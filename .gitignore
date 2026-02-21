@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# macOS / VS Code
+.DS_Store
+.vscode/
+
+# Data / runs / outputs
+data/
+*.parquet
+*.csv
+*.jsonl
+*.log
+
+# Secrets
+.env

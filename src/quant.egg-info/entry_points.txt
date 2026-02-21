@@ -1,0 +1,3 @@
+[console_scripts]
+quant-backtest = quant.backtest.renko_runner:main
+quant-webhook = quant.execution.webhook_server:main
