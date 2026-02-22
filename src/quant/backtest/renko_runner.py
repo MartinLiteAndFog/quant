@@ -102,8 +102,14 @@ def _signals_bundle_to_df(bundle) -> pd.DataFrame:
 
 def _pair_trades_from_events(events: pd.DataFrame, price_col: str = "price") -> pd.DataFrame:
     """
-    Pair each 'entry' with the next exit event in {tp_exit, sl_exit, signal_flip_exit, be_exit}.
-    This avoids double-counting when flips emit entry at same ts.
+    Pair trades for a CONTINUOUS-FLIP engine.
+
+    Rules:
+      - 'entry' opens a trade.
+      - Any exit in {tp_exit, sl_exit, signal_flip_exit, be_exit} closes the current trade.
+      - If the exit is a FLIP exit (tp_exit or signal_flip_exit), we immediately open a NEW trade
+        in the opposite direction at the SAME timestamp/price (synthetic entry).
+      - If the exit is a FLAT exit (sl_exit or be_exit), we go flat (no synthetic entry).
     """
     if events is None or len(events) == 0:
         return pd.DataFrame(columns=["entry_ts", "exit_ts", "entry_px", "exit_px", "side", "exit_event", "pnl_pct"])
@@ -115,54 +121,68 @@ def _pair_trades_from_events(events: pd.DataFrame, price_col: str = "price") -> 
     ev = ev.sort_values(sort_cols, kind="mergesort").reset_index(drop=True)
 
     exits = {"tp_exit", "sl_exit", "signal_flip_exit", "be_exit"}
+    flip_exits = {"tp_exit", "signal_flip_exit"}
+    flat_exits = {"sl_exit", "be_exit"}
 
-    open_entry = None
+    open_side = None
+    open_ts = None
+    open_px = None
+
     out = []
+
     for _, r in ev.iterrows():
         e = str(r.get("event", ""))
+        ts = pd.Timestamp(r["ts"])
+        px = float(r.get(price_col, np.nan))
+        side = int(r.get("side", 0))
+
         if e == "entry":
-            open_entry = r
+            open_side = side
+            open_ts = ts
+            open_px = px
             continue
-        if e in exits and open_entry is not None:
+
+        if e in exits and open_side is not None:
             out.append(
                 {
-                    "entry_ts": pd.Timestamp(open_entry["ts"]),
-                    "exit_ts": pd.Timestamp(r["ts"]),
-                    "side": int(open_entry.get("side", 0)),
-                    "entry_px": float(open_entry.get(price_col, np.nan)),
-                    "exit_px": float(r.get(price_col, np.nan)),
+                    "entry_ts": open_ts,
+                    "exit_ts": ts,
+                    "side": int(open_side),
+                    "entry_px": float(open_px),
+                    "exit_px": float(px),
                     "exit_event": e,
-                    # keep engine pnl (brick-based) if present
                     "pnl_pct": float(r.get("pnl_pct", np.nan)),
                 }
             )
-            open_entry = None
+
+            if e in flip_exits:
+                open_side = -int(open_side)
+                open_ts = ts
+                open_px = px
+            elif e in flat_exits:
+                open_side = None
+                open_ts = None
+                open_px = None
 
     return pd.DataFrame(out)
 
 
-def _equity_from_trades(trades: pd.DataFrame, initial_capital: float = 10_000.0) -> pd.DataFrame:
+def _equity_from_trades(trades: pd.DataFrame, initial_capital: float = 1.0) -> pd.DataFrame:
     if trades is None or len(trades) == 0:
         return pd.DataFrame({"ts": [], "equity": []})
 
     t = trades.copy()
-
-    # If there are duplicate column names (common when renaming pnl_pct_real -> pnl_pct while pnl_pct already exists),
-    # pandas can return a DataFrame for t["pnl_pct"]. Normalize to a single Series.
     if "pnl_pct" not in t.columns:
         return pd.DataFrame({"ts": [], "equity": []})
 
     pnl_col = t["pnl_pct"]
     if isinstance(pnl_col, pd.DataFrame):
-        # take the last occurrence
         pnl_series = pnl_col.iloc[:, -1]
     else:
         pnl_series = pnl_col
 
-    # build a temp df with clean pnl_pct
     t = t.copy()
     t["pnl_pct__tmp"] = pnl_series
-
     t = t.dropna(subset=["exit_ts", "pnl_pct__tmp"]).copy()
     t["exit_ts"] = pd.to_datetime(t["exit_ts"], utc=True, errors="coerce")
     t = t.dropna(subset=["exit_ts"]).copy()
@@ -174,13 +194,7 @@ def _equity_from_trades(trades: pd.DataFrame, initial_capital: float = 10_000.0)
     return pd.DataFrame({"ts": t["exit_ts"].values, "equity": eq})
 
 
-def _map_events_to_fills_asof(
-    events: pd.DataFrame, fills: pd.DataFrame, fill_col: str
-) -> Tuple[pd.DataFrame, float]:
-    """
-    Map each event timestamp to the most recent fill price at or before event ts (merge_asof backward).
-    Returns (events_with_price_real, miss_rate).
-    """
+def _map_events_to_fills_asof(events: pd.DataFrame, fills: pd.DataFrame, fill_col: str) -> Tuple[pd.DataFrame, float]:
     ev = events.copy()
     ev["ts"] = pd.to_datetime(ev["ts"], utc=True, errors="coerce")
     ev = ev.dropna(subset=["ts"]).sort_values(["ts", "seq"] if "seq" in ev.columns else ["ts"]).reset_index(drop=True)
@@ -200,30 +214,21 @@ def _map_events_to_fills_asof(
     return merged, miss_rate
 
 
-def _compute_trade_pnl_from_prices(
-    trades: pd.DataFrame, fee_bps: float, price_cols: Tuple[str, str]
-) -> pd.DataFrame:
-    """
-    Recompute pnl_pct from entry/exit price columns:
-      pnl = side*(exit/entry - 1) - roundtrip_fee
-    roundtrip_fee approximated as 2*fee_bps/10000.
-    """
+def _compute_trade_pnl_from_prices(trades: pd.DataFrame, fee_bps: float, price_cols: Tuple[str, str]) -> pd.DataFrame:
     t = trades.copy()
     e_col, x_col = price_cols
     t[e_col] = pd.to_numeric(t[e_col], errors="coerce")
     t[x_col] = pd.to_numeric(t[x_col], errors="coerce")
     t["side"] = pd.to_numeric(t["side"], errors="coerce")
 
-    fee_rt = 2.0 * float(fee_bps) / 10000.0
+    # fee_bps is ROUNDTRIP
+    fee_rt = float(fee_bps) / 10000.0
     denom = t[e_col].abs().replace(0.0, np.nan)
     gross = (t["side"].astype(float) * (t[x_col].astype(float) - t[e_col].astype(float))) / denom
     t["pnl_pct_real"] = (gross - fee_rt).astype(float)
     return t
 
 
-# =========================
-# Regime indicators (brick-based)
-# =========================
 def _true_range(df: pd.DataFrame) -> pd.Series:
     high = df["high"].astype(float)
     low = df["low"].astype(float)
@@ -260,7 +265,6 @@ def _adx(df: pd.DataFrame, n: int) -> pd.Series:
     dm_minus = pd.Series(np.where((down > up) & (down > 0), down, 0.0), index=df.index)
 
     tr = _true_range(df)
-
     atr = _wilder_smooth(tr, n)
     sm_plus = _wilder_smooth(dm_plus, n)
     sm_minus = _wilder_smooth(dm_minus, n)
@@ -418,11 +422,11 @@ def main() -> None:
     ap.add_argument("--run-id", default=None)
 
     ap.add_argument("--ttp-trail-pct", type=float, default=0.012)
-    ap.add_argument("--sl-cap-pct", type=float, default=0.015)
-    ap.add_argument("--swing-lookback", type=int, default=250)
 
-    ap.add_argument("--be-trigger-pct", type=float, default=0.0)
-    ap.add_argument("--be-offset-pct", type=float, default=0.0)
+    ap.add_argument("--min-sl-pct", type=float, default=0.015)
+    ap.add_argument("--max-sl-pct", type=float, default=0.030)
+
+    ap.add_argument("--swing-lookback", type=int, default=250)
 
     ap.add_argument(
         "--regime",
@@ -431,31 +435,25 @@ def main() -> None:
         help="none | chop | adx | er | chop_adx | chop_er | adx_er | chop_adx_er",
     )
 
-    ap.add_argument("--regime-csv", type=str, default=None, help="Path to daily/weekly gate CSV (e.g. daily_gate.csv)")
+    ap.add_argument("--regime-csv", type=str, default=None)
     ap.add_argument("--regime-ts-col", type=str, default="ts")
     ap.add_argument("--regime-col", type=str, default="gate_on")
-    ap.add_argument("--regime-default-off", action="store_true", help="Default OFF before first regime row")
+    ap.add_argument("--regime-default-off", action="store_true")
 
     ap.add_argument("--chop-len", type=int, default=14)
     ap.add_argument("--chop-on", type=float, default=58.0)
     ap.add_argument("--chop-off", type=float, default=52.0)
 
     ap.add_argument("--adx-len", type=int, default=14)
-    ap.add_argument("--adx-on", type=float, default=18.0, help="re-enable trading when ADX drops back <= this")
-    ap.add_argument("--adx-off", type=float, default=25.0, help="disable trading when ADX rises >= this")
+    ap.add_argument("--adx-on", type=float, default=18.0)
+    ap.add_argument("--adx-off", type=float, default=25.0)
 
     ap.add_argument("--er-len", type=int, default=40)
-    ap.add_argument("--er-on", type=float, default=0.30, help="re-enable trading when ER drops back <= this")
-    ap.add_argument("--er-off", type=float, default=0.40, help="disable trading when ER rises >= this")
+    ap.add_argument("--er-on", type=float, default=0.30)
+    ap.add_argument("--er-off", type=float, default=0.40)
 
-    # NEW: map event prices to real fills (minute OHLC-derived)
-    ap.add_argument("--fills-parquet", type=str, default=None, help="Optional fills parquet with ts + fill col")
-    ap.add_argument(
-        "--fill-col",
-        type=str,
-        default="fill_ohlc4",
-        help="Column in fills parquet to use as mapped event price (default: fill_ohlc4)",
-    )
+    ap.add_argument("--fills-parquet", type=str, default=None)
+    ap.add_argument("--fill-col", type=str, default="fill_ohlc4")
 
     args = ap.parse_args()
 
@@ -498,10 +496,9 @@ def main() -> None:
     params = FlipParams(
         fee_bps=float(args.fee_bps),
         ttp_trail_pct=float(args.ttp_trail_pct),
-        sl_cap_pct=float(args.sl_cap_pct),
+        min_sl_pct=float(args.min_sl_pct),
+        max_sl_pct=float(args.max_sl_pct),
         swing_lookback=int(args.swing_lookback),
-        be_trigger_pct=float(args.be_trigger_pct),
-        be_offset_pct=float(args.be_offset_pct),
     )
 
     pos, events = run_flip_state_machine(
@@ -512,10 +509,9 @@ def main() -> None:
     )
 
     trades = _pair_trades_from_events(events, price_col="price")
-    equity = _equity_from_trades(trades, initial_capital=10_000.0)
+    equity = _equity_from_trades(trades, initial_capital=1.0)
 
-    # Brick-based stats
-    equity0 = 10_000.0
+    equity0 = 1.0
     equity1 = float(equity["equity"].iloc[-1]) if len(equity) else equity0
     total_return_pct = (equity1 / equity0 - 1.0) * 100.0
     if len(equity):
@@ -525,12 +521,21 @@ def main() -> None:
     else:
         max_drawdown_pct = 0.0
 
-    # NEW: "real price" equity by mapping event timestamps to fills (asof backward)
+    entries_count = int((events["event"] == "entry").sum()) if len(events) else 0
+    flips_count = int(events["event"].isin(["tp_exit", "signal_flip_exit"]).sum()) if len(events) else 0
+    sl_count = int((events["event"] == "sl_exit").sum()) if len(events) else 0
+
+    # effective (engine clamps internally to <=50; mirror that here)
+    effective_swing_lb = int(min(int(args.swing_lookback), 50))
+
+    # =========================
+    # REAL pricing via fills (optional)
+    # =========================
+    fills_miss_rate = None
     trades_real = pd.DataFrame()
     equity_real = pd.DataFrame({"ts": [], "equity": []})
     total_return_pct_real = None
     max_drawdown_pct_real = None
-    fills_miss_rate = None
 
     if args.fills_parquet:
         fills = _read_fills_parquet(str(args.fills_parquet), str(args.fill_col))
@@ -543,13 +548,9 @@ def main() -> None:
             price_cols=("entry_px", "exit_px"),
         )
 
-        # IMPORTANT: avoid duplicate column name "pnl_pct"
-        # trades_real already contains engine pnl_pct from events; we want pnl_pct_real for equity_real.
-        trades_real_for_eq = trades_real.drop(columns=["pnl_pct"], errors="ignore").rename(
-            columns={"pnl_pct_real": "pnl_pct"}
-        )
-
-        equity_real = _equity_from_trades(trades_real_for_eq, initial_capital=10_000.0)
+        trades_real_for_eq = trades_real.copy()
+        trades_real_for_eq["pnl_pct"] = trades_real_for_eq["pnl_pct_real"]
+        equity_real = _equity_from_trades(trades_real_for_eq, initial_capital=1.0)
 
         eq1r = float(equity_real["equity"].iloc[-1]) if len(equity_real) else equity0
         total_return_pct_real = (eq1r / equity0 - 1.0) * 100.0
@@ -570,29 +571,23 @@ def main() -> None:
         "end": str(bars["ts"].max()) if len(bars) else None,
         "total_return_pct": float(total_return_pct),
         "max_drawdown_pct": float(max_drawdown_pct),
-        "turnover_sum": float((events["event"] == "entry").sum()) if events is not None and len(events) else 0.0,
-        "fee_bps": float(args.fee_bps),
-        "sl_cap_pct": float(args.sl_cap_pct),
-        "swing_lookback": int(args.swing_lookback),
+        # clearer counts:
+        "trades": int(len(trades)),
+        "entries_count": entries_count,
+        "flips_count": flips_count,
+        "sl_exits_count": sl_count,
+        "fee_bps_roundtrip": float(args.fee_bps),
+        "min_sl_pct": float(args.min_sl_pct),
+        "max_sl_pct": float(args.max_sl_pct),
+        "swing_lookback_arg": int(args.swing_lookback),
+        "swing_lookback_effective": effective_swing_lb,
         "ttp_trail_pct": float(args.ttp_trail_pct),
-        "be_trigger_pct": float(args.be_trigger_pct),
-        "be_offset_pct": float(args.be_offset_pct),
         "regime": ("external" if args.regime_csv else str(args.regime)),
         "regime_csv": (str(args.regime_csv) if args.regime_csv else None),
-        "chop_len": int(args.chop_len),
-        "chop_on": float(args.chop_on),
-        "chop_off": float(args.chop_off),
-        "adx_len": int(args.adx_len),
-        "adx_on": float(args.adx_on),
-        "adx_off": float(args.adx_off),
-        "er_len": int(args.er_len),
-        "er_on": float(args.er_on),
-        "er_off": float(args.er_off),
         "signals_jsonl": str(args.signals_jsonl),
         "parquet": str(args.parquet),
         "box": float(args.box),
-        "trades": int(len(trades)),
-        # NEW: real pricing meta
+        # real pricing meta
         "fills_parquet": (str(args.fills_parquet) if args.fills_parquet else None),
         "fill_col": (str(args.fill_col) if args.fills_parquet else None),
         "fills_miss_rate": (float(fills_miss_rate) if fills_miss_rate is not None else None),
@@ -616,7 +611,6 @@ def main() -> None:
     trades.to_parquet(out_dir / "trades.parquet", index=False)
     equity.to_parquet(out_dir / "equity.parquet", index=False)
 
-    # NEW outputs
     if args.fills_parquet:
         trades_real.to_parquet(out_dir / "trades_real.parquet", index=False)
         equity_real.to_parquet(out_dir / "equity_real.parquet", index=False)

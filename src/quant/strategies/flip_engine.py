@@ -11,62 +11,45 @@ import pandas as pd
 @dataclass
 class FlipParams:
     """
-    Two-phase stop logic:
+    Countertrend strategy (remembered as "countertrend"):
 
-    Phase A: "TTP active"
-      - Trigger: IMBA impulse while flat OR IMBA impulse while in WAIT.
-      - Behavior: trailing stop (TTP) active immediately.
-      - Exit:
-          * If TTP is hit -> tp_exit and FLIP position.
-          * If opposite IMBA arrives -> signal_flip_exit and FLIP position.
-      - After any flip (tp_exit or opposite IMBA flip): switch to Phase B (WAIT with SL).
+    - IMBA impulse defines direction.
+    - When FLAT and impulse arrives -> ENTER in impulse direction, mode=TTP (TTP armed).
+    - When IN POSITION and opposite impulse arrives -> signal_flip_exit + flip immediately, mode=TTP (because IMBA signal).
+    - When IN POSITION and same-dir impulse arrives:
+        * If mode != TTP -> ttp_on + set mode=TTP (re-arm TTP)
+        * Else ignore.
 
-    Phase B: "WAIT with SL"
-      - Trigger: after a flip (from Phase A).
-      - Behavior: SL only:
-          * Stop is at least sl_cap_pct away from entry (min distance),
-            and can be farther using swing extreme over swing_lookback.
-          * LONG: stop = min(entry*(1-sl_cap_pct), swing_low_lookback)
-          * SHORT: stop = max(entry*(1+sl_cap_pct), swing_high_lookback)
-      - Exit:
-          * If SL hit -> sl_exit and go FLAT.
-      - If an IMBA impulse arrives:
-          * If same direction as current pos -> activate Phase A (TTP) (no pos change).
-          * If opposite direction -> reverse into that direction and activate Phase A (TTP).
+    - TTP (trailing take profit) is a trailing stop that, when hit, causes tp_exit and FLIPS.
+      After a TTP-based flip, we go into WAIT (SL-only) until an IMBA same-dir impulse re-arms TTP.
 
-    Break-even (BE) (optional):
-      - If be_trigger_pct > 0:
-          * Once trade's best favorable move reaches be_trigger_pct,
-            enforce a BE stop at entry*(1+be_offset_pct) for LONG and entry*(1-be_offset_pct) for SHORT.
-      - BE is evaluated in both TTP and WAIT modes and will exit to FLAT with event 'be_exit'.
-        (No flip on BE; it’s a protection mechanic.)
+    - WAIT SL distance is:
+        dist_pct = clamp( lookback_extreme_dist_pct , min_sl_pct, max_sl_pct )
+      LONG: stop = entry * (1 - dist_pct)
+      SHORT: stop = entry * (1 + dist_pct)
+      swing_lookback is capped at 50 effective.
 
-    Regime gating (optional):
-      - If regime_on is provided (bool series):
-          * When regime_on is False, we DO NOT:
-              - open new entries from flat
-              - activate TTP / reverse on IMBA impulses
-              - flip on IMBA impulses
-            We DO still:
-              - manage open positions with TTP/SL/BE exits
+    Fees:
+      fee_bps is ROUNDTRIP bps (e.g., 10 means total 10 bps for entry+exit).
     """
 
-    fee_bps: float = 0.0
+    fee_bps: float = 0.0  # ROUNDTRIP bps
 
-    # Phase A
+    # Phase A (TTP)
     ttp_trail_pct: float = 0.012
 
-    # Phase B
-    sl_cap_pct: float = 0.015
-    swing_lookback: int = 250
+    # Phase B (WAIT SL)
+    min_sl_pct: float = 0.015
+    max_sl_pct: float = 0.030
+    swing_lookback: int = 50
 
-    # Break-even
+    # Optional BE (disabled by default; kept for future)
     be_trigger_pct: float = 0.0
     be_offset_pct: float = 0.0
 
 
-def _fee_roundtrip(fee_bps: float) -> float:
-    return 2.0 * (float(fee_bps) / 10_000.0)
+def _fee_roundtrip(fee_bps_roundtrip: float) -> float:
+    return float(fee_bps_roundtrip) / 10_000.0
 
 
 def _ensure_cols(df: pd.DataFrame, need: List[str], name: str) -> pd.DataFrame:
@@ -144,11 +127,8 @@ def align_impulses_exact(times: pd.DatetimeIndex, signals_df: Optional[pd.DataFr
 
 def _align_regime_ffill(times: pd.DatetimeIndex, regime_on: Optional[pd.Series]) -> Optional[pd.Series]:
     """
-    Align regime to bar times using forward-fill:
-      - regime_on can be daily/weekly timestamps
-      - we map each bar ts to the latest regime value at or before it
-    Default is True before the first regime timestamp (conservative = allow trading),
-    but you can change that later if you prefer default False.
+    Align regime to bar times using forward-fill.
+    Default True before the first regime timestamp (allow trading).
     """
     if regime_on is None or len(regime_on) == 0:
         return None
@@ -160,7 +140,6 @@ def _align_regime_ffill(times: pd.DatetimeIndex, regime_on: Optional[pd.Series])
     r = r.sort_index()
     r = r.astype(bool)
 
-    # build full index and ffill
     out = pd.Series(True, index=times, dtype="bool")
     out = out.to_frame("x")
     out["x"] = np.nan
@@ -168,8 +147,6 @@ def _align_regime_ffill(times: pd.DatetimeIndex, regime_on: Optional[pd.Series])
     tmp = pd.DataFrame({"x": r.astype(int).values}, index=r.index)
     out = out.combine_first(tmp).sort_index()
     out["x"] = out["x"].ffill()
-
-    # default True if still NaN (before first regime point)
     out["x"] = out["x"].fillna(1).astype(int)
     return out["x"].astype(bool).reindex(times)
 
@@ -198,14 +175,18 @@ def run_flip_state_machine(
 
     fee_rt = _fee_roundtrip(params.fee_bps)
     trail = float(params.ttp_trail_pct)
-    slcap = float(params.sl_cap_pct)
-    lb = int(params.swing_lookback) if params.swing_lookback else 0
-    be_trig = float(params.be_trigger_pct)
-    be_off = float(params.be_offset_pct)
+
+    min_sl = float(params.min_sl_pct)
+    max_sl = float(params.max_sl_pct)
+    lb_arg = int(params.swing_lookback) if params.swing_lookback else 0
+    lb_eff = int(min(max(lb_arg, 0), 50))  # cap to 50 effective
+
+    be_trig = float(getattr(params, "be_trigger_pct", 0.0))
+    be_off = float(getattr(params, "be_offset_pct", 0.0))
 
     pos = 0  # -1/0/+1
     entry_px: Optional[float] = None
-    best_fav: Optional[float] = None  # best favorable price since entry
+    best_fav: Optional[float] = None  # best favorable price since entry (for TTP)
     mode: Optional[str] = None  # None | "TTP" | "WAIT"
 
     events: List[Dict[str, Any]] = []
@@ -235,29 +216,49 @@ def run_flip_state_machine(
             gross = (entry_px - exit_px) / entry_px
         return float(gross - fee_rt)
 
+    def _clamp(x: float, lo: float, hi: float) -> float:
+        return float(max(lo, min(hi, x)))
+
     def swing_sl_price(i: int) -> float:
+        """
+        WAIT SL: dist_pct = clamp(lookback_dist_pct, min_sl, max_sl)
+        LONG: stop = entry*(1 - dist_pct)
+        SHORT: stop = entry*(1 + dist_pct)
+        """
         assert entry_px is not None and pos != 0
         e = float(entry_px)
 
+        # Fallback if no HL data or no lookback
+        if (not has_hl) or (lb_eff <= 1):
+            dist = _clamp(min_sl, min_sl, max_sl)
+            return float(e * (1.0 - dist) if pos > 0 else e * (1.0 + dist))
+
+        j0 = max(0, i - lb_eff + 1)
+
         if pos > 0:
-            cap_stop = e * (1.0 - slcap)
-            stop = cap_stop
-            if has_hl and lb > 1:
-                j0 = max(0, i - lb + 1)
-                swing_low = float(pd.to_numeric(bars["low"].iloc[j0 : i + 1], errors="coerce").min())
-                if np.isfinite(swing_low):
-                    stop = min(stop, swing_low)
+            swing_low = float(pd.to_numeric(bars["low"].iloc[j0 : i + 1], errors="coerce").min())
+            if not np.isfinite(swing_low):
+                dist = _clamp(min_sl, min_sl, max_sl)
+                stop = e * (1.0 - dist)
+            else:
+                # distance as pct
+                dist_pct = (e - swing_low) / e if e != 0 else max_sl
+                dist = _clamp(float(dist_pct), min_sl, max_sl)
+                stop = e * (1.0 - dist)
+            # ensure strictly below entry
             eps = max(1e-9, abs(e) * 1e-9)
             stop = min(stop, e - eps)
             return float(stop)
+
         else:
-            cap_stop = e * (1.0 + slcap)
-            stop = cap_stop
-            if has_hl and lb > 1:
-                j0 = max(0, i - lb + 1)
-                swing_high = float(pd.to_numeric(bars["high"].iloc[j0 : i + 1], errors="coerce").max())
-                if np.isfinite(swing_high):
-                    stop = max(stop, swing_high)
+            swing_high = float(pd.to_numeric(bars["high"].iloc[j0 : i + 1], errors="coerce").max())
+            if not np.isfinite(swing_high):
+                dist = _clamp(min_sl, min_sl, max_sl)
+                stop = e * (1.0 + dist)
+            else:
+                dist_pct = (swing_high - e) / e if e != 0 else max_sl
+                dist = _clamp(float(dist_pct), min_sl, max_sl)
+                stop = e * (1.0 + dist)
             eps = max(1e-9, abs(e) * 1e-9)
             stop = max(stop, e + eps)
             return float(stop)
@@ -273,11 +274,13 @@ def run_flip_state_machine(
         px = float(close[i])
 
         gate = True if regime is None else bool(regime.iloc[i])
-
         out_pos.iloc[i] = pos
 
         impulse = int(impulses.iloc[i]) if len(impulses) else 0
 
+        # =========================
+        # FLAT: impulse opens a position, TTP armed
+        # =========================
         if pos == 0:
             if gate and impulse != 0:
                 pos = int(np.sign(impulse))
@@ -289,13 +292,13 @@ def run_flip_state_machine(
 
         assert entry_px is not None and best_fav is not None and mode is not None
 
-        # update best favorable
+        # Update best favorable for TTP
         if pos > 0:
             best_fav = max(best_fav, px)
         else:
             best_fav = min(best_fav, px)
 
-        # Break-even (optional)
+        # Optional BE (kept, default disabled)
         if be_trig > 0.0:
             if pos > 0:
                 best_move = (best_fav - entry_px) / entry_px
@@ -322,6 +325,31 @@ def run_flip_state_machine(
                         mode = None
                         continue
 
+        # =========================
+        # IMBA handling (core countertrend):
+        # - opposite impulse flips immediately and sets mode=TTP (IMBA signal!)
+        # - same-dir impulse arms TTP (mode=TTP)
+        # =========================
+        if gate and impulse != 0:
+            imp = int(np.sign(impulse))
+            if imp == -pos:
+                pnl = realized_pnl_pct(px)
+                emit(ts, "signal_flip_exit", pos, px, pnl, "Opposite IMBA -> flip -> TTP")
+                pos = -pos
+                entry_px = px
+                best_fav = px
+                mode = "TTP"
+                out_pos.iloc[i] = pos
+                continue
+            elif imp == pos:
+                if mode != "TTP":
+                    mode = "TTP"
+                    emit(ts, "ttp_on", pos, px, 0.0, "IMBA same-dir -> TTP(on)")
+                # if already TTP, do nothing
+
+        # =========================
+        # PRICE-based logic
+        # =========================
         if mode == "TTP":
             stop = ttp_stop(best_fav)
             if (pos > 0 and px <= stop) or (pos < 0 and px >= stop):
@@ -330,43 +358,21 @@ def run_flip_state_machine(
                 pos = -pos
                 entry_px = stop
                 best_fav = stop
-                mode = "WAIT"
-                continue
-
-            if gate and impulse != 0 and int(np.sign(impulse)) == -pos:
-                pnl = realized_pnl_pct(px)
-                emit(ts, "signal_flip_exit", pos, px, pnl, "Opposite IMBA -> flip -> TTP")
-                pos = -pos
-                entry_px = px
-                best_fav = px
-                mode = "TTP"
+                mode = "WAIT"  # after TTP flip, we are in WAIT until IMBA re-arms TTP
+                out_pos.iloc[i] = pos
                 continue
 
         elif mode == "WAIT":
             stop = swing_sl_price(i)
             if (pos > 0 and px <= stop) or (pos < 0 and px >= stop):
                 pnl = realized_pnl_pct(stop)
-                emit(ts, "sl_exit", pos, stop, pnl, f"WAIT SL hit -> flat (sl={stop:.4f})")
+                emit(ts, "sl_exit", pos, stop, pnl, f"SL hit -> flat (sl={stop:.4f})")
                 pos = 0
                 entry_px = None
                 best_fav = None
                 mode = None
+                out_pos.iloc[i] = pos
                 continue
-
-            if gate and impulse != 0:
-                imp = int(np.sign(impulse))
-                if imp == pos:
-                    mode = "TTP"
-                    emit(ts, "ttp_on", pos, px, 0.0, "WAIT + same IMBA -> TTP")
-                    continue
-                else:
-                    pnl = realized_pnl_pct(px)
-                    emit(ts, "signal_flip_exit", pos, px, pnl, "WAIT + opposite IMBA -> flip -> TTP")
-                    pos = -pos
-                    entry_px = px
-                    best_fav = px
-                    mode = "TTP"
-                    continue
 
         out_pos.iloc[i] = pos
 

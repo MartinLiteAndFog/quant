@@ -1,11 +1,10 @@
-# src/quant/strategies/imba.py
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, Tuple
 
-import json
 import numpy as np
 import pandas as pd
 
@@ -13,19 +12,28 @@ import pandas as pd
 @dataclass(frozen=True)
 class ImbaParams:
     """
-    IMBA signal logic (matching the Pine code you pasted):
+    IMBA signal logic (intended to match the Pine "can_long/can_short" behavior):
+
       high_line = highest(high, lookback)
       low_line  = lowest(low, lookback)
       fib_236 = high_line - (high_line-low_line)*0.236
       fib_5   = high_line - (high_line-low_line)*0.5
       fib_786 = high_line - (high_line-low_line)*0.786
 
-    Long signal when:
-      close >= fib_5 and close >= fib_236 and NOT already in long trend
-    Short signal when:
-      close <= fib_5 and close <= fib_786 and NOT already in short trend
+    Long zone:
+      close >= fib_5 and close >= fib_236
 
-    Sticky trend: if neither long nor short condition, trend stays as-is.
+    Short zone:
+      close <= fib_5 and close <= fib_786
+
+    IMPORTANT (TV-style):
+      - Trend state is STICKY (no neutral/0 state).
+      - A signal is emitted ONLY on true flips: +1 -> -1 or -1 -> +1.
+      - "Same-direction re-arms" must never emit a signal.
+
+    Notes about trend_state_mode:
+      - We keep this param for backward compatibility, but "reset" is rejected because it
+        creates a neutral state (0) that does not exist in the TV behavior you described.
     """
 
     lookback: int = 240
@@ -36,17 +44,21 @@ class ImbaParams:
     fib_5: float = 0.5
     fib_786: float = 0.786
 
+    trend_state_mode: str = "sticky"  # must be "sticky" for TV-style
+
 
 def _ensure_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     need = {"ts", "open", "high", "low", "close"}
     missing = need - set(df.columns)
     if missing:
-        raise ValueError(f"OHLCV missing columns: {sorted(missing)}")
+        raise ValueError(f"df_ohlcv missing columns: {sorted(missing)}")
     out = df.copy()
-    out["ts"] = pd.to_datetime(out["ts"], utc=True)
-    out = out.sort_values("ts")
-    # Drop exact duplicate timestamps (keep last) to avoid downstream reindex dup issues
+    out["ts"] = pd.to_datetime(out["ts"], utc=True, errors="coerce")
+    out = out.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
     out = out.drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
+    # Coerce numeric
+    for c in ["open", "high", "low", "close"]:
+        out[c] = pd.to_numeric(out[c], errors="coerce")
     return out
 
 
@@ -55,74 +67,94 @@ def compute_imba_signals(df_ohlcv: pd.DataFrame, params: ImbaParams) -> pd.DataF
     Returns a DataFrame with columns:
       ts, signal, position, source, sl
 
-    Where:
-      signal: +1 for long signal bar, -1 for short signal bar, 0 otherwise
-      position: same as signal for those bars (for convenience)
-      sl: absolute SL price based on entry close and fixed_sl_abs
+    signal: +1 for long signal bar, -1 for short signal bar, 0 otherwise
+    position: same as signal for those bars (for convenience)
+    sl: absolute SL price based on entry close and fixed_sl_abs
     """
     df = _ensure_ohlcv(df_ohlcv)
 
     if params.start_ts is not None:
-        start_ts = pd.to_datetime(params.start_ts, utc=True)
-        df = df[df["ts"] >= start_ts].copy()
+        start_ts = pd.to_datetime(params.start_ts, utc=True, errors="coerce")
+        df = df[df["ts"] >= start_ts].copy().reset_index(drop=True)
 
-    lb = int(params.lookback)
-    if lb < 2:
-        raise ValueError("lookback must be >= 2")
+    mode = str(params.trend_state_mode).strip().lower()
+    if mode != "sticky":
+        raise ValueError("trend_state_mode must be 'sticky' (TV-style: no neutral state)")
 
-    high_line = df["high"].rolling(lb, min_periods=lb).max()
-    low_line = df["low"].rolling(lb, min_periods=lb).min()
-    rng = (high_line - low_line)
+    lookback = int(params.lookback)
+    if lookback <= 1:
+        raise ValueError("lookback must be > 1")
+
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+    close = df["close"].astype(float)
+
+    # Rolling extrema
+    high_line = high.rolling(lookback, min_periods=lookback).max()
+    low_line = low.rolling(lookback, min_periods=lookback).min()
+
+    rng = (high_line - low_line).astype(float)
 
     fib236 = high_line - rng * float(params.fib_236)
     fib5 = high_line - rng * float(params.fib_5)
     fib786 = high_line - rng * float(params.fib_786)
 
-    close = df["close"]
+    long_zone = (close >= fib5) & (close >= fib236)
+    short_zone = (close <= fib5) & (close <= fib786)
 
-    # Long/short conditions exactly as in the Pine (can_long/can_short)
-    long_cond = (close >= fib5) & (close >= fib236)
-    short_cond = (close <= fib5) & (close <= fib786)
-
-    # Sticky trend state machine (matches:
-    # if can_long -> is_long_trend true / if can_short -> is_short_trend true / else keep)
-    trend = np.zeros(len(df), dtype=np.int8)  # -1,0,+1
     signals = np.zeros(len(df), dtype=np.int8)
 
-    cur = 0
+    # state: -1 short, +1 long. (No 0 in TV-style.)
+    cur: int = 0  # internal init only; NOT a real trend-state
+    initialized = False
+
     for i in range(len(df)):
+        # Need fully formed fibs
         if not np.isfinite(fib5.iat[i]) or not np.isfinite(fib236.iat[i]) or not np.isfinite(fib786.iat[i]):
-            trend[i] = cur
             continue
 
-        if bool(long_cond.iat[i]) and cur != 1:
-            cur = 1
-            signals[i] = 1
-        elif bool(short_cond.iat[i]) and cur != -1:
-            cur = -1
-            signals[i] = -1
+        in_long = bool(long_zone.iat[i])
+        in_short = bool(short_zone.iat[i])
 
-        trend[i] = cur
+        # If neither zone holds, we do nothing (sticky trend).
+        if not in_long and not in_short:
+            continue
 
-    out = pd.DataFrame(
-        {
-            "ts": df["ts"].values,
-            "signal": signals.astype(int),
-        }
-    )
+        # Determine desired trend state on this bar
+        # If both zones happen to be true (rare edge), prefer keeping current if initialized,
+        # otherwise choose long by default.
+        if in_long and not in_short:
+            new = 1
+        elif in_short and not in_long:
+            new = -1
+        else:
+            new = cur if initialized else 1
+
+        if not initialized:
+            # Establish initial trend WITHOUT emitting a signal
+            cur = new
+            initialized = True
+            continue
+
+        # Emit only on true flip: +1 <-> -1
+        if new != cur:
+            signals[i] = new
+            cur = new
+
+    out = pd.DataFrame({"ts": df["ts"].values, "signal": signals.astype(int)})
     out = out[out["signal"] != 0].copy()
     out["position"] = out["signal"]
     out["source"] = "imba"
 
-    # fixed absolute stop
+    # fixed absolute stop (kept for compatibility; TV uses fib-based SL by default)
     sl_abs = float(params.fixed_sl_abs)
-    entry = df.set_index("ts")["close"]
+    entry = df.set_index("ts")["close"].astype(float)
+
     out = out.set_index("ts")
     out["entry"] = entry.reindex(out.index).astype(float)
     out["sl"] = np.where(out["signal"] > 0, out["entry"] - sl_abs, out["entry"] + sl_abs)
     out = out.reset_index().drop(columns=["entry"])
 
-    # Dedup in case we emitted multiple signals on same ts (shouldn't, but safe)
     out = out.sort_values("ts").drop_duplicates(subset=["ts"], keep="last").reset_index(drop=True)
     return out
 
@@ -132,7 +164,8 @@ def write_signals_jsonl(signals: pd.DataFrame, out_path: Path) -> int:
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     sig = signals.copy()
-    sig["ts"] = pd.to_datetime(sig["ts"], utc=True)
+    sig["ts"] = pd.to_datetime(sig["ts"], utc=True, errors="coerce")
+    sig = sig.dropna(subset=["ts"])
     sig = sig.sort_values("ts").drop_duplicates(subset=["ts"], keep="last")
 
     n = 0
