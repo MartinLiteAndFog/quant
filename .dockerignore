@@ -1,0 +1,11 @@
+.git
+__pycache__
+*.pyc
+.env
+.env.*
+!.env.example
+notebooks
+data
+*.md
+.venv
+venv
