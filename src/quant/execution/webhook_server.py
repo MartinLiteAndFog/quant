@@ -282,7 +282,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
 
+    const qs = new URLSearchParams(window.location.search);
+    const chartMode = (qs.get('mode') || 'brick').toLowerCase(); // brick | time
+    const brickBaseTs = 1704067200; // 2024-01-01 UTC
     let latestPayload = null;
+    let timeMap = null;
 
     function resizeShade() {
       shadeCanvas.width = chartEl.clientWidth;
@@ -302,8 +306,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const spans = latestPayload.regime.spans;
       const tscale = chart.timeScale();
       for (const s of spans) {
-        const x0 = tscale.timeToCoordinate(s.from);
-        const x1 = tscale.timeToCoordinate(s.to);
+        const fromT = mapTimeForChart(s.from);
+        const toT = mapTimeForChart(s.to);
+        if (fromT == null || toT == null) continue;
+        const x0 = tscale.timeToCoordinate(fromT);
+        const x1 = tscale.timeToCoordinate(toT);
         if (x0 == null || x1 == null) continue;
         const left = Math.min(x0, x1);
         const width = Math.max(1, Math.abs(x1 - x0));
@@ -312,6 +319,49 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ctx.fillStyle = color;
         ctx.fillRect(left, 0, width, shadeCanvas.height);
       }
+    }
+
+    function buildTimeMapFromBars(bars) {
+      const m = new Map();
+      if (!Array.isArray(bars)) return m;
+      for (let i = 0; i < bars.length; i++) {
+        const t = Number(bars[i].time);
+        if (!Number.isFinite(t)) continue;
+        // Keep first occurrence for stable shading/marker placement.
+        if (!m.has(t)) m.set(t, i);
+      }
+      return m;
+    }
+
+    function mapTimeForChart(t) {
+      if (t == null) return null;
+      const n = Number(t);
+      if (!Number.isFinite(n)) return null;
+      if (chartMode !== 'brick' || !timeMap) return n;
+      const idx = timeMap.get(n);
+      if (idx == null) return null;
+      return brickBaseTs + idx * 60;
+    }
+
+    function mapBarsForChart(bars) {
+      if (!Array.isArray(bars)) return [];
+      if (chartMode !== 'brick') return bars;
+      return bars.map((b, i) => ({
+        ...b,
+        time: brickBaseTs + i * 60,
+      }));
+    }
+
+    function mapMarkersForChart(markers) {
+      if (!Array.isArray(markers)) return [];
+      if (chartMode !== 'brick') return markers;
+      return markers
+        .map((m) => {
+          const mapped = mapTimeForChart(m.time);
+          if (mapped == null) return null;
+          return { ...m, time: mapped };
+        })
+        .filter(Boolean);
     }
 
     function fmtNum(v) {
@@ -352,9 +402,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       latestPayload = payload;
       if (!payload.ok) return;
 
-      const bars = Array.isArray(payload.bars) ? payload.bars : [];
+      const barsRaw = Array.isArray(payload.bars) ? payload.bars : [];
+      timeMap = buildTimeMapFromBars(barsRaw);
+      const bars = mapBarsForChart(barsRaw);
       candle.setData(bars);
-      candle.setMarkers(Array.isArray(payload.markers) ? payload.markers : []);
+      candle.setMarkers(mapMarkersForChart(Array.isArray(payload.markers) ? payload.markers : []));
 
       const levels = payload.levels || {};
       slSeries.setData(levelLineData(bars, levels.sl));
