@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import threading
+import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -67,6 +69,59 @@ def _signals_root() -> Path:
 
 def _auth_required() -> bool:
     return bool(os.getenv("WEBHOOK_TOKEN", "").strip())
+
+
+def _truthy(v: Optional[str]) -> bool:
+    if v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _start_renko_cache_updater_if_enabled() -> None:
+    """
+    Optional background updater for dashboard Renko cache.
+    Controlled via env:
+      ENABLE_DASHBOARD_RENKO_UPDATER=1
+    """
+    if not _truthy(os.getenv("ENABLE_DASHBOARD_RENKO_UPDATER", "0")):
+        return
+
+    symbol = os.getenv("DASHBOARD_SYMBOL", "SOL-USDT")
+    out_parquet = os.getenv("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet")
+    box = float(os.getenv("DASHBOARD_RENKO_BOX", "0.1"))
+    days_back = int(os.getenv("DASHBOARD_RENKO_DAYS_BACK", "14"))
+    step_hours = int(os.getenv("DASHBOARD_RENKO_STEP_HOURS", "6"))
+    poll_sec = float(os.getenv("DASHBOARD_RENKO_POLL_SEC", "300"))
+
+    def _loop() -> None:
+        # Lazy import to avoid startup dependency when updater is disabled.
+        from quant.execution.renko_cache_updater import refresh_renko_cache
+
+        while True:
+            try:
+                info = refresh_renko_cache(
+                    symbol=str(symbol),
+                    box=float(box),
+                    days_back=int(days_back),
+                    step_hours=int(step_hours),
+                    out_parquet=str(out_parquet),
+                )
+                log.info("dashboard renko updater: %s", info)
+            except Exception as e:
+                log.warning("dashboard renko updater failed: %s", e)
+            time.sleep(max(5.0, float(poll_sec)))
+
+    t = threading.Thread(target=_loop, name="dashboard-renko-updater", daemon=True)
+    t.start()
+    log.info(
+        "started dashboard renko updater symbol=%s out=%s box=%s days_back=%s step_hours=%s poll_sec=%s",
+        symbol,
+        out_parquet,
+        box,
+        days_back,
+        step_hours,
+        poll_sec,
+    )
 
 
 def _check_token(token: Optional[str]) -> None:
@@ -514,6 +569,7 @@ def main() -> None:
     except ImportError:
         pass
     args = parse_args()
+    _start_renko_cache_updater_if_enabled()
     # Railway/cloud set PORT; use it so the app listens on the right port
     port = int(os.environ.get("PORT", str(args.port)))
     uvicorn.run(

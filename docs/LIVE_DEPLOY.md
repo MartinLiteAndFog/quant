@@ -78,6 +78,18 @@ Die Dashboard-Chart zeigt:
 - Trades (Marker),
 - aktive Level (`SL`, `TTP`, `TP1`, `TP2`) aus `DASHBOARD_LEVELS_JSON`.
 
+### Optional: Renko-Cache automatisch aktualisieren
+
+Wenn du willst, kann der Webservice selbst im Hintergrund den Dashboard-Renko-Cache aktualisieren:
+
+- `ENABLE_DASHBOARD_RENKO_UPDATER=1`
+- `DASHBOARD_RENKO_BOX=0.1`
+- `DASHBOARD_RENKO_DAYS_BACK=14`
+- `DASHBOARD_RENKO_STEP_HOURS=6`
+- `DASHBOARD_RENKO_POLL_SEC=300`
+
+Hinweis: Das aktualisiert nur die Dashboard-Renko-Datei (`DASHBOARD_RENKO_PARQUET`), nicht die Trading-Logik an sich.
+
 ## Smoke-Check lokal (Regime + Dashboard)
 
 1. Regime-Daten in SQLite schreiben:
