@@ -90,6 +90,32 @@ Wenn du willst, kann der Webservice selbst im Hintergrund den Dashboard-Renko-Ca
 
 Hinweis: Das aktualisiert nur die Dashboard-Renko-Datei (`DASHBOARD_RENKO_PARQUET`), nicht die Trading-Logik an sich.
 
+## Live-Ausführung (Order Execution Worker)
+
+Für echte Orders brauchst du einen zweiten Prozess (Worker), getrennt vom Webserver.
+
+Empfohlene Safety-Defaults:
+
+- `LIVE_TRADING_ENABLED=0` (hart aus)
+- `LIVE_EXECUTOR_DRY_RUN=1` (nur simulieren)
+- `LIVE_EXECUTOR_MAX_EUR=20`
+- `LIVE_EXECUTOR_LEVERAGE=1`
+- `LIVE_EXECUTOR_SYMBOL_ALLOWLIST=SOL-USDT`
+
+Worker-Start (z. B. in zweitem Railway-Service):
+
+```bash
+python -m quant.execution.live_executor --symbol SOL-USDT --signals-dir data/signals
+```
+
+Go-live Schalter:
+
+1. Dry-Run beobachten (Logs + expected_trades)
+2. Dann `LIVE_TRADING_ENABLED=1`
+3. Dann `LIVE_EXECUTOR_DRY_RUN=0`
+
+Ohne diese beiden letzten Schritte werden keine echten Orders gesendet.
+
 ## Smoke-Check lokal (Regime + Dashboard)
 
 1. Regime-Daten in SQLite schreiben:
