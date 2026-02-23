@@ -27,7 +27,7 @@ class WorkerState:
 
 
 def _normalize_symbol(sym: str) -> str:
-    s = sym.strip().replace("/", "-").replace(":", "-").replace(" ", "")
+    s = sym.strip().upper().replace("/", "-").replace(":", "-").replace(" ", "")
     return s or "UNKNOWN"
 
 
@@ -221,7 +221,7 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Run live IMBA signal worker from KuCoin Futures 1m candles")
     p.add_argument("--symbol", default=os.getenv("LIVE_SYMBOL", "SOL-USDT"))
     p.add_argument("--renko-box", type=float, default=float(os.getenv("LIVE_RENKO_BOX", "0.1")))
-    p.add_argument("--lookback", type=int, default=int(os.getenv("LIVE_IMBA_LOOKBACK", "240")))
+    p.add_argument("--lookback", type=int, default=int(os.getenv("LIVE_IMBA_LOOKBACK", "250")))
     p.add_argument("--sl-abs", type=float, default=float(os.getenv("LIVE_IMBA_SL_ABS", "1.5")))
     p.add_argument("--candles-limit", type=int, default=int(os.getenv("LIVE_CANDLES_LIMIT", "1500")))
     p.add_argument("--poll-sec", type=float, default=float(os.getenv("LIVE_POLL_SEC", "15")))

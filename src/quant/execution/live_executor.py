@@ -41,7 +41,12 @@ def _truthy(v: Optional[str]) -> bool:
 
 
 def _norm_symbol(sym: str) -> str:
-    return sym.strip().replace("/", "-").replace(":", "-").replace(" ", "")
+    return sym.strip().upper().replace("/", "-").replace(":", "-").replace(" ", "")
+
+
+def _canon_symbol(sym: str) -> str:
+    s = (sym or "").upper()
+    return "".join(ch for ch in s if ch.isalnum())
 
 
 def _safe_ts(v: Any) -> Optional[pd.Timestamp]:
@@ -84,15 +89,26 @@ def _write_state(path: Path, st: ExecutorState) -> None:
 
 
 def _latest_signal(signals_root: Path, symbol: str) -> Optional[Dict[str, Any]]:
-    sym_dir = signals_root / _norm_symbol(symbol)
-    if not sym_dir.exists():
-        return None
-    files = sorted(sym_dir.glob("*.jsonl"))
-    if not files:
+    # Accept both SOLUSDT and SOL-USDT style directories.
+    wanted = _canon_symbol(symbol)
+    candidate_dirs = []
+    if signals_root.exists():
+        for p in signals_root.iterdir():
+            if p.is_dir() and _canon_symbol(p.name) == wanted:
+                candidate_dirs.append(p)
+
+    if not candidate_dirs:
+        sym_dir = signals_root / _norm_symbol(symbol)
+        if sym_dir.exists():
+            candidate_dirs = [sym_dir]
+    if not candidate_dirs:
         return None
 
     # Read newest files first, newest line wins.
-    for fp in reversed(files):
+    all_files = []
+    for d in candidate_dirs:
+        all_files.extend(d.glob("*.jsonl"))
+    for fp in reversed(sorted(all_files)):
         try:
             with fp.open("r", encoding="utf-8") as f:
                 lines = [ln.strip() for ln in f if ln.strip()]
@@ -216,7 +232,7 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    symbol = str(args.symbol)
+    symbol = str(args.symbol).upper()
     signals_root = Path(args.signals_dir)
     state_path = Path(args.state_file)
 
@@ -226,7 +242,7 @@ def main() -> None:
     leverage = float(os.getenv("LIVE_EXECUTOR_LEVERAGE", "1"))
 
     allowlist_raw = os.getenv("LIVE_EXECUTOR_SYMBOL_ALLOWLIST", "SOL-USDT")
-    allowlist = {s.strip() for s in allowlist_raw.split(",") if s.strip()}
+    allowlist = {s.strip().upper() for s in allowlist_raw.split(",") if s.strip()}
     if symbol not in allowlist:
         raise RuntimeError(f"symbol '{symbol}' not allowed. Set LIVE_EXECUTOR_SYMBOL_ALLOWLIST.")
 
