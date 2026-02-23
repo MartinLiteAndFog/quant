@@ -163,17 +163,36 @@ class KucoinFuturesBroker(BrokerAPI):
     def get_position(self, symbol: str) -> float:
         """Signed position size (contracts): >0 long, <0 short."""
         contract = _symbol_to_contract(symbol)
-        path = "/api/v1/position"
+        # KuCoin Futures expects symbol for single-position lookup.
+        path = f"/api/v1/position?symbol={contract}"
         data = self._req("GET", path)
-        # data may be list of positions
-        positions = data if isinstance(data, list) else (data.get("holding", []) or [])
-        for p in positions:
-            if p.get("symbol") == contract:
-                size = float(p.get("currentQty", p.get("size", 0)) or 0)
-                side = (p.get("side") or "none").lower()
-                if side == "short":
-                    return -abs(size)
+
+        if not data:
+            return 0.0
+
+        # Typical response is a single object for the requested symbol.
+        if isinstance(data, dict):
+            size = float(data.get("currentQty", data.get("size", 0)) or 0)
+            side = (data.get("side") or "").lower()
+            if side == "short":
+                return -abs(size)
+            if side == "long":
                 return abs(size)
+            # Fallback: if side is missing, keep sign from size if present.
+            return float(size)
+
+        # Defensive fallback if API shape changes to list.
+        if isinstance(data, list):
+            for p in data:
+                if p.get("symbol") == contract:
+                    size = float(p.get("currentQty", p.get("size", 0)) or 0)
+                    side = (p.get("side") or "").lower()
+                    if side == "short":
+                        return -abs(size)
+                    if side == "long":
+                        return abs(size)
+                    return float(size)
+
         return 0.0
 
     def cancel_all(self, symbol: str) -> None:
