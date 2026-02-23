@@ -262,10 +262,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <script>
     const chartEl = document.getElementById('chart');
     const shadeCanvas = document.getElementById('shade');
+    const qs = new URLSearchParams(window.location.search);
+    const chartMode = (qs.get('mode') || 'brick').toLowerCase(); // brick | time
+    const brickBaseTs = 1704067200; // 2024-01-01 UTC
     const chart = LightweightCharts.createChart(chartEl, {
       layout: { background: { color: '#1e2333' }, textColor: '#d9def7' },
       rightPriceScale: { borderColor: '#2a3044' },
-      timeScale: { borderColor: '#2a3044', timeVisible: true, secondsVisible: false },
+      timeScale: {
+        borderColor: '#2a3044',
+        timeVisible: chartMode !== 'brick',
+        secondsVisible: false,
+        // In brick mode, render a brick index instead of fake calendar time.
+        tickMarkFormatter: (time, tickMarkType, locale) => {
+          if (chartMode !== 'brick') return undefined;
+          const t = Number(time);
+          if (!Number.isFinite(t)) return '';
+          const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
+          return `B${idx}`;
+        },
+      },
       grid: { vertLines: { color: '#252b3f' }, horzLines: { color: '#252b3f' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Magnet },
     });
@@ -282,9 +297,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
 
-    const qs = new URLSearchParams(window.location.search);
-    const chartMode = (qs.get('mode') || 'brick').toLowerCase(); // brick | time
-    const brickBaseTs = 1704067200; // 2024-01-01 UTC
     let latestPayload = null;
     let timeMap = null;
 
