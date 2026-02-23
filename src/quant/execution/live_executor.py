@@ -11,11 +11,27 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from quant.execution.kucoin_futures import KucoinFuturesBroker
-from quant.execution.live_monitor import ExpectedTrade, record_expected
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
 from quant.utils.log import get_logger
 
 log = get_logger("quant.live_executor")
+
+try:
+    from quant.execution.live_monitor import ExpectedTrade, record_expected
+except Exception:
+    # Keep executor runnable even if monitoring module is not packaged in target runtime.
+    @dataclass
+    class ExpectedTrade:
+        ts: str
+        symbol: str
+        side: str
+        action: str
+        qty: float
+        expected_px: Optional[float] = None
+        note: Optional[str] = None
+
+    def record_expected(_: ExpectedTrade) -> None:
+        return None
 
 
 def _truthy(v: Optional[str]) -> bool:
