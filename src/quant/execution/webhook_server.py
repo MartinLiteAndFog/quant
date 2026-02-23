@@ -13,6 +13,13 @@ from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
 import uvicorn
 
+from quant.execution.dashboard_state import (
+    build_regime_overlay,
+    load_active_levels,
+    load_renko_bars,
+    load_trade_markers,
+)
+from quant.regime import RegimeStore
 from ..utils.log import get_logger
 
 log = get_logger("quant.webhook")
@@ -145,42 +152,187 @@ def api_position(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
         return {"ok": False, "symbol": symbol, "position": None, "error": str(e)}
 
 
+@app.get("/api/regime/latest")
+def api_regime_latest(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
+    try:
+        row = RegimeStore().get_latest_state(symbol=symbol)
+        return {"ok": True, "symbol": symbol, "regime": row}
+    except Exception as e:
+        return {"ok": False, "symbol": symbol, "regime": None, "error": str(e)}
+
+
+@app.get("/api/regime/transitions")
+def api_regime_transitions(symbol: str = DEFAULT_SYMBOL, limit: int = 50) -> Dict[str, Any]:
+    try:
+        rows = RegimeStore().get_recent_transitions(symbol=symbol, limit=int(max(1, limit)))
+        return {"ok": True, "symbol": symbol, "transitions": rows}
+    except Exception as e:
+        return {"ok": False, "symbol": symbol, "transitions": [], "error": str(e)}
+
+
+@app.get("/api/dashboard/chart")
+def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_points: int = 3000) -> Dict[str, Any]:
+    """
+    Unified chart payload: renko bars, trades, regime overlays, and active levels.
+    """
+    try:
+        bars = load_renko_bars(max_points=int(max(100, max_points)))
+        markers = load_trade_markers(max_points=int(max(100, max_points)))
+        levels = load_active_levels()
+        regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
+        latest = regime.get("latest") or {}
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "bars": bars,
+            "markers": markers,
+            "levels": levels,
+            "regime": regime,
+            "confidence": latest.get("confidence"),
+            "gate_on": latest.get("gate_on"),
+            "regime_state": latest.get("regime_state"),
+            "ts": _now_utc_iso(),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "bars": [],
+            "markers": [],
+            "levels": {},
+            "regime": {"spans": [], "points": [], "latest": None},
+            "error": str(e),
+            "ts": _now_utc_iso(),
+        }
+
+
 DASHBOARD_HTML = """<!DOCTYPE html>
-<html lang="de">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Quant Live Dashboard</title>
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
   <style>
-    :root { --bg: #1a1b26; --card: #24283b; --text: #c0caf5; --accent: #7aa2f7; --ok: #9ece6a; --err: #f7768e; }
+    :root { --bg: #141823; --card: #1e2333; --text: #d9def7; --muted: #8e98bf; --ok: #9ece6a; --err: #f7768e; --accent: #7aa2f7; }
     * { box-sizing: border-box; }
-    body { font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); margin: 1rem; }
-    h1 { font-size: 1.25rem; color: var(--accent); }
-    .card { background: var(--card); border-radius: 8px; padding: 1rem; margin: 1rem 0; max-width: 480px; }
-    .row { display: flex; justify-content: space-between; margin: 0.5rem 0; }
-    .label { color: #787c99; }
+    body { margin: 0; padding: 1rem; font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); }
+    h1 { margin: 0 0 0.75rem 0; color: var(--accent); font-size: 1.25rem; }
+    .layout { display: grid; grid-template-columns: 1fr 320px; gap: 1rem; align-items: start; }
+    .card { background: var(--card); border-radius: 10px; padding: 0.75rem; }
+    .chart-wrap { position: relative; height: 620px; border-radius: 10px; overflow: hidden; }
+    #chart { position: absolute; inset: 0; }
+    #shade { position: absolute; inset: 0; pointer-events: none; }
+    .row { display: flex; justify-content: space-between; gap: 1rem; margin: 0.4rem 0; }
+    .label { color: var(--muted); }
     .ok { color: var(--ok); }
     .err { color: var(--err); }
-    .hint { font-size: 0.875rem; color: #787c99; margin-top: 0.5rem; }
-    a { color: var(--accent); }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
+    .confidence-pill { font-weight: 700; }
+    @media (max-width: 1200px) { .layout { grid-template-columns: 1fr; } .chart-wrap { height: 520px; } }
   </style>
 </head>
 <body>
   <h1>Quant Live Dashboard</h1>
-  <div class="card">
-    <div class="row"><span class="label">API (KuCoin)</span><span id="api-status">…</span></div>
-    <div class="row"><span class="label">Kurs (Bid / Ask)</span><span id="ticker">…</span></div>
-    <div class="row"><span class="label">Position</span><span id="position">…</span></div>
-    <p class="hint" id="hint"></p>
+  <div class="layout">
+    <div class="card">
+      <div class="chart-wrap">
+        <div id="chart"></div>
+        <canvas id="shade"></canvas>
+      </div>
+      <div class="hint">Gate ON is green, Gate OFF is blue. Intensity follows confidence.</div>
+    </div>
+    <div class="card">
+      <div class="row"><span class="label">API (KuCoin)</span><span id="api-status">...</span></div>
+      <div class="row"><span class="label">Ticker</span><span id="ticker" class="mono">...</span></div>
+      <div class="row"><span class="label">Position</span><span id="position" class="mono">...</span></div>
+      <hr style="border-color:#2a3044;border-style:solid;border-width:1px 0 0 0;margin:0.8rem 0;">
+      <div class="row"><span class="label">Gate</span><span id="gate">...</span></div>
+      <div class="row"><span class="label">Regime</span><span id="regime-state">...</span></div>
+      <div class="row"><span class="label">Confidence</span><span id="confidence" class="confidence-pill">...</span></div>
+      <div class="row"><span class="label">SL</span><span id="lvl-sl" class="mono">-</span></div>
+      <div class="row"><span class="label">TTP</span><span id="lvl-ttp" class="mono">-</span></div>
+      <div class="row"><span class="label">TP1</span><span id="lvl-tp1" class="mono">-</span></div>
+      <div class="row"><span class="label">TP2</span><span id="lvl-tp2" class="mono">-</span></div>
+      <p id="hint" class="hint"></p>
+    </div>
   </div>
-  <p class="hint">API-Key: .env oder Umgebungsvariablen (KUCOIN_FUTURES_*). Siehe docs/LIVE_DEPLOY.md</p>
+
   <script>
-    async function load() {
+    const chartEl = document.getElementById('chart');
+    const shadeCanvas = document.getElementById('shade');
+    const chart = LightweightCharts.createChart(chartEl, {
+      layout: { background: { color: '#1e2333' }, textColor: '#d9def7' },
+      rightPriceScale: { borderColor: '#2a3044' },
+      timeScale: { borderColor: '#2a3044', timeVisible: true, secondsVisible: false },
+      grid: { vertLines: { color: '#252b3f' }, horzLines: { color: '#252b3f' } },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Magnet },
+    });
+    const candle = chart.addCandlestickSeries({
+      upColor: '#2ecc71',
+      downColor: '#f7768e',
+      borderDownColor: '#f7768e',
+      borderUpColor: '#2ecc71',
+      wickDownColor: '#f7768e',
+      wickUpColor: '#2ecc71',
+    });
+    const slSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, title: 'SL' });
+    const ttpSeries = chart.addLineSeries({ color: '#ffcc66', lineWidth: 2, title: 'TTP' });
+    const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
+    const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
+
+    let latestPayload = null;
+
+    function resizeShade() {
+      shadeCanvas.width = chartEl.clientWidth;
+      shadeCanvas.height = chartEl.clientHeight;
+    }
+
+    function confAlpha(conf) {
+      const c = Math.max(0, Math.min(1, Number(conf || 0)));
+      return 0.08 + 0.32 * c;
+    }
+
+    function drawGateShading() {
+      resizeShade();
+      const ctx = shadeCanvas.getContext('2d');
+      ctx.clearRect(0, 0, shadeCanvas.width, shadeCanvas.height);
+      if (!latestPayload || !latestPayload.regime || !Array.isArray(latestPayload.regime.spans)) return;
+      const spans = latestPayload.regime.spans;
+      const tscale = chart.timeScale();
+      for (const s of spans) {
+        const x0 = tscale.timeToCoordinate(s.from);
+        const x1 = tscale.timeToCoordinate(s.to);
+        if (x0 == null || x1 == null) continue;
+        const left = Math.min(x0, x1);
+        const width = Math.max(1, Math.abs(x1 - x0));
+        const alpha = confAlpha(s.confidence);
+        const color = Number(s.gate_on) ? `rgba(46, 204, 113, ${alpha})` : `rgba(64, 124, 255, ${alpha})`;
+        ctx.fillStyle = color;
+        ctx.fillRect(left, 0, width, shadeCanvas.height);
+      }
+    }
+
+    function fmtNum(v) {
+      if (v == null || Number.isNaN(Number(v))) return '-';
+      return Number(v).toFixed(4);
+    }
+
+    function levelLineData(lastBars, level) {
+      if (!Array.isArray(lastBars) || !lastBars.length || level == null || Number.isNaN(Number(level))) return [];
+      const first = lastBars[0].time;
+      const last = lastBars[lastBars.length - 1].time;
+      const val = Number(level);
+      return [{ time: first, value: val }, { time: last, value: val }];
+    }
+
+    async function loadMeta() {
       const [st, pos] = await Promise.all([
         fetch('/api/status').then(r => r.json()),
         fetch('/api/position').then(r => r.json())
       ]);
-      document.getElementById('api-status').textContent = st.api_configured ? '✓ konfiguriert' : '— nicht gesetzt';
+      document.getElementById('api-status').textContent = st.api_configured ? 'configured' : 'missing';
       document.getElementById('api-status').className = st.api_configured ? 'ok' : 'err';
       if (st.hint) document.getElementById('hint').textContent = st.hint;
       if (st.ticker) {
@@ -188,12 +340,55 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const b = typeof t.bid === 'number' ? t.bid.toFixed(4) : t.bid;
         const a = typeof t.ask === 'number' ? t.ask.toFixed(4) : t.ask;
         const m = t.mid != null ? (typeof t.mid === 'number' ? t.mid.toFixed(4) : t.mid) : null;
-        document.getElementById('ticker').textContent = m != null ? m + ' (bid ' + b + ' / ask ' + a + ')' : (b + ' / ' + a);
-      } else document.getElementById('ticker').textContent = st.ticker_error || '—';
-      document.getElementById('position').textContent = pos.position != null ? pos.position : (pos.error || '—');
+        document.getElementById('ticker').textContent = m != null ? `${m} (bid ${b} / ask ${a})` : `${b} / ${a}`;
+      } else {
+        document.getElementById('ticker').textContent = st.ticker_error || '-';
+      }
+      document.getElementById('position').textContent = pos.position != null ? String(pos.position) : (pos.error || '-');
     }
-    load();
-    setInterval(load, 10000);
+
+    async function loadChart() {
+      const payload = await fetch('/api/dashboard/chart?hours=336&max_points=4000').then(r => r.json());
+      latestPayload = payload;
+      if (!payload.ok) return;
+
+      const bars = Array.isArray(payload.bars) ? payload.bars : [];
+      candle.setData(bars);
+      candle.setMarkers(Array.isArray(payload.markers) ? payload.markers : []);
+
+      const levels = payload.levels || {};
+      slSeries.setData(levelLineData(bars, levels.sl));
+      ttpSeries.setData(levelLineData(bars, levels.ttp));
+      tp1Series.setData(levelLineData(bars, levels.tp1));
+      tp2Series.setData(levelLineData(bars, levels.tp2));
+
+      document.getElementById('lvl-sl').textContent = fmtNum(levels.sl);
+      document.getElementById('lvl-ttp').textContent = fmtNum(levels.ttp);
+      document.getElementById('lvl-tp1').textContent = fmtNum(levels.tp1);
+      document.getElementById('lvl-tp2').textContent = fmtNum(levels.tp2);
+
+      const gate = payload.gate_on;
+      document.getElementById('gate').textContent = gate == null ? '-' : (Number(gate) ? 'ON' : 'OFF');
+      document.getElementById('gate').className = Number(gate) ? 'ok' : 'err';
+      document.getElementById('regime-state').textContent = payload.regime_state || '-';
+      const conf = payload.confidence == null ? null : Number(payload.confidence);
+      document.getElementById('confidence').textContent = conf == null ? '-' : conf.toFixed(3);
+      if (conf != null) {
+        document.getElementById('confidence').style.color = conf >= 0.7 ? '#9ece6a' : (conf >= 0.5 ? '#e0af68' : '#f7768e');
+      }
+
+      chart.timeScale().fitContent();
+      drawGateShading();
+    }
+
+    chart.timeScale().subscribeVisibleTimeRangeChange(() => drawGateShading());
+    window.addEventListener('resize', () => drawGateShading());
+
+    async function tick() {
+      await Promise.all([loadMeta(), loadChart()]);
+    }
+    tick();
+    setInterval(tick, 10000);
   </script>
 </body>
 </html>

@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+import pandas as pd
+
+from quant.execution.webhook_server import api_dashboard_chart, api_regime_latest
+from quant.regime import RegimeDecision, RegimeService, RegimeStore
+
+
+class WebhookDashboardApiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        root = Path(self.tmp.name)
+        os.environ["REGIME_DB_PATH"] = str(root / "regime.db")
+        os.environ["DASHBOARD_RENKO_PARQUET"] = str(root / "renko.parquet")
+        os.environ["DASHBOARD_TRADES_PARQUET"] = str(root / "trades.parquet")
+        os.environ["DASHBOARD_LEVELS_JSON"] = str(root / "execution_state.json")
+
+        renko = pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-02-20", periods=2, freq="h", tz="UTC"),
+                "open": [100.0, 101.0],
+                "high": [101.0, 102.0],
+                "low": [99.0, 100.0],
+                "close": [100.5, 101.5],
+            }
+        )
+        renko.to_parquet(root / "renko.parquet", index=False)
+        pd.DataFrame(
+            [
+                {"entry_ts": "2026-02-20T00:00:00Z", "exit_ts": "2026-02-20T01:00:00Z", "side": 1, "exit_event": "tp_exit"}
+            ]
+        ).to_parquet(root / "trades.parquet", index=False)
+        (root / "execution_state.json").write_text('{"sl":99.0,"ttp":102.0,"tp1":103.0,"tp2":104.0}', encoding="utf-8")
+
+        svc = RegimeService(RegimeStore())
+        svc.upsert_decision(
+            RegimeDecision(
+                ts="2026-02-20T00:00:00Z",
+                symbol="SOL-USDT",
+                gate_on=1,
+                regime_state="trend",
+                regime_score=0.8,
+                confidence=0.8,
+                reason_code="seed",
+            )
+        )
+
+    def tearDown(self) -> None:
+        self.tmp.cleanup()
+
+    def test_chart_payload_shape(self) -> None:
+        body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+        self.assertTrue(body.get("ok"))
+        self.assertIn("bars", body)
+        self.assertIn("markers", body)
+        self.assertIn("levels", body)
+        self.assertIn("regime", body)
+        self.assertTrue(len(body["bars"]) >= 1)
+
+    def test_regime_latest_endpoint(self) -> None:
+        body = api_regime_latest(symbol="SOL-USDT")
+        self.assertTrue(body.get("ok"))
+        self.assertEqual(body["symbol"], "SOL-USDT")
+        self.assertIsNotNone(body["regime"])
+
+
+if __name__ == "__main__":
+    unittest.main()

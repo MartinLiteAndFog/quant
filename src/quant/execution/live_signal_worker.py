@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from quant.execution.execution_state import write_execution_state
 from quant.execution.kucoin_futures import KucoinFuturesBroker, _symbol_to_contract
 from quant.features.renko import renko_from_close
 from quant.strategies.imba import ImbaParams, compute_imba_signals
@@ -197,6 +198,19 @@ def run_once(
         _append_signal_jsonl(out_path, rec)
         state.last_signal_ts = ts.isoformat()
         state.n_emitted += 1
+        # Minimal live execution context for dashboard overlays.
+        write_execution_state(
+            {
+                "symbol": symbol,
+                "signal": int(rec["signal"]),
+                "sl": rec.get("sl"),
+                "ttp": None,
+                "tp1": None,
+                "tp2": None,
+                "mode": "signal_only",
+                "ts": rec["ts"],
+            }
+        )
         log.info("live-signal emitted symbol=%s ts=%s signal=%s file=%s", symbol, rec["ts"], rec["signal"], out_path)
 
     state.last_poll_ts = _now_utc_iso()

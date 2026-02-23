@@ -1,0 +1,110 @@
+# Live-Betrieb & Cloud-Deployment
+
+## Woher kommt der SOL-Kurs (Ticker)?
+
+Der **Kurs kommt von KuCoin**: Sobald der Live-Service läuft, holt er Bid/Ask über die **KuCoin Futures API** (Ticker-Endpoint). Es wird also dieselbe Quelle genutzt wie für die Orders – keine separate Datenquelle. Der `KucoinFuturesBroker` ruft dafür `get_best_bid_ask("SOL-USDT")` auf und erhält die aktuellen Preise von KuCoin.
+
+## API-Key eintragen
+
+**Nicht im Code.** Nur über Umgebungsvariablen:
+
+| Variable | Beschreibung |
+|----------|--------------|
+| `KUCOIN_FUTURES_API_KEY` | API Key aus KuCoin (API Management) |
+| `KUCOIN_FUTURES_API_SECRET` | API Secret |
+| `KUCOIN_FUTURES_PASSPHRASE` | Passphrase, die du beim Anlegen des Keys gesetzt hast |
+
+**Lokal:**
+
+1. Im Projektroot `.env` anlegen (wird von git ignoriert, wenn in `.gitignore`).
+2. Inhalt an `.env.example` anlehnen und die Platzhalter durch echte Werte ersetzen.
+3. Beim Start der App werden die Werte geladen (z.B. mit `python-dotenv` in deinem Startscript).
+
+**Cloud (24/7):**
+
+- In der jeweiligen Plattform die **Environment Variables** setzen (keine `.env`-Datei committen).
+- Beispiele:
+  - **Railway:** Project → Variables → Add Variable
+  - **Fly.io:** `fly secrets set KUCOIN_FUTURES_API_KEY=...` (und Secret/Passphrase)
+  - **Render / Heroku / AWS:** jeweilige „Environment“- oder „Config Vars“-Sektion
+
+KuCoin: **API Management** → Create API → **Futures**-Berechtigung aktivieren, IP-Whitelist optional.
+
+## 24/7 in der Cloud laufen lassen
+
+Ein möglicher Aufbau:
+
+1. **Ein Service** führt aus:
+   - Webhook-Server (empfängt TradingView-Signale),
+   - optional ein Worker/Loop, der bei neuem Signal den OMS aufruft und Orders an KuCoin sendet,
+   - **Dashboard** (gleiche App, andere Pfade) für Status und Oberfläche.
+
+2. **Deployment-Optionen:**
+   - **Railway / Render / Fly.io:** Repo verbinden, Build-Befehl (z.B. `pip install -e .`), Start: `uvicorn quant.execution.webhook_server:app --host 0.0.0.0 --port $PORT`. Env-Variablen wie oben setzen.
+   - **VPS (Ubuntu):** Systemd-Service oder Docker, gleicher uvicorn-Befehl, `0.0.0.0` damit der Server von außen erreichbar ist.
+
+3. **Webhook von TradingView:** URL auf deine Cloud-URL setzen (z.B. `https://deine-app.railway.app/webhook/tradingview`). Wenn `WEBHOOK_TOKEN` gesetzt ist, im TradingView-Webhook den Header `x-webhook-token` mitschicken.
+
+4. **Persistenz:** `data/signals` und `data/live` sollten auf einem Volume/verzeichnis liegen, das bei Restarts erhalten bleibt (z.B. Railway Volume, oder gebundenes Verzeichnis auf dem VPS).
+
+## Desktop-Oberfläche
+
+Es gibt eine **Web-Dashboard-Grundlage** (siehe unten). Du öffnest sie im Browser (lokal oder unter der Cloud-URL). Später kann daraus eine „richtige“ Desktop-App werden (z.B. Electron/Tauri), die dieselben API-Routen nutzt.
+
+- **Lokal:** Nach Start des Servers: `http://127.0.0.1:8000/dashboard`
+- **Cloud:** `https://deine-app.railway.app/dashboard`
+
+Die gleichen API-Routen (`/api/status`, `/api/position`, …) können dann von einer eigenen Desktop-App angefragt werden.
+
+## Regime Store und Dashboard-Overlays
+
+Neue Standardpfade (optional per Env konfigurierbar):
+
+- `REGIME_DB_PATH` (Default: `data/live/regime.db`)
+- `DASHBOARD_RENKO_PARQUET` (Default: `data/live/renko_latest.parquet`)
+- `DASHBOARD_TRADES_PARQUET` (Default: `data/live/trades.parquet`)
+- `DASHBOARD_LEVELS_JSON` (Default: `data/live/execution_state.json`)
+
+Neue Dashboard-APIs:
+
+- `/api/regime/latest?symbol=SOL-USDT`
+- `/api/regime/transitions?symbol=SOL-USDT&limit=50`
+- `/api/dashboard/chart?symbol=SOL-USDT&hours=336&max_points=4000`
+
+Die Dashboard-Chart zeigt:
+
+- Renko-Chart (scroll/zoom),
+- Gate-Shading (ON=grün, OFF=blau) mit transparenzbasierter Confidence,
+- Trades (Marker),
+- aktive Level (`SL`, `TTP`, `TP1`, `TP2`) aus `DASHBOARD_LEVELS_JSON`.
+
+## Smoke-Check lokal (Regime + Dashboard)
+
+1. Regime-Daten in SQLite schreiben:
+
+```bash
+python scripts/update_regime_store.py --input data/regimes/your_gate.csv --symbol SOL-USDT --gate-col gate_on --ts-col ts
+```
+
+2. Webserver starten:
+
+```bash
+uvicorn quant.execution.webhook_server:app --host 127.0.0.1 --port 8000
+```
+
+3. API prüfen:
+
+```bash
+curl "http://127.0.0.1:8000/api/regime/latest?symbol=SOL-USDT"
+curl "http://127.0.0.1:8000/api/dashboard/chart?symbol=SOL-USDT&hours=168"
+```
+
+4. Dashboard prüfen:
+
+- `http://127.0.0.1:8000/dashboard`
+
+## Migration zu Postgres (später)
+
+- Die Regime-Logik ist über ein Store-Interface gekapselt (`RegimeStore`).
+- Für Postgres bleibt der API-Vertrag gleich; nur die Store-Implementierung wird getauscht.
+- Empfohlener Weg: parallele Writes (SQLite + Postgres) im Übergang, dann Dashboard/Worker auf Postgres umstellen.
