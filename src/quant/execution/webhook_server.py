@@ -359,14 +359,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const ttpSeries = chart.addLineSeries({ color: '#ffcc66', lineWidth: 2, title: 'TTP' });
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
-    const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 2, title: 'IMBA Long Fib', lineStyle: 0 });
-    const fibMidSeries = chart.addLineSeries({ color: '#bfc7d5', lineWidth: 1, title: 'IMBA Mid Fib', lineStyle: 2 });
-    const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, title: 'IMBA Short Fib', lineStyle: 0 });
-    const priceLineSeries = chart.addLineSeries({ color: '#9aa5b1', lineWidth: 1, title: 'Last', lineStyle: 2 });
+    const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibMidSeries = chart.addLineSeries({ color: '#bfc7d5', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const priceLineSeries = chart.addLineSeries({ color: '#9aa5b1', lineWidth: 1, title: 'Last', lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     const tradeSegmentSeries = [];
 
     let latestPayload = null;
     let timeMap = null;
+    let latestMid = null;
+    let hasFittedOnce = false;
 
     function resizeShade() {
       shadeCanvas.width = chartEl.clientWidth;
@@ -496,8 +498,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const b = typeof t.bid === 'number' ? t.bid.toFixed(4) : t.bid;
         const a = typeof t.ask === 'number' ? t.ask.toFixed(4) : t.ask;
         const m = t.mid != null ? (typeof t.mid === 'number' ? t.mid.toFixed(4) : t.mid) : null;
+        latestMid = Number(t.mid);
         document.getElementById('ticker').textContent = m != null ? `${m} (bid ${b} / ask ${a})` : `${b} / ${a}`;
       } else {
+        latestMid = null;
         document.getElementById('ticker').textContent = st.ticker_error || '-';
       }
       document.getElementById('position').textContent = pos.position != null ? String(pos.position) : (pos.error || '-');
@@ -525,9 +529,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       fibShortSeries.setData(mapLineForChart(fibo.short || []));
       const lastBar = bars.length ? bars[bars.length - 1] : null;
       if (lastBar) {
+        const livePx = Number.isFinite(Number(latestMid)) ? Number(latestMid) : Number(lastBar.close);
         priceLineSeries.setData([
-          { time: bars[0].time, value: Number(lastBar.close) },
-          { time: lastBar.time, value: Number(lastBar.close) },
+          { time: bars[0].time, value: livePx },
+          { time: lastBar.time, value: livePx },
         ]);
       } else {
         priceLineSeries.setData([]);
@@ -557,7 +562,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         document.getElementById('confidence').style.color = conf >= 0.7 ? '#9ece6a' : (conf >= 0.5 ? '#e0af68' : '#f7768e');
       }
 
-      chart.timeScale().fitContent();
+      if (!hasFittedOnce) {
+        chart.timeScale().fitContent();
+        hasFittedOnce = true;
+      }
       drawGateShading();
     }
 
