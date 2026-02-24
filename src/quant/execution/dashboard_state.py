@@ -67,18 +67,20 @@ def _refresh_renko_cache_if_needed(existing_df: pd.DataFrame) -> pd.DataFrame:
         return existing_df
     try:
         from quant.execution.renko_cache_updater import refresh_renko_cache
-
-        refresh_renko_cache(
+        info = refresh_renko_cache(
             symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
             box=float(os.getenv("DASHBOARD_RENKO_BOX", "0.1")),
             days_back=int(os.getenv("DASHBOARD_RENKO_DAYS_BACK", "14")),
             step_hours=int(os.getenv("DASHBOARD_RENKO_STEP_HOURS", "6")),
             out_parquet=str(_env_path("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet")),
         )
+        if not bool(info.get("ok", False)):
+            _LAST_REFRESH_ERROR = str(info.get("reason") or info.get("error") or "refresh_not_ok")
+            return existing_df
         _LAST_REFRESH_TS = now
         _LAST_REFRESH_ERROR = None
-    except Exception:
-        _LAST_REFRESH_ERROR = "refresh_failed"
+    except Exception as e:
+        _LAST_REFRESH_ERROR = f"refresh_failed:{e}"
         return existing_df
     return _read_renko_df()
 

@@ -13,6 +13,8 @@ from quant.features.renko import renko_from_close
 from quant.utils.log import get_logger
 
 log = get_logger("quant.renko_cache_updater")
+KLINE_PAGE_LIMIT = 200
+SAFE_STEP_MINUTES = 180  # < 200 to avoid page truncation gaps on 1m candles
 
 
 def _build_renko_ohlc(bricks: pd.DataFrame) -> pd.DataFrame:
@@ -54,7 +56,9 @@ def _fetch_1m_close_paged(
     contract = _symbol_to_contract(symbol)
     now = pd.Timestamp.now("UTC")
     start = now - pd.Timedelta(days=int(max(1, days_back)))
-    step = pd.Timedelta(hours=int(max(1, step_hours)))
+    requested = pd.Timedelta(hours=int(max(1, step_hours)))
+    max_safe = pd.Timedelta(minutes=SAFE_STEP_MINUTES)
+    step = min(requested, max_safe)
 
     chunks: List[pd.DataFrame] = []
     cur = start
@@ -129,6 +133,7 @@ def refresh_renko_cache(
         "box": float(box),
         "days_back": int(days_back),
         "step_hours": int(step_hours),
+        "step_effective_minutes": int(SAFE_STEP_MINUTES if int(step_hours) * 60 > SAFE_STEP_MINUTES else int(step_hours) * 60),
         "last_close": last_close,
         "out": str(out_path),
     }
