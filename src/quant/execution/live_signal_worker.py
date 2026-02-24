@@ -32,11 +32,11 @@ def _normalize_symbol(sym: str) -> str:
 
 
 def _today_utc() -> str:
-    return pd.Timestamp.utcnow().strftime("%Y%m%d")
+    return pd.Timestamp.now("UTC").strftime("%Y%m%d")
 
 
 def _now_utc_iso() -> str:
-    return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _read_state(path: Path) -> WorkerState:
@@ -95,11 +95,32 @@ def _parse_kucoin_1m_rows(rows: List[List[Any]]) -> pd.DataFrame:
 
 def _fetch_recent_1m_ohlcv(broker: KucoinFuturesBroker, symbol: str, limit: int) -> pd.DataFrame:
     contract = _symbol_to_contract(symbol)
-    data = broker._req("GET", f"/api/v1/kline/query?symbol={contract}&granularity=60&from=0")
-    rows = data if isinstance(data, list) else (data.get("data", []) if isinstance(data, dict) else [])
-    df = _parse_kucoin_1m_rows(rows)
-    if limit > 0 and len(df) > limit:
-        df = df.iloc[-limit:].reset_index(drop=True)
+    lim = int(max(1, limit))
+    now = pd.Timestamp.now("UTC")
+    start = now - pd.Timedelta(minutes=lim + 30)  # small warm-up buffer
+    step = pd.Timedelta(hours=3)  # small pages to avoid API truncation
+
+    chunks: List[pd.DataFrame] = []
+    cur = start
+    while cur < now:
+        nxt = min(cur + step, now)
+        from_ms = int(cur.timestamp() * 1000)
+        data = broker._req("GET", f"/api/v1/kline/query?symbol={contract}&granularity=60&from={from_ms}")
+        rows = data if isinstance(data, list) else (data.get("data", []) if isinstance(data, dict) else [])
+        df_page = _parse_kucoin_1m_rows(rows)
+        if not df_page.empty:
+            df_page = df_page[(df_page["ts"] >= cur) & (df_page["ts"] < nxt)]
+            if not df_page.empty:
+                chunks.append(df_page)
+        cur = nxt
+
+    if not chunks:
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close"])
+
+    df = pd.concat(chunks, ignore_index=True)
+    df = df.sort_values("ts").drop_duplicates("ts", keep="last").reset_index(drop=True)
+    if len(df) > lim:
+        df = df.iloc[-lim:].reset_index(drop=True)
     return df
 
 
