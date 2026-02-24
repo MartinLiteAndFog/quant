@@ -15,25 +15,33 @@ from quant.utils.log import get_logger
 log = get_logger("quant.renko_cache_updater")
 
 
-def _build_synthetic_renko_ohlc(bricks: pd.DataFrame) -> pd.DataFrame:
+def _build_renko_ohlc(bricks: pd.DataFrame) -> pd.DataFrame:
     """
-    Build continuous Renko OHLC for dashboard rendering.
-    Keeps brick sequence order and assigns unique synthetic minute timestamps.
+    Build Renko OHLC for dashboard rendering using real brick timestamps.
+    If multiple bricks share the same timestamp, add nanosecond offsets to keep
+    chart times unique while preserving chronological order.
     """
     if bricks is None or len(bricks) == 0:
         return pd.DataFrame(columns=["ts", "open", "high", "low", "close"])
 
     b = bricks.copy().reset_index(drop=True)
-    t0 = pd.Timestamp.now("UTC").floor("s") - pd.Timedelta(minutes=len(b))
+    b["ts"] = pd.to_datetime(b["ts"], utc=True, errors="coerce")
     out = pd.DataFrame(
         {
-            "ts": [t0 + pd.Timedelta(minutes=i) for i in range(len(b))],
+            "ts": b["ts"],
             "open": pd.to_numeric(b["open"], errors="coerce"),
             "high": b[["open", "close"]].max(axis=1),
             "low": b[["open", "close"]].min(axis=1),
             "close": pd.to_numeric(b["close"], errors="coerce"),
         }
     ).dropna()
+    out = out.sort_values("ts").reset_index(drop=True)
+    if len(out) > 1:
+        dup = out["ts"].duplicated(keep=False)
+        if dup.any():
+            grp = out["ts"].astype("int64")
+            idx_in_grp = out.groupby(grp).cumcount()
+            out["ts"] = out["ts"] + pd.to_timedelta(idx_in_grp, unit="ns")
     return out.reset_index(drop=True)
 
 
@@ -103,7 +111,7 @@ def refresh_renko_cache(
     if len(bricks) == 0:
         return {"ok": False, "reason": "no_bricks", "candles": int(len(close_df))}
 
-    renko = _build_synthetic_renko_ohlc(bricks)
+    renko = _build_renko_ohlc(bricks)
     out_path = Path(out_parquet)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     renko.to_parquet(out_path, index=False)

@@ -352,8 +352,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const d = new Date(rt * 1000);
           const hh = String(d.getUTCHours()).padStart(2, '0');
           const mm = String(d.getUTCMinutes()).padStart(2, '0');
-          // Show a clear time axis label every ~2 hours.
-          return (d.getUTCMinutes() % 120 === 0 || d.getUTCHours() % 2 === 0) ? `${hh}:${mm}` : `${hh}:${mm}`;
+          return `${hh}:${mm}`;
         },
       },
       grid: { vertLines: { color: '#252b3f' }, horzLines: { color: '#252b3f' } },
