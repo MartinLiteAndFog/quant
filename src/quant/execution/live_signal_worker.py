@@ -151,6 +151,33 @@ def _append_signal_jsonl(out_path: Path, rec: Dict[str, Any]) -> None:
         f.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":"), default=str) + "\n")
 
 
+def _last_jsonl_record(path: Path) -> Optional[Dict[str, Any]]:
+    if not path.exists():
+        return None
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            lines = [ln.strip() for ln in f if ln.strip()]
+        if not lines:
+            return None
+        return json.loads(lines[-1])
+    except Exception:
+        return None
+
+
+def _append_signal_jsonl_dedupe(out_path: Path, rec: Dict[str, Any]) -> bool:
+    prev = _last_jsonl_record(out_path)
+    if prev:
+        same_ts = str(prev.get("ts")) == str(rec.get("ts"))
+        same_sig = int(prev.get("signal", 0)) == int(rec.get("signal", 0))
+        same_mode = str(prev.get("strategy_mode", "")) == str(rec.get("strategy_mode", ""))
+        if same_ts and same_sig and same_mode:
+            return False
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":"), default=str) + "\n")
+    return True
+
+
 def _filter_after(df: pd.DataFrame, ts_iso: Optional[str]) -> pd.DataFrame:
     if df.empty or not ts_iso:
         return df
@@ -270,7 +297,7 @@ def run_once(
             "gate_on": gate_on,
             "lookback": int(lookback),
         }
-        _append_signal_jsonl(imba_path, rec)
+        _append_signal_jsonl_dedupe(imba_path, rec)
         state.last_countertrend_ts = rec["ts"]
 
     for _, r in trend_new.iterrows():
@@ -286,9 +313,10 @@ def run_once(
             "gate_on": gate_on,
             "lookback": int(lookback),
         }
-        _append_signal_jsonl(trend_path, rec)
+        _append_signal_jsonl_dedupe(trend_path, rec)
         state.last_trendfollower_ts = rec["ts"]
 
+    emitted_active = 0
     for _, r in active_new.iterrows():
         rec = {
             "server_ts": _now_utc_iso(),
@@ -302,18 +330,20 @@ def run_once(
             "gate_on": gate_on,
             "lookback": int(lookback),
         }
-        _append_signal_jsonl(root_path, rec)
-        state.last_signal_ts = rec["ts"]
-        state.n_emitted += 1
-        log.info(
-            "live-signal emitted symbol=%s strategy=%s gate_on=%s ts=%s signal=%s file=%s",
-            symbol,
-            active_mode,
-            gate_on,
-            rec["ts"],
-            rec["signal"],
-            root_path,
-        )
+        wrote = _append_signal_jsonl_dedupe(root_path, rec)
+        if wrote:
+            state.last_signal_ts = rec["ts"]
+            state.n_emitted += 1
+            emitted_active += 1
+            log.info(
+                "live-signal emitted symbol=%s strategy=%s gate_on=%s ts=%s signal=%s file=%s",
+                symbol,
+                active_mode,
+                gate_on,
+                rec["ts"],
+                rec["signal"],
+                root_path,
+            )
 
     latest_active = active_base.iloc[-1] if len(active_base) else None
     write_execution_state(
@@ -329,6 +359,17 @@ def run_once(
             "ts": pd.Timestamp(latest_active["ts"], tz="UTC").isoformat() if latest_active is not None else _now_utc_iso(),
         }
     )
+    latest_calc = active_base.iloc[-1] if len(active_base) else None
+    if latest_calc is not None:
+        log.info(
+            "live-signal status symbol=%s strategy=%s gate_on=%s latest_calc_ts=%s latest_calc_sig=%s emitted_now=%s",
+            symbol,
+            active_mode,
+            gate_on,
+            pd.Timestamp(latest_calc["ts"], tz="UTC").isoformat(),
+            int(latest_calc["signal"]),
+            emitted_active,
+        )
 
     state.last_poll_ts = _now_utc_iso()
     return state
