@@ -54,7 +54,7 @@ def _fetch_1m_close_paged(
         nxt = min(cur + step, now)
         from_ms = int(cur.timestamp() * 1000)
         try:
-            rows = broker._req("GET", f"/api/v1/kline/query?symbol={contract}&granularity=60&from={from_ms}")
+            rows = broker._req("GET", f"/api/v1/kline/query?symbol={contract}&granularity=1&from={from_ms}")
         except Exception as e:
             log.warning("fetch page failed symbol=%s from=%s err=%s", symbol, cur.isoformat(), e)
             rows = []

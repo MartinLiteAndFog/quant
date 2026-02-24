@@ -141,7 +141,7 @@ class KucoinFuturesBroker(BrokerAPI):
     def get_1m_range_pct_proxy(self, symbol: str) -> Optional[float]:
         """(high - low) / close for latest 1m candle."""
         contract = _symbol_to_contract(symbol)
-        path = f"/api/v1/kline/query?symbol={contract}&granularity=60&forward=false&from=0"
+        path = f"/api/v1/kline/query?symbol={contract}&granularity=1&forward=false&from=0"
         try:
             data = self._req("GET", path)
         except Exception:
