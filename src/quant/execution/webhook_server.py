@@ -16,6 +16,7 @@ from fastapi.responses import HTMLResponse
 import uvicorn
 
 from quant.execution.dashboard_state import (
+    build_fibo_levels,
     build_regime_overlay,
     load_active_levels,
     load_renko_bars,
@@ -235,6 +236,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
         markers = load_trade_markers(max_points=int(max(100, max_points)))
         levels = load_active_levels()
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
+        fibo = build_fibo_levels(max_points=int(max(100, max_points)))
         latest = regime.get("latest") or {}
         return {
             "ok": True,
@@ -242,6 +244,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "bars": bars,
             "markers": markers,
             "levels": levels,
+            "fibo": fibo,
             "regime": regime,
             "confidence": latest.get("confidence"),
             "gate_on": latest.get("gate_on"),
@@ -256,6 +259,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "markers": [],
             "levels": {},
             "regime": {"spans": [], "points": [], "latest": None},
+            "fibo": {"lookback": None, "long": [], "mid": [], "short": [], "latest": {}},
             "error": str(e),
             "ts": _now_utc_iso(),
         }
@@ -351,6 +355,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const ttpSeries = chart.addLineSeries({ color: '#ffcc66', lineWidth: 2, title: 'TTP' });
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
+    const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 2, title: 'IMBA Long Fib', lineStyle: 0 });
+    const fibMidSeries = chart.addLineSeries({ color: '#bfc7d5', lineWidth: 1, title: 'IMBA Mid Fib', lineStyle: 2 });
+    const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, title: 'IMBA Short Fib', lineStyle: 0 });
 
     let latestPayload = null;
     let timeMap = null;
@@ -431,6 +438,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .filter(Boolean);
     }
 
+    function mapLineForChart(points) {
+      if (!Array.isArray(points)) return [];
+      if (chartMode !== 'brick') return points;
+      return points
+        .map((p) => {
+          const mapped = mapTimeForChart(p.time);
+          if (mapped == null) return null;
+          return { time: mapped, value: Number(p.value) };
+        })
+        .filter(Boolean);
+    }
+
     function fmtNum(v) {
       if (v == null || Number.isNaN(Number(v))) return '-';
       return Number(v).toFixed(4);
@@ -480,6 +499,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ttpSeries.setData(levelLineData(bars, levels.ttp));
       tp1Series.setData(levelLineData(bars, levels.tp1));
       tp2Series.setData(levelLineData(bars, levels.tp2));
+      const fibo = payload.fibo || {};
+      fibLongSeries.setData(mapLineForChart(fibo.long || []));
+      fibMidSeries.setData(mapLineForChart(fibo.mid || []));
+      fibShortSeries.setData(mapLineForChart(fibo.short || []));
 
       document.getElementById('lvl-sl').textContent = fmtNum(levels.sl);
       document.getElementById('lvl-ttp').textContent = fmtNum(levels.ttp);

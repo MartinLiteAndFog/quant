@@ -9,6 +9,8 @@ import pandas as pd
 
 from quant.regime import RegimeStore
 
+_LAST_REFRESH_TS: Optional[pd.Timestamp] = None
+
 
 def _to_ts_iso(ts_like: Any) -> Optional[str]:
     ts = pd.to_datetime(ts_like, utc=True, errors="coerce")
@@ -21,21 +23,69 @@ def _env_path(name: str, default_value: str) -> Path:
     return Path(os.getenv(name, default_value))
 
 
-def load_renko_bars(max_points: int = 5000) -> List[Dict[str, Any]]:
+def _truthy(v: Optional[str]) -> bool:
+    if v is None:
+        return False
+    return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _read_renko_df() -> pd.DataFrame:
     p = _env_path("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet")
     if not p.exists():
-        return []
-    df = pd.read_parquet(p)
+        return pd.DataFrame()
+    try:
+        df = pd.read_parquet(p)
+    except Exception:
+        return pd.DataFrame()
     if "ts" not in df.columns:
         if isinstance(df.index, pd.DatetimeIndex):
             df = df.reset_index().rename(columns={"index": "ts"})
         else:
-            return []
+            return pd.DataFrame()
     need = {"open", "high", "low", "close"}
     if not need.issubset(set(df.columns)):
-        return []
+        return pd.DataFrame()
     df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
-    df = df.dropna(subset=["ts"]).sort_values("ts").tail(int(max(1, max_points)))
+    return df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+
+
+def _refresh_renko_cache_if_needed(existing_df: pd.DataFrame) -> pd.DataFrame:
+    global _LAST_REFRESH_TS
+    if not _truthy(os.getenv("DASHBOARD_RENKO_AUTO_REFRESH_ON_READ", "1")):
+        return existing_df
+    now = pd.Timestamp.now("UTC")
+    stale_min = int(os.getenv("DASHBOARD_RENKO_STALE_MIN", "30"))
+    refresh_cooldown_sec = int(os.getenv("DASHBOARD_RENKO_REFRESH_COOLDOWN_SEC", "60"))
+    is_stale = True
+    if not existing_df.empty:
+        last_ts = pd.Timestamp(existing_df["ts"].iloc[-1])
+        is_stale = (now - last_ts) > pd.Timedelta(minutes=max(1, stale_min))
+    if not is_stale:
+        return existing_df
+    if _LAST_REFRESH_TS is not None and (now - _LAST_REFRESH_TS) < pd.Timedelta(seconds=max(1, refresh_cooldown_sec)):
+        return existing_df
+    try:
+        from quant.execution.renko_cache_updater import refresh_renko_cache
+
+        refresh_renko_cache(
+            symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
+            box=float(os.getenv("DASHBOARD_RENKO_BOX", "0.1")),
+            days_back=int(os.getenv("DASHBOARD_RENKO_DAYS_BACK", "14")),
+            step_hours=int(os.getenv("DASHBOARD_RENKO_STEP_HOURS", "6")),
+            out_parquet=str(_env_path("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet")),
+        )
+        _LAST_REFRESH_TS = now
+    except Exception:
+        return existing_df
+    return _read_renko_df()
+
+
+def load_renko_bars(max_points: int = 5000) -> List[Dict[str, Any]]:
+    df = _read_renko_df()
+    df = _refresh_renko_cache_if_needed(df)
+    if df.empty:
+        return []
+    df = df.tail(int(max(1, max_points)))
     out: List[Dict[str, Any]] = []
     for _, r in df.iterrows():
         out.append(
@@ -48,6 +98,43 @@ def load_renko_bars(max_points: int = 5000) -> List[Dict[str, Any]]:
             }
         )
     return out
+
+
+def build_fibo_levels(max_points: int = 5000, lookback: Optional[int] = None) -> Dict[str, Any]:
+    lb = int(lookback or int(os.getenv("LIVE_IMBA_LOOKBACK", "250")))
+    lb = max(2, lb)
+    df = _read_renko_df()
+    if df.empty:
+        return {"lookback": lb, "long": [], "mid": [], "short": [], "latest": {}}
+    df = df.tail(int(max(lb + 5, max_points))).copy()
+    hh = pd.to_numeric(df["high"], errors="coerce").rolling(lb, min_periods=lb).max()
+    ll = pd.to_numeric(df["low"], errors="coerce").rolling(lb, min_periods=lb).min()
+    rng = hh - ll
+    fib_long = hh - rng * 0.236
+    fib_mid = hh - rng * 0.5
+    fib_short = hh - rng * 0.786
+
+    out_long: List[Dict[str, Any]] = []
+    out_mid: List[Dict[str, Any]] = []
+    out_short: List[Dict[str, Any]] = []
+    for i in range(len(df)):
+        ts = int(pd.Timestamp(df.iloc[i]["ts"]).timestamp())
+        a = fib_long.iloc[i]
+        b = fib_mid.iloc[i]
+        c = fib_short.iloc[i]
+        if pd.notna(a):
+            out_long.append({"time": ts, "value": float(a)})
+        if pd.notna(b):
+            out_mid.append({"time": ts, "value": float(b)})
+        if pd.notna(c):
+            out_short.append({"time": ts, "value": float(c)})
+
+    latest = {
+        "long": out_long[-1]["value"] if out_long else None,
+        "mid": out_mid[-1]["value"] if out_mid else None,
+        "short": out_short[-1]["value"] if out_short else None,
+    }
+    return {"lookback": lb, "long": out_long, "mid": out_mid, "short": out_short, "latest": latest}
 
 
 def load_trade_markers(max_points: int = 5000) -> List[Dict[str, Any]]:
@@ -138,10 +225,11 @@ def build_regime_overlay(symbol: str, hours: int = 24 * 14) -> Dict[str, Any]:
                 cur_conf = conf_i
             else:
                 cur_conf = max(cur_conf, conf_i)
+        to_ts = max(pd.Timestamp(df.iloc[-1]["ts"]), end_ts)
         spans.append(
             {
                 "from": int(start.timestamp()),
-                "to": int(pd.Timestamp(df.iloc[-1]["ts"]).timestamp()),
+                "to": int(to_ts.timestamp()),
                 "gate_on": cur_gate,
                 "confidence": cur_conf,
             }

@@ -226,6 +226,26 @@ def run_once(
     gate = _load_or_seed_gate(regime_store=regime_store, symbol=symbol, default_gate_on=default_gate_on)
     gate_on = int(gate.get("gate_on", default_gate_on))
     active_mode = strategy_for_gate(gate_on)
+    regime_store.upsert_regime_state(
+        RegimeStateRecord(
+            ts=_now_utc_iso(),
+            symbol=symbol,
+            gate_on=gate_on,
+            regime_state=active_mode,
+            regime_score=1.0 if gate_on else -1.0,
+            confidence=float(gate.get("confidence", 0.7 if gate_on else 0.6)),
+            reason_code="live_signal_heartbeat",
+            model_version="live-signal-v1",
+            feature_values_json=json.dumps(
+                {
+                    "lookback": int(lookback),
+                    "bars_available": int(len(renko_ohlc)),
+                    "active_mode": active_mode,
+                },
+                separators=(",", ":"),
+            ),
+        )
+    )
 
     imba_new = _filter_after(imba_all, state.last_countertrend_ts)
     trend_new = _filter_after(trend_all, state.last_trendfollower_ts)
