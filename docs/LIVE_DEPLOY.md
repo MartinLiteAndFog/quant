@@ -90,9 +90,25 @@ Wenn du willst, kann der Webservice selbst im Hintergrund den Dashboard-Renko-Ca
 
 Hinweis: Das aktualisiert nur die Dashboard-Renko-Datei (`DASHBOARD_RENKO_PARQUET`), nicht die Trading-Logik an sich.
 
-## Live-Ausführung (Order Execution Worker)
+## Live-Ausführung (Signal + Gate-Routing + Trailing + Executor)
 
-Für echte Orders brauchst du einen zweiten Prozess (Worker), getrennt vom Webserver.
+Der Live-Flow besteht aus zwei Worker-Prozessen:
+
+1. `live_signal_worker`
+   - erzeugt IMBA-Signale mit Lookback-Historie,
+   - baut parallel einen inversen Trendfolger-Stream,
+   - wählt je nach Gate den aktiven Stream:
+     - `gate_on=1` -> `countertrend` (IMBA)
+     - `gate_on=0` -> `trendfollower`
+   - schreibt aktive Signale nach `SIGNALS_DIR/<SYMBOL>/<day>.jsonl`
+   - persistiert Strategy-Streams zusätzlich unter:
+     - `.../countertrend/<day>.jsonl`
+     - `.../trendfollower/<day>.jsonl`
+
+2. `live_executor`
+   - liest den aktiven Stream,
+   - führt OMS-Entry/Flip aus,
+   - berechnet und schreibt laufende `SL/TTP/TP1/TP2` Trailing-Level in `DASHBOARD_LEVELS_JSON`.
 
 Empfohlene Safety-Defaults:
 
@@ -100,12 +116,15 @@ Empfohlene Safety-Defaults:
 - `LIVE_EXECUTOR_DRY_RUN=1` (nur simulieren)
 - `LIVE_EXECUTOR_MAX_EUR=20`
 - `LIVE_EXECUTOR_LEVERAGE=1`
-- `LIVE_EXECUTOR_SYMBOL_ALLOWLIST=SOL-USDT`
+- `LIVE_EXECUTOR_SYMBOL_ALLOWLIST=SOLUSDT,SOL-USDT`
+- `LIVE_TTP_TRAIL_PCT=0.012`
+- `LIVE_WAIT_SL_PCT=0.02`
+- `LIVE_DEFAULT_GATE_ON=1`
 
 Worker-Start (z. B. in zweitem Railway-Service):
 
 ```bash
-python -m quant.execution.live_executor --symbol SOL-USDT --signals-dir data/signals
+sh -lc "python -u -m quant.execution.live_signal_worker --symbol SOLUSDT --signals-dir /data/live/signals & python -u -m quant.execution.live_executor --symbol SOLUSDT --signals-dir /data/live/signals; wait"
 ```
 
 Go-live Schalter:

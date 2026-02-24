@@ -15,7 +15,7 @@ def default_regime_db_path() -> str:
 
 
 def _utc_now_iso() -> str:
-    return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 @dataclass

@@ -103,7 +103,7 @@ def load_active_levels() -> Dict[str, Any]:
 
 def build_regime_overlay(symbol: str, hours: int = 24 * 14) -> Dict[str, Any]:
     store = RegimeStore()
-    end_ts = pd.Timestamp.utcnow()
+    end_ts = pd.Timestamp.now("UTC")
     start_ts = end_ts - pd.Timedelta(hours=int(max(1, hours)))
     rows = store.get_history(symbol=symbol, start_ts=start_ts.isoformat(), end_ts=end_ts.isoformat(), limit=20000)
     if not rows:
