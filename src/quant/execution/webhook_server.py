@@ -325,6 +325,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="row"><span class="label">Regime</span><span id="regime-state">...</span></div>
       <div class="row"><span class="label">Confidence</span><span id="confidence" class="confidence-pill">...</span></div>
       <div class="row"><span class="label">Bar time</span><span id="bar-time" class="mono">-</span></div>
+      <div class="row"><span class="label">SL active</span><span id="sl-active">-</span></div>
+      <div class="row"><span class="label">TTP active</span><span id="ttp-active">-</span></div>
       <div class="row"><span class="label">SL</span><span id="lvl-sl" class="mono">-</span></div>
       <div class="row"><span class="label">TTP</span><span id="lvl-ttp" class="mono">-</span></div>
       <div class="row"><span class="label">TP1</span><span id="lvl-tp1" class="mono">-</span></div>
@@ -621,6 +623,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('lvl-ttp').textContent = fmtNum(levels.ttp);
       document.getElementById('lvl-tp1').textContent = fmtNum(levels.tp1);
       document.getElementById('lvl-tp2').textContent = fmtNum(levels.tp2);
+      const slActive = levels.sl != null && !Number.isNaN(Number(levels.sl));
+      const ttpActive = levels.ttp != null && !Number.isNaN(Number(levels.ttp));
+      const slEl = document.getElementById('sl-active');
+      const ttpEl = document.getElementById('ttp-active');
+      slEl.textContent = slActive ? 'YES' : 'NO';
+      ttpEl.textContent = ttpActive ? 'YES' : 'NO';
+      slEl.className = slActive ? 'ok' : 'err';
+      ttpEl.className = ttpActive ? 'ok' : 'err';
 
       const gate = payload.gate_on;
       document.getElementById('gate').textContent = gate == null ? '-' : (Number(gate) ? 'ON' : 'OFF');
