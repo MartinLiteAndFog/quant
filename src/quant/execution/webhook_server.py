@@ -20,6 +20,7 @@ from quant.execution.dashboard_state import (
     build_regime_overlay,
     load_active_levels,
     load_renko_bars,
+    load_renko_health,
     load_trade_segments,
     load_trade_markers,
 )
@@ -239,6 +240,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
         levels = load_active_levels()
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
         fibo = build_fibo_levels(max_points=int(max(100, max_points)))
+        renko_health = load_renko_health()
         latest = regime.get("latest") or {}
         return {
             "ok": True,
@@ -248,6 +250,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "segments": segments,
             "levels": levels,
             "fibo": fibo,
+            "renko_health": renko_health,
             "regime": regime,
             "confidence": latest.get("confidence"),
             "gate_on": latest.get("gate_on"),
@@ -264,6 +267,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "levels": {},
             "regime": {"spans": [], "points": [], "latest": None},
             "fibo": {"lookback": None, "long": [], "mid": [], "short": [], "latest": {}},
+            "renko_health": {"ok": False, "bars": 0, "last_ts": None, "age_sec": None},
             "error": str(e),
             "ts": _now_utc_iso(),
         }
@@ -314,6 +318,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="row"><span class="label">Gate</span><span id="gate">...</span></div>
       <div class="row"><span class="label">Regime</span><span id="regime-state">...</span></div>
       <div class="row"><span class="label">Confidence</span><span id="confidence" class="confidence-pill">...</span></div>
+      <div class="row"><span class="label">Bar time</span><span id="bar-time" class="mono">-</span></div>
       <div class="row"><span class="label">SL</span><span id="lvl-sl" class="mono">-</span></div>
       <div class="row"><span class="label">TTP</span><span id="lvl-ttp" class="mono">-</span></div>
       <div class="row"><span class="label">TP1</span><span id="lvl-tp1" class="mono">-</span></div>
@@ -341,7 +346,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const t = Number(time);
           if (!Number.isFinite(t)) return '';
           const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
-          return `B${idx}`;
+          if (!Array.isArray(barsRawRef) || idx >= barsRawRef.length) return `B${idx}`;
+          const rt = Number(barsRawRef[idx].time);
+          if (!Number.isFinite(rt)) return `B${idx}`;
+          const d = new Date(rt * 1000);
+          const hh = String(d.getUTCHours()).padStart(2, '0');
+          const mm = String(d.getUTCMinutes()).padStart(2, '0');
+          // Show a clear time axis label every ~2 hours.
+          return (d.getUTCMinutes() % 120 === 0 || d.getUTCHours() % 2 === 0) ? `${hh}:${mm}` : `${hh}:${mm}`;
         },
       },
       grid: { vertLines: { color: '#252b3f' }, horzLines: { color: '#252b3f' } },
@@ -367,6 +379,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     let latestPayload = null;
     let timeMap = null;
+    let barsRawRef = [];
     let latestMid = null;
     let hasFittedOnce = false;
 
@@ -376,8 +389,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     function confAlpha(conf) {
-      const c = Math.max(0, Math.min(1, Number(conf || 0)));
-      return 0.08 + 0.32 * c;
+      // Temporary strong colors requested by user; confidence can be reintroduced later.
+      return 0.24;
     }
 
     function drawGateShading() {
@@ -424,7 +437,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const n = Number(t);
       if (!Number.isFinite(n)) return null;
       if (chartMode !== 'brick' || !timeMap) return n;
-      const idx = timeMap.get(n);
+      let idx = timeMap.get(n);
+      if (idx == null && Array.isArray(barsRawRef) && barsRawRef.length) {
+        // Nearest-left mapping for regime spans whose timestamps are not exact brick timestamps.
+        let lo = 0, hi = barsRawRef.length - 1, best = null;
+        while (lo <= hi) {
+          const m = Math.floor((lo + hi) / 2);
+          const tv = Number(barsRawRef[m].time);
+          if (tv <= n) {
+            best = m;
+            lo = m + 1;
+          } else {
+            hi = m - 1;
+          }
+        }
+        idx = best;
+      }
       if (idx == null) return null;
       return brickBaseTs + idx * 60;
     }
@@ -513,6 +541,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (!payload.ok) return;
 
       const barsRaw = Array.isArray(payload.bars) ? payload.bars : [];
+      barsRawRef = barsRaw;
       timeMap = buildTimeMapFromBars(barsRaw);
       const bars = mapBarsForChart(barsRaw);
       candle.setData(bars);
@@ -562,6 +591,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         document.getElementById('confidence').style.color = conf >= 0.7 ? '#9ece6a' : (conf >= 0.5 ? '#e0af68' : '#f7768e');
       }
 
+      const rh = payload.renko_health || {};
+      if (rh.age_sec != null) {
+        document.getElementById('hint').textContent = `Renko age: ${Math.round(Number(rh.age_sec))}s`;
+      }
+
       if (!hasFittedOnce) {
         chart.timeScale().fitContent();
         hasFittedOnce = true;
@@ -570,6 +604,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     chart.timeScale().subscribeVisibleTimeRangeChange(() => drawGateShading());
+    chart.subscribeCrosshairMove((param) => {
+      const t = param && param.time != null ? Number(param.time) : null;
+      if (t == null || !Number.isFinite(t)) {
+        document.getElementById('bar-time').textContent = '-';
+        return;
+      }
+      if (chartMode !== 'brick') {
+        document.getElementById('bar-time').textContent = new Date(t * 1000).toISOString().slice(11, 16);
+        return;
+      }
+      const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
+      if (!Array.isArray(barsRawRef) || idx >= barsRawRef.length) {
+        document.getElementById('bar-time').textContent = '-';
+        return;
+      }
+      const rt = Number(barsRawRef[idx].time);
+      if (!Number.isFinite(rt)) {
+        document.getElementById('bar-time').textContent = '-';
+        return;
+      }
+      document.getElementById('bar-time').textContent = new Date(rt * 1000).toISOString().slice(11, 16);
+    });
     window.addEventListener('resize', () => drawGateShading());
 
     async function tick() {

@@ -10,6 +10,7 @@ import pandas as pd
 from quant.regime import RegimeStore
 
 _LAST_REFRESH_TS: Optional[pd.Timestamp] = None
+_LAST_REFRESH_ERROR: Optional[str] = None
 
 
 def _to_ts_iso(ts_like: Any) -> Optional[str]:
@@ -50,11 +51,11 @@ def _read_renko_df() -> pd.DataFrame:
 
 
 def _refresh_renko_cache_if_needed(existing_df: pd.DataFrame) -> pd.DataFrame:
-    global _LAST_REFRESH_TS
+    global _LAST_REFRESH_TS, _LAST_REFRESH_ERROR
     if not _truthy(os.getenv("DASHBOARD_RENKO_AUTO_REFRESH_ON_READ", "1")):
         return existing_df
     now = pd.Timestamp.now("UTC")
-    stale_min = int(os.getenv("DASHBOARD_RENKO_STALE_MIN", "30"))
+    stale_min = int(os.getenv("DASHBOARD_RENKO_STALE_MIN", "5"))
     refresh_cooldown_sec = int(os.getenv("DASHBOARD_RENKO_REFRESH_COOLDOWN_SEC", "60"))
     is_stale = True
     if not existing_df.empty:
@@ -75,7 +76,9 @@ def _refresh_renko_cache_if_needed(existing_df: pd.DataFrame) -> pd.DataFrame:
             out_parquet=str(_env_path("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet")),
         )
         _LAST_REFRESH_TS = now
+        _LAST_REFRESH_ERROR = None
     except Exception:
+        _LAST_REFRESH_ERROR = "refresh_failed"
         return existing_df
     return _read_renko_df()
 
@@ -98,6 +101,30 @@ def load_renko_bars(max_points: int = 5000) -> List[Dict[str, Any]]:
             }
         )
     return out
+
+
+def load_renko_health() -> Dict[str, Any]:
+    df = _read_renko_df()
+    if df.empty:
+        return {
+            "ok": False,
+            "bars": 0,
+            "last_ts": None,
+            "age_sec": None,
+            "last_refresh_ts": _LAST_REFRESH_TS.isoformat() if _LAST_REFRESH_TS is not None else None,
+            "last_refresh_error": _LAST_REFRESH_ERROR,
+        }
+    now = pd.Timestamp.now("UTC")
+    last_ts = pd.Timestamp(df["ts"].iloc[-1])
+    age_sec = float(max(0.0, (now - last_ts).total_seconds()))
+    return {
+        "ok": True,
+        "bars": int(len(df)),
+        "last_ts": last_ts.isoformat(),
+        "age_sec": age_sec,
+        "last_refresh_ts": _LAST_REFRESH_TS.isoformat() if _LAST_REFRESH_TS is not None else None,
+        "last_refresh_error": _LAST_REFRESH_ERROR,
+    }
 
 
 def build_fibo_levels(max_points: int = 5000, lookback: Optional[int] = None) -> Dict[str, Any]:
