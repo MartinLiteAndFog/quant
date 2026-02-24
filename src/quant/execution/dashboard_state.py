@@ -175,6 +175,69 @@ def load_trade_markers(max_points: int = 5000) -> List[Dict[str, Any]]:
     return markers
 
 
+def load_trade_segments(max_points: int = 2000) -> List[Dict[str, Any]]:
+    """
+    Return entry->exit line segments for closed trades.
+    Color is green for positive PnL, red for negative PnL.
+    """
+    p = _env_path("DASHBOARD_TRADES_PARQUET", "data/live/trades.parquet")
+    if not p.exists():
+        return []
+    try:
+        df = pd.read_parquet(p)
+    except Exception:
+        return []
+
+    if "entry_ts" not in df.columns and "ts" in df.columns:
+        df = df.rename(columns={"ts": "entry_ts"})
+    if "entry_ts" not in df.columns or "exit_ts" not in df.columns:
+        return []
+
+    df["entry_ts"] = pd.to_datetime(df["entry_ts"], utc=True, errors="coerce")
+    df["exit_ts"] = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
+    df = df.dropna(subset=["entry_ts", "exit_ts"]).sort_values("entry_ts").tail(int(max(1, max_points)))
+
+    entry_candidates = ["entry_px", "entry_price", "price_entry", "entry"]
+    exit_candidates = ["exit_px", "exit_price", "price_exit", "exit"]
+    entry_col = next((c for c in entry_candidates if c in df.columns), None)
+    exit_col = next((c for c in exit_candidates if c in df.columns), None)
+    if not entry_col or not exit_col:
+        return []
+
+    side_col = "side" if "side" in df.columns else None
+    pnl_cols = [c for c in ("pnl_pct", "pnl", "pnl_abs", "net_pnl") if c in df.columns]
+    pnl_col = pnl_cols[0] if pnl_cols else None
+
+    segs: List[Dict[str, Any]] = []
+    for _, r in df.iterrows():
+        try:
+            epx = float(r[entry_col])
+            xpx = float(r[exit_col])
+        except Exception:
+            continue
+        if not pd.notna(epx) or not pd.notna(xpx):
+            continue
+
+        side = int(r[side_col]) if side_col and pd.notna(r.get(side_col)) else 1
+        if pnl_col and pd.notna(r.get(pnl_col)):
+            pnl_positive = float(r[pnl_col]) >= 0.0
+        else:
+            # Fallback from direction-aware move.
+            pnl_positive = ((xpx - epx) * (1 if side >= 0 else -1)) >= 0.0
+
+        segs.append(
+            {
+                "from_time": int(pd.Timestamp(r["entry_ts"]).timestamp()),
+                "to_time": int(pd.Timestamp(r["exit_ts"]).timestamp()),
+                "from_price": float(epx),
+                "to_price": float(xpx),
+                "positive": bool(pnl_positive),
+                "color": "#2ecc71" if pnl_positive else "#f7768e",
+            }
+        )
+    return segs
+
+
 def load_active_levels() -> Dict[str, Any]:
     p = _env_path("DASHBOARD_LEVELS_JSON", "data/live/execution_state.json")
     if not p.exists():

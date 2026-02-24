@@ -20,6 +20,7 @@ from quant.execution.dashboard_state import (
     build_regime_overlay,
     load_active_levels,
     load_renko_bars,
+    load_trade_segments,
     load_trade_markers,
 )
 from quant.regime import RegimeStore
@@ -234,6 +235,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
     try:
         bars = load_renko_bars(max_points=int(max(100, max_points)))
         markers = load_trade_markers(max_points=int(max(100, max_points)))
+        segments = load_trade_segments(max_points=int(max(100, max_points)))
         levels = load_active_levels()
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
         fibo = build_fibo_levels(max_points=int(max(100, max_points)))
@@ -243,6 +245,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "symbol": symbol,
             "bars": bars,
             "markers": markers,
+            "segments": segments,
             "levels": levels,
             "fibo": fibo,
             "regime": regime,
@@ -257,6 +260,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "symbol": symbol,
             "bars": [],
             "markers": [],
+            "segments": [],
             "levels": {},
             "regime": {"spans": [], "points": [], "latest": None},
             "fibo": {"lookback": None, "long": [], "mid": [], "short": [], "latest": {}},
@@ -358,6 +362,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 2, title: 'IMBA Long Fib', lineStyle: 0 });
     const fibMidSeries = chart.addLineSeries({ color: '#bfc7d5', lineWidth: 1, title: 'IMBA Mid Fib', lineStyle: 2 });
     const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, title: 'IMBA Short Fib', lineStyle: 0 });
+    const priceLineSeries = chart.addLineSeries({ color: '#9aa5b1', lineWidth: 1, title: 'Last', lineStyle: 2 });
+    const tradeSegmentSeries = [];
 
     let latestPayload = null;
     let timeMap = null;
@@ -378,6 +384,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.clearRect(0, 0, shadeCanvas.width, shadeCanvas.height);
       if (!latestPayload || !latestPayload.regime || !Array.isArray(latestPayload.regime.spans)) return;
       const spans = latestPayload.regime.spans;
+      if (Array.isArray(spans) && spans.length === 1 && Number(spans[0].from) === Number(spans[0].to) && latestPayload?.bars?.length) {
+        spans[0].from = Number(latestPayload.bars[0].time);
+        spans[0].to = Number(latestPayload.bars[latestPayload.bars.length - 1].time);
+      }
       const tscale = chart.timeScale();
       for (const s of spans) {
         const fromT = mapTimeForChart(s.from);
@@ -450,6 +460,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .filter(Boolean);
     }
 
+    function mapSegmentForChart(seg) {
+      const t0 = mapTimeForChart(seg.from_time);
+      const t1 = mapTimeForChart(seg.to_time);
+      if (t0 == null || t1 == null) return [];
+      return [
+        { time: t0, value: Number(seg.from_price) },
+        { time: t1, value: Number(seg.to_price) },
+      ];
+    }
+
     function fmtNum(v) {
       if (v == null || Number.isNaN(Number(v))) return '-';
       return Number(v).toFixed(4);
@@ -503,6 +523,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       fibLongSeries.setData(mapLineForChart(fibo.long || []));
       fibMidSeries.setData(mapLineForChart(fibo.mid || []));
       fibShortSeries.setData(mapLineForChart(fibo.short || []));
+      const lastBar = bars.length ? bars[bars.length - 1] : null;
+      if (lastBar) {
+        priceLineSeries.setData([
+          { time: bars[0].time, value: Number(lastBar.close) },
+          { time: lastBar.time, value: Number(lastBar.close) },
+        ]);
+      } else {
+        priceLineSeries.setData([]);
+      }
+
+      for (const s of tradeSegmentSeries) chart.removeSeries(s);
+      tradeSegmentSeries.length = 0;
+      const segments = Array.isArray(payload.segments) ? payload.segments : [];
+      for (const seg of segments) {
+        const ls = chart.addLineSeries({ color: seg.color || '#9aa5b1', lineWidth: 2, title: seg.positive ? 'Trade +' : 'Trade -' });
+        ls.setData(mapSegmentForChart(seg));
+        tradeSegmentSeries.push(ls);
+      }
 
       document.getElementById('lvl-sl').textContent = fmtNum(levels.sl);
       document.getElementById('lvl-ttp').textContent = fmtNum(levels.ttp);
