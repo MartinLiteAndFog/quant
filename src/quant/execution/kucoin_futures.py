@@ -242,7 +242,7 @@ class KucoinFuturesBroker(BrokerAPI):
         client_id: str,
     ) -> str:
         contract = _symbol_to_contract(symbol)
-        body = {
+        base_body = {
             "clientOid": _sanitize_client_oid(client_id),
             "symbol": contract,
             "side": side.lower(),
@@ -253,10 +253,36 @@ class KucoinFuturesBroker(BrokerAPI):
             "postOnly": post_only,
             "leverage": str(max(1.0, float(self._order_leverage))),
         }
+        # Try configured mode first, then robust fallbacks for account config mismatch.
+        candidates: List[Optional[str]] = []
         if self._margin_mode in ("isolated", "cross"):
-            body["marginMode"] = self._margin_mode
-        data = self._req("POST", "/api/v1/orders", body=body)
-        return str(data.get("orderId", data.get("order_id", "")))
+            candidates.extend([self._margin_mode, "cross" if self._margin_mode == "isolated" else "isolated", None])
+        else:
+            candidates.extend([None, "cross", "isolated"])
+
+        last_err: Optional[Exception] = None
+        tried = set()
+        for mm in candidates:
+            key = mm or "<none>"
+            if key in tried:
+                continue
+            tried.add(key)
+            body = dict(base_body)
+            if mm in ("isolated", "cross"):
+                body["marginMode"] = mm
+            try:
+                data = self._req("POST", "/api/v1/orders", body=body)
+                return str(data.get("orderId", data.get("order_id", "")))
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                if "margin mode" in msg and "does not match" in msg:
+                    log.warning("marginMode=%s mismatch for %s, trying fallback", mm, contract)
+                    continue
+                raise
+        if last_err:
+            raise last_err
+        raise RuntimeError("failed to place limit order")
 
     def place_marketable_limit(
         self,
