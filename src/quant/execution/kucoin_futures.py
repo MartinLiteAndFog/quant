@@ -15,6 +15,7 @@ import json
 import os
 import re
 import time
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
@@ -37,6 +38,16 @@ def _sanitize_client_oid(v: str) -> str:
     if not s:
         s = f"oid-{int(time.time() * 1000)}"
     return s[:40]
+
+
+def _quantize_price(price: float, tick: float) -> str:
+    p = Decimal(str(max(0.0, float(price))))
+    t = Decimal(str(max(1e-9, float(tick))))
+    q = (p / t).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * t
+    # normalize output decimals based on tick precision (e.g. 0.001 -> 3 dp)
+    tick_str = format(float(tick), "f")
+    dp = len(tick_str.split(".")[1].rstrip("0")) if "." in tick_str else 0
+    return f"{float(q):.{dp}f}" if dp > 0 else str(int(q))
 
 
 def _symbol_to_contract(symbol: str) -> str:
@@ -130,6 +141,7 @@ class KucoinFuturesBroker(BrokerAPI):
         self._pass = (passphrase or os.getenv("KUCOIN_FUTURES_PASSPHRASE", "")).strip()
         self._order_leverage = float(os.getenv("KUCOIN_FUTURES_ORDER_LEVERAGE", os.getenv("LIVE_EXECUTOR_LEVERAGE", "1")))
         self._margin_mode = (os.getenv("KUCOIN_FUTURES_MARGIN_MODE", "") or "").strip().lower()
+        self._price_tick = float(os.getenv("KUCOIN_FUTURES_PRICE_TICK", "0.001"))
         if not self._key or not self._secret or not self._pass:
             log.warning("KuCoin Futures credentials missing; set KUCOIN_FUTURES_* env vars")
 
@@ -235,7 +247,7 @@ class KucoinFuturesBroker(BrokerAPI):
             "symbol": contract,
             "side": side.lower(),
             "type": "limit",
-            "price": str(round(price, 8)),
+            "price": _quantize_price(float(price), self._price_tick),
             "size": int(qty),
             "reduceOnly": reduce_only,
             "postOnly": post_only,
