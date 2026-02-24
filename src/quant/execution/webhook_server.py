@@ -19,6 +19,7 @@ from quant.execution.dashboard_state import (
     build_fibo_levels,
     build_regime_overlay,
     load_active_levels,
+    load_live_fill_markers,
     load_renko_bars,
     load_renko_health,
     load_trade_segments,
@@ -236,6 +237,10 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
     try:
         bars = load_renko_bars(max_points=int(max(100, max_points)))
         markers = load_trade_markers(max_points=int(max(100, max_points)))
+        markers_live = load_live_fill_markers(symbol=symbol, limit=int(max(50, min(500, max_points))))
+        markers = sorted(markers + markers_live, key=lambda x: int(x.get("time", 0)))
+        if len(markers) > int(max(100, max_points)):
+            markers = markers[-int(max(100, max_points)) :]
         segments = load_trade_segments(max_points=int(max(100, max_points)))
         levels = load_active_levels()
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
@@ -313,7 +318,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="card">
       <div class="row"><span class="label">API (KuCoin)</span><span id="api-status">...</span></div>
       <div class="row"><span class="label">Ticker</span><span id="ticker" class="mono">...</span></div>
-      <div class="row"><span class="label">Position</span><span id="position" class="mono">...</span></div>
+      <div class="row"><span class="label">Position (contracts)</span><span id="position" class="mono">...</span></div>
+      <div class="row"><span class="label">Notional (est)</span><span id="position-notional" class="mono">...</span></div>
       <hr style="border-color:#2a3044;border-style:solid;border-width:1px 0 0 0;margin:0.8rem 0;">
       <div class="row"><span class="label">Gate</span><span id="gate">...</span></div>
       <div class="row"><span class="label">Regime</span><span id="regime-state">...</span></div>
@@ -562,6 +568,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         document.getElementById('ticker').textContent = st.ticker_error || '-';
       }
       document.getElementById('position').textContent = pos.position != null ? String(pos.position) : (pos.error || '-');
+      if (pos.position != null && st.ticker && st.ticker.mid != null) {
+        const notional = Math.abs(Number(pos.position)) * Number(st.ticker.mid);
+        document.getElementById('position-notional').textContent = Number.isFinite(notional) ? `${notional.toFixed(2)} USDT` : '-';
+      } else {
+        document.getElementById('position-notional').textContent = '-';
+      }
     }
 
     async function loadChart() {

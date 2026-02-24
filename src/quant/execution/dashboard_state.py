@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from quant.execution.kucoin_futures import list_fills
 from quant.regime import RegimeStore
 
 _LAST_REFRESH_TS: Optional[pd.Timestamp] = None
@@ -265,6 +266,38 @@ def load_trade_segments(max_points: int = 2000) -> List[Dict[str, Any]]:
             }
         )
     return segs
+
+
+def load_live_fill_markers(symbol: str, limit: int = 100) -> List[Dict[str, Any]]:
+    """
+    Build chart markers from live KuCoin fills as a fallback/augmentation
+    when local trades parquet is incomplete.
+    """
+    rows = list_fills(symbol=symbol, limit=int(max(1, limit)))
+    if not rows:
+        return []
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        try:
+            side = str(r.get("side", "")).lower()
+            sz = float(r.get("size", 0) or 0)
+            px = float(r.get("price", 0) or 0)
+            t_raw = r.get("tradeTime") or r.get("createdAt")
+            t_i = int(float(t_raw))
+            ts = pd.to_datetime(t_i, unit="ns" if t_i > 10**15 else ("ms" if t_i > 10**12 else "s"), utc=True)
+        except Exception:
+            continue
+        out.append(
+            {
+                "time": int(pd.Timestamp(ts).timestamp()),
+                "position": "belowBar" if side == "buy" else "aboveBar",
+                "shape": "arrowUp" if side == "buy" else "arrowDown",
+                "color": "#2ecc71" if side == "buy" else "#f7768e",
+                "text": f"fill {side} {sz:g} @ {px:.3f}",
+            }
+        )
+    out = sorted(out, key=lambda x: int(x["time"]))
+    return out
 
 
 def load_active_levels() -> Dict[str, Any]:
