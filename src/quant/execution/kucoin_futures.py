@@ -116,6 +116,8 @@ class KucoinFuturesBroker(BrokerAPI):
         self._key = (api_key or os.getenv("KUCOIN_FUTURES_API_KEY", "")).strip()
         self._secret = (api_secret or os.getenv("KUCOIN_FUTURES_API_SECRET", "")).strip()
         self._pass = (passphrase or os.getenv("KUCOIN_FUTURES_PASSPHRASE", "")).strip()
+        self._order_leverage = float(os.getenv("KUCOIN_FUTURES_ORDER_LEVERAGE", os.getenv("LIVE_EXECUTOR_LEVERAGE", "1")))
+        self._margin_mode = (os.getenv("KUCOIN_FUTURES_MARGIN_MODE", "") or "").strip().lower()
         if not self._key or not self._secret or not self._pass:
             log.warning("KuCoin Futures credentials missing; set KUCOIN_FUTURES_* env vars")
 
@@ -141,7 +143,9 @@ class KucoinFuturesBroker(BrokerAPI):
     def get_1m_range_pct_proxy(self, symbol: str) -> Optional[float]:
         """(high - low) / close for latest 1m candle."""
         contract = _symbol_to_contract(symbol)
-        path = f"/api/v1/kline/query?symbol={contract}&granularity=1&forward=false&from=0"
+        now_ms = int(time.time() * 1000)
+        from_ms = now_ms - (5 * 60 * 1000)
+        path = f"/api/v1/kline/query?symbol={contract}&granularity=1&from={from_ms}&to={now_ms}"
         try:
             data = self._req("GET", path)
         except Exception:
@@ -223,7 +227,10 @@ class KucoinFuturesBroker(BrokerAPI):
             "size": int(qty),
             "reduceOnly": reduce_only,
             "postOnly": post_only,
+            "leverage": str(max(1.0, float(self._order_leverage))),
         }
+        if self._margin_mode in ("isolated", "cross"):
+            body["marginMode"] = self._margin_mode
         data = self._req("POST", "/api/v1/orders", body=body)
         return str(data.get("orderId", data.get("order_id", "")))
 
