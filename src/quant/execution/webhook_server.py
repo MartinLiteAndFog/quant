@@ -81,6 +81,24 @@ def _truthy(v: Optional[str]) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _contract_multiplier(symbol: str) -> float:
+    """
+    Contract value per contract for notional estimation in dashboard.
+    Priority:
+      1) CONTRACT_MULTIPLIER_<SYMBOL_NO_SEPARATORS>, e.g. CONTRACT_MULTIPLIER_SOLUSDT=0.1
+      2) CONTRACT_MULTIPLIER_DEFAULT (default 1.0)
+    """
+    norm = "".join(ch for ch in str(symbol or "").upper() if ch.isalnum())
+    v = os.getenv(f"CONTRACT_MULTIPLIER_{norm}")
+    if v is None:
+        v = os.getenv("CONTRACT_MULTIPLIER_DEFAULT", "1.0")
+    try:
+        m = float(v)
+    except Exception:
+        m = 1.0
+    return m if m > 0 else 1.0
+
+
 def _start_renko_cache_updater_if_enabled() -> None:
     """
     Optional background updater for dashboard Renko cache.
@@ -206,9 +224,20 @@ def api_position(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
     try:
         broker = _kucoin_broker()
         pos = broker.get_position(symbol)
-        return {"ok": True, "symbol": symbol, "position": pos}
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "position": pos,
+            "contract_multiplier": _contract_multiplier(symbol),
+        }
     except Exception as e:
-        return {"ok": False, "symbol": symbol, "position": None, "error": str(e)}
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "position": None,
+            "contract_multiplier": _contract_multiplier(symbol),
+            "error": str(e),
+        }
 
 
 @app.get("/api/regime/latest")
@@ -571,7 +600,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
       document.getElementById('position').textContent = pos.position != null ? String(pos.position) : (pos.error || '-');
       if (pos.position != null && st.ticker && st.ticker.mid != null) {
-        const notional = Math.abs(Number(pos.position)) * Number(st.ticker.mid);
+        const mult = Number(pos.contract_multiplier || 1);
+        const notional = Math.abs(Number(pos.position)) * mult * Number(st.ticker.mid);
         document.getElementById('position-notional').textContent = Number.isFinite(notional) ? `${notional.toFixed(2)} USDT` : '-';
       } else {
         document.getElementById('position-notional').textContent = '-';
