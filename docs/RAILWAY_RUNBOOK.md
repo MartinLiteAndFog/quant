@@ -160,3 +160,53 @@ Rollback (instant):
   Use Python snippets and `/proc` checks instead.
 - If chart looks stale, always inspect `renko_health.age_sec` and `last_ts`.
 - If no new signals appear but worker is healthy, `emitted_now=0` can be a legitimate no-flip state.
+
+## 11) Current status snapshot (2026-02-24)
+
+### Live execution
+
+- Live order submission is working on KuCoin Futures (`SOLUSDTM`).
+- Confirmed fills seen via `list_fills(symbol="SOLUSDT")` with:
+  - `liquidity: maker`
+  - `marginMode: CROSS`
+  - successful buy fills for size `2` contracts.
+
+### Dashboard
+
+- Implemented:
+  - gate shading, fib lines, live fill markers, explicit `SL active` / `TTP active`
+  - position label clarified as contracts
+  - notional calculation now uses contract multiplier.
+- Required env for correct notional:
+  - `CONTRACT_MULTIPLIER_SOLUSDT=0.1`
+
+### Open consistency issue (important)
+
+- `Signal` service and `quant` service currently do not reliably share the same live `execution_state.json` content.
+- Symptom:
+  - Worker writes rich state (`countertrend/lookback/...`)
+  - Web service reads a stale/minimal state object.
+- Impact:
+  - Dashboard can show outdated/missing SL/TTP/TP levels.
+
+## 12) Next tasks for tomorrow
+
+1. **Unify runtime storage (highest priority)**
+   - Run web + workers in one service with one shared volume, or
+   - move state/signals to shared DB/Redis instead of local files.
+
+2. **Verify level propagation end-to-end**
+   - Ensure `execution_state.json` seen by dashboard is exactly the worker-written file.
+   - Re-check `SL active` / `TTP active` and level lines under live position.
+
+3. **Final ops hardening**
+   - Reduce noisy non-actionable `cancel_all` warnings.
+   - Add structured `LIVE ORDER FILLED` log line (order_id, qty, price, side).
+
+4. **Post-trade visualization completion**
+   - Confirm entry/exit connectors and PnL colors for closed trades in live mode.
+   - Validate marker timestamps against brick mapping.
+
+5. **Go-live guardrail cleanup**
+   - Review and freeze required env vars in Railway.
+   - Keep a one-command rollback checklist (`DRY_RUN=1` and/or `LIVE_TRADING_ENABLED=0`).
