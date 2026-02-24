@@ -223,6 +223,26 @@ class KucoinFuturesBroker(BrokerAPI):
 
         return 0.0
 
+    def _position_margin_mode(self, symbol: str) -> Optional[str]:
+        """
+        Try to read active margin mode from position payload.
+        Returns 'CROSS' | 'ISOLATED' | None.
+        """
+        contract = _symbol_to_contract(symbol)
+        try:
+            data = self._req("GET", f"/api/v1/position?symbol={contract}")
+        except Exception:
+            return None
+        if not isinstance(data, dict):
+            return None
+        mm = (data.get("marginMode") or data.get("margin_mode") or "").strip().upper()
+        if mm in ("CROSS", "ISOLATED"):
+            return mm
+        cm = data.get("crossMode")
+        if isinstance(cm, bool):
+            return "CROSS" if cm else "ISOLATED"
+        return None
+
     def cancel_all(self, symbol: str) -> None:
         contract = _symbol_to_contract(symbol)
         path = f"/api/v1/orders/cancelAll?symbol={contract}"
@@ -253,12 +273,15 @@ class KucoinFuturesBroker(BrokerAPI):
             "postOnly": post_only,
             "leverage": str(max(1.0, float(self._order_leverage))),
         }
-        # Try configured mode first, then robust fallbacks for account config mismatch.
+        # Try detected position mode first, then configured mode, then fallbacks.
+        detected_mm = self._position_margin_mode(symbol)
+        configured_mm = self._margin_mode.upper() if self._margin_mode in ("isolated", "cross") else None
         candidates: List[Optional[str]] = []
-        if self._margin_mode in ("isolated", "cross"):
-            candidates.extend([self._margin_mode, "cross" if self._margin_mode == "isolated" else "isolated", None])
-        else:
-            candidates.extend([None, "cross", "isolated"])
+        if detected_mm in ("CROSS", "ISOLATED"):
+            candidates.append(detected_mm)
+        if configured_mm in ("CROSS", "ISOLATED"):
+            candidates.append(configured_mm)
+        candidates.extend(["CROSS", "ISOLATED", None])
 
         last_err: Optional[Exception] = None
         tried = set()
@@ -268,7 +291,7 @@ class KucoinFuturesBroker(BrokerAPI):
                 continue
             tried.add(key)
             body = dict(base_body)
-            if mm in ("isolated", "cross"):
+            if mm in ("ISOLATED", "CROSS"):
                 body["marginMode"] = mm
             try:
                 data = self._req("POST", "/api/v1/orders", body=body)
