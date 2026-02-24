@@ -288,8 +288,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .layout { display: grid; grid-template-columns: 1fr 320px; gap: 1rem; align-items: start; }
     .card { background: var(--card); border-radius: 10px; padding: 0.75rem; }
     .chart-wrap { position: relative; height: 620px; border-radius: 10px; overflow: hidden; }
-    #chart { position: absolute; inset: 0; }
-    #shade { position: absolute; inset: 0; pointer-events: none; }
+    #chart { position: absolute; inset: 0; z-index: 1; }
+    #shade { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
     .row { display: flex; justify-content: space-between; gap: 1rem; margin: 0.4rem 0; }
     .label { color: var(--muted); }
     .ok { color: var(--ok); }
@@ -335,6 +335,32 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const brickBaseTs = 1704067200; // 2024-01-01 UTC
     const chart = LightweightCharts.createChart(chartEl, {
       layout: { background: { color: '#1e2333' }, textColor: '#d9def7' },
+      localization: {
+        timeFormatter: (time) => {
+          const t = Number(time);
+          if (!Number.isFinite(t)) return '';
+          if (chartMode !== 'brick' || !Array.isArray(barsRawRef) || !barsRawRef.length) {
+            const d = new Date(t * 1000);
+            const yyyy = d.getUTCFullYear();
+            const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+            const dd = String(d.getUTCDate()).padStart(2, '0');
+            const hh = String(d.getUTCHours()).padStart(2, '0');
+            const mi = String(d.getUTCMinutes()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+          }
+          const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
+          if (idx >= barsRawRef.length) return `B${idx}`;
+          const rt = Number(barsRawRef[idx].time);
+          if (!Number.isFinite(rt)) return `B${idx}`;
+          const d = new Date(rt * 1000);
+          const yyyy = d.getUTCFullYear();
+          const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const dd = String(d.getUTCDate()).padStart(2, '0');
+          const hh = String(d.getUTCHours()).padStart(2, '0');
+          const mi = String(d.getUTCMinutes()).padStart(2, '0');
+          return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+        },
+      },
       rightPriceScale: { borderColor: '#2a3044' },
       timeScale: {
         borderColor: '#2a3044',
@@ -352,7 +378,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const d = new Date(rt * 1000);
           const hh = String(d.getUTCHours()).padStart(2, '0');
           const mm = String(d.getUTCMinutes()).padStart(2, '0');
-          return `${hh}:${mm}`;
+          const yyyy = d.getUTCFullYear();
+          const mon = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(d.getUTCDate()).padStart(2, '0');
+          return `${day}.${mon} ${hh}:${mm}`;
         },
       },
       grid: { vertLines: { color: '#252b3f' }, horzLines: { color: '#252b3f' } },
@@ -403,6 +432,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         spans[0].to = Number(latestPayload.bars[latestPayload.bars.length - 1].time);
       }
       const tscale = chart.timeScale();
+      const chartH = chartEl.clientHeight;
       for (const s of spans) {
         const fromT = mapTimeForChart(s.from);
         const toT = mapTimeForChart(s.to);
@@ -415,7 +445,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const alpha = confAlpha(s.confidence);
         const color = Number(s.gate_on) ? `rgba(46, 204, 113, ${alpha})` : `rgba(64, 124, 255, ${alpha})`;
         ctx.fillStyle = color;
-        ctx.fillRect(left, 0, width, shadeCanvas.height);
+        ctx.fillRect(left, 0, width, chartH);
       }
     }
 
