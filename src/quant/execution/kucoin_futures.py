@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import time
 from typing import Any, Dict, List, Optional, Tuple
 from urllib.request import Request, urlopen
@@ -25,6 +26,17 @@ log = get_logger("quant.kucoin_futures")
 
 BASE_URL = "https://api-futures.kucoin.com"
 KC_API_KEY_VERSION = "2"
+
+
+def _sanitize_client_oid(v: str) -> str:
+    """
+    KuCoin allows only [A-Za-z0-9_-] in clientOid.
+    """
+    s = str(v or "").strip()
+    s = re.sub(r"[^A-Za-z0-9_-]", "-", s)
+    if not s:
+        s = f"oid-{int(time.time() * 1000)}"
+    return s[:40]
 
 
 def _symbol_to_contract(symbol: str) -> str:
@@ -219,7 +231,7 @@ class KucoinFuturesBroker(BrokerAPI):
     ) -> str:
         contract = _symbol_to_contract(symbol)
         body = {
-            "clientOid": client_id,
+            "clientOid": _sanitize_client_oid(client_id),
             "symbol": contract,
             "side": side.lower(),
             "type": "limit",
