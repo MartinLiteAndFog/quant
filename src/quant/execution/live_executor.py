@@ -132,13 +132,16 @@ def _latest_signal(signals_root: Path, symbol: str) -> Optional[Dict[str, Any]]:
     if not candidate_dirs:
         return None
 
-    all_files = []
+    root_files = []
+    nested_files = []
     for d in candidate_dirs:
-        all_files.extend(d.glob("*.jsonl"))
-        all_files.extend((d / "countertrend").glob("*.jsonl"))
-        all_files.extend((d / "trendfollower").glob("*.jsonl"))
+        root_files.extend(d.glob("*.jsonl"))
+        nested_files.extend((d / "countertrend").glob("*.jsonl"))
+        nested_files.extend((d / "trendfollower").glob("*.jsonl"))
 
-    for fp in reversed(sorted(set(all_files))):
+    # Primary source is the gate-routed root stream.
+    all_files = list(set(root_files)) if root_files else list(set(nested_files))
+    for fp in reversed(sorted(all_files)):
         try:
             with fp.open("r", encoding="utf-8") as f:
                 lines = [ln.strip() for ln in f if ln.strip()]

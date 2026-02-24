@@ -154,10 +154,13 @@ def _append_signal_jsonl(out_path: Path, rec: Dict[str, Any]) -> None:
 def _filter_after(df: pd.DataFrame, ts_iso: Optional[str]) -> pd.DataFrame:
     if df.empty or not ts_iso:
         return df
+    out = df.copy()
+    out["ts"] = pd.to_datetime(out["ts"], utc=True, errors="coerce")
+    out = out.dropna(subset=["ts"])
     ts = pd.to_datetime(ts_iso, utc=True, errors="coerce")
     if pd.isna(ts):
-        return df
-    return df[df["ts"] > ts].copy()
+        return out
+    return out[out["ts"] > ts].copy()
 
 
 def _load_or_seed_gate(regime_store: RegimeStore, symbol: str, default_gate_on: int) -> Dict[str, Any]:
