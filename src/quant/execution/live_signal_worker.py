@@ -94,14 +94,18 @@ def _fetch_recent_1m_ohlcv(broker: KucoinFuturesBroker, symbol: str, limit: int)
     lim = int(max(1, limit))
     now = pd.Timestamp.now("UTC")
     start = now - pd.Timedelta(minutes=lim + 30)
-    step = pd.Timedelta(hours=3)
+    step = pd.Timedelta(hours=2)
 
     chunks: List[pd.DataFrame] = []
     cur = start
     while cur < now:
         nxt = min(cur + step, now)
         from_ms = int(cur.timestamp() * 1000)
-        data = broker._req("GET", f"/api/v1/kline/query?symbol={contract}&granularity=1&from={from_ms}")
+        to_ms = int(nxt.timestamp() * 1000)
+        data = broker._req(
+            "GET",
+            f"/api/v1/kline/query?symbol={contract}&granularity=1&from={from_ms}&to={to_ms}",
+        )
         rows = data if isinstance(data, list) else (data.get("data", []) if isinstance(data, dict) else [])
         df_page = _parse_kucoin_1m_rows(rows)
         if not df_page.empty:
