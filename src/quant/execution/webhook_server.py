@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import threading
 import time
 from pathlib import Path
@@ -17,9 +16,13 @@ from fastapi.responses import HTMLResponse
 import uvicorn
 
 from quant.execution.dashboard_state import (
+    build_fibo_levels,
     build_regime_overlay,
     load_active_levels,
+    load_live_fill_markers,
     load_renko_bars,
+    load_renko_health,
+    load_trade_segments,
     load_trade_markers,
 )
 from quant.regime import RegimeStore, get_live_gate_confidence
@@ -78,6 +81,24 @@ def _truthy(v: Optional[str]) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _contract_multiplier(symbol: str) -> float:
+    """
+    Contract value per contract for notional estimation in dashboard.
+    Priority:
+      1) CONTRACT_MULTIPLIER_<SYMBOL_NO_SEPARATORS>, e.g. CONTRACT_MULTIPLIER_SOLUSDT=0.1
+      2) CONTRACT_MULTIPLIER_DEFAULT (default 1.0)
+    """
+    norm = "".join(ch for ch in str(symbol or "").upper() if ch.isalnum())
+    v = os.getenv(f"CONTRACT_MULTIPLIER_{norm}")
+    if v is None:
+        v = os.getenv("CONTRACT_MULTIPLIER_DEFAULT", "1.0")
+    try:
+        m = float(v)
+    except Exception:
+        m = 1.0
+    return m if m > 0 else 1.0
+
+
 def _start_renko_cache_updater_if_enabled() -> None:
     """
     Optional background updater for dashboard Renko cache.
@@ -123,63 +144,6 @@ def _start_renko_cache_updater_if_enabled() -> None:
         step_hours,
         poll_sec,
     )
-
-
-def _sync_gate_conf_artifacts_if_enabled() -> None:
-    """
-    Optional one-way sync of gate-confidence files from app workspace -> mounted volume.
-    This is useful when Railway volume does not yet contain required state-space artifacts.
-    """
-    if not _truthy(os.getenv("GATE_CONF_SYNC_ON_START", "0")):
-        return
-
-    src_dir = Path(os.getenv("GATE_CONF_SYNC_SRC_DIR", "data/runs/visual_v02_seed/transitions"))
-    src_gate = Path(
-        os.getenv(
-            "GATE_CONF_SYNC_SRC_GATE",
-            "data/regimes/SOLUSDT_tv5mIMBA_gate2of3_qch0.4_qadx0.6_qer0.3_daily.csv",
-        )
-    )
-    dst_dir = Path(os.getenv("GATE_CONF_ARTIFACT_DIR", "/data/live/gate_conf/transitions"))
-    dst_gate = Path(os.getenv("GATE_DAILY_PATH", "/data/live/gate_conf/gate_daily.csv"))
-
-    required = [
-        "voxel_map.parquet",
-        "voxel_stats.parquet",
-        "transitions_topk.parquet",
-        "basins_v02_components.parquet",
-    ]
-    try:
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        if dst_gate.parent:
-            dst_gate.parent.mkdir(parents=True, exist_ok=True)
-
-        copied = []
-        for name in required:
-            s = src_dir / name
-            d = dst_dir / name
-            if not s.exists():
-                log.warning("gate-conf sync missing source file: %s", s)
-                continue
-            need_copy = (not d.exists()) or (s.stat().st_mtime > d.stat().st_mtime + 1e-6) or (s.stat().st_size != d.stat().st_size)
-            if need_copy:
-                shutil.copy2(s, d)
-                copied.append(str(d))
-
-        if src_gate.exists():
-            need_copy_gate = (not dst_gate.exists()) or (src_gate.stat().st_mtime > dst_gate.stat().st_mtime + 1e-6) or (src_gate.stat().st_size != dst_gate.stat().st_size)
-            if need_copy_gate:
-                shutil.copy2(src_gate, dst_gate)
-                copied.append(str(dst_gate))
-        else:
-            log.warning("gate-conf sync missing source gate file: %s", src_gate)
-
-        if copied:
-            log.info("gate-conf sync copied %d files", len(copied))
-        else:
-            log.info("gate-conf sync up-to-date; no files copied")
-    except Exception as e:
-        log.warning("gate-conf sync failed: %s", e)
 
 
 def _check_token(token: Optional[str]) -> None:
@@ -260,9 +224,20 @@ def api_position(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
     try:
         broker = _kucoin_broker()
         pos = broker.get_position(symbol)
-        return {"ok": True, "symbol": symbol, "position": pos}
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "position": pos,
+            "contract_multiplier": _contract_multiplier(symbol),
+        }
     except Exception as e:
-        return {"ok": False, "symbol": symbol, "position": None, "error": str(e)}
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "position": None,
+            "contract_multiplier": _contract_multiplier(symbol),
+            "error": str(e),
+        }
 
 
 @app.get("/api/regime/latest")
@@ -291,8 +266,15 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
     try:
         bars = load_renko_bars(max_points=int(max(100, max_points)))
         markers = load_trade_markers(max_points=int(max(100, max_points)))
+        markers_live = load_live_fill_markers(symbol=symbol, limit=int(max(50, min(500, max_points))))
+        markers = sorted(markers + markers_live, key=lambda x: int(x.get("time", 0)))
+        if len(markers) > int(max(100, max_points)):
+            markers = markers[-int(max(100, max_points)) :]
+        segments = load_trade_segments(max_points=int(max(100, max_points)))
         levels = load_active_levels()
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
+        fibo = build_fibo_levels(max_points=int(max(100, max_points)))
+        renko_health = load_renko_health()
         latest = regime.get("latest") or {}
         live_gc = None
         live_gc_error = None
@@ -313,7 +295,10 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "symbol": symbol,
             "bars": bars,
             "markers": markers,
+            "segments": segments,
             "levels": levels,
+            "fibo": fibo,
+            "renko_health": renko_health,
             "regime": regime,
             "confidence": confidence_out,
             "gate_on": latest.get("gate_on"),
@@ -328,8 +313,11 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "symbol": symbol,
             "bars": [],
             "markers": [],
+            "segments": [],
             "levels": {},
             "regime": {"spans": [], "points": [], "latest": None},
+            "fibo": {"lookback": None, "long": [], "mid": [], "short": [], "latest": {}},
+            "renko_health": {"ok": False, "bars": 0, "last_ts": None, "age_sec": None},
             "error": str(e),
             "ts": _now_utc_iso(),
         }
@@ -350,8 +338,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .layout { display: grid; grid-template-columns: 1fr 320px; gap: 1rem; align-items: start; }
     .card { background: var(--card); border-radius: 10px; padding: 0.75rem; }
     .chart-wrap { position: relative; height: 620px; border-radius: 10px; overflow: hidden; }
-    #chart { position: absolute; inset: 0; }
-    #shade { position: absolute; inset: 0; pointer-events: none; }
+    #chart { position: absolute; inset: 0; z-index: 1; }
+    #shade { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
     .row { display: flex; justify-content: space-between; gap: 1rem; margin: 0.4rem 0; }
     .label { color: var(--muted); }
     .ok { color: var(--ok); }
@@ -375,11 +363,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="card">
       <div class="row"><span class="label">API (KuCoin)</span><span id="api-status">...</span></div>
       <div class="row"><span class="label">Ticker</span><span id="ticker" class="mono">...</span></div>
-      <div class="row"><span class="label">Position</span><span id="position" class="mono">...</span></div>
+      <div class="row"><span class="label">Position (contracts)</span><span id="position" class="mono">...</span></div>
+      <div class="row"><span class="label">Notional (est)</span><span id="position-notional" class="mono">...</span></div>
       <hr style="border-color:#2a3044;border-style:solid;border-width:1px 0 0 0;margin:0.8rem 0;">
       <div class="row"><span class="label">Gate</span><span id="gate">...</span></div>
       <div class="row"><span class="label">Regime</span><span id="regime-state">...</span></div>
       <div class="row"><span class="label">Confidence</span><span id="confidence" class="confidence-pill">...</span></div>
+      <div class="row"><span class="label">Bar time</span><span id="bar-time" class="mono">-</span></div>
+      <div class="row"><span class="label">SL active</span><span id="sl-active">-</span></div>
+      <div class="row"><span class="label">TTP active</span><span id="ttp-active">-</span></div>
       <div class="row"><span class="label">SL</span><span id="lvl-sl" class="mono">-</span></div>
       <div class="row"><span class="label">TTP</span><span id="lvl-ttp" class="mono">-</span></div>
       <div class="row"><span class="label">TP1</span><span id="lvl-tp1" class="mono">-</span></div>
@@ -396,6 +388,32 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const brickBaseTs = 1704067200; // 2024-01-01 UTC
     const chart = LightweightCharts.createChart(chartEl, {
       layout: { background: { color: '#1e2333' }, textColor: '#d9def7' },
+      localization: {
+        timeFormatter: (time) => {
+          const t = Number(time);
+          if (!Number.isFinite(t)) return '';
+          if (chartMode !== 'brick' || !Array.isArray(barsRawRef) || !barsRawRef.length) {
+            const d = new Date(t * 1000);
+            const yyyy = d.getUTCFullYear();
+            const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+            const dd = String(d.getUTCDate()).padStart(2, '0');
+            const hh = String(d.getUTCHours()).padStart(2, '0');
+            const mi = String(d.getUTCMinutes()).padStart(2, '0');
+            return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+          }
+          const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
+          if (idx >= barsRawRef.length) return `B${idx}`;
+          const rt = Number(barsRawRef[idx].time);
+          if (!Number.isFinite(rt)) return `B${idx}`;
+          const d = new Date(rt * 1000);
+          const yyyy = d.getUTCFullYear();
+          const mm = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const dd = String(d.getUTCDate()).padStart(2, '0');
+          const hh = String(d.getUTCHours()).padStart(2, '0');
+          const mi = String(d.getUTCMinutes()).padStart(2, '0');
+          return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+        },
+      },
       rightPriceScale: { borderColor: '#2a3044' },
       timeScale: {
         borderColor: '#2a3044',
@@ -407,7 +425,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const t = Number(time);
           if (!Number.isFinite(t)) return '';
           const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
-          return `B${idx}`;
+          if (!Array.isArray(barsRawRef) || idx >= barsRawRef.length) return `B${idx}`;
+          const rt = Number(barsRawRef[idx].time);
+          if (!Number.isFinite(rt)) return `B${idx}`;
+          const d = new Date(rt * 1000);
+          const hh = String(d.getUTCHours()).padStart(2, '0');
+          const mm = String(d.getUTCMinutes()).padStart(2, '0');
+          const yyyy = d.getUTCFullYear();
+          const mon = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const day = String(d.getUTCDate()).padStart(2, '0');
+          return `${day}.${mon} ${hh}:${mm}`;
         },
       },
       grid: { vertLines: { color: '#252b3f' }, horzLines: { color: '#252b3f' } },
@@ -425,9 +452,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const ttpSeries = chart.addLineSeries({ color: '#ffcc66', lineWidth: 2, title: 'TTP' });
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
+    const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibMidSeries = chart.addLineSeries({ color: '#bfc7d5', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const priceLineSeries = chart.addLineSeries({ color: '#9aa5b1', lineWidth: 1, title: 'Last', lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const tradeSegmentSeries = [];
 
     let latestPayload = null;
     let timeMap = null;
+    let barsRawRef = [];
+    let latestMid = null;
+    let hasFittedOnce = false;
 
     function resizeShade() {
       shadeCanvas.width = chartEl.clientWidth;
@@ -435,8 +470,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     function confAlpha(conf) {
-      const c = Math.max(0, Math.min(1, Number(conf || 0)));
-      return 0.08 + 0.32 * c;
+      // Temporary strong colors requested by user; confidence can be reintroduced later.
+      return 0.24;
     }
 
     function drawGateShading() {
@@ -445,7 +480,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.clearRect(0, 0, shadeCanvas.width, shadeCanvas.height);
       if (!latestPayload || !latestPayload.regime || !Array.isArray(latestPayload.regime.spans)) return;
       const spans = latestPayload.regime.spans;
+      if (Array.isArray(spans) && spans.length === 1 && Number(spans[0].from) === Number(spans[0].to) && latestPayload?.bars?.length) {
+        spans[0].from = Number(latestPayload.bars[0].time);
+        spans[0].to = Number(latestPayload.bars[latestPayload.bars.length - 1].time);
+      }
       const tscale = chart.timeScale();
+      const chartH = chartEl.clientHeight;
       for (const s of spans) {
         const fromT = mapTimeForChart(s.from);
         const toT = mapTimeForChart(s.to);
@@ -458,7 +498,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const alpha = confAlpha(s.confidence);
         const color = Number(s.gate_on) ? `rgba(46, 204, 113, ${alpha})` : `rgba(247, 118, 142, ${alpha})`;
         ctx.fillStyle = color;
-        ctx.fillRect(left, 0, width, shadeCanvas.height);
+        ctx.fillRect(left, 0, width, chartH);
       }
     }
 
@@ -479,7 +519,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const n = Number(t);
       if (!Number.isFinite(n)) return null;
       if (chartMode !== 'brick' || !timeMap) return n;
-      const idx = timeMap.get(n);
+      let idx = timeMap.get(n);
+      if (idx == null && Array.isArray(barsRawRef) && barsRawRef.length) {
+        // Nearest-left mapping for regime spans whose timestamps are not exact brick timestamps.
+        let lo = 0, hi = barsRawRef.length - 1, best = null;
+        while (lo <= hi) {
+          const m = Math.floor((lo + hi) / 2);
+          const tv = Number(barsRawRef[m].time);
+          if (tv <= n) {
+            best = m;
+            lo = m + 1;
+          } else {
+            hi = m - 1;
+          }
+        }
+        idx = best;
+      }
       if (idx == null) return null;
       return brickBaseTs + idx * 60;
     }
@@ -505,6 +560,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .filter(Boolean);
     }
 
+    function mapLineForChart(points) {
+      if (!Array.isArray(points)) return [];
+      if (chartMode !== 'brick') return points;
+      return points
+        .map((p) => {
+          const mapped = mapTimeForChart(p.time);
+          if (mapped == null) return null;
+          return { time: mapped, value: Number(p.value) };
+        })
+        .filter(Boolean);
+    }
+
+    function mapSegmentForChart(seg) {
+      const t0 = mapTimeForChart(seg.from_time);
+      const t1 = mapTimeForChart(seg.to_time);
+      if (t0 == null || t1 == null) return [];
+      return [
+        { time: t0, value: Number(seg.from_price) },
+        { time: t1, value: Number(seg.to_price) },
+      ];
+    }
+
     function fmtNum(v) {
       if (v == null || Number.isNaN(Number(v))) return '-';
       return Number(v).toFixed(4);
@@ -516,6 +593,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const last = lastBars[lastBars.length - 1].time;
       const val = Number(level);
       return [{ time: first, value: val }, { time: last, value: val }];
+    }
+
+    function unifiedExitLineData(lastBars, levels) {
+      if (!Array.isArray(lastBars) || !lastBars.length || !levels) return [];
+      const side = String(levels.side || '').toLowerCase();
+      const sl = Number(levels.sl);
+      const hasSl = Number.isFinite(sl);
+      const ttpPtsRaw = Array.isArray(levels.ttp_points) ? levels.ttp_points : [];
+      const ttpPts = mapLineForChart(ttpPtsRaw).filter(p => Number.isFinite(Number(p.value)));
+
+      const mergeStop = (slVal, ttpVal) => {
+        if (!Number.isFinite(slVal)) return ttpVal;
+        if (!Number.isFinite(ttpVal)) return slVal;
+        // Long: higher stop is tighter; short: lower stop is tighter.
+        return side === 'short' ? Math.min(slVal, ttpVal) : Math.max(slVal, ttpVal);
+      };
+
+      if (!ttpPts.length) {
+        return hasSl ? levelLineData(lastBars, sl) : [];
+      }
+
+      const out = [];
+      if (hasSl) out.push({ time: lastBars[0].time, value: sl });
+      for (const p of ttpPts) {
+        const ttpVal = Number(p.value);
+        out.push({ time: p.time, value: mergeStop(sl, ttpVal) });
+      }
+      return out;
     }
 
     async function loadMeta() {
@@ -531,11 +636,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const b = typeof t.bid === 'number' ? t.bid.toFixed(4) : t.bid;
         const a = typeof t.ask === 'number' ? t.ask.toFixed(4) : t.ask;
         const m = t.mid != null ? (typeof t.mid === 'number' ? t.mid.toFixed(4) : t.mid) : null;
+        latestMid = Number(t.mid);
         document.getElementById('ticker').textContent = m != null ? `${m} (bid ${b} / ask ${a})` : `${b} / ${a}`;
       } else {
+        latestMid = null;
         document.getElementById('ticker').textContent = st.ticker_error || '-';
       }
       document.getElementById('position').textContent = pos.position != null ? String(pos.position) : (pos.error || '-');
+      if (pos.position != null && st.ticker && st.ticker.mid != null) {
+        const mult = Number(pos.contract_multiplier || 1);
+        const notional = Math.abs(Number(pos.position)) * mult * Number(st.ticker.mid);
+        document.getElementById('position-notional').textContent = Number.isFinite(notional) ? `${notional.toFixed(2)} USDT` : '-';
+      } else {
+        document.getElementById('position-notional').textContent = '-';
+      }
     }
 
     async function loadChart() {
@@ -544,21 +658,54 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (!payload.ok) return;
 
       const barsRaw = Array.isArray(payload.bars) ? payload.bars : [];
+      barsRawRef = barsRaw;
       timeMap = buildTimeMapFromBars(barsRaw);
       const bars = mapBarsForChart(barsRaw);
       candle.setData(bars);
       candle.setMarkers(mapMarkersForChart(Array.isArray(payload.markers) ? payload.markers : []));
 
       const levels = payload.levels || {};
-      slSeries.setData(levelLineData(bars, levels.sl));
-      ttpSeries.setData(levelLineData(bars, levels.ttp));
+      // Display one unified yellow exit line: SL first, then TTP as it tightens.
+      slSeries.setData([]);
+      ttpSeries.setData(unifiedExitLineData(bars, levels));
       tp1Series.setData(levelLineData(bars, levels.tp1));
       tp2Series.setData(levelLineData(bars, levels.tp2));
+      const fibo = payload.fibo || {};
+      fibLongSeries.setData(mapLineForChart(fibo.long || []));
+      fibMidSeries.setData(mapLineForChart(fibo.mid || []));
+      fibShortSeries.setData(mapLineForChart(fibo.short || []));
+      const lastBar = bars.length ? bars[bars.length - 1] : null;
+      if (lastBar) {
+        const livePx = Number.isFinite(Number(latestMid)) ? Number(latestMid) : Number(lastBar.close);
+        priceLineSeries.setData([
+          { time: bars[0].time, value: livePx },
+          { time: lastBar.time, value: livePx },
+        ]);
+      } else {
+        priceLineSeries.setData([]);
+      }
+
+      for (const s of tradeSegmentSeries) chart.removeSeries(s);
+      tradeSegmentSeries.length = 0;
+      const segments = Array.isArray(payload.segments) ? payload.segments : [];
+      for (const seg of segments) {
+        const ls = chart.addLineSeries({ color: seg.color || '#9aa5b1', lineWidth: 2, title: seg.positive ? 'Trade +' : 'Trade -' });
+        ls.setData(mapSegmentForChart(seg));
+        tradeSegmentSeries.push(ls);
+      }
 
       document.getElementById('lvl-sl').textContent = fmtNum(levels.sl);
       document.getElementById('lvl-ttp').textContent = fmtNum(levels.ttp);
       document.getElementById('lvl-tp1').textContent = fmtNum(levels.tp1);
       document.getElementById('lvl-tp2').textContent = fmtNum(levels.tp2);
+      const slActive = levels.sl != null && !Number.isNaN(Number(levels.sl));
+      const ttpActive = levels.ttp != null && !Number.isNaN(Number(levels.ttp));
+      const slEl = document.getElementById('sl-active');
+      const ttpEl = document.getElementById('ttp-active');
+      slEl.textContent = slActive ? 'YES' : 'NO';
+      ttpEl.textContent = ttpActive ? 'YES' : 'NO';
+      slEl.className = slActive ? 'ok' : 'err';
+      ttpEl.className = ttpActive ? 'ok' : 'err';
 
       const gate = payload.gate_on;
       document.getElementById('gate').textContent = gate == null ? '-' : (Number(gate) ? 'ON' : 'OFF');
@@ -575,11 +722,41 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
       }
 
-      chart.timeScale().fitContent();
+      const rh = payload.renko_health || {};
+      if (rh.age_sec != null) {
+        document.getElementById('hint').textContent = `Renko age: ${Math.round(Number(rh.age_sec))}s`;
+      }
+
+      if (!hasFittedOnce) {
+        chart.timeScale().fitContent();
+        hasFittedOnce = true;
+      }
       drawGateShading();
     }
 
     chart.timeScale().subscribeVisibleTimeRangeChange(() => drawGateShading());
+    chart.subscribeCrosshairMove((param) => {
+      const t = param && param.time != null ? Number(param.time) : null;
+      if (t == null || !Number.isFinite(t)) {
+        document.getElementById('bar-time').textContent = '-';
+        return;
+      }
+      if (chartMode !== 'brick') {
+        document.getElementById('bar-time').textContent = new Date(t * 1000).toISOString().slice(11, 16);
+        return;
+      }
+      const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
+      if (!Array.isArray(barsRawRef) || idx >= barsRawRef.length) {
+        document.getElementById('bar-time').textContent = '-';
+        return;
+      }
+      const rt = Number(barsRawRef[idx].time);
+      if (!Number.isFinite(rt)) {
+        document.getElementById('bar-time').textContent = '-';
+        return;
+      }
+      document.getElementById('bar-time').textContent = new Date(rt * 1000).toISOString().slice(11, 16);
+    });
     window.addEventListener('resize', () => drawGateShading());
 
     async function tick() {
@@ -648,7 +825,6 @@ def main() -> None:
     except ImportError:
         pass
     args = parse_args()
-    _sync_gate_conf_artifacts_if_enabled()
     _start_renko_cache_updater_if_enabled()
     # Railway/cloud set PORT; use it so the app listens on the right port
     port = int(os.environ.get("PORT", str(args.port)))
