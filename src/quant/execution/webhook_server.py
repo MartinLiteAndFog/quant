@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -144,6 +145,57 @@ def _start_renko_cache_updater_if_enabled() -> None:
         step_hours,
         poll_sec,
     )
+
+
+def _sync_gate_conf_artifacts_if_enabled() -> None:
+    """Optionally sync gate-confidence artifacts from app workspace -> mounted volume."""
+    if not _truthy(os.getenv("GATE_CONF_SYNC_ON_START", "0")):
+        return
+
+    src_dir = Path(os.getenv("GATE_CONF_SYNC_SRC_DIR", "data/runs/visual_v02_seed/transitions"))
+    src_gate = Path(
+        os.getenv(
+            "GATE_CONF_SYNC_SRC_GATE",
+            "data/regimes/SOLUSDT_tv5mIMBA_gate2of3_qch0.4_qadx0.6_qer0.3_daily.csv",
+        )
+    )
+    dst_dir = Path(os.getenv("GATE_CONF_ARTIFACT_DIR", "/data/live/gate_conf/transitions"))
+    dst_gate = Path(os.getenv("GATE_DAILY_PATH", "/data/live/gate_conf/gate_daily.csv"))
+
+    required = [
+        "voxel_map.parquet",
+        "voxel_stats.parquet",
+        "transitions_topk.parquet",
+        "basins_v02_components.parquet",
+    ]
+    try:
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        if dst_gate.parent:
+            dst_gate.parent.mkdir(parents=True, exist_ok=True)
+
+        copied = 0
+        for name in required:
+            s_file = src_dir / name
+            d_file = dst_dir / name
+            if not s_file.exists():
+                log.warning("gate-conf sync missing source file: %s", s_file)
+                continue
+            need_copy = (not d_file.exists()) or (s_file.stat().st_mtime > d_file.stat().st_mtime + 1e-6) or (s_file.stat().st_size != d_file.stat().st_size)
+            if need_copy:
+                shutil.copy2(s_file, d_file)
+                copied += 1
+
+        if src_gate.exists():
+            need_gate = (not dst_gate.exists()) or (src_gate.stat().st_mtime > dst_gate.stat().st_mtime + 1e-6) or (src_gate.stat().st_size != dst_gate.stat().st_size)
+            if need_gate:
+                shutil.copy2(src_gate, dst_gate)
+                copied += 1
+        else:
+            log.warning("gate-conf sync missing source gate file: %s", src_gate)
+
+        log.info("gate-conf sync complete; copied=%s", copied)
+    except Exception as e:
+        log.warning("gate-conf sync failed: %s", e)
 
 
 def _check_token(token: Optional[str]) -> None:
@@ -825,6 +877,7 @@ def main() -> None:
     except ImportError:
         pass
     args = parse_args()
+    _sync_gate_conf_artifacts_if_enabled()
     _start_renko_cache_updater_if_enabled()
     # Railway/cloud set PORT; use it so the app listens on the right port
     port = int(os.environ.get("PORT", str(args.port)))
