@@ -21,7 +21,7 @@ from quant.execution.dashboard_state import (
     load_renko_bars,
     load_trade_markers,
 )
-from quant.regime import RegimeStore
+from quant.regime import RegimeStore, get_live_gate_confidence
 from ..utils.log import get_logger
 
 log = get_logger("quant.webhook")
@@ -236,6 +236,14 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
         levels = load_active_levels()
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
         latest = regime.get("latest") or {}
+        live_gc = get_live_gate_confidence()
+        selected_p_trend = live_gc.get("selected_p_trend")
+        live_conf = float(max(0.0, min(1.0, selected_p_trend))) if isinstance(selected_p_trend, (float, int)) else None
+        if live_conf is not None and isinstance(regime.get("latest"), dict):
+            regime["latest"]["confidence"] = live_conf
+        if live_conf is not None and isinstance(regime.get("spans"), list) and regime["spans"]:
+            regime["spans"][-1]["confidence"] = live_conf
+        confidence_out = live_conf if live_conf is not None else latest.get("confidence")
         return {
             "ok": True,
             "symbol": symbol,
@@ -243,9 +251,10 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "markers": markers,
             "levels": levels,
             "regime": regime,
-            "confidence": latest.get("confidence"),
+            "confidence": confidence_out,
             "gate_on": latest.get("gate_on"),
             "regime_state": latest.get("regime_state"),
+            "gate_confidence": live_gc,
             "ts": _now_utc_iso(),
         }
     except Exception as e:
@@ -296,7 +305,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="chart"></div>
         <canvas id="shade"></canvas>
       </div>
-      <div class="hint">Gate ON is green, Gate OFF is blue. Intensity follows confidence.</div>
+      <div class="hint">Gate ON is green, Gate OFF is red. Intensity follows confidence.</div>
     </div>
     <div class="card">
       <div class="row"><span class="label">API (KuCoin)</span><span id="api-status">...</span></div>
@@ -382,7 +391,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const left = Math.min(x0, x1);
         const width = Math.max(1, Math.abs(x1 - x0));
         const alpha = confAlpha(s.confidence);
-        const color = Number(s.gate_on) ? `rgba(46, 204, 113, ${alpha})` : `rgba(64, 124, 255, ${alpha})`;
+        const color = Number(s.gate_on) ? `rgba(46, 204, 113, ${alpha})` : `rgba(247, 118, 142, ${alpha})`;
         ctx.fillStyle = color;
         ctx.fillRect(left, 0, width, shadeCanvas.height);
       }
@@ -493,7 +502,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const conf = payload.confidence == null ? null : Number(payload.confidence);
       document.getElementById('confidence').textContent = conf == null ? '-' : conf.toFixed(3);
       if (conf != null) {
-        document.getElementById('confidence').style.color = conf >= 0.7 ? '#9ece6a' : (conf >= 0.5 ? '#e0af68' : '#f7768e');
+        const rs = String(payload.regime_state || '').toLowerCase();
+        if (rs === 'trend') {
+          document.getElementById('confidence').style.color = conf >= 0.7 ? '#9ece6a' : (conf >= 0.5 ? '#e0af68' : '#f7768e');
+        } else {
+          document.getElementById('confidence').style.color = conf >= 0.7 ? '#f7768e' : (conf >= 0.5 ? '#e0af68' : '#9ece6a');
+        }
       }
 
       chart.timeScale().fitContent();
