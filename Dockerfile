@@ -6,6 +6,11 @@ WORKDIR /app
 # Abhängigkeiten + Paket installieren (dasselbe Python wie zur Laufzeit)
 COPY pyproject.toml .
 COPY src ./src
+COPY data/runs/visual_v02_seed/transitions/voxel_map.parquet ./data/runs/visual_v02_seed/transitions/voxel_map.parquet
+COPY data/runs/visual_v02_seed/transitions/voxel_stats.parquet ./data/runs/visual_v02_seed/transitions/voxel_stats.parquet
+COPY data/runs/visual_v02_seed/transitions/transitions_topk.parquet ./data/runs/visual_v02_seed/transitions/transitions_topk.parquet
+COPY data/runs/visual_v02_seed/transitions/basins_v02_components.parquet ./data/runs/visual_v02_seed/transitions/basins_v02_components.parquet
+COPY data/regimes/SOLUSDT_tv5mIMBA_gate2of3_qch0.4_qadx0.6_qer0.3_daily.csv ./data/regimes/SOLUSDT_tv5mIMBA_gate2of3_qch0.4_qadx0.6_qer0.3_daily.csv
 RUN pip install --no-cache-dir .
 
 # PORT aus der Umgebung lesen (Python), keine Shell-Expansion – Railway setzt PORT
