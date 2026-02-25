@@ -166,6 +166,64 @@ def _to_utc_ts(value: Any) -> pd.Timestamp:
     return pd.Timestamp(ts)
 
 
+def _maybe_emit_bootstrap_from_position(
+    *,
+    broker: KucoinFuturesBroker,
+    symbol: str,
+    out_path: Path,
+    active_mode: str,
+    gate_on: int,
+    lookback: int,
+    state: WorkerState,
+) -> int:
+    """
+    If no signal has ever been emitted yet, bootstrap the stream from the live position side.
+    This prevents the executor from being permanently blocked by an empty signal file.
+    """
+    if state.last_signal_ts:
+        return 0
+    if _last_jsonl_record(out_path) is not None:
+        return 0
+
+    try:
+        pos = float(broker.get_position(symbol))
+    except Exception:
+        return 0
+
+    if abs(pos) < 1e-12:
+        return 0
+
+    sig = 1 if pos > 0 else -1
+    ts_iso = _now_utc_iso()
+    rec = {
+        "server_ts": ts_iso,
+        "ts": ts_iso,
+        "signal": sig,
+        "position": sig,
+        "source": "bootstrap_from_live_position",
+        "strategy_mode": str(active_mode),
+        "sl": None,
+        "symbol": symbol,
+        "gate_on": int(gate_on),
+        "lookback": int(lookback),
+    }
+    wrote = _append_signal_jsonl_dedupe(out_path, rec)
+    if not wrote:
+        return 0
+
+    state.last_signal_ts = rec["ts"]
+    state.n_emitted += 1
+    log.warning(
+        "live-signal bootstrap emitted symbol=%s strategy=%s gate_on=%s signal=%s file=%s",
+        symbol,
+        active_mode,
+        gate_on,
+        sig,
+        out_path,
+    )
+    return 1
+
+
 def _last_jsonl_record(path: Path) -> Optional[Dict[str, Any]]:
     if not path.exists():
         return None
@@ -253,6 +311,15 @@ def run_once(
         return state
 
     renko_ohlc = _renko_to_ohlc(bricks)
+    gate = _load_or_seed_gate(regime_store=regime_store, symbol=symbol, default_gate_on=default_gate_on)
+    gate_on = int(gate.get("gate_on", default_gate_on))
+    active_mode = strategy_for_gate(gate_on)
+
+    sym_norm = _normalize_symbol(symbol)
+    root_path = signals_dir / sym_norm / f"{_today_utc()}.jsonl"
+    imba_path = signals_dir / sym_norm / "countertrend" / f"{_today_utc()}.jsonl"
+    trend_path = signals_dir / sym_norm / "trendfollower" / f"{_today_utc()}.jsonl"
+
     imba_all = compute_imba_signals(
         renko_ohlc,
         ImbaParams(
@@ -261,13 +328,20 @@ def run_once(
         ),
     ).sort_values("ts").reset_index(drop=True)
     if imba_all.empty:
+        # Bootstrap once from current live position side when stream is empty.
+        _maybe_emit_bootstrap_from_position(
+            broker=broker,
+            symbol=symbol,
+            out_path=root_path,
+            active_mode=active_mode,
+            gate_on=gate_on,
+            lookback=int(lookback),
+            state=state,
+        )
         state.last_poll_ts = _now_utc_iso()
         return state
 
     trend_all = trend_signals_from_imba(imba_all).sort_values("ts").reset_index(drop=True)
-    gate = _load_or_seed_gate(regime_store=regime_store, symbol=symbol, default_gate_on=default_gate_on)
-    gate_on = int(gate.get("gate_on", default_gate_on))
-    active_mode = strategy_for_gate(gate_on)
     regime_store.upsert_regime_state(
         RegimeStateRecord(
             ts=_now_utc_iso(),
@@ -293,11 +367,6 @@ def run_once(
     trend_new = _filter_after(trend_all, state.last_trendfollower_ts)
     active_base = imba_all if active_mode == "countertrend" else trend_all
     active_new = _filter_after(active_base, state.last_signal_ts)
-
-    sym_norm = _normalize_symbol(symbol)
-    root_path = signals_dir / sym_norm / f"{_today_utc()}.jsonl"
-    imba_path = signals_dir / sym_norm / "countertrend" / f"{_today_utc()}.jsonl"
-    trend_path = signals_dir / sym_norm / "trendfollower" / f"{_today_utc()}.jsonl"
 
     for _, r in imba_new.iterrows():
         rec = {
