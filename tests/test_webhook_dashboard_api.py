@@ -122,6 +122,27 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertEqual(body["symbol"], "SOL-USDT")
         self.assertIsNotNone(body["regime"])
 
+    def test_gate_confidence_handles_mixed_timestamp_precision(self) -> None:
+        root = Path(self.tmp.name)
+        gate_parquet = root / "gate_daily.parquet"
+        gate_ts_us = pd.Series(
+            pd.DatetimeIndex(
+                pd.to_datetime(
+                    ["2026-02-19T00:00:00Z", "2026-02-20T00:00:00Z"],
+                    utc=True,
+                )
+            ).as_unit("us")
+        )
+        pd.DataFrame({"ts": gate_ts_us, "gate_on_2of3": [0, 1]}).to_parquet(gate_parquet, index=False)
+
+        os.environ["GATE_DAILY_PATH"] = str(gate_parquet)
+        os.environ["GATE_CONF_CACHE_SEC"] = "0"
+
+        body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+        self.assertTrue(body.get("ok"))
+        self.assertIsNone(body.get("gate_confidence_error"))
+        self.assertIsInstance(body.get("gate_confidence"), dict)
+
 
 if __name__ == "__main__":
     unittest.main()
