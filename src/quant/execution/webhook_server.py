@@ -276,8 +276,14 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
         fibo = build_fibo_levels(max_points=int(max(100, max_points)))
         renko_health = load_renko_health()
         latest = regime.get("latest") or {}
-        live_gc = get_live_gate_confidence()
-        selected_p_trend = live_gc.get("selected_p_trend")
+        live_gc = None
+        live_gc_error = None
+        try:
+            live_gc = get_live_gate_confidence()
+        except Exception as e:
+            live_gc_error = str(e)
+            log.warning("live gate confidence unavailable: %s", e)
+        selected_p_trend = (live_gc or {}).get("selected_p_trend")
         live_conf = float(max(0.0, min(1.0, selected_p_trend))) if isinstance(selected_p_trend, (float, int)) else None
         if live_conf is not None and isinstance(regime.get("latest"), dict):
             regime["latest"]["confidence"] = live_conf
@@ -298,6 +304,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "gate_on": latest.get("gate_on"),
             "regime_state": latest.get("regime_state"),
             "gate_confidence": live_gc,
+            "gate_confidence_error": live_gc_error,
             "ts": _now_utc_iso(),
         }
     except Exception as e:
