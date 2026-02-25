@@ -579,6 +579,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return [{ time: first, value: val }, { time: last, value: val }];
     }
 
+    function unifiedExitLineData(lastBars, levels) {
+      if (!Array.isArray(lastBars) || !lastBars.length || !levels) return [];
+      const side = String(levels.side || '').toLowerCase();
+      const sl = Number(levels.sl);
+      const hasSl = Number.isFinite(sl);
+      const ttpPtsRaw = Array.isArray(levels.ttp_points) ? levels.ttp_points : [];
+      const ttpPts = mapLineForChart(ttpPtsRaw).filter(p => Number.isFinite(Number(p.value)));
+
+      const mergeStop = (slVal, ttpVal) => {
+        if (!Number.isFinite(slVal)) return ttpVal;
+        if (!Number.isFinite(ttpVal)) return slVal;
+        // Long: higher stop is tighter; short: lower stop is tighter.
+        return side === 'short' ? Math.min(slVal, ttpVal) : Math.max(slVal, ttpVal);
+      };
+
+      if (!ttpPts.length) {
+        return hasSl ? levelLineData(lastBars, sl) : [];
+      }
+
+      const out = [];
+      if (hasSl) out.push({ time: lastBars[0].time, value: sl });
+      for (const p of ttpPts) {
+        const ttpVal = Number(p.value);
+        out.push({ time: p.time, value: mergeStop(sl, ttpVal) });
+      }
+      return out;
+    }
+
     async function loadMeta() {
       const [st, pos] = await Promise.all([
         fetch('/api/status').then(r => r.json()),
@@ -621,10 +649,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       candle.setMarkers(mapMarkersForChart(Array.isArray(payload.markers) ? payload.markers : []));
 
       const levels = payload.levels || {};
-      slSeries.setData(levelLineData(bars, levels.sl));
-      const ttpPointsRaw = Array.isArray(levels.ttp_points) ? levels.ttp_points : [];
-      const ttpTrail = mapLineForChart(ttpPointsRaw);
-      ttpSeries.setData(ttpTrail.length ? ttpTrail : levelLineData(bars, levels.ttp));
+      // Display one unified yellow exit line: SL first, then TTP as it tightens.
+      slSeries.setData([]);
+      ttpSeries.setData(unifiedExitLineData(bars, levels));
       tp1Series.setData(levelLineData(bars, levels.tp1));
       tp2Series.setData(levelLineData(bars, levels.tp2));
       const fibo = payload.fibo || {};
