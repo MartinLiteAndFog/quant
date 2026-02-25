@@ -19,6 +19,14 @@ class WebhookDashboardApiTests(unittest.TestCase):
         os.environ["DASHBOARD_RENKO_PARQUET"] = str(root / "renko.parquet")
         os.environ["DASHBOARD_TRADES_PARQUET"] = str(root / "trades.parquet")
         os.environ["DASHBOARD_LEVELS_JSON"] = str(root / "execution_state.json")
+        os.environ["GATE_CONF_ARTIFACT_DIR"] = str(root / "artifacts")
+        os.environ["GATE_DAILY_PATH"] = str(root / "gate_daily.csv")
+        os.environ["GATE_DAILY_TS_COL"] = "ts"
+        os.environ["GATE_DAILY_COL"] = "gate_on_2of3"
+        os.environ["GATE_ON_MEANS"] = "trend"
+        os.environ["GATE_CONF_HORIZONS_MINUTES"] = "5,30,120,240"
+        os.environ["GATE_CONF_CACHE_SEC"] = "0"
+        os.environ["GATE_CONF_NOW_MODE"] = "last_ts"
 
         renko = pd.DataFrame(
             {
@@ -36,6 +44,46 @@ class WebhookDashboardApiTests(unittest.TestCase):
             ]
         ).to_parquet(root / "trades.parquet", index=False)
         (root / "execution_state.json").write_text('{"sl":99.0,"ttp":102.0,"tp1":103.0,"tp2":104.0}', encoding="utf-8")
+        art = root / "artifacts"
+        art.mkdir(parents=True, exist_ok=True)
+        pd.DataFrame(
+            {
+                "ts": pd.to_datetime(
+                    [
+                        "2026-02-20T00:00:00Z",
+                        "2026-02-20T00:01:00Z",
+                        "2026-02-20T00:02:00Z",
+                    ],
+                    utc=True,
+                ),
+                "voxel_id": [1, 2, 1],
+            }
+        ).to_parquet(art / "voxel_map.parquet", index=False)
+        pd.DataFrame(
+            {
+                "voxel_id": [1, 2],
+                "pi": [0.6, 0.4],
+            }
+        ).to_parquet(art / "voxel_stats.parquet", index=False)
+        pd.DataFrame(
+            {
+                "from_voxel_id": [1, 1, 2, 2],
+                "to_voxel_id": [1, 2, 2, 1],
+                "p": [0.7, 0.2, 0.6, 0.3],
+            }
+        ).to_parquet(art / "transitions_topk.parquet", index=False)
+        pd.DataFrame(
+            {
+                "voxel_id": [1, 2],
+                "basin_id": [10, 20],
+            }
+        ).to_parquet(art / "basins_v02_components.parquet", index=False)
+        pd.DataFrame(
+            {
+                "ts": ["2026-02-19T00:00:00Z", "2026-02-20T00:00:00Z"],
+                "gate_on_2of3": [0, 1],
+            }
+        ).to_csv(root / "gate_daily.csv", index=False)
 
         svc = RegimeService(RegimeStore())
         svc.upsert_decision(
@@ -61,6 +109,12 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIn("levels", body)
         self.assertIn("regime", body)
         self.assertTrue(len(body["bars"]) >= 1)
+        self.assertIn("gate_confidence", body)
+        gc = body["gate_confidence"]
+        self.assertIsInstance(gc, dict)
+        self.assertIn("horizons", gc)
+        self.assertTrue(len(gc["horizons"]) >= 1)
+        self.assertIn("p_trend_voxel", gc["horizons"][0])
 
     def test_regime_latest_endpoint(self) -> None:
         body = api_regime_latest(symbol="SOL-USDT")

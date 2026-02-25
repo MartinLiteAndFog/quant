@@ -82,6 +82,9 @@ class DashboardStateTests(unittest.TestCase):
         self.assertTrue(len(overlay["points"]) >= 2)
         self.assertTrue(len(overlay["spans"]) >= 1)
         self.assertIn("latest", overlay)
+        # OFF regime should be rendered in red family downstream.
+        latest = overlay["latest"]
+        self.assertEqual(int(latest["gate_on"]), 0)
 
 
 if __name__ == "__main__":
