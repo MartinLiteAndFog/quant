@@ -75,6 +75,7 @@ class TrailingState:
     strategy_mode: Optional[str] = None
     entry_ref: Optional[float] = None
     best_fav: Optional[float] = None
+    ttp_points: Optional[list[dict[str, float]]] = None
     last_updated: Optional[str] = None
 
 
@@ -109,6 +110,7 @@ def _read_trailing_state(path: Path) -> TrailingState:
             strategy_mode=d.get("strategy_mode"),
             entry_ref=float(d["entry_ref"]) if d.get("entry_ref") is not None else None,
             best_fav=float(d["best_fav"]) if d.get("best_fav") is not None else None,
+            ttp_points=d.get("ttp_points") if isinstance(d.get("ttp_points"), list) else None,
             last_updated=d.get("last_updated"),
         )
     except Exception:
@@ -118,6 +120,23 @@ def _read_trailing_state(path: Path) -> TrailingState:
 def _write_trailing_state(path: Path, st: TrailingState) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(asdict(st), ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+
+
+def _append_level_point(
+    points: Optional[list[dict[str, float]]],
+    *,
+    ts_iso: str,
+    value: float,
+    max_points: int = 2000,
+) -> list[dict[str, float]]:
+    out = list(points or [])
+    ts = _safe_ts(ts_iso)
+    if ts is None:
+        return out
+    out.append({"time": float(ts.timestamp()), "value": float(value)})
+    if len(out) > max_points:
+        out = out[-max_points:]
+    return out
 
 
 def _latest_signal(signals_root: Path, symbol: str) -> Optional[Dict[str, Any]]:
@@ -203,6 +222,7 @@ def _update_trailing_levels(
             strategy_mode=trailing.strategy_mode,
             entry_ref=float(px),
             best_fav=float(px),
+            ttp_points=[],
             last_updated=_now_iso(),
         )
 
@@ -232,11 +252,18 @@ def _update_trailing_levels(
         tp1_out = float(tp1)
         tp2_out = float(tp2)
         mode_label = "TP"
+        ttp_points_out: list[dict[str, float]] = []
     else:
         ttp_out = float(ttp)
         tp1_out = None
         tp2_out = None
         mode_label = "TTP"
+        ttp_points_out = _append_level_point(
+            trailing.ttp_points,
+            ts_iso=str(trailing.last_updated or _now_iso()),
+            value=float(ttp_out),
+        )
+    trailing.ttp_points = ttp_points_out
 
     write_execution_state(
         {
@@ -251,6 +278,7 @@ def _update_trailing_levels(
             "tp2": tp2_out,
             "entry_ref": float(trailing.entry_ref),
             "best_fav": float(best),
+            "ttp_points": ttp_points_out,
             "ts": trailing.last_updated,
         }
     )

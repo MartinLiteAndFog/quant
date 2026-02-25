@@ -622,7 +622,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       const levels = payload.levels || {};
       slSeries.setData(levelLineData(bars, levels.sl));
-      ttpSeries.setData(levelLineData(bars, levels.ttp));
+      const ttpPointsRaw = Array.isArray(levels.ttp_points) ? levels.ttp_points : [];
+      const ttpTrail = mapLineForChart(ttpPointsRaw);
+      ttpSeries.setData(ttpTrail.length ? ttpTrail : levelLineData(bars, levels.ttp));
       tp1Series.setData(levelLineData(bars, levels.tp1));
       tp2Series.setData(levelLineData(bars, levels.tp2));
       const fibo = payload.fibo || {};

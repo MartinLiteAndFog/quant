@@ -430,19 +430,26 @@ def run_once(
             )
 
     latest_active = active_base.iloc[-1] if len(active_base) else None
-    write_execution_state(
-        {
-            "symbol": symbol,
-            "mode": active_mode,
-            "gate_on": gate_on,
-            "regime_state": gate.get("regime_state"),
-            "lookback": int(lookback),
-            "bars_available": int(len(renko_ohlc)),
-            "signal": int(latest_active["signal"]) if latest_active is not None else None,
-            "sl": float(latest_active["sl"]) if latest_active is not None and not pd.isna(latest_active.get("sl")) else None,
-            "ts": _to_utc_ts(latest_active["ts"]).isoformat() if latest_active is not None else _now_utc_iso(),
-        }
-    )
+    # Do not overwrite executor-managed live levels while a position is open.
+    # Otherwise dashboard SL/TTP can flicker to signal-only values.
+    try:
+        live_pos = float(broker.get_position(symbol))
+    except Exception:
+        live_pos = 0.0
+    if abs(live_pos) < 1e-12:
+        write_execution_state(
+            {
+                "symbol": symbol,
+                "mode": active_mode,
+                "gate_on": gate_on,
+                "regime_state": gate.get("regime_state"),
+                "lookback": int(lookback),
+                "bars_available": int(len(renko_ohlc)),
+                "signal": int(latest_active["signal"]) if latest_active is not None else None,
+                "sl": float(latest_active["sl"]) if latest_active is not None and not pd.isna(latest_active.get("sl")) else None,
+                "ts": _to_utc_ts(latest_active["ts"]).isoformat() if latest_active is not None else _now_utc_iso(),
+            }
+        )
     latest_calc = active_base.iloc[-1] if len(active_base) else None
     if latest_calc is not None:
         log.info(
