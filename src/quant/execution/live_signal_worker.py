@@ -155,6 +155,17 @@ def _append_signal_jsonl(out_path: Path, rec: Dict[str, Any]) -> None:
         f.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":"), default=str) + "\n")
 
 
+def _to_utc_ts(value: Any) -> pd.Timestamp:
+    """
+    Normalize timestamp-like values to UTC-aware pandas Timestamp.
+    Supports both naive and already tz-aware inputs.
+    """
+    ts = pd.to_datetime(value, errors="coerce", utc=True)
+    if pd.isna(ts):
+        raise ValueError(f"invalid timestamp value: {value!r}")
+    return pd.Timestamp(ts)
+
+
 def _last_jsonl_record(path: Path) -> Optional[Dict[str, Any]]:
     if not path.exists():
         return None
@@ -291,7 +302,7 @@ def run_once(
     for _, r in imba_new.iterrows():
         rec = {
             "server_ts": _now_utc_iso(),
-            "ts": pd.Timestamp(r["ts"], tz="UTC").isoformat(),
+            "ts": _to_utc_ts(r["ts"]).isoformat(),
             "signal": int(r["signal"]),
             "position": int(r.get("position", r["signal"])),
             "source": "imba_live_worker",
@@ -307,7 +318,7 @@ def run_once(
     for _, r in trend_new.iterrows():
         rec = {
             "server_ts": _now_utc_iso(),
-            "ts": pd.Timestamp(r["ts"], tz="UTC").isoformat(),
+            "ts": _to_utc_ts(r["ts"]).isoformat(),
             "signal": int(r["signal"]),
             "position": int(r.get("position", r["signal"])),
             "source": "imba_live_worker",
@@ -324,7 +335,7 @@ def run_once(
     for _, r in active_new.iterrows():
         rec = {
             "server_ts": _now_utc_iso(),
-            "ts": pd.Timestamp(r["ts"], tz="UTC").isoformat(),
+            "ts": _to_utc_ts(r["ts"]).isoformat(),
             "signal": int(r["signal"]),
             "position": int(r.get("position", r["signal"])),
             "source": "imba_live_worker",
@@ -360,7 +371,7 @@ def run_once(
             "bars_available": int(len(renko_ohlc)),
             "signal": int(latest_active["signal"]) if latest_active is not None else None,
             "sl": float(latest_active["sl"]) if latest_active is not None and not pd.isna(latest_active.get("sl")) else None,
-            "ts": pd.Timestamp(latest_active["ts"], tz="UTC").isoformat() if latest_active is not None else _now_utc_iso(),
+            "ts": _to_utc_ts(latest_active["ts"]).isoformat() if latest_active is not None else _now_utc_iso(),
         }
     )
     latest_calc = active_base.iloc[-1] if len(active_base) else None
@@ -370,7 +381,7 @@ def run_once(
             symbol,
             active_mode,
             gate_on,
-            pd.Timestamp(latest_calc["ts"], tz="UTC").isoformat(),
+            _to_utc_ts(latest_calc["ts"]).isoformat(),
             int(latest_calc["signal"]),
             emitted_active,
         )
