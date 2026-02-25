@@ -72,6 +72,7 @@ class ExecutorState:
 class TrailingState:
     side: Optional[str] = None
     mode: Optional[str] = None
+    strategy_mode: Optional[str] = None
     entry_ref: Optional[float] = None
     best_fav: Optional[float] = None
     last_updated: Optional[str] = None
@@ -105,6 +106,7 @@ def _read_trailing_state(path: Path) -> TrailingState:
         return TrailingState(
             side=d.get("side"),
             mode=d.get("mode"),
+            strategy_mode=d.get("strategy_mode"),
             entry_ref=float(d["entry_ref"]) if d.get("entry_ref") is not None else None,
             best_fav=float(d["best_fav"]) if d.get("best_fav") is not None else None,
             last_updated=d.get("last_updated"),
@@ -198,6 +200,7 @@ def _update_trailing_levels(
         trailing = TrailingState(
             side=side,
             mode="TTP",
+            strategy_mode=trailing.strategy_mode,
             entry_ref=float(px),
             best_fav=float(px),
             last_updated=_now_iso(),
@@ -211,6 +214,7 @@ def _update_trailing_levels(
     trailing.best_fav = best
     trailing.last_updated = _now_iso()
 
+    strategy_mode = (trailing.strategy_mode or "countertrend").strip().lower()
     if side == "long":
         ttp = best * (1.0 - float(ttp_trail_pct))
         sl = float(trailing.entry_ref) * (1.0 - float(sl_wait_pct))
@@ -222,16 +226,29 @@ def _update_trailing_levels(
         tp1 = float(trailing.entry_ref) * (1.0 - float(ttp_trail_pct))
         tp2 = float(trailing.entry_ref) * (1.0 - float(2.0 * ttp_trail_pct))
 
+    # Countertrend uses trailing exits; trendfollower uses fixed TP1/TP2.
+    if strategy_mode == "trendfollower":
+        ttp_out = None
+        tp1_out = float(tp1)
+        tp2_out = float(tp2)
+        mode_label = "TP"
+    else:
+        ttp_out = float(ttp)
+        tp1_out = None
+        tp2_out = None
+        mode_label = "TTP"
+
     write_execution_state(
         {
             "symbol": symbol,
-            "mode": trailing.mode or "TTP",
+            "mode": mode_label,
+            "strategy_mode": strategy_mode,
             "side": side,
             "signal": 1 if side == "long" else -1,
             "sl": float(sl),
-            "ttp": float(ttp),
-            "tp1": float(tp1),
-            "tp2": float(tp2),
+            "ttp": ttp_out,
+            "tp1": tp1_out,
+            "tp2": tp2_out,
             "entry_ref": float(trailing.entry_ref),
             "best_fav": float(best),
             "ts": trailing.last_updated,
@@ -255,6 +272,12 @@ def run_once(
     ttp_trail_pct: float,
     sl_wait_pct: float,
 ) -> tuple[ExecutorState, TrailingState]:
+    sig = _latest_signal(signals_root=signals_root, symbol=symbol)
+    if sig is not None:
+        raw_mode = str(sig.get("raw", {}).get("strategy_mode", "")).strip().lower()
+        if raw_mode in ("countertrend", "trendfollower"):
+            trailing.strategy_mode = raw_mode
+
     pos = float(broker.get_position(symbol))
     trailing = _update_trailing_levels(
         broker=broker,
@@ -265,7 +288,6 @@ def run_once(
         sl_wait_pct=sl_wait_pct,
     )
 
-    sig = _latest_signal(signals_root=signals_root, symbol=symbol)
     if sig is None:
         log.info("executor no signal yet symbol=%s", symbol)
         return state, trailing
