@@ -15,6 +15,17 @@ def _env(name: str, default: str) -> str:
     return str(os.getenv(name, default))
 
 
+def _to_utc_ns(values: Any) -> pd.Series:
+    """Normalize timestamps to a consistent dtype for merge_asof."""
+    s = pd.to_datetime(values, utc=True, errors="coerce")
+    if isinstance(s, pd.DatetimeIndex):
+        s = pd.Series(s)
+    elif not isinstance(s, pd.Series):
+        s = pd.Series(s)
+    # Round-trip through string to force unified datetime64[ns, UTC].
+    return pd.to_datetime(s.astype("string"), utc=True, errors="coerce")
+
+
 def _parse_horizons(raw: str) -> List[int]:
     out: List[int] = []
     for part in str(raw).split(","):
@@ -149,12 +160,12 @@ class GateConfidenceLiveEngine:
             raise ValueError(f"gate column not found: {gate_col}")
 
         g = gate[[gate_ts_col, gate_col]].rename(columns={gate_ts_col: "ts", gate_col: "gate_on"}).copy()
-        g["ts"] = pd.to_datetime(g["ts"], utc=True, errors="coerce")
+        g["ts"] = _to_utc_ns(g["ts"])
         g = g.dropna(subset=["ts"]).sort_values("ts")
         g["gate_on"] = pd.to_numeric(g["gate_on"], errors="coerce").fillna(0).astype(int).clip(0, 1)
 
         vm = voxel_map_df[["ts", "voxel_id"]].copy()
-        vm["ts"] = pd.to_datetime(vm["ts"], utc=True, errors="coerce")
+        vm["ts"] = _to_utc_ns(vm["ts"])
         vm = vm.dropna(subset=["ts"]).sort_values("ts")
 
         aligned = pd.merge_asof(vm, g, on="ts", direction="backward")
@@ -257,7 +268,7 @@ class GateConfidenceLiveEngine:
                 raise FileNotFoundError(f"missing required live confidence file: {p[k]}")
 
         voxel_map_df = pd.read_parquet(p["voxel_map"], columns=["ts", "voxel_id"])
-        voxel_map_df["ts"] = pd.to_datetime(voxel_map_df["ts"], utc=True, errors="coerce")
+        voxel_map_df["ts"] = _to_utc_ns(voxel_map_df["ts"])
         voxel_map_df = voxel_map_df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
 
         voxel_stats = pd.read_parquet(p["voxel_stats"], columns=["voxel_id", "pi"])
