@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 import uvicorn
 
 from quant.execution.dashboard_state import (
@@ -599,9 +599,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard() -> str:
+def dashboard() -> Response:
     """Simple dashboard UI: API status, SOL ticker from KuCoin, position. Basis für spätere Desktop-App."""
-    return DASHBOARD_HTML
+    return HTMLResponse(
+        content=DASHBOARD_HTML,
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
+    )
 
 
 @app.post("/webhook/tradingview")
