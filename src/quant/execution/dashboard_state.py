@@ -373,6 +373,57 @@ def build_regime_overlay(symbol: str, hours: int = 24 * 14) -> Dict[str, Any]:
     return {"spans": spans, "points": points, "latest": latest}
 
 
+def build_equity_curve(max_points: int = 500) -> Dict[str, Any]:
+    """Cumulative equity curve from closed trades as discrete % steps."""
+    p = _env_path("DASHBOARD_TRADES_PARQUET", "data/live/trades.parquet")
+    if not p.exists():
+        return {"trades": []}
+    try:
+        df = pd.read_parquet(p)
+    except Exception:
+        return {"trades": []}
+
+    if "entry_ts" not in df.columns and "ts" in df.columns:
+        df = df.rename(columns={"ts": "entry_ts"})
+    if "entry_ts" not in df.columns or "exit_ts" not in df.columns:
+        return {"trades": []}
+
+    df["exit_ts"] = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
+    df = df.dropna(subset=["exit_ts"]).sort_values("exit_ts").tail(int(max(1, max_points)))
+
+    entry_col = next((c for c in ("entry_px", "entry_price", "price_entry", "entry") if c in df.columns), None)
+    exit_col = next((c for c in ("exit_px", "exit_price", "price_exit", "exit") if c in df.columns), None)
+    pnl_cols = [c for c in ("pnl_pct", "pnl", "pnl_abs", "net_pnl") if c in df.columns]
+    pnl_col = pnl_cols[0] if pnl_cols else None
+    side_col = "side" if "side" in df.columns else None
+
+    trades: list[dict] = []
+    cum_pct = 0.0
+    for _, r in df.iterrows():
+        if pnl_col and pd.notna(r.get(pnl_col)):
+            pnl_pct = float(r[pnl_col])
+            if pnl_col not in ("pnl_pct",) and entry_col and pd.notna(r.get(entry_col)):
+                epx = float(r[entry_col])
+                if epx > 0:
+                    pnl_pct = pnl_pct / epx * 100.0
+        elif entry_col and exit_col and pd.notna(r.get(entry_col)) and pd.notna(r.get(exit_col)):
+            epx = float(r[entry_col])
+            xpx = float(r[exit_col])
+            side = int(r[side_col]) if side_col and pd.notna(r.get(side_col)) else 1
+            pnl_pct = ((xpx - epx) / epx * 100.0) * (1 if side >= 0 else -1) if epx > 0 else 0.0
+        else:
+            continue
+
+        cum_pct += pnl_pct
+        trades.append({
+            "time": int(pd.Timestamp(r["exit_ts"]).timestamp()),
+            "pnl_pct": round(pnl_pct, 2),
+            "cum_pct": round(cum_pct, 2),
+        })
+
+    return {"trades": trades}
+
+
 def build_regime_scores(symbol: str, hours: int = 24 * 14) -> Dict[str, List]:
     """Extract regime_score time series for the gradient band."""
     store = RegimeStore()

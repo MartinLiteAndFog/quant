@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, Response
 import uvicorn
 
 from quant.execution.dashboard_state import (
+    build_equity_curve,
     build_fibo_levels,
     build_regime_overlay,
     build_regime_scores,
@@ -272,6 +273,7 @@ def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
     out = {"ok": True, "ts": _now_utc_iso(), "api_configured": bool(key)}
     if not key:
         out["ticker"] = None
+        out["balance"] = None
         out["hint"] = "Set KUCOIN_FUTURES_API_KEY, KUCOIN_FUTURES_API_SECRET, KUCOIN_FUTURES_PASSPHRASE (e.g. in .env or cloud env vars)."
         return out
     try:
@@ -281,6 +283,12 @@ def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
     except Exception as e:
         out["ticker"] = None
         out["ticker_error"] = str(e)
+    try:
+        broker = _kucoin_broker()
+        out["balance"] = broker.get_account_balance("USDT")
+    except Exception as e:
+        out["balance"] = None
+        out["balance_error"] = str(e)
     return out
 
 
@@ -350,6 +358,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
         confidence_out = live_conf if live_conf is not None else latest.get("confidence")
 
         regime_score_data = build_regime_scores(symbol=symbol, hours=int(max(1, hours)))
+        equity = build_equity_curve(max_points=int(max(100, max_points)))
 
         regime_forecast: list[dict[str, Any]] = []
         if live_gc and isinstance(live_gc.get("horizons"), list):
@@ -379,6 +388,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "renko_health": renko_health,
             "regime_scores": regime_score_data.get("scores", []),
             "regime_forecast": regime_forecast,
+            "equity_curve": equity.get("trades", []),
             "ts": _now_utc_iso(),
         }
     except Exception as e:
@@ -394,6 +404,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "renko_health": {"ok": False, "bars": 0, "last_ts": None, "age_sec": None},
             "regime_scores": [],
             "regime_forecast": [],
+            "equity_curve": [],
             "error": str(e),
             "ts": _now_utc_iso(),
         }
@@ -485,7 +496,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="row"><span class="label">Position</span><span id="position" class="mono">...</span></div>
       <div class="row"><span class="label">Notional (est)</span><span id="position-notional" class="mono">...</span></div>
       <hr style="border-color:#2a3044;border-style:solid;border-width:1px 0 0 0;margin:0.8rem 0;">
-      <div class="row"><span class="label">Gate</span><span id="gate">...</span></div>
+      <div class="row"><span class="label">Capital</span><span id="capital" class="mono ok">...</span></div>
       <div class="row"><span class="label">Regime</span><span id="regime-state">...</span></div>
       <div class="row"><span class="label">Confidence</span><span id="confidence" class="confidence-pill">...</span></div>
       <div class="row"><span class="label">Bar time</span><span id="bar-time" class="mono">-</span></div>
@@ -494,6 +505,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="row"><span class="label">TTP</span><span id="lvl-ttp" class="mono">-</span></div>
       <div class="row"><span class="label">TP1</span><span id="lvl-tp1" class="mono">-</span></div>
       <div class="row"><span class="label">TP2</span><span id="lvl-tp2" class="mono">-</span></div>
+      <div style="margin-top:0.5rem;font-size:0.8rem;color:var(--muted);font-weight:600;">Equity Curve</div>
+      <canvas id="equity-canvas" style="width:100%;height:160px;display:block;border-radius:6px;margin-top:0.25rem;"></canvas>
       <p id="hint" class="hint"></p>
     </div>
   </div>
@@ -513,6 +526,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <option value="24">24h</option>
       <option value="48">48h</option>
     </select>
+    <span class="label" style="font-size:0.85rem;margin-left:1.5rem;">Time cursor:</span>
+    <input type="range" id="traj-slider" min="0" max="100" value="100" style="width:200px;accent-color:var(--accent);">
+    <span id="traj-slider-label" class="mono" style="font-size:0.8rem;min-width:40px;">now</span>
   </div>
 
   <div class="bottom-row">
@@ -724,22 +740,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
 
       const traj = ssPayload.trajectory || [];
-      if (traj.length > 1) {
-        for (let i = 1; i < traj.length; i++) {
-          const alpha = 0.05 + 0.95 * (i / traj.length);
+      const cursorPt = getHeatmapCursorState();
+      const sliceEnd = trajCursorIdx >= 0 ? trajCursorIdx + 1 : traj.length;
+      const visibleTraj = traj.slice(0, sliceEnd);
+
+      if (visibleTraj.length > 1) {
+        for (let i = 1; i < visibleTraj.length; i++) {
+          const alpha = 0.05 + 0.95 * (i / visibleTraj.length);
           ctx.strokeStyle = `rgba(100, 160, 255, ${alpha})`;
           ctx.lineWidth = 1.8;
           ctx.beginPath();
-          ctx.moveTo(valToCanvas(traj[i-1][xKey], w), h - valToCanvas(traj[i-1][yKey], h));
-          ctx.lineTo(valToCanvas(traj[i][xKey], w), h - valToCanvas(traj[i][yKey], h));
+          ctx.moveTo(valToCanvas(visibleTraj[i-1][xKey], w), h - valToCanvas(visibleTraj[i-1][yKey], h));
+          ctx.lineTo(valToCanvas(visibleTraj[i][xKey], w), h - valToCanvas(visibleTraj[i][yKey], h));
           ctx.stroke();
         }
       }
 
-      const cur = ssPayload.current;
-      if (cur) {
-        const cx = valToCanvas(cur[xKey], w);
-        const cy = h - valToCanvas(cur[yKey], h);
+      if (cursorPt) {
+        const cx = valToCanvas(cursorPt[xKey], w);
+        const cy = h - valToCanvas(cursorPt[yKey], h);
         ctx.strokeStyle = 'rgba(255, 80, 60, 0.55)';
         ctx.lineWidth = 0.9;
         ctx.setLineDash([4, 3]);
@@ -772,12 +791,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     // ── Axis status bars ──
     function drawAxisBars() {
       const canvas = document.getElementById('axis-bars');
-      if (!canvas || !ssPayload || !ssPayload.current) return;
+      if (!canvas || !ssPayload) return;
+      const cur = getHeatmapCursorState();
+      if (!cur) return;
       const ctx = canvas.getContext('2d');
       const w = canvas.width, h = canvas.height;
       ctx.clearRect(0, 0, w, h);
-
-      const cur = ssPayload.current;
       const axes = [
         { label: 'X Drift', value: cur.x, conf: cur.conf_x, color: '#ff6644' },
         { label: 'Y Elast.', value: cur.y, conf: cur.conf_y, color: '#44bbff' },
@@ -814,6 +833,92 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const cStr = (a.conf >= 0 ? '+' : '') + a.conf.toFixed(3);
         ctx.fillText(vStr + '  c:' + cStr, trackRight + 4, y + barH / 2 + 4);
       });
+    }
+
+    // ── Equity curve ──
+    function drawEquityCurve() {
+      const canvas = document.getElementById('equity-canvas');
+      if (!canvas || !latestPayload) return;
+      const rect = canvas.getBoundingClientRect();
+      canvas.width = Math.floor(rect.width);
+      canvas.height = Math.floor(rect.height);
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+      ctx.fillStyle = '#181c24';
+      ctx.fillRect(0, 0, w, h);
+
+      const trades = latestPayload.equity_curve || [];
+      if (!trades.length) {
+        ctx.fillStyle = '#8e98bf';
+        ctx.font = '11px system-ui';
+        ctx.textAlign = 'center';
+        ctx.fillText('No closed trades', w / 2, h / 2);
+        return;
+      }
+
+      const vals = trades.map(t => t.cum_pct);
+      const minV = Math.min(0, ...vals);
+      const maxV = Math.max(0, ...vals);
+      const range = Math.max(1, maxV - minV) * 1.15;
+      const padL = 8, padR = 8, padT = 14, padB = 14;
+      const pw = w - padL - padR, ph = h - padT - padB;
+
+      function tx(i) { return padL + (i / Math.max(1, trades.length - 1)) * pw; }
+      function ty(v) { return padT + (1 - (v - minV) / range) * ph; }
+
+      // zero line
+      const y0 = ty(0);
+      ctx.strokeStyle = '#3a3f52';
+      ctx.lineWidth = 0.7;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(w - padR, y0); ctx.stroke();
+      ctx.setLineDash([]);
+
+      // step line
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      for (let i = 0; i < trades.length; i++) {
+        const x = tx(i);
+        const y = ty(trades[i].cum_pct);
+        if (i === 0) { ctx.moveTo(x, y0); ctx.lineTo(x, y); }
+        else {
+          ctx.lineTo(x, ty(trades[i - 1].cum_pct));
+          ctx.lineTo(x, y);
+        }
+      }
+      const lastCum = trades[trades.length - 1].cum_pct;
+      ctx.strokeStyle = lastCum >= 0 ? '#9ece6a' : '#f7768e';
+      ctx.stroke();
+
+      // % labels at each step
+      ctx.font = 'bold 9px system-ui';
+      ctx.textAlign = 'center';
+      for (let i = 0; i < trades.length; i++) {
+        const x = tx(i);
+        const y = ty(trades[i].cum_pct);
+        const pnl = trades[i].pnl_pct;
+        ctx.fillStyle = pnl >= 0 ? '#9ece6a' : '#f7768e';
+        const label = (pnl >= 0 ? '+' : '') + pnl.toFixed(1) + '%';
+        ctx.fillText(label, x, y - 5);
+      }
+
+      // cumulative at the end
+      ctx.font = 'bold 11px system-ui';
+      ctx.textAlign = 'right';
+      ctx.fillStyle = lastCum >= 0 ? '#9ece6a' : '#f7768e';
+      ctx.fillText((lastCum >= 0 ? '+' : '') + lastCum.toFixed(1) + '%', w - padR, padT - 2);
+    }
+
+    // ── Time cursor for heatmaps ──
+    let trajCursorIdx = -1;  // -1 = live/latest
+
+    function getHeatmapCursorState() {
+      if (!ssPayload || !ssPayload.trajectory || !ssPayload.trajectory.length) return null;
+      const traj = ssPayload.trajectory;
+      if (trajCursorIdx < 0 || trajCursorIdx >= traj.length) return ssPayload.current;
+      const pt = traj[trajCursorIdx];
+      return { x: pt.x, y: pt.y, z: pt.z, conf_x: 0, conf_y: 0, conf_z: 0 };
     }
 
     // ── Time mapping (unchanged) ──
@@ -969,6 +1074,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         latestMid = null;
       }
       document.getElementById('position').textContent = pos.position != null ? String(pos.position) : (pos.error || '-');
+      if (pos.position != null && st.ticker && st.ticker.mid != null) {
+        const mult = Number(pos.contract_multiplier || 1);
+        const notional = Math.abs(Number(pos.position)) * mult * Number(st.ticker.mid);
+        document.getElementById('position-notional').textContent = Number.isFinite(notional) ? notional.toFixed(2)+' USDT' : '-';
+      } else {
+        document.getElementById('position-notional').textContent = '-';
+      }
+      const bal = st.balance;
+      if (bal && bal.equity != null) {
+        document.getElementById('capital').textContent = Number(bal.equity).toFixed(2) + ' USDT';
+      } else {
+        document.getElementById('capital').textContent = '-';
+      }
     }
 
     async function loadChart() {
@@ -1037,9 +1155,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('lvl-tp1').textContent = fmtNum(levels.tp1);
       document.getElementById('lvl-tp2').textContent = fmtNum(levels.tp2);
 
-      const gate = payload.gate_on;
-      document.getElementById('gate').textContent = gate == null ? '-' : (Number(gate) ? 'ON' : 'OFF');
-      document.getElementById('gate').className = Number(gate) ? 'ok' : 'err';
       document.getElementById('regime-state').textContent = payload.regime_state || '-';
       const conf = payload.confidence == null ? null : Number(payload.confidence);
       document.getElementById('confidence').textContent = conf == null ? '-' : conf.toFixed(3);
@@ -1062,6 +1177,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         hasFittedOnce = true;
       }
       drawRegimeBand();
+      drawEquityCurve();
     }
 
     async function loadStateSpace() {
@@ -1074,14 +1190,46 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         for (const tag of ['xy', 'xz', 'yz']) {
           if (bg[tag] && !bgImages[tag]) loadBgImage(tag, bg[tag]);
         }
+        const slider = document.getElementById('traj-slider');
+        if (Number(slider.value) >= 100) {
+          trajCursorIdx = -1;
+          document.getElementById('traj-slider-label').textContent = 'now';
+        }
         drawAllHeatmaps();
         drawAxisBars();
       } catch (e) { /* state space unavailable */ }
     }
 
     chart.timeScale().subscribeVisibleTimeRangeChange(() => drawRegimeBand());
-    window.addEventListener('resize', () => { drawRegimeBand(); drawAllHeatmaps(); });
+    window.addEventListener('resize', () => { drawRegimeBand(); drawAllHeatmaps(); drawEquityCurve(); });
     document.getElementById('traj-window').addEventListener('change', loadStateSpace);
+
+    document.getElementById('traj-slider').addEventListener('input', function() {
+      const slider = this;
+      const pct = Number(slider.value);
+      const label = document.getElementById('traj-slider-label');
+      if (!ssPayload || !ssPayload.trajectory || !ssPayload.trajectory.length) {
+        trajCursorIdx = -1;
+        label.textContent = 'now';
+        return;
+      }
+      const traj = ssPayload.trajectory;
+      if (pct >= 100) {
+        trajCursorIdx = -1;
+        label.textContent = 'now';
+      } else {
+        trajCursorIdx = Math.round(pct / 100 * (traj.length - 1));
+        const pt = traj[trajCursorIdx];
+        if (pt && pt.ts) {
+          const d = new Date(pt.ts * 1000);
+          label.textContent = String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0');
+        } else {
+          label.textContent = '#' + trajCursorIdx;
+        }
+      }
+      drawAllHeatmaps();
+      drawAxisBars();
+    });
 
     async function tick() {
       await Promise.all([loadMeta(), loadChart()]);

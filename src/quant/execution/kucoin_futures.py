@@ -223,6 +223,20 @@ class KucoinFuturesBroker(BrokerAPI):
 
         return 0.0
 
+    def get_account_balance(self, currency: str = "USDT") -> Dict[str, Any]:
+        """Account overview: equity, available balance, margin balance."""
+        path = f"/api/v1/account-overview?currency={currency}"
+        data = self._req("GET", path)
+        if not isinstance(data, dict):
+            return {}
+        return {
+            "currency": currency,
+            "equity": float(data.get("accountEquity", 0) or 0),
+            "available": float(data.get("availableBalance", 0) or 0),
+            "margin": float(data.get("marginBalance", 0) or 0),
+            "unrealised_pnl": float(data.get("unrealisedPNL", 0) or 0),
+        }
+
     def _position_margin_mode(self, symbol: str) -> Optional[str]:
         """
         Try to read active margin mode from position payload.
