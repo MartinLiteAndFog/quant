@@ -501,7 +501,7 @@ def main() -> None:
         swing_lookback=int(args.swing_lookback),
     )
 
-    pos, events = run_flip_state_machine(
+    pos, events, _terminal = run_flip_state_machine(
         bars=bars[["ts", "open", "high", "low", "close"]].copy(),
         signals_df=signals_df,
         params=params,

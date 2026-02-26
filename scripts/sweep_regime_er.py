@@ -70,7 +70,7 @@ def _run_one(
     params: FlipParams,
     regime_on: pd.Series | None,
 ) -> Tuple[float, float, int]:
-    _, events = run_flip_state_machine(
+    _, events, _term = run_flip_state_machine(
         bars=bars[["ts", "open", "high", "low", "close"]].copy(),
         signals_df=signals_df,
         params=params,

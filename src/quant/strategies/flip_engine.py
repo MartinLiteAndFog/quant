@@ -156,13 +156,14 @@ def run_flip_state_machine(
     signals_df: Optional[pd.DataFrame],
     params: FlipParams,
     regime_on: Optional[pd.Series] = None,
-) -> Tuple[pd.Series, pd.DataFrame]:
+) -> Tuple[pd.Series, pd.DataFrame, Dict[str, Any]]:
     """
     bars: DataFrame with at least ['ts','close'] and optionally ['high','low'] for swing stops.
 
     Returns:
       pos_series indexed by ts,
-      events_df with columns: ts,event,side,price,pnl_pct,note,seq
+      events_df with columns: ts,event,side,price,pnl_pct,note,seq,
+      terminal_state dict with keys: pos, side, mode, entry_px, best_fav, sl, ttp, entry_bar_ts
     """
     bars = _ensure_cols(bars, ["ts", "close"], name="bars")
     has_hl = ("high" in bars.columns) and ("low" in bars.columns)
@@ -377,4 +378,28 @@ def run_flip_state_machine(
         out_pos.iloc[i] = pos
 
     events_df = pd.DataFrame(events)
-    return out_pos, events_df
+
+    terminal_state: Dict[str, Any] = {
+        "pos": int(pos),
+        "side": ("long" if pos > 0 else "short") if pos != 0 else None,
+        "mode": mode,
+        "entry_px": float(entry_px) if entry_px is not None else None,
+        "best_fav": float(best_fav) if best_fav is not None else None,
+    }
+    if pos != 0 and entry_px is not None and best_fav is not None:
+        n = len(bars) - 1
+        if mode == "TTP":
+            terminal_state["ttp"] = float(ttp_stop(best_fav))
+            terminal_state["sl"] = None
+        elif mode == "WAIT":
+            terminal_state["sl"] = float(swing_sl_price(n))
+            terminal_state["ttp"] = None
+        # entry_bar_ts: ts of the last entry/flip event
+        entry_events = events_df[events_df["event"].isin(["entry", "signal_flip_exit", "tp_exit"])] if not events_df.empty else events_df
+        if not entry_events.empty:
+            terminal_state["entry_bar_ts"] = pd.Timestamp(entry_events.iloc[-1]["ts"])
+    else:
+        terminal_state["sl"] = None
+        terminal_state["ttp"] = None
+
+    return out_pos, events_df, terminal_state

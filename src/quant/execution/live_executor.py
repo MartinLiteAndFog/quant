@@ -6,10 +6,11 @@ import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from quant.execution.execution_state import write_execution_state
 from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
 from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
@@ -195,9 +196,12 @@ def _event_sig(row: pd.Series) -> str:
     return f"{ts}|{seq}|{event}|{side}"
 
 
-def _latest_backtest_event(renko_bars: pd.DataFrame, signals_df: pd.DataFrame) -> Optional[pd.Series]:
+def _latest_backtest_event(
+    renko_bars: pd.DataFrame, signals_df: pd.DataFrame,
+) -> Tuple[Optional[pd.Series], Dict[str, Any]]:
+    """Returns (latest_event_row, terminal_state_dict)."""
     if renko_bars.empty or signals_df.empty:
-        return None
+        return None, {}
     params = FlipParams(
         fee_bps=float(os.getenv("LIVE_FLIP_FEE_BPS", "0")),
         ttp_trail_pct=float(os.getenv("LIVE_FLIP_TTP_TRAIL_PCT", "0.012")),
@@ -207,11 +211,11 @@ def _latest_backtest_event(renko_bars: pd.DataFrame, signals_df: pd.DataFrame) -
         be_trigger_pct=float(os.getenv("LIVE_FLIP_BE_TRIGGER_PCT", "0")),
         be_offset_pct=float(os.getenv("LIVE_FLIP_BE_OFFSET_PCT", "0")),
     )
-    _, events = run_flip_state_machine(bars=renko_bars, signals_df=signals_df, params=params, regime_on=None)
+    _, events, terminal = run_flip_state_machine(bars=renko_bars, signals_df=signals_df, params=params, regime_on=None)
     if events is None or events.empty:
-        return None
+        return None, terminal
     events = events.sort_values(["ts", "seq"]).reset_index(drop=True)
-    return events.iloc[-1]
+    return events.iloc[-1], terminal
 
 
 def _qty_from_max_eur(max_eur: float, leverage: float, mid_price: float) -> int:
@@ -219,6 +223,22 @@ def _qty_from_max_eur(max_eur: float, leverage: float, mid_price: float) -> int:
         return 0
     notional = float(max_eur) * float(leverage)
     return int(notional // float(mid_price))
+
+
+def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any]) -> None:
+    """Write current flip-engine state to execution_state.json for the dashboard."""
+    if not terminal:
+        return
+    entry_bar_ts = terminal.get("entry_bar_ts")
+    write_execution_state({
+        "symbol": symbol,
+        "side": terminal.get("side"),
+        "mode": terminal.get("mode"),
+        "sl": terminal.get("sl"),
+        "ttp": terminal.get("ttp"),
+        "entry_px": terminal.get("entry_px"),
+        "entry_bar_ts": int(pd.Timestamp(entry_bar_ts).timestamp()) if entry_bar_ts is not None else None,
+    })
 
 
 def run_once(
@@ -236,7 +256,8 @@ def run_once(
     renko_path = Path(os.getenv("LIVE_EXECUTOR_RENKO_PARQUET", os.getenv("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet")))
     renko_bars = _load_renko_bars(renko_path, limit=int(os.getenv("LIVE_EXECUTOR_RENKO_LIMIT", "4000")))
     signals_df = _load_signals_df(signals_root=signals_root, symbol=symbol)
-    ev = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
+    ev, terminal_state = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
+    _write_dashboard_levels(symbol, terminal_state)
     if ev is None:
         sig = _latest_signal(signals_root=signals_root, symbol=symbol)
         if sig is None:
