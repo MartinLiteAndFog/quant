@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict, List
 
+import numpy as np
 import pandas as pd
 
 from quant.state_space.config import StateSpaceConfig
@@ -109,3 +110,52 @@ def load_state_space_trajectory(window_hours: float = 8.0) -> Dict[str, Any]:
     }
 
     return {"trajectory": trajectory, "current": current}
+
+
+def compute_recent_density(hours: float = 4.0, bins: int = 28) -> Dict[str, List]:
+    """Binned density for recent state space data (dashboard heatmap overlay)."""
+    empty: Dict[str, List] = {"xy": [], "xz": [], "yz": []}
+
+    df = _read_state_space_df()
+    if df.empty:
+        return empty
+
+    cutoff = df["ts"].max() - pd.Timedelta(hours=hours)
+    df = df[df["ts"] >= cutoff]
+    if df.empty:
+        return empty
+
+    edges = np.linspace(-1.0, 1.0, bins + 1)
+    centers = (edges[:-1] + edges[1:]) / 2.0
+
+    pairs = {
+        "xy": ("X_raw", "Y_res"),
+        "xz": ("X_raw", "Z_res"),
+        "yz": ("Y_res", "Z_res"),
+    }
+
+    result: Dict[str, List] = {}
+    for key, (col_a, col_b) in pairs.items():
+        a = df[col_a].to_numpy(dtype=float)
+        b = df[col_b].to_numpy(dtype=float)
+        mask = np.isfinite(a) & np.isfinite(b)
+        a, b = a[mask], b[mask]
+
+        idx_a = np.clip(np.digitize(a, edges) - 1, 0, bins - 1)
+        idx_b = np.clip(np.digitize(b, edges) - 1, 0, bins - 1)
+
+        grid = np.zeros((bins, bins), dtype=int)
+        for ia, ib in zip(idx_a, idx_b):
+            grid[ia, ib] += 1
+
+        cells: List = []
+        nz = np.nonzero(grid)
+        for i, j in zip(nz[0], nz[1]):
+            cells.append([
+                round(float(centers[i]), 4),
+                round(float(centers[j]), 4),
+                int(grid[i, j]),
+            ])
+        result[key] = cells
+
+    return result

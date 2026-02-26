@@ -65,6 +65,18 @@ class TestStateSpaceWriter(unittest.TestCase):
         self.assertEqual(len(result["trajectory"]), 0)
         self.assertIsNone(result["current"])
 
+    def test_compute_recent_density(self) -> None:
+        from quant.execution.dashboard_statespace import refresh_state_space_cache, compute_recent_density
+        refresh_state_space_cache()
+        density = compute_recent_density(hours=48)
+        self.assertIn("xy", density)
+        self.assertIn("xz", density)
+        self.assertIn("yz", density)
+        for key in ("xy", "xz", "yz"):
+            self.assertIsInstance(density[key], list)
+            if density[key]:
+                self.assertEqual(len(density[key][0]), 3)
+
     def test_refresh_rejects_short_renko(self) -> None:
         n = 10
         ts = pd.date_range("2026-02-01", periods=n, freq="5min", tz="UTC")
