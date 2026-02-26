@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -124,6 +125,63 @@ def _start_renko_cache_updater_if_enabled() -> None:
     )
 
 
+def _sync_gate_conf_artifacts_if_enabled() -> None:
+    """
+    Optional one-way sync of gate-confidence files from app workspace -> mounted volume.
+    This is useful when Railway volume does not yet contain required state-space artifacts.
+    """
+    if not _truthy(os.getenv("GATE_CONF_SYNC_ON_START", "0")):
+        return
+
+    src_dir = Path(os.getenv("GATE_CONF_SYNC_SRC_DIR", "data/runs/visual_v02_seed/transitions"))
+    src_gate = Path(
+        os.getenv(
+            "GATE_CONF_SYNC_SRC_GATE",
+            "data/regimes/SOLUSDT_tv5mIMBA_gate2of3_qch0.4_qadx0.6_qer0.3_daily.csv",
+        )
+    )
+    dst_dir = Path(os.getenv("GATE_CONF_ARTIFACT_DIR", "/data/live/gate_conf/transitions"))
+    dst_gate = Path(os.getenv("GATE_DAILY_PATH", "/data/live/gate_conf/gate_daily.csv"))
+
+    required = [
+        "voxel_map.parquet",
+        "voxel_stats.parquet",
+        "transitions_topk.parquet",
+        "basins_v02_components.parquet",
+    ]
+    try:
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        if dst_gate.parent:
+            dst_gate.parent.mkdir(parents=True, exist_ok=True)
+
+        copied = []
+        for name in required:
+            s = src_dir / name
+            d = dst_dir / name
+            if not s.exists():
+                log.warning("gate-conf sync missing source file: %s", s)
+                continue
+            need_copy = (not d.exists()) or (s.stat().st_mtime > d.stat().st_mtime + 1e-6) or (s.stat().st_size != d.stat().st_size)
+            if need_copy:
+                shutil.copy2(s, d)
+                copied.append(str(d))
+
+        if src_gate.exists():
+            need_copy_gate = (not dst_gate.exists()) or (src_gate.stat().st_mtime > dst_gate.stat().st_mtime + 1e-6) or (src_gate.stat().st_size != dst_gate.stat().st_size)
+            if need_copy_gate:
+                shutil.copy2(src_gate, dst_gate)
+                copied.append(str(dst_gate))
+        else:
+            log.warning("gate-conf sync missing source gate file: %s", src_gate)
+
+        if copied:
+            log.info("gate-conf sync copied %d files", len(copied))
+        else:
+            log.info("gate-conf sync up-to-date; no files copied")
+    except Exception as e:
+        log.warning("gate-conf sync failed: %s", e)
+
+
 def _check_token(token: Optional[str]) -> None:
     expected = os.getenv("WEBHOOK_TOKEN", "").strip()
     if not expected:
@@ -232,12 +290,18 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
     """
     try:
         bars = load_renko_bars(max_points=int(max(100, max_points)))
-        markers = load_trade_markers(max_points=int(max(100, max_points)))
+        markers = load_trade_markers(max_points=int(max(1000, max_points * 50)))
         levels = load_active_levels()
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
         latest = regime.get("latest") or {}
-        live_gc = get_live_gate_confidence()
-        selected_p_trend = live_gc.get("selected_p_trend")
+        live_gc = None
+        live_gc_error = None
+        try:
+            live_gc = get_live_gate_confidence()
+        except Exception as e:
+            live_gc_error = str(e)
+            log.warning("live gate confidence unavailable: %s", e)
+        selected_p_trend = (live_gc or {}).get("selected_p_trend")
         live_conf = float(max(0.0, min(1.0, selected_p_trend))) if isinstance(selected_p_trend, (float, int)) else None
         if live_conf is not None and isinstance(regime.get("latest"), dict):
             regime["latest"]["confidence"] = live_conf
@@ -255,6 +319,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "gate_on": latest.get("gate_on"),
             "regime_state": latest.get("regime_state"),
             "gate_confidence": live_gc,
+            "gate_confidence_error": live_gc_error,
             "ts": _now_utc_iso(),
         }
     except Exception as e:
@@ -363,6 +428,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     let latestPayload = null;
     let timeMap = null;
+    let timeAxis = [];
 
     function resizeShade() {
       shadeCanvas.width = chartEl.clientWidth;
@@ -374,10 +440,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return 0.08 + 0.32 * c;
     }
 
+    function liveRegimeScore(payload) {
+      const gc = (payload && payload.gate_confidence) ? payload.gate_confidence : null;
+      if (!gc) return null;
+      const pTrend = Number(gc.selected_p_trend);
+      if (!Number.isFinite(pTrend)) return null;
+      return Math.max(-1, Math.min(1, 2 * pTrend - 1));
+    }
+
+    function liveShadeColor(score) {
+      if (!Number.isFinite(score)) return null;
+      const alpha = 0.08 + 0.42 * Math.abs(score);
+      if (score >= 0) return `rgba(46, 204, 113, ${alpha})`;
+      return `rgba(247, 118, 142, ${alpha})`;
+    }
+
     function drawGateShading() {
       resizeShade();
       const ctx = shadeCanvas.getContext('2d');
       ctx.clearRect(0, 0, shadeCanvas.width, shadeCanvas.height);
+      const liveScore = liveRegimeScore(latestPayload);
+      if (Number.isFinite(liveScore)) {
+        const col = liveShadeColor(liveScore);
+        if (col) {
+          ctx.fillStyle = col;
+          ctx.fillRect(0, 0, shadeCanvas.width, shadeCanvas.height);
+          return;
+        }
+      }
       if (!latestPayload || !latestPayload.regime || !Array.isArray(latestPayload.regime.spans)) return;
       const spans = latestPayload.regime.spans;
       const tscale = chart.timeScale();
@@ -399,13 +489,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     function buildTimeMapFromBars(bars) {
       const m = new Map();
+      const arr = [];
       if (!Array.isArray(bars)) return m;
       for (let i = 0; i < bars.length; i++) {
         const t = Number(bars[i].time);
         if (!Number.isFinite(t)) continue;
+        arr.push(t);
         // Keep first occurrence for stable shading/marker placement.
         if (!m.has(t)) m.set(t, i);
       }
+      timeAxis = arr;
       return m;
     }
 
@@ -417,6 +510,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const idx = timeMap.get(n);
       if (idx == null) return null;
       return brickBaseTs + idx * 60;
+    }
+
+    function mapTimeAsOfForChart(t) {
+      if (t == null) return null;
+      const n = Number(t);
+      if (!Number.isFinite(n)) return null;
+      if (chartMode !== 'brick' || !Array.isArray(timeAxis) || timeAxis.length === 0) return n;
+      let lo = 0;
+      let hi = timeAxis.length - 1;
+      let ans = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (timeAxis[mid] <= n) {
+          ans = mid;
+          lo = mid + 1;
+        } else {
+          hi = mid - 1;
+        }
+      }
+      if (ans < 0) return null;
+      return brickBaseTs + ans * 60;
     }
 
     function mapBarsForChart(bars) {
@@ -433,7 +547,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (chartMode !== 'brick') return markers;
       return markers
         .map((m) => {
-          const mapped = mapTimeForChart(m.time);
+          const mapped = mapTimeAsOfForChart(m.time);
           if (mapped == null) return null;
           return { ...m, time: mapped };
         })
@@ -502,11 +616,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const conf = payload.confidence == null ? null : Number(payload.confidence);
       document.getElementById('confidence').textContent = conf == null ? '-' : conf.toFixed(3);
       if (conf != null) {
-        const rs = String(payload.regime_state || '').toLowerCase();
-        if (rs === 'trend') {
-          document.getElementById('confidence').style.color = conf >= 0.7 ? '#9ece6a' : (conf >= 0.5 ? '#e0af68' : '#f7768e');
+        const score = liveRegimeScore(payload);
+        if (Number.isFinite(score)) {
+          document.getElementById('confidence').style.color = score >= 0 ? '#9ece6a' : '#f7768e';
         } else {
-          document.getElementById('confidence').style.color = conf >= 0.7 ? '#f7768e' : (conf >= 0.5 ? '#e0af68' : '#9ece6a');
+          const rs = String(payload.regime_state || '').toLowerCase();
+          if (rs === 'trend') {
+            document.getElementById('confidence').style.color = conf >= 0.7 ? '#9ece6a' : (conf >= 0.5 ? '#e0af68' : '#f7768e');
+          } else {
+            document.getElementById('confidence').style.color = conf >= 0.7 ? '#f7768e' : (conf >= 0.5 ? '#e0af68' : '#9ece6a');
+          }
         }
       }
 
@@ -583,6 +702,7 @@ def main() -> None:
     except ImportError:
         pass
     args = parse_args()
+    _sync_gate_conf_artifacts_if_enabled()
     _start_renko_cache_updater_if_enabled()
     # Railway/cloud set PORT; use it so the app listens on the right port
     port = int(os.environ.get("PORT", str(args.port)))
