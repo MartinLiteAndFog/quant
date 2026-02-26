@@ -371,3 +371,22 @@ def build_regime_overlay(symbol: str, hours: int = 24 * 14) -> Dict[str, Any]:
     ]
     latest = points[-1] if points else None
     return {"spans": spans, "points": points, "latest": latest}
+
+
+def build_regime_scores(symbol: str, hours: int = 24 * 14) -> Dict[str, List]:
+    """Extract regime_score time series for the gradient band."""
+    store = RegimeStore()
+    end_ts = pd.Timestamp.now("UTC")
+    start_ts = end_ts - pd.Timedelta(hours=int(max(1, hours)))
+    rows = store.get_history(symbol=symbol, start_ts=start_ts.isoformat(), end_ts=end_ts.isoformat(), limit=20000)
+    if not rows:
+        return {"scores": [], "forecast": []}
+
+    scores = []
+    for r in rows:
+        ts = pd.to_datetime(r.get("ts"), utc=True, errors="coerce")
+        rs = pd.to_numeric(r.get("regime_score"), errors="coerce")
+        if pd.notna(ts) and pd.notna(rs):
+            scores.append({"time": int(ts.timestamp()), "score": round(float(rs), 4)})
+
+    return {"scores": scores, "forecast": []}

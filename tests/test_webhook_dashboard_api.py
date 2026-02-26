@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from quant.execution.webhook_server import api_dashboard_chart, api_regime_latest
+from quant.execution.webhook_server import api_dashboard_chart, api_regime_latest, api_dashboard_statespace
 from quant.regime import RegimeDecision, RegimeService, RegimeStore
 
 
@@ -142,6 +142,14 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertTrue(body.get("ok"))
         self.assertIsNone(body.get("gate_confidence_error"))
         self.assertIsInstance(body.get("gate_confidence"), dict)
+
+
+    def test_statespace_endpoint_shape(self) -> None:
+        body = api_dashboard_statespace(window_hours=48)
+        self.assertIn("trajectory", body)
+        self.assertIn("current", body)
+        self.assertIn("recent_density", body)
+        self.assertIn("density_bg", body)
 
 
 if __name__ == "__main__":

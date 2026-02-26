@@ -26,6 +26,10 @@ from quant.execution.dashboard_state import (
     load_trade_segments,
     load_trade_markers,
 )
+from quant.execution.dashboard_statespace import (
+    load_state_space_trajectory,
+    compute_recent_density,
+)
 from quant.regime import RegimeStore, get_live_gate_confidence
 from ..utils.log import get_logger
 
@@ -386,6 +390,43 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "error": str(e),
             "ts": _now_utc_iso(),
         }
+
+
+def _load_density_bg_images() -> Dict[str, Optional[str]]:
+    """Load pre-computed density PNGs as base64 strings."""
+    import base64
+    density_dir = Path(os.getenv("DASHBOARD_DENSITY_DIR", "data/live/density"))
+    out: Dict[str, Optional[str]] = {}
+    for tag in ("xy", "xz", "yz"):
+        p = density_dir / f"density_bg_{tag}.png"
+        if p.exists():
+            data = p.read_bytes()
+            out[tag] = f"data:image/png;base64,{base64.b64encode(data).decode('ascii')}"
+        else:
+            out[tag] = None
+    return out
+
+
+@app.get("/api/dashboard/statespace")
+def api_dashboard_statespace(window_hours: float = 8.0) -> Dict[str, Any]:
+    """State space heatmap data: trajectory, current position, density layers."""
+    try:
+        traj = load_state_space_trajectory(window_hours=float(max(0.1, window_hours)))
+        recent = compute_recent_density(hours=min(window_hours, 12.0))
+        density_bg = _load_density_bg_images()
+        return {
+            "ok": True,
+            "trajectory": traj.get("trajectory", []),
+            "current": traj.get("current"),
+            "recent_density": recent,
+            "density_bg": density_bg,
+            "window_hours": window_hours,
+        }
+    except Exception as e:
+        return {"ok": False, "trajectory": [], "current": None,
+                "recent_density": {"xy": [], "xz": [], "yz": []},
+                "density_bg": {"xy": None, "xz": None, "yz": None},
+                "error": str(e)}
 
 
 DASHBOARD_HTML = """<!DOCTYPE html>
