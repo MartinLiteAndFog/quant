@@ -6,13 +6,14 @@ import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from quant.execution.execution_state import write_execution_state
 from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
+from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
+from quant.strategies.signal_io import read_signals_jsonl
 from quant.utils.log import get_logger
 
 log = get_logger("quant.live_executor")
@@ -20,6 +21,7 @@ log = get_logger("quant.live_executor")
 try:
     from quant.execution.live_monitor import ExpectedTrade, record_expected
 except Exception:
+    # Keep executor runnable even if monitoring module is not packaged in target runtime.
     @dataclass
     class ExpectedTrade:
         ts: str
@@ -57,26 +59,16 @@ def _safe_ts(v: Any) -> Optional[pd.Timestamp]:
 
 
 def _now_iso() -> str:
-    return pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 @dataclass
 class ExecutorState:
     last_signal_ts: Optional[str] = None
     last_signal_value: Optional[int] = None
+    last_event_sig: Optional[str] = None
     last_action: Optional[str] = None
     n_actions: int = 0
-
-
-@dataclass
-class TrailingState:
-    side: Optional[str] = None
-    mode: Optional[str] = None
-    strategy_mode: Optional[str] = None
-    entry_ref: Optional[float] = None
-    best_fav: Optional[float] = None
-    ttp_points: Optional[list[dict[str, float]]] = None
-    last_updated: Optional[str] = None
 
 
 def _read_state(path: Path) -> ExecutorState:
@@ -87,6 +79,7 @@ def _read_state(path: Path) -> ExecutorState:
         return ExecutorState(
             last_signal_ts=d.get("last_signal_ts"),
             last_signal_value=d.get("last_signal_value"),
+            last_event_sig=d.get("last_event_sig"),
             last_action=d.get("last_action"),
             n_actions=int(d.get("n_actions", 0)),
         )
@@ -99,47 +92,52 @@ def _write_state(path: Path, st: ExecutorState) -> None:
     path.write_text(json.dumps(asdict(st), ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
-def _read_trailing_state(path: Path) -> TrailingState:
-    if not path.exists():
-        return TrailingState()
-    try:
-        d = json.loads(path.read_text(encoding="utf-8"))
-        return TrailingState(
-            side=d.get("side"),
-            mode=d.get("mode"),
-            strategy_mode=d.get("strategy_mode"),
-            entry_ref=float(d["entry_ref"]) if d.get("entry_ref") is not None else None,
-            best_fav=float(d["best_fav"]) if d.get("best_fav") is not None else None,
-            ttp_points=d.get("ttp_points") if isinstance(d.get("ttp_points"), list) else None,
-            last_updated=d.get("last_updated"),
-        )
-    except Exception:
-        return TrailingState()
-
-
-def _write_trailing_state(path: Path, st: TrailingState) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(asdict(st), ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-
-
-def _append_level_point(
-    points: Optional[list[dict[str, float]]],
-    *,
-    ts_iso: str,
-    value: float,
-    max_points: int = 2000,
-) -> list[dict[str, float]]:
-    out = list(points or [])
-    ts = _safe_ts(ts_iso)
-    if ts is None:
-        return out
-    out.append({"time": float(ts.timestamp()), "value": float(value)})
-    if len(out) > max_points:
-        out = out[-max_points:]
-    return out
-
-
 def _latest_signal(signals_root: Path, symbol: str) -> Optional[Dict[str, Any]]:
+    # Accept both SOLUSDT and SOL-USDT style directories.
+    wanted = _canon_symbol(symbol)
+    candidate_dirs = []
+    if signals_root.exists():
+        for p in signals_root.iterdir():
+            if p.is_dir() and _canon_symbol(p.name) == wanted:
+                candidate_dirs.append(p)
+
+    if not candidate_dirs:
+        sym_dir = signals_root / _norm_symbol(symbol)
+        if sym_dir.exists():
+            candidate_dirs = [sym_dir]
+    if not candidate_dirs:
+        return None
+
+    # Read newest files first, newest line wins.
+    all_files = []
+    for d in candidate_dirs:
+        all_files.extend(d.glob("*.jsonl"))
+    for fp in reversed(sorted(all_files)):
+        try:
+            with fp.open("r", encoding="utf-8") as f:
+                lines = [ln.strip() for ln in f if ln.strip()]
+            for ln in reversed(lines):
+                try:
+                    obj = json.loads(ln)
+                except Exception:
+                    continue
+                sig = obj.get("signal")
+                ts = _safe_ts(obj.get("ts"))
+                if ts is None:
+                    continue
+                try:
+                    sig_i = int(sig)
+                except Exception:
+                    continue
+                if sig_i == 0:
+                    continue
+                return {"ts": ts, "signal": 1 if sig_i > 0 else -1, "raw": obj}
+        except Exception:
+            continue
+    return None
+
+
+def _load_signals_df(signals_root: Path, symbol: str) -> pd.DataFrame:
     wanted = _canon_symbol(symbol)
     candidate_dirs = []
     if signals_root.exists():
@@ -151,43 +149,69 @@ def _latest_signal(signals_root: Path, symbol: str) -> Optional[Dict[str, Any]]:
         if sym_dir.exists():
             candidate_dirs = [sym_dir]
     if not candidate_dirs:
-        return None
+        return pd.DataFrame(columns=["ts", "signal"])
 
-    root_files = []
-    nested_files = []
+    parts: List[pd.DataFrame] = []
+    all_files: List[Path] = []
     for d in candidate_dirs:
-        root_files.extend(d.glob("*.jsonl"))
-        nested_files.extend((d / "countertrend").glob("*.jsonl"))
-        nested_files.extend((d / "trendfollower").glob("*.jsonl"))
-
-    # Primary source is the gate-routed root stream.
-    all_files = list(set(root_files)) if root_files else list(set(nested_files))
-    for fp in reversed(sorted(all_files)):
+        all_files.extend(sorted(d.glob("*.jsonl")))
+    for fp in all_files:
         try:
-            with fp.open("r", encoding="utf-8") as f:
-                lines = [ln.strip() for ln in f if ln.strip()]
-            for ln in reversed(lines):
-                try:
-                    obj = json.loads(ln)
-                except Exception:
-                    continue
-                ts = _safe_ts(obj.get("ts"))
-                if ts is None:
-                    continue
-                try:
-                    sig_i = int(obj.get("signal"))
-                except Exception:
-                    continue
-                if sig_i == 0:
-                    continue
-                return {
-                    "ts": ts,
-                    "signal": 1 if sig_i > 0 else -1,
-                    "raw": obj,
-                }
+            parts.append(read_signals_jsonl(fp)[["ts", "signal"]].copy())
         except Exception:
             continue
-    return None
+    if not parts:
+        return pd.DataFrame(columns=["ts", "signal"])
+    out = pd.concat(parts, ignore_index=True)
+    out["ts"] = pd.to_datetime(out["ts"], utc=True, errors="coerce")
+    out = out.dropna(subset=["ts"]).sort_values("ts").drop_duplicates("ts", keep="last").reset_index(drop=True)
+    out["signal"] = pd.to_numeric(out["signal"], errors="coerce").fillna(0).astype(int).clip(-1, 1)
+    out = out[out["signal"] != 0].copy()
+    return out
+
+
+def _load_renko_bars(path: Path, limit: int = 4000) -> pd.DataFrame:
+    if not path.exists():
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close"])
+    df = pd.read_parquet(path)
+    need = {"ts", "open", "high", "low", "close"}
+    if not need.issubset(set(df.columns)):
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close"])
+    df = df[["ts", "open", "high", "low", "close"]].copy()
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    for c in ("open", "high", "low", "close"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.dropna(subset=["ts", "close"]).sort_values("ts")
+    if limit > 0:
+        df = df.tail(int(limit))
+    return df.reset_index(drop=True)
+
+
+def _event_sig(row: pd.Series) -> str:
+    ts = pd.Timestamp(row["ts"]).isoformat()
+    seq = int(row.get("seq", 0))
+    event = str(row.get("event", ""))
+    side = int(row.get("side", 0))
+    return f"{ts}|{seq}|{event}|{side}"
+
+
+def _latest_backtest_event(renko_bars: pd.DataFrame, signals_df: pd.DataFrame) -> Optional[pd.Series]:
+    if renko_bars.empty or signals_df.empty:
+        return None
+    params = FlipParams(
+        fee_bps=float(os.getenv("LIVE_FLIP_FEE_BPS", "0")),
+        ttp_trail_pct=float(os.getenv("LIVE_FLIP_TTP_TRAIL_PCT", "0.012")),
+        min_sl_pct=float(os.getenv("LIVE_FLIP_MIN_SL_PCT", "0.015")),
+        max_sl_pct=float(os.getenv("LIVE_FLIP_MAX_SL_PCT", "0.030")),
+        swing_lookback=int(os.getenv("LIVE_FLIP_SWING_LOOKBACK", "50")),
+        be_trigger_pct=float(os.getenv("LIVE_FLIP_BE_TRIGGER_PCT", "0")),
+        be_offset_pct=float(os.getenv("LIVE_FLIP_BE_OFFSET_PCT", "0")),
+    )
+    _, events = run_flip_state_machine(bars=renko_bars, signals_df=signals_df, params=params, regime_on=None)
+    if events is None or events.empty:
+        return None
+    events = events.sort_values(["ts", "seq"]).reset_index(drop=True)
+    return events.iloc[-1]
 
 
 def _qty_from_max_eur(max_eur: float, leverage: float, mid_price: float) -> int:
@@ -197,94 +221,6 @@ def _qty_from_max_eur(max_eur: float, leverage: float, mid_price: float) -> int:
     return int(notional // float(mid_price))
 
 
-def _update_trailing_levels(
-    *,
-    broker: KucoinFuturesBroker,
-    symbol: str,
-    trailing: TrailingState,
-    pos: float,
-    ttp_trail_pct: float,
-    sl_wait_pct: float,
-) -> TrailingState:
-    if abs(pos) < 1e-12:
-        return TrailingState()
-
-    bid, ask = broker.get_best_bid_ask(symbol)
-    px = (bid + ask) / 2.0 if (bid and ask) else (ask or bid or 0.0)
-    if px <= 0:
-        return trailing
-
-    side = "long" if pos > 0 else "short"
-    if trailing.side != side or trailing.entry_ref is None or trailing.best_fav is None:
-        trailing = TrailingState(
-            side=side,
-            mode="TTP",
-            strategy_mode=trailing.strategy_mode,
-            entry_ref=float(px),
-            best_fav=float(px),
-            ttp_points=[],
-            last_updated=_now_iso(),
-        )
-
-    best = float(trailing.best_fav or px)
-    if side == "long":
-        best = max(best, float(px))
-    else:
-        best = min(best, float(px))
-    trailing.best_fav = best
-    trailing.last_updated = _now_iso()
-
-    strategy_mode = (trailing.strategy_mode or "countertrend").strip().lower()
-    if side == "long":
-        ttp = best * (1.0 - float(ttp_trail_pct))
-        sl = float(trailing.entry_ref) * (1.0 - float(sl_wait_pct))
-        tp1 = float(trailing.entry_ref) * (1.0 + float(ttp_trail_pct))
-        tp2 = float(trailing.entry_ref) * (1.0 + float(2.0 * ttp_trail_pct))
-    else:
-        ttp = best * (1.0 + float(ttp_trail_pct))
-        sl = float(trailing.entry_ref) * (1.0 + float(sl_wait_pct))
-        tp1 = float(trailing.entry_ref) * (1.0 - float(ttp_trail_pct))
-        tp2 = float(trailing.entry_ref) * (1.0 - float(2.0 * ttp_trail_pct))
-
-    # Countertrend uses trailing exits; trendfollower uses fixed TP1/TP2.
-    if strategy_mode == "trendfollower":
-        ttp_out = None
-        tp1_out = float(tp1)
-        tp2_out = float(tp2)
-        mode_label = "TP"
-        ttp_points_out: list[dict[str, float]] = []
-    else:
-        ttp_out = float(ttp)
-        tp1_out = None
-        tp2_out = None
-        mode_label = "TTP"
-        ttp_points_out = _append_level_point(
-            trailing.ttp_points,
-            ts_iso=str(trailing.last_updated or _now_iso()),
-            value=float(ttp_out),
-        )
-    trailing.ttp_points = ttp_points_out
-
-    write_execution_state(
-        {
-            "symbol": symbol,
-            "mode": mode_label,
-            "strategy_mode": strategy_mode,
-            "side": side,
-            "signal": 1 if side == "long" else -1,
-            "sl": float(sl),
-            "ttp": ttp_out,
-            "tp1": tp1_out,
-            "tp2": tp2_out,
-            "entry_ref": float(trailing.entry_ref),
-            "best_fav": float(best),
-            "ttp_points": ttp_points_out,
-            "ts": trailing.last_updated,
-        }
-    )
-    return trailing
-
-
 def run_once(
     *,
     broker: KucoinFuturesBroker,
@@ -292,39 +228,37 @@ def run_once(
     symbol: str,
     signals_root: Path,
     state: ExecutorState,
-    trailing: TrailingState,
     live_enabled: bool,
     dry_run: bool,
     max_eur: float,
     leverage: float,
-    ttp_trail_pct: float,
-    sl_wait_pct: float,
-) -> tuple[ExecutorState, TrailingState]:
-    sig = _latest_signal(signals_root=signals_root, symbol=symbol)
-    if sig is not None:
-        raw_mode = str(sig.get("raw", {}).get("strategy_mode", "")).strip().lower()
-        if raw_mode in ("countertrend", "trendfollower"):
-            trailing.strategy_mode = raw_mode
-
-    pos = float(broker.get_position(symbol))
-    trailing = _update_trailing_levels(
-        broker=broker,
-        symbol=symbol,
-        trailing=trailing,
-        pos=pos,
-        ttp_trail_pct=ttp_trail_pct,
-        sl_wait_pct=sl_wait_pct,
-    )
-
-    if sig is None:
-        log.info("executor no signal yet symbol=%s", symbol)
-        return state, trailing
-
-    ts = sig["ts"]
-    sig_v = int(sig["signal"])
-    ts_iso = ts.isoformat()
-    if state.last_signal_ts == ts_iso and state.last_signal_value == sig_v:
-        return state, trailing
+) -> ExecutorState:
+    renko_path = Path(os.getenv("LIVE_EXECUTOR_RENKO_PARQUET", os.getenv("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet")))
+    renko_bars = _load_renko_bars(renko_path, limit=int(os.getenv("LIVE_EXECUTOR_RENKO_LIMIT", "4000")))
+    signals_df = _load_signals_df(signals_root=signals_root, symbol=symbol)
+    ev = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
+    if ev is None:
+        sig = _latest_signal(signals_root=signals_root, symbol=symbol)
+        if sig is None:
+            log.info("executor no signal yet symbol=%s", symbol)
+            return state
+        ts = sig["ts"]
+        sig_v = int(sig["signal"])
+        ts_iso = ts.isoformat()
+        if state.last_signal_ts == ts_iso and state.last_signal_value == sig_v:
+            return state
+        event = "entry" if sig_v > 0 else "entry"
+        event_side = sig_v
+        ev_sig = f"{ts_iso}|0|fallback_signal|{sig_v}"
+    else:
+        ev_sig = _event_sig(ev)
+        if state.last_event_sig == ev_sig:
+            return state
+        ts = pd.Timestamp(ev["ts"])
+        ts_iso = ts.isoformat()
+        event = str(ev["event"])
+        event_side = int(ev["side"])
+        sig_v = 1 if event_side > 0 else -1
 
     bid, ask = broker.get_best_bid_ask(symbol)
     mid = (bid + ask) / 2.0 if (bid and ask) else (ask or bid or 0.0)
@@ -334,17 +268,27 @@ def run_once(
         state.last_signal_ts = ts_iso
         state.last_signal_value = sig_v
         state.last_action = "skip_qty_0"
-        return state, trailing
+        return state
 
-    want_side = "long" if sig_v > 0 else "short"
+    pos = float(broker.get_position(symbol))
+    target_side = (-event_side if event in ("signal_flip_exit", "tp_exit") else event_side)
+    want_side = "long" if target_side > 0 else "short"
     current_side = "long" if pos > 0 else ("short" if pos < 0 else "flat")
-    if abs(pos) < 1e-12:
-        action = f"enter_{want_side}"
-    elif (pos > 0 and sig_v < 0) or (pos < 0 and sig_v > 0):
-        action = f"flip_to_{want_side}"
-    else:
-        action = "hold"
 
+    action = None
+    if event == "entry":
+        action = f"enter_{want_side}" if abs(pos) < 1e-12 else "hold"
+    elif event in ("signal_flip_exit", "tp_exit"):
+        if abs(pos) < 1e-12:
+            action = f"enter_{want_side}"
+        else:
+            action = f"flip_to_{want_side}" if ((pos > 0 and target_side < 0) or (pos < 0 and target_side > 0)) else "hold"
+    elif event in ("sl_exit", "be_exit"):
+        action = f"exit_{current_side}" if abs(pos) > 1e-12 else "hold"
+    else:
+        action = f"enter_{want_side}" if abs(pos) < 1e-12 else (f"flip_to_{want_side}" if ((pos > 0 and sig_v < 0) or (pos < 0 and sig_v > 0)) else "hold")
+
+    # Record expected trade for post-trade monitoring.
     if action in ("enter_long", "enter_short", "flip_to_long", "flip_to_short"):
         record_expected(
             ExpectedTrade(
@@ -354,7 +298,7 @@ def run_once(
                 action=("entry" if action.startswith("enter_") else "exit_flip"),
                 qty=float(qty),
                 expected_px=float(mid) if mid > 0 else None,
-                note=f"executor action={action} current={current_side}",
+                note=f"executor action={action} event={event} current={current_side}",
             )
         )
 
@@ -369,14 +313,18 @@ def run_once(
         elif action.startswith("flip_to_"):
             res = oms.exit_tp_or_flip(symbol=symbol, side=current_side, qty=abs(float(pos)), flip_to=want_side)
             log.info("executor flip result=%s", res)
+        elif action.startswith("exit_"):
+            res = oms.exit_sl(symbol=symbol, side=current_side, qty=abs(float(pos)))
+            log.info("executor exit result=%s", res)
         else:
-            log.info("executor hold symbol=%s pos=%s sig=%s", symbol, pos, sig_v)
+            log.info("executor hold symbol=%s pos=%s sig=%s event=%s", symbol, pos, sig_v, event)
 
     state.last_signal_ts = ts_iso
     state.last_signal_value = sig_v
+    state.last_event_sig = ev_sig
     state.last_action = action
     state.n_actions += 1
-    return state, trailing
+    return state
 
 
 def parse_args() -> argparse.Namespace:
@@ -384,7 +332,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--symbol", default=os.getenv("LIVE_SYMBOL", "SOL-USDT"))
     p.add_argument("--signals-dir", default=os.getenv("SIGNALS_DIR", "data/signals"))
     p.add_argument("--state-file", default=os.getenv("LIVE_EXECUTOR_STATE", "data/live/live_executor_state.json"))
-    p.add_argument("--trailing-state-file", default=os.getenv("LIVE_TRAILING_STATE", "data/live/live_trailing_state.json"))
     p.add_argument("--poll-sec", type=float, default=float(os.getenv("LIVE_EXECUTOR_POLL_SEC", "5")))
     p.add_argument("--once", action="store_true")
     return p.parse_args()
@@ -395,16 +342,13 @@ def main() -> None:
     symbol = str(args.symbol).upper()
     signals_root = Path(args.signals_dir)
     state_path = Path(args.state_file)
-    trailing_state_path = Path(args.trailing_state_file)
 
     live_enabled = _truthy(os.getenv("LIVE_TRADING_ENABLED", "0"))
     dry_run = _truthy(os.getenv("LIVE_EXECUTOR_DRY_RUN", "1"))
     max_eur = float(os.getenv("LIVE_EXECUTOR_MAX_EUR", "20"))
     leverage = float(os.getenv("LIVE_EXECUTOR_LEVERAGE", "1"))
-    ttp_trail_pct = float(os.getenv("LIVE_TTP_TRAIL_PCT", "0.012"))
-    sl_wait_pct = float(os.getenv("LIVE_WAIT_SL_PCT", "0.02"))
 
-    allowlist_raw = os.getenv("LIVE_EXECUTOR_SYMBOL_ALLOWLIST", "SOLUSDT,SOL-USDT")
+    allowlist_raw = os.getenv("LIVE_EXECUTOR_SYMBOL_ALLOWLIST", "SOL-USDT")
     allowlist = {s.strip().upper() for s in allowlist_raw.split(",") if s.strip()}
     if symbol not in allowlist:
         raise RuntimeError(f"symbol '{symbol}' not allowed. Set LIVE_EXECUTOR_SYMBOL_ALLOWLIST.")
@@ -412,7 +356,6 @@ def main() -> None:
     broker = KucoinFuturesBroker()
     oms = MakerFirstOMS(broker=broker, cfg=OmsDefaults())
     st = _read_state(state_path)
-    trailing = _read_trailing_state(trailing_state_path)
 
     log.info(
         "executor start symbol=%s live_enabled=%s dry_run=%s max_eur=%s leverage=%s signals=%s",
@@ -426,26 +369,21 @@ def main() -> None:
 
     while True:
         try:
-            st, trailing = run_once(
+            st = run_once(
                 broker=broker,
                 oms=oms,
                 symbol=symbol,
                 signals_root=signals_root,
                 state=st,
-                trailing=trailing,
                 live_enabled=live_enabled,
                 dry_run=dry_run,
                 max_eur=max_eur,
                 leverage=leverage,
-                ttp_trail_pct=ttp_trail_pct,
-                sl_wait_pct=sl_wait_pct,
             )
             _write_state(state_path, st)
-            _write_trailing_state(trailing_state_path, trailing)
         except Exception as e:
             log.warning("executor loop error: %s", e)
             _write_state(state_path, st)
-            _write_trailing_state(trailing_state_path, trailing)
 
         if args.once:
             break
