@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import threading
 import time
 from pathlib import Path
@@ -17,16 +16,12 @@ from fastapi.responses import HTMLResponse
 import uvicorn
 
 from quant.execution.dashboard_state import (
-    build_fibo_levels,
     build_regime_overlay,
     load_active_levels,
-    load_live_fill_markers,
     load_renko_bars,
-    load_renko_health,
-    load_trade_segments,
     load_trade_markers,
 )
-from quant.regime import RegimeStore, get_live_gate_confidence
+from quant.regime import RegimeStore
 from ..utils.log import get_logger
 
 log = get_logger("quant.webhook")
@@ -141,63 +136,6 @@ def _start_renko_cache_updater_if_enabled() -> None:
     )
 
 
-def _sync_gate_conf_artifacts_if_enabled() -> None:
-    """
-    Optional one-way sync of gate-confidence files from app workspace -> mounted volume.
-    This is useful when Railway volume does not yet contain required state-space artifacts.
-    """
-    if not _truthy(os.getenv("GATE_CONF_SYNC_ON_START", "0")):
-        return
-
-    src_dir = Path(os.getenv("GATE_CONF_SYNC_SRC_DIR", "data/runs/visual_v02_seed/transitions"))
-    src_gate = Path(
-        os.getenv(
-            "GATE_CONF_SYNC_SRC_GATE",
-            "data/regimes/SOLUSDT_tv5mIMBA_gate2of3_qch0.4_qadx0.6_qer0.3_daily.csv",
-        )
-    )
-    dst_dir = Path(os.getenv("GATE_CONF_ARTIFACT_DIR", "/data/live/gate_conf/transitions"))
-    dst_gate = Path(os.getenv("GATE_DAILY_PATH", "/data/live/gate_conf/gate_daily.csv"))
-
-    required = [
-        "voxel_map.parquet",
-        "voxel_stats.parquet",
-        "transitions_topk.parquet",
-        "basins_v02_components.parquet",
-    ]
-    try:
-        dst_dir.mkdir(parents=True, exist_ok=True)
-        if dst_gate.parent:
-            dst_gate.parent.mkdir(parents=True, exist_ok=True)
-
-        copied = []
-        for name in required:
-            s = src_dir / name
-            d = dst_dir / name
-            if not s.exists():
-                log.warning("gate-conf sync missing source file: %s", s)
-                continue
-            need_copy = (not d.exists()) or (s.stat().st_mtime > d.stat().st_mtime + 1e-6) or (s.stat().st_size != d.stat().st_size)
-            if need_copy:
-                shutil.copy2(s, d)
-                copied.append(str(d))
-
-        if src_gate.exists():
-            need_copy_gate = (not dst_gate.exists()) or (src_gate.stat().st_mtime > dst_gate.stat().st_mtime + 1e-6) or (src_gate.stat().st_size != dst_gate.stat().st_size)
-            if need_copy_gate:
-                shutil.copy2(src_gate, dst_gate)
-                copied.append(str(dst_gate))
-        else:
-            log.warning("gate-conf sync missing source gate file: %s", src_gate)
-
-        if copied:
-            log.info("gate-conf sync copied %d files", len(copied))
-        else:
-            log.info("gate-conf sync up-to-date; no files copied")
-    except Exception as e:
-        log.warning("gate-conf sync failed: %s", e)
-
-
 def _check_token(token: Optional[str]) -> None:
     expected = os.getenv("WEBHOOK_TOKEN", "").strip()
     if not expected:
@@ -269,16 +207,88 @@ def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
 
 @app.get("/api/position")
 def api_position(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
-    """Current position from KuCoin Futures (signed: >0 long, <0 short)."""
+    """
+    Current position from KuCoin Futures.
+
+    Backwards compatible:
+    - keeps `position` (signed: >0 long, <0 short)
+    Adds:
+    - side, size_abs, leverage, entry_price, mark_price, margin_mode, contract
+    """
     key = (os.getenv("KUCOIN_FUTURES_API_KEY") or "").strip()
     if not key:
-        return {"ok": True, "symbol": symbol, "position": None, "hint": "Configure KuCoin API keys."}
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "position": None,
+            "contract_multiplier": _contract_multiplier(symbol),
+            "hint": "Configure KuCoin API keys.",
+        }
     try:
         broker = _kucoin_broker()
-        pos = broker.get_position(symbol)
-        return {"ok": True, "symbol": symbol, "position": pos, "contract_multiplier": _contract_multiplier(symbol)}
+        # Prefer the raw position payload so we can expose leverage/entry/mark/margin mode.
+        from quant.execution.kucoin_futures import _symbol_to_contract
+
+        contract = _symbol_to_contract(symbol)
+        data = broker._req("GET", f"/api/v1/position?symbol={contract}")
+        if not isinstance(data, dict) or not data:
+            return {
+                "ok": True,
+                "symbol": symbol,
+                "contract": contract,
+                "position": 0.0,
+                "side": "flat",
+                "size_abs": 0.0,
+                "contract_multiplier": _contract_multiplier(symbol),
+            }
+
+        side = (data.get("side") or "").strip().lower() or "unknown"
+        qty = float(data.get("currentQty", data.get("size", 0)) or 0.0)
+        if side == "short":
+            pos = -abs(qty)
+        elif side == "long":
+            pos = abs(qty)
+        else:
+            pos = float(qty)
+
+        lev = data.get("leverage")
+        if lev is None:
+            lev = data.get("realLeverage")
+        if lev is None:
+            lev = data.get("initLeverage")
+
+        mm = (data.get("marginMode") or data.get("margin_mode") or "").strip().upper()
+        if mm not in ("CROSS", "ISOLATED"):
+            cm = data.get("crossMode")
+            if isinstance(cm, bool):
+                mm = "CROSS" if cm else "ISOLATED"
+            else:
+                mm = None
+
+        entry = data.get("avgEntryPrice") or data.get("entryPrice")
+        mark = data.get("markPrice")
+
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "contract": contract,
+            "position": float(pos),
+            "side": ("long" if pos > 0 else "short" if pos < 0 else "flat"),
+            "size_abs": float(abs(pos)),
+            "leverage": lev,
+            "entry_price": entry,
+            "mark_price": mark,
+            "margin_mode": mm,
+            "contract_multiplier": _contract_multiplier(symbol),
+        }
     except Exception as e:
-        return {"ok": False, "symbol": symbol, "position": None, "contract_multiplier": _contract_multiplier(symbol), "error": str(e)}
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "position": None,
+            "contract_multiplier": _contract_multiplier(symbol),
+            "error": str(e),
+        }
 
 
 @app.get("/api/regime/latest")
@@ -307,45 +317,19 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
     try:
         bars = load_renko_bars(max_points=int(max(100, max_points)))
         markers = load_trade_markers(max_points=int(max(100, max_points)))
-        markers_live = load_live_fill_markers(symbol=symbol, limit=int(max(50, min(500, max_points))))
-        markers = sorted(markers + markers_live, key=lambda x: int(x.get("time", 0)))
-        if len(markers) > int(max(100, max_points)):
-            markers = markers[-int(max(100, max_points)):]
-        segments = load_trade_segments(max_points=int(max(100, max_points)))
         levels = load_active_levels()
-        fibo = build_fibo_levels(max_points=int(max(100, max_points)))
-        renko_health = load_renko_health()
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
         latest = regime.get("latest") or {}
-        live_gc = None
-        live_gc_error = None
-        try:
-            live_gc = get_live_gate_confidence()
-        except Exception as e:
-            live_gc_error = str(e)
-            log.warning("live gate confidence unavailable: %s", e)
-        selected_p_trend = (live_gc or {}).get("selected_p_trend")
-        live_conf = float(max(0.0, min(1.0, selected_p_trend))) if isinstance(selected_p_trend, (float, int)) else None
-        if live_conf is not None and isinstance(regime.get("latest"), dict):
-            regime["latest"]["confidence"] = live_conf
-        if live_conf is not None and isinstance(regime.get("spans"), list) and regime["spans"]:
-            regime["spans"][-1]["confidence"] = live_conf
-        confidence_out = live_conf if live_conf is not None else latest.get("confidence")
         return {
             "ok": True,
             "symbol": symbol,
             "bars": bars,
             "markers": markers,
-            "segments": segments,
             "levels": levels,
-            "fibo": fibo,
-            "renko_health": renko_health,
             "regime": regime,
-            "confidence": confidence_out,
+            "confidence": latest.get("confidence"),
             "gate_on": latest.get("gate_on"),
             "regime_state": latest.get("regime_state"),
-            "gate_confidence": live_gc,
-            "gate_confidence_error": live_gc_error,
             "ts": _now_utc_iso(),
         }
     except Exception as e:
@@ -354,10 +338,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "symbol": symbol,
             "bars": [],
             "markers": [],
-            "segments": [],
             "levels": {},
-            "fibo": {"lookback": None, "long": [], "mid": [], "short": [], "latest": {}},
-            "renko_health": {"ok": False, "bars": 0, "last_ts": None, "age_sec": None},
             "regime": {"spans": [], "points": [], "latest": None},
             "error": str(e),
             "ts": _now_utc_iso(),
@@ -379,8 +360,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .layout { display: grid; grid-template-columns: 1fr 320px; gap: 1rem; align-items: start; }
     .card { background: var(--card); border-radius: 10px; padding: 0.75rem; }
     .chart-wrap { position: relative; height: 620px; border-radius: 10px; overflow: hidden; }
-    #chart { position: absolute; inset: 0; z-index: 1; }
-    #shade { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+    #chart { position: absolute; inset: 0; }
+    #shade { position: absolute; inset: 0; pointer-events: none; }
     .row { display: flex; justify-content: space-between; gap: 1rem; margin: 0.4rem 0; }
     .label { color: var(--muted); }
     .ok { color: var(--ok); }
@@ -399,19 +380,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div id="chart"></div>
         <canvas id="shade"></canvas>
       </div>
-      <div class="hint">Gate ON = green, Gate OFF = blue. Intensity follows confidence.</div>
+      <div class="hint">Gate ON is green, Gate OFF is blue. Intensity follows confidence.</div>
     </div>
     <div class="card">
       <div class="row"><span class="label">API (KuCoin)</span><span id="api-status">...</span></div>
       <div class="row"><span class="label">Ticker</span><span id="ticker" class="mono">...</span></div>
-      <div class="row"><span class="label">Position (contracts)</span><span id="position" class="mono">...</span></div>
-      <div class="row"><span class="label">Notional (est)</span><span id="position-notional" class="mono">...</span></div>
+      <div class="row"><span class="label">Position</span><span id="position" class="mono">...</span></div>
       <hr style="border-color:#2a3044;border-style:solid;border-width:1px 0 0 0;margin:0.8rem 0;">
       <div class="row"><span class="label">Gate</span><span id="gate">...</span></div>
       <div class="row"><span class="label">Regime</span><span id="regime-state">...</span></div>
       <div class="row"><span class="label">Confidence</span><span id="confidence" class="confidence-pill">...</span></div>
-      <div class="row"><span class="label">Bar time</span><span id="bar-time" class="mono">-</span></div>
-      <div class="row"><span class="label">Exit mode</span><span id="exit-mode">-</span></div>
       <div class="row"><span class="label">SL</span><span id="lvl-sl" class="mono">-</span></div>
       <div class="row"><span class="label">TTP</span><span id="lvl-ttp" class="mono">-</span></div>
       <div class="row"><span class="label">TP1</span><span id="lvl-tp1" class="mono">-</span></div>
@@ -424,108 +402,60 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const chartEl = document.getElementById('chart');
     const shadeCanvas = document.getElementById('shade');
     const qs = new URLSearchParams(window.location.search);
-    const chartMode = (qs.get('mode') || 'brick').toLowerCase();
-    const brickBaseTs = 1704067200;
+    const chartMode = (qs.get('mode') || 'brick').toLowerCase(); // brick | time
+    const brickBaseTs = 1704067200; // 2024-01-01 UTC
     const chart = LightweightCharts.createChart(chartEl, {
       layout: { background: { color: '#1e2333' }, textColor: '#d9def7' },
-      localization: {
-        timeFormatter: (time) => {
-          const t = Number(time);
-          if (!Number.isFinite(t)) return '';
-          if (chartMode !== 'brick' || !Array.isArray(barsRawRef) || !barsRawRef.length) {
-            const d = new Date(t * 1000);
-            return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0')+' '+String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0');
-          }
-          const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
-          if (idx >= barsRawRef.length) return 'B'+idx;
-          const rt = Number(barsRawRef[idx].time);
-          if (!Number.isFinite(rt)) return 'B'+idx;
-          const d = new Date(rt * 1000);
-          return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0')+' '+String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0');
-        },
-      },
       rightPriceScale: { borderColor: '#2a3044' },
       timeScale: {
         borderColor: '#2a3044',
         timeVisible: chartMode !== 'brick',
         secondsVisible: false,
-        tickMarkFormatter: (time) => {
+        // In brick mode, render a brick index instead of fake calendar time.
+        tickMarkFormatter: (time, tickMarkType, locale) => {
           if (chartMode !== 'brick') return undefined;
           const t = Number(time);
           if (!Number.isFinite(t)) return '';
           const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
-          if (!Array.isArray(barsRawRef) || idx >= barsRawRef.length) return 'B'+idx;
-          const rt = Number(barsRawRef[idx].time);
-          if (!Number.isFinite(rt)) return 'B'+idx;
-          const d = new Date(rt * 1000);
-          return String(d.getUTCDate()).padStart(2,'0')+'.'+String(d.getUTCMonth()+1).padStart(2,'0')+' '+String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0');
+          return `B${idx}`;
         },
       },
       grid: { vertLines: { color: '#252b3f' }, horzLines: { color: '#252b3f' } },
       crosshair: { mode: LightweightCharts.CrosshairMode.Magnet },
     });
     const candle = chart.addCandlestickSeries({
-      upColor: '#2ecc71', downColor: '#f7768e',
-      borderDownColor: '#f7768e', borderUpColor: '#2ecc71',
-      wickDownColor: '#f7768e', wickUpColor: '#2ecc71',
+      upColor: '#2ecc71',
+      downColor: '#f7768e',
+      borderDownColor: '#f7768e',
+      borderUpColor: '#2ecc71',
+      wickDownColor: '#f7768e',
+      wickUpColor: '#2ecc71',
     });
-    // Unified exit line (SL or TTP depending on active mode)
-    const exitSeries = chart.addLineSeries({ color: '#ffcc66', lineWidth: 2, title: 'Exit', lastValueVisible: true, priceLineVisible: false });
+    const slSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, title: 'SL' });
+    const ttpSeries = chart.addLineSeries({ color: '#ffcc66', lineWidth: 2, title: 'TTP' });
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
-    // Fibonacci level lines
-    const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const fibMidSeries = chart.addLineSeries({ color: '#bfc7d5', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const priceLineSeries = chart.addLineSeries({ color: '#9aa5b1', lineWidth: 1, title: 'Last', lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const tradeSegmentSeries = [];
 
     let latestPayload = null;
     let timeMap = null;
-    let barsRawRef = [];
-    let latestMid = null;
-    let hasFittedOnce = false;
 
     function resizeShade() {
       shadeCanvas.width = chartEl.clientWidth;
       shadeCanvas.height = chartEl.clientHeight;
     }
 
-    function confAlpha(conf) { return 0.24; }
-
-    function liveRegimeScore(payload) {
-      const gc = (payload && payload.gate_confidence) ? payload.gate_confidence : null;
-      if (!gc) return null;
-      const pTrend = Number(gc.selected_p_trend);
-      if (!Number.isFinite(pTrend)) return null;
-      return Math.max(-1, Math.min(1, 2 * pTrend - 1));
-    }
-
-    function liveShadeColor(score) {
-      if (!Number.isFinite(score)) return null;
-      const alpha = 0.08 + 0.42 * Math.abs(score);
-      if (score >= 0) return 'rgba(46, 204, 113, '+alpha+')';
-      return 'rgba(247, 118, 142, '+alpha+')';
+    function confAlpha(conf) {
+      const c = Math.max(0, Math.min(1, Number(conf || 0)));
+      return 0.08 + 0.32 * c;
     }
 
     function drawGateShading() {
       resizeShade();
       const ctx = shadeCanvas.getContext('2d');
       ctx.clearRect(0, 0, shadeCanvas.width, shadeCanvas.height);
-      // If live gate_confidence available, paint full background from live score
-      const liveScore = liveRegimeScore(latestPayload);
-      if (Number.isFinite(liveScore)) {
-        const col = liveShadeColor(liveScore);
-        if (col) { ctx.fillStyle = col; ctx.fillRect(0, 0, shadeCanvas.width, shadeCanvas.height); return; }
-      }
       if (!latestPayload || !latestPayload.regime || !Array.isArray(latestPayload.regime.spans)) return;
       const spans = latestPayload.regime.spans;
-      if (Array.isArray(spans) && spans.length === 1 && Number(spans[0].from) === Number(spans[0].to) && latestPayload.bars && latestPayload.bars.length) {
-        spans[0].from = Number(latestPayload.bars[0].time);
-        spans[0].to = Number(latestPayload.bars[latestPayload.bars.length - 1].time);
-      }
       const tscale = chart.timeScale();
-      const chartH = chartEl.clientHeight;
       for (const s of spans) {
         const fromT = mapTimeForChart(s.from);
         const toT = mapTimeForChart(s.to);
@@ -536,9 +466,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const left = Math.min(x0, x1);
         const width = Math.max(1, Math.abs(x1 - x0));
         const alpha = confAlpha(s.confidence);
-        const color = Number(s.gate_on) ? 'rgba(46, 204, 113, '+alpha+')' : 'rgba(64, 124, 255, '+alpha+')';
+        const color = Number(s.gate_on) ? `rgba(46, 204, 113, ${alpha})` : `rgba(64, 124, 255, ${alpha})`;
         ctx.fillStyle = color;
-        ctx.fillRect(left, 0, width, chartH);
+        ctx.fillRect(left, 0, width, shadeCanvas.height);
       }
     }
 
@@ -548,6 +478,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       for (let i = 0; i < bars.length; i++) {
         const t = Number(bars[i].time);
         if (!Number.isFinite(t)) continue;
+        // Keep first occurrence for stable shading/marker placement.
         if (!m.has(t)) m.set(t, i);
       }
       return m;
@@ -558,16 +489,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const n = Number(t);
       if (!Number.isFinite(n)) return null;
       if (chartMode !== 'brick' || !timeMap) return n;
-      let idx = timeMap.get(n);
-      if (idx == null && Array.isArray(barsRawRef) && barsRawRef.length) {
-        let lo = 0, hi = barsRawRef.length - 1, best = null;
-        while (lo <= hi) {
-          const m = Math.floor((lo + hi) / 2);
-          const tv = Number(barsRawRef[m].time);
-          if (tv <= n) { best = m; lo = m + 1; } else { hi = m - 1; }
-        }
-        idx = best;
-      }
+      const idx = timeMap.get(n);
       if (idx == null) return null;
       return brickBaseTs + idx * 60;
     }
@@ -575,34 +497,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     function mapBarsForChart(bars) {
       if (!Array.isArray(bars)) return [];
       if (chartMode !== 'brick') return bars;
-      return bars.map((b, i) => ({ ...b, time: brickBaseTs + i * 60 }));
+      return bars.map((b, i) => ({
+        ...b,
+        time: brickBaseTs + i * 60,
+      }));
     }
 
     function mapMarkersForChart(markers) {
       if (!Array.isArray(markers)) return [];
       if (chartMode !== 'brick') return markers;
-      return markers.map((m) => {
-        const mapped = mapTimeForChart(m.time);
-        if (mapped == null) return null;
-        return { ...m, time: mapped };
-      }).filter(Boolean);
-    }
-
-    function mapLineForChart(points) {
-      if (!Array.isArray(points)) return [];
-      if (chartMode !== 'brick') return points;
-      return points.map((p) => {
-        const mapped = mapTimeForChart(p.time);
-        if (mapped == null) return null;
-        return { time: mapped, value: Number(p.value) };
-      }).filter(Boolean);
-    }
-
-    function mapSegmentForChart(seg) {
-      const t0 = mapTimeForChart(seg.from_time);
-      const t1 = mapTimeForChart(seg.to_time);
-      if (t0 == null || t1 == null) return [];
-      return [{ time: t0, value: Number(seg.from_price) }, { time: t1, value: Number(seg.to_price) }];
+      return markers
+        .map((m) => {
+          const mapped = mapTimeForChart(m.time);
+          if (mapped == null) return null;
+          return { ...m, time: mapped };
+        })
+        .filter(Boolean);
     }
 
     function fmtNum(v) {
@@ -618,55 +528,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return [{ time: first, value: val }, { time: last, value: val }];
     }
 
-    // Build a single exit line that shows whichever is currently protecting:
-    //   - SL when TTP has not yet armed
-    //   - TTP once it activates (trail tightens toward price)
-    // Starts from entry_bar_ts so the line only spans the active trade.
-    function buildUnifiedExitLine(bars, levels) {
-      if (!Array.isArray(bars) || !bars.length || !levels) return { data: [], mode: 'none' };
-      const sl = Number(levels.sl);
-      const ttp = Number(levels.ttp);
-      const hasSl = Number.isFinite(sl);
-      const hasTtp = Number.isFinite(ttp);
-      if (!hasSl && !hasTtp) return { data: [], mode: 'none' };
-
-      // Determine the entry bar: use entry_bar_ts from levels, else trade start
-      let entryTime = null;
-      if (levels.entry_bar_ts != null) {
-        entryTime = mapTimeForChart(Number(levels.entry_bar_ts));
-      }
-      if (entryTime == null) {
-        // Fallback: if side is set, we have an open trade -> start from ~80% through bars
-        if (levels.side) {
-          const startIdx = Math.max(0, bars.length - Math.round(bars.length * 0.2));
-          entryTime = bars[startIdx].time;
-        } else {
-          entryTime = bars[0].time;
-        }
-      }
-      const lastTime = bars[bars.length - 1].time;
-
-      // TTP armed? If ttp value exists, the trailing stop is active.
-      if (hasTtp) {
-        const side = String(levels.side || '').toLowerCase();
-        // The active exit is whichever is tighter (closer to price).
-        // Long: higher of SL/TTP.  Short: lower of SL/TTP.
-        let exitVal = ttp;
-        if (hasSl) {
-          exitVal = (side === 'short') ? Math.min(sl, ttp) : Math.max(sl, ttp);
-        }
-        return {
-          data: [{ time: entryTime, value: exitVal }, { time: lastTime, value: exitVal }],
-          mode: 'ttp',
-        };
-      }
-      // Only SL
-      return {
-        data: [{ time: entryTime, value: sl }, { time: lastTime, value: sl }],
-        mode: 'sl',
-      };
-    }
-
     async function loadMeta() {
       const [st, pos] = await Promise.all([
         fetch('/api/status').then(r => r.json()),
@@ -680,20 +541,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const b = typeof t.bid === 'number' ? t.bid.toFixed(4) : t.bid;
         const a = typeof t.ask === 'number' ? t.ask.toFixed(4) : t.ask;
         const m = t.mid != null ? (typeof t.mid === 'number' ? t.mid.toFixed(4) : t.mid) : null;
-        latestMid = Number(t.mid);
-        document.getElementById('ticker').textContent = m != null ? (m+' (bid '+b+' / ask '+a+')') : (b+' / '+a);
+        document.getElementById('ticker').textContent = m != null ? `${m} (bid ${b} / ask ${a})` : `${b} / ${a}`;
       } else {
-        latestMid = null;
         document.getElementById('ticker').textContent = st.ticker_error || '-';
       }
       document.getElementById('position').textContent = pos.position != null ? String(pos.position) : (pos.error || '-');
-      if (pos.position != null && st.ticker && st.ticker.mid != null) {
-        const mult = Number(pos.contract_multiplier || 1);
-        const notional = Math.abs(Number(pos.position)) * mult * Number(st.ticker.mid);
-        document.getElementById('position-notional').textContent = Number.isFinite(notional) ? notional.toFixed(2)+' USDT' : '-';
-      } else {
-        document.getElementById('position-notional').textContent = '-';
-      }
     }
 
     async function loadChart() {
@@ -702,71 +554,22 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (!payload.ok) return;
 
       const barsRaw = Array.isArray(payload.bars) ? payload.bars : [];
-      barsRawRef = barsRaw;
       timeMap = buildTimeMapFromBars(barsRaw);
       const bars = mapBarsForChart(barsRaw);
       candle.setData(bars);
       candle.setMarkers(mapMarkersForChart(Array.isArray(payload.markers) ? payload.markers : []));
 
       const levels = payload.levels || {};
-
-      // Unified exit line: shows SL or TTP (whichever is active/tighter)
-      const exitInfo = buildUnifiedExitLine(bars, levels);
-      exitSeries.setData(exitInfo.data);
-      if (exitInfo.mode === 'ttp') {
-        exitSeries.applyOptions({ color: '#ffcc66', title: 'TTP' });
-      } else if (exitInfo.mode === 'sl') {
-        exitSeries.applyOptions({ color: '#f7768e', title: 'SL' });
-      } else {
-        exitSeries.applyOptions({ color: '#ffcc66', title: 'Exit' });
-      }
-
+      slSeries.setData(levelLineData(bars, levels.sl));
+      ttpSeries.setData(levelLineData(bars, levels.ttp));
       tp1Series.setData(levelLineData(bars, levels.tp1));
       tp2Series.setData(levelLineData(bars, levels.tp2));
 
-      // Fibonacci levels
-      const fibo = payload.fibo || {};
-      fibLongSeries.setData(mapLineForChart(fibo.long || []));
-      fibMidSeries.setData(mapLineForChart(fibo.mid || []));
-      fibShortSeries.setData(mapLineForChart(fibo.short || []));
-
-      // Live price line
-      const lastBar = bars.length ? bars[bars.length - 1] : null;
-      if (lastBar) {
-        const livePx = Number.isFinite(Number(latestMid)) ? Number(latestMid) : Number(lastBar.close);
-        priceLineSeries.setData([{ time: bars[0].time, value: livePx }, { time: lastBar.time, value: livePx }]);
-      } else {
-        priceLineSeries.setData([]);
-      }
-
-      // Trade segments (entry->exit lines for historic trades)
-      for (const s of tradeSegmentSeries) chart.removeSeries(s);
-      tradeSegmentSeries.length = 0;
-      const segments = Array.isArray(payload.segments) ? payload.segments : [];
-      for (const seg of segments) {
-        const ls = chart.addLineSeries({ color: seg.color || '#9aa5b1', lineWidth: 2, title: seg.positive ? 'Trade +' : 'Trade -' });
-        ls.setData(mapSegmentForChart(seg));
-        tradeSegmentSeries.push(ls);
-      }
-
-      // Side panel levels
       document.getElementById('lvl-sl').textContent = fmtNum(levels.sl);
       document.getElementById('lvl-ttp').textContent = fmtNum(levels.ttp);
       document.getElementById('lvl-tp1').textContent = fmtNum(levels.tp1);
       document.getElementById('lvl-tp2').textContent = fmtNum(levels.tp2);
-      const exitModeEl = document.getElementById('exit-mode');
-      if (exitInfo.mode === 'ttp') {
-        exitModeEl.textContent = 'TTP (trailing)';
-        exitModeEl.className = 'ok';
-      } else if (exitInfo.mode === 'sl') {
-        exitModeEl.textContent = 'SL (stop loss)';
-        exitModeEl.className = 'err';
-      } else {
-        exitModeEl.textContent = '-';
-        exitModeEl.className = '';
-      }
 
-      // Regime / gate
       const gate = payload.gate_on;
       document.getElementById('gate').textContent = gate == null ? '-' : (Number(gate) ? 'ON' : 'OFF');
       document.getElementById('gate').className = Number(gate) ? 'ok' : 'err';
@@ -774,38 +577,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const conf = payload.confidence == null ? null : Number(payload.confidence);
       document.getElementById('confidence').textContent = conf == null ? '-' : conf.toFixed(3);
       if (conf != null) {
-        const score = liveRegimeScore(payload);
-        if (Number.isFinite(score)) {
-          document.getElementById('confidence').style.color = score >= 0 ? '#9ece6a' : '#f7768e';
-        } else {
-          document.getElementById('confidence').style.color = conf >= 0.7 ? '#9ece6a' : (conf >= 0.5 ? '#e0af68' : '#f7768e');
-        }
+        document.getElementById('confidence').style.color = conf >= 0.7 ? '#9ece6a' : (conf >= 0.5 ? '#e0af68' : '#f7768e');
       }
 
-      // Renko health hint
-      const rh = payload.renko_health || {};
-      if (rh.age_sec != null) {
-        document.getElementById('hint').textContent = 'Renko age: '+Math.round(Number(rh.age_sec))+'s';
-      }
-
-      if (!hasFittedOnce) {
-        chart.timeScale().fitContent();
-        hasFittedOnce = true;
-      }
+      chart.timeScale().fitContent();
       drawGateShading();
     }
 
     chart.timeScale().subscribeVisibleTimeRangeChange(() => drawGateShading());
-    chart.subscribeCrosshairMove((param) => {
-      const t = param && param.time != null ? Number(param.time) : null;
-      if (t == null || !Number.isFinite(t)) { document.getElementById('bar-time').textContent = '-'; return; }
-      if (chartMode !== 'brick') { document.getElementById('bar-time').textContent = new Date(t * 1000).toISOString().slice(11, 16); return; }
-      const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
-      if (!Array.isArray(barsRawRef) || idx >= barsRawRef.length) { document.getElementById('bar-time').textContent = '-'; return; }
-      const rt = Number(barsRawRef[idx].time);
-      if (!Number.isFinite(rt)) { document.getElementById('bar-time').textContent = '-'; return; }
-      document.getElementById('bar-time').textContent = new Date(rt * 1000).toISOString().slice(11, 16);
-    });
     window.addEventListener('resize', () => drawGateShading());
 
     async function tick() {
@@ -874,7 +653,6 @@ def main() -> None:
     except ImportError:
         pass
     args = parse_args()
-    _sync_gate_conf_artifacts_if_enabled()
     _start_renko_cache_updater_if_enabled()
     # Railway/cloud set PORT; use it so the app listens on the right port
     port = int(os.environ.get("PORT", str(args.port)))
