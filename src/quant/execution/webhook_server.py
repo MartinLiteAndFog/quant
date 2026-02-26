@@ -13,17 +13,13 @@ from typing import Any, Dict, Optional
 
 import pandas as pd
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse
 import uvicorn
 
 from quant.execution.dashboard_state import (
-    build_fibo_levels,
     build_regime_overlay,
     load_active_levels,
-    load_live_fill_markers,
     load_renko_bars,
-    load_renko_health,
-    load_trade_segments,
     load_trade_markers,
 )
 from quant.execution.dashboard_statespace import (
@@ -86,18 +82,6 @@ def _truthy(v: Optional[str]) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
-def _contract_multiplier(symbol: str) -> float:
-    norm = "".join(ch for ch in str(symbol or "").upper() if ch.isalnum())
-    v = os.getenv(f"CONTRACT_MULTIPLIER_{norm}")
-    if v is None:
-        v = os.getenv("CONTRACT_MULTIPLIER_DEFAULT", "1.0")
-    try:
-        m = float(v)
-    except Exception:
-        m = 1.0
-    return m if m > 0 else 1.0
-
-
 def _start_renko_cache_updater_if_enabled() -> None:
     """
     Optional background updater for dashboard Renko cache.
@@ -115,6 +99,7 @@ def _start_renko_cache_updater_if_enabled() -> None:
     poll_sec = float(os.getenv("DASHBOARD_RENKO_POLL_SEC", "300"))
 
     def _loop() -> None:
+        # Lazy import to avoid startup dependency when updater is disabled.
         from quant.execution.renko_cache_updater import refresh_renko_cache
 
         while True:
@@ -145,6 +130,10 @@ def _start_renko_cache_updater_if_enabled() -> None:
 
 
 def _sync_gate_conf_artifacts_if_enabled() -> None:
+    """
+    Optional one-way sync of gate-confidence files from app workspace -> mounted volume.
+    This is useful when Railway volume does not yet contain required state-space artifacts.
+    """
     if not _truthy(os.getenv("GATE_CONF_SYNC_ON_START", "0")):
         return
 
@@ -206,6 +195,12 @@ def _check_token(token: Optional[str]) -> None:
 
 
 def _ensure_ts(payload: Dict[str, Any], now_iso: str) -> Dict[str, Any]:
+    """
+    Guarantee a 'ts' field exists for downstream backtests.
+    - If client sends ts/timestamp/time/t/datetime -> normalize into 'ts'
+    - Else fallback to server_ts (now)
+    Keep original fields too.
+    """
     candidate_keys = ("ts", "timestamp", "time", "t", "datetime")
     ts_val = None
     for k in candidate_keys:
@@ -218,6 +213,7 @@ def _ensure_ts(payload: Dict[str, Any], now_iso: str) -> Dict[str, Any]:
         out["ts"] = now_iso
         out["_ts_source"] = "server_ts_fallback"
     else:
+        # preserve exact value under 'ts' for signal_io
         out["ts"] = ts_val
         out["_ts_source"] = f"payload:{k}"
     return out
@@ -225,6 +221,7 @@ def _ensure_ts(payload: Dict[str, Any], now_iso: str) -> Dict[str, Any]:
 
 @app.get("/")
 def root() -> Dict[str, Any]:
+    """Root für Health-Checks (z. B. Railway); leitet auf Dashboard hin."""
     return {"ok": True, "app": "quant-webhook", "ts": _now_utc_iso(), "dashboard": "/dashboard", "health": "/health"}
 
 
@@ -234,12 +231,14 @@ def health() -> Dict[str, Any]:
 
 
 def _kucoin_broker():
+    """Lazy import so app starts even without credentials."""
     from quant.execution.kucoin_futures import KucoinFuturesBroker
     return KucoinFuturesBroker()
 
 
 @app.get("/api/status")
 def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
+    """API status: whether KuCoin credentials are set, and current ticker (bid/ask) from KuCoin."""
     key = (os.getenv("KUCOIN_FUTURES_API_KEY") or "").strip()
     out = {"ok": True, "ts": _now_utc_iso(), "api_configured": bool(key)}
     if not key:
@@ -258,58 +257,16 @@ def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
 
 @app.get("/api/position")
 def api_position(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
-    """
-    Current position from KuCoin Futures.
-    Backwards compatible (keeps `position` signed: >0 long, <0 short).
-    Adds: side, size_abs, leverage, entry_price, mark_price, margin_mode, contract.
-    """
+    """Current position from KuCoin Futures (signed: >0 long, <0 short)."""
     key = (os.getenv("KUCOIN_FUTURES_API_KEY") or "").strip()
     if not key:
-        return {
-            "ok": True, "symbol": symbol, "position": None,
-            "contract_multiplier": _contract_multiplier(symbol),
-            "hint": "Configure KuCoin API keys.",
-        }
+        return {"ok": True, "symbol": symbol, "position": None, "hint": "Configure KuCoin API keys."}
     try:
         broker = _kucoin_broker()
-        from quant.execution.kucoin_futures import _symbol_to_contract
-        contract = _symbol_to_contract(symbol)
-        data = broker._req("GET", f"/api/v1/position?symbol={contract}")
-        if not isinstance(data, dict) or not data:
-            return {
-                "ok": True, "symbol": symbol, "contract": contract,
-                "position": 0.0, "side": "flat", "size_abs": 0.0,
-                "contract_multiplier": _contract_multiplier(symbol),
-            }
-        side = (data.get("side") or "").strip().lower() or "unknown"
-        qty = float(data.get("currentQty", data.get("size", 0)) or 0.0)
-        if side == "short":
-            pos = -abs(qty)
-        elif side == "long":
-            pos = abs(qty)
-        else:
-            pos = float(qty)
-        lev = data.get("leverage") or data.get("realLeverage") or data.get("initLeverage")
-        mm = (data.get("marginMode") or data.get("margin_mode") or "").strip().upper()
-        if mm not in ("CROSS", "ISOLATED"):
-            cm = data.get("crossMode")
-            mm = ("CROSS" if cm else "ISOLATED") if isinstance(cm, bool) else None
-        entry = data.get("avgEntryPrice") or data.get("entryPrice")
-        mark = data.get("markPrice")
-        return {
-            "ok": True, "symbol": symbol, "contract": contract,
-            "position": float(pos),
-            "side": ("long" if pos > 0 else "short" if pos < 0 else "flat"),
-            "size_abs": float(abs(pos)),
-            "leverage": lev, "entry_price": entry, "mark_price": mark,
-            "margin_mode": mm,
-            "contract_multiplier": _contract_multiplier(symbol),
-        }
+        pos = broker.get_position(symbol)
+        return {"ok": True, "symbol": symbol, "position": pos}
     except Exception as e:
-        return {
-            "ok": False, "symbol": symbol, "position": None,
-            "contract_multiplier": _contract_multiplier(symbol), "error": str(e),
-        }
+        return {"ok": False, "symbol": symbol, "position": None, "error": str(e)}
 
 
 @app.get("/api/regime/latest")
@@ -332,17 +289,13 @@ def api_regime_transitions(symbol: str = DEFAULT_SYMBOL, limit: int = 50) -> Dic
 
 @app.get("/api/dashboard/chart")
 def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_points: int = 3000) -> Dict[str, Any]:
+    """
+    Unified chart payload: renko bars, trades, regime overlays, and active levels.
+    """
     try:
         bars = load_renko_bars(max_points=int(max(100, max_points)))
-        markers = load_trade_markers(max_points=int(max(100, max_points)))
-        markers_live = load_live_fill_markers(symbol=symbol, limit=int(max(50, min(500, max_points))))
-        markers = sorted(markers + markers_live, key=lambda x: int(x.get("time", 0)))
-        if len(markers) > int(max(100, max_points)):
-            markers = markers[-int(max(100, max_points)):]
-        segments = load_trade_segments(max_points=int(max(100, max_points)))
+        markers = load_trade_markers(max_points=int(max(1000, max_points * 50)))
         levels = load_active_levels()
-        fibo = build_fibo_levels(max_points=int(max(100, max_points)))
-        renko_health = load_renko_health()
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
         latest = regime.get("latest") or {}
         live_gc = None
@@ -364,10 +317,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "symbol": symbol,
             "bars": bars,
             "markers": markers,
-            "segments": segments,
             "levels": levels,
-            "fibo": fibo,
-            "renko_health": renko_health,
             "regime": regime,
             "confidence": confidence_out,
             "gate_on": latest.get("gate_on"),
@@ -382,10 +332,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "symbol": symbol,
             "bars": [],
             "markers": [],
-            "segments": [],
             "levels": {},
-            "fibo": {"lookback": None, "long": [], "mid": [], "short": [], "latest": {}},
-            "renko_health": {"ok": False, "bars": 0, "last_ts": None, "age_sec": None},
             "regime": {"spans": [], "points": [], "latest": None},
             "error": str(e),
             "ts": _now_utc_iso(),
@@ -444,8 +391,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .layout { display: grid; grid-template-columns: 1fr 320px; gap: 1rem; align-items: start; }
     .card { background: var(--card); border-radius: 10px; padding: 0.75rem; }
     .chart-wrap { position: relative; height: 620px; border-radius: 10px; overflow: hidden; }
-    #chart { position: absolute; inset: 0; z-index: 1; }
-    #shade { position: absolute; inset: 0; pointer-events: none; z-index: 3; }
+    #chart { position: absolute; inset: 0; }
     .row { display: flex; justify-content: space-between; gap: 1rem; margin: 0.4rem 0; }
     .label { color: var(--muted); }
     .ok { color: var(--ok); }
@@ -453,7 +399,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .hint { color: var(--muted); font-size: 0.85rem; margin-top: 0.5rem; }
     .confidence-pill { font-weight: 700; }
-    @media (max-width: 1200px) { .layout { grid-template-columns: 1fr; } .chart-wrap { height: 520px; } }
+    .regime-band { height: 35px; border-radius: 6px; overflow: hidden; position: relative; }
+    .regime-band canvas { width: 100%; height: 100%; display: block; }
+    .bottom-row { display: grid; grid-template-columns: 1fr 1fr 1fr 280px; gap: 1rem; margin-top: 1rem; }
+    .heatmap-card { position: relative; }
+    .heatmap-card canvas { width: 100%; aspect-ratio: 1; display: block; border-radius: 6px; }
+    .heatmap-title { color: var(--text); font-size: 0.85rem; text-align: center; margin-bottom: 0.25rem; }
+    .traj-controls { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; }
+    .traj-controls select { background: var(--card); color: var(--text); border: 1px solid #2a3044; border-radius: 4px; padding: 2px 6px; font-size: 0.85rem; }
+    @media (max-width: 1200px) { .layout { grid-template-columns: 1fr; } .chart-wrap { height: 520px; } .bottom-row { grid-template-columns: 1fr 1fr; } }
+    @media (max-width: 800px) { .bottom-row { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -462,21 +417,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     <div class="card">
       <div class="chart-wrap">
         <div id="chart"></div>
-        <canvas id="shade"></canvas>
       </div>
-      <div class="hint">Gate ON = green, Gate OFF = blue. Intensity follows confidence.</div>
     </div>
     <div class="card">
       <div class="row"><span class="label">API (KuCoin)</span><span id="api-status">...</span></div>
       <div class="row"><span class="label">Ticker</span><span id="ticker" class="mono">...</span></div>
-      <div class="row"><span class="label">Position (contracts)</span><span id="position" class="mono">...</span></div>
-      <div class="row"><span class="label">Notional (est)</span><span id="position-notional" class="mono">...</span></div>
+      <div class="row"><span class="label">Position</span><span id="position" class="mono">...</span></div>
       <hr style="border-color:#2a3044;border-style:solid;border-width:1px 0 0 0;margin:0.8rem 0;">
       <div class="row"><span class="label">Gate</span><span id="gate">...</span></div>
       <div class="row"><span class="label">Regime</span><span id="regime-state">...</span></div>
       <div class="row"><span class="label">Confidence</span><span id="confidence" class="confidence-pill">...</span></div>
-      <div class="row"><span class="label">Bar time</span><span id="bar-time" class="mono">-</span></div>
-      <div class="row"><span class="label">Exit mode</span><span id="exit-mode">-</span></div>
       <div class="row"><span class="label">SL</span><span id="lvl-sl" class="mono">-</span></div>
       <div class="row"><span class="label">TTP</span><span id="lvl-ttp" class="mono">-</span></div>
       <div class="row"><span class="label">TP1</span><span id="lvl-tp1" class="mono">-</span></div>
@@ -485,45 +435,60 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     </div>
   </div>
 
+  <div class="card regime-band" style="margin-top:0.5rem;">
+    <canvas id="regime-canvas"></canvas>
+  </div>
+  <div class="hint" style="text-align:center;margin-top:0.25rem;">Regime: red = countertrend, green = trend. Right side = projected.</div>
+
+  <div class="traj-controls">
+    <span class="label" style="font-size:0.85rem;">Trajectory window:</span>
+    <select id="traj-window" class="mono">
+      <option value="1">1h</option>
+      <option value="4">4h</option>
+      <option value="8" selected>8h</option>
+      <option value="12">12h</option>
+      <option value="24">24h</option>
+      <option value="48">48h</option>
+    </select>
+  </div>
+
+  <div class="bottom-row">
+    <div class="card heatmap-card">
+      <div class="heatmap-title">Drift vs Elasticity</div>
+      <canvas id="heatmap-xy"></canvas>
+    </div>
+    <div class="card heatmap-card">
+      <div class="heatmap-title">Drift vs Instability</div>
+      <canvas id="heatmap-xz"></canvas>
+    </div>
+    <div class="card heatmap-card">
+      <div class="heatmap-title">Elasticity vs Instability</div>
+      <canvas id="heatmap-yz"></canvas>
+    </div>
+    <div class="card" id="axis-bars-card">
+      <div style="color:var(--text);font-size:0.95rem;font-weight:600;margin-bottom:0.5rem;">Current State</div>
+      <canvas id="axis-bars" width="250" height="200"></canvas>
+    </div>
+  </div>
+
   <script>
     const chartEl = document.getElementById('chart');
-    const shadeCanvas = document.getElementById('shade');
     const qs = new URLSearchParams(window.location.search);
     const chartMode = (qs.get('mode') || 'brick').toLowerCase();
     const brickBaseTs = 1704067200;
     const chart = LightweightCharts.createChart(chartEl, {
       layout: { background: { color: '#1e2333' }, textColor: '#d9def7' },
-      localization: {
-        timeFormatter: (time) => {
-          const t = Number(time);
-          if (!Number.isFinite(t)) return '';
-          if (chartMode !== 'brick' || !Array.isArray(barsRawRef) || !barsRawRef.length) {
-            const d = new Date(t * 1000);
-            return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0')+' '+String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0');
-          }
-          const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
-          if (idx >= barsRawRef.length) return 'B'+idx;
-          const rt = Number(barsRawRef[idx].time);
-          if (!Number.isFinite(rt)) return 'B'+idx;
-          const d = new Date(rt * 1000);
-          return d.getUTCFullYear()+'-'+String(d.getUTCMonth()+1).padStart(2,'0')+'-'+String(d.getUTCDate()).padStart(2,'0')+' '+String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0');
-        },
-      },
       rightPriceScale: { borderColor: '#2a3044' },
       timeScale: {
         borderColor: '#2a3044',
         timeVisible: chartMode !== 'brick',
         secondsVisible: false,
-        tickMarkFormatter: (time) => {
+        tickMarkFormatter: (time, tickMarkType, locale) => {
           if (chartMode !== 'brick') return undefined;
           const t = Number(time);
           if (!Number.isFinite(t)) return '';
           const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
-          if (!Array.isArray(barsRawRef) || idx >= barsRawRef.length) return 'B'+idx;
-          const rt = Number(barsRawRef[idx].time);
-          if (!Number.isFinite(rt)) return 'B'+idx;
-          const d = new Date(rt * 1000);
-          return String(d.getUTCDate()).padStart(2,'0')+'.'+String(d.getUTCMonth()+1).padStart(2,'0')+' '+String(d.getUTCHours()).padStart(2,'0')+':'+String(d.getUTCMinutes()).padStart(2,'0');
+          return `B${idx}`;
         },
       },
       grid: { vertLines: { color: '#252b3f' }, horzLines: { color: '#252b3f' } },
@@ -534,84 +499,212 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       borderDownColor: '#f7768e', borderUpColor: '#2ecc71',
       wickDownColor: '#f7768e', wickUpColor: '#2ecc71',
     });
-    const exitSeries = chart.addLineSeries({ color: '#ffcc66', lineWidth: 2, title: 'Exit', lastValueVisible: true, priceLineVisible: false });
+    const slSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, title: 'SL' });
+    const ttpSeries = chart.addLineSeries({ color: '#ffcc66', lineWidth: 2, title: 'TTP' });
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
-    const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const fibMidSeries = chart.addLineSeries({ color: '#bfc7d5', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const priceLineSeries = chart.addLineSeries({ color: '#9aa5b1', lineWidth: 1, title: 'Last', lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const tradeSegmentSeries = [];
 
     let latestPayload = null;
     let timeMap = null;
-    let barsRawRef = [];
-    let latestMid = null;
-    let hasFittedOnce = false;
+    let timeAxis = [];
+    const bgImages = { xy: null, xz: null, yz: null };
+    let ssPayload = null;
 
-    function resizeShade() {
-      shadeCanvas.width = chartEl.clientWidth;
-      shadeCanvas.height = chartEl.clientHeight;
-    }
-
-    function confAlpha(conf) { return 0.24; }
-
-    function liveRegimeScore(payload) {
-      const gc = (payload && payload.gate_confidence) ? payload.gate_confidence : null;
-      if (!gc) return null;
-      const pTrend = Number(gc.selected_p_trend);
-      if (!Number.isFinite(pTrend)) return null;
-      return Math.max(-1, Math.min(1, 2 * pTrend - 1));
-    }
-
-    function liveShadeColor(score) {
-      if (!Number.isFinite(score)) return null;
-      const alpha = 0.08 + 0.42 * Math.abs(score);
-      if (score >= 0) return 'rgba(46, 204, 113, '+alpha+')';
-      return 'rgba(247, 118, 142, '+alpha+')';
-    }
-
-    function drawGateShading() {
-      resizeShade();
-      const ctx = shadeCanvas.getContext('2d');
-      ctx.clearRect(0, 0, shadeCanvas.width, shadeCanvas.height);
-      const liveScore = liveRegimeScore(latestPayload);
-      if (Number.isFinite(liveScore)) {
-        const col = liveShadeColor(liveScore);
-        if (col) { ctx.fillStyle = col; ctx.fillRect(0, 0, shadeCanvas.width, shadeCanvas.height); return; }
+    // ── Regime gradient helpers ──
+    function scoreToColor(score, alpha) {
+      alpha = alpha != null ? alpha : 1.0;
+      const t = (Math.max(-1, Math.min(1, score)) + 1.0) / 2.0;
+      let r, g, b;
+      if (t < 0.5) {
+        const u = t / 0.5;
+        r = 247; g = Math.round(118 + 86 * u); b = Math.round(142 * (1 - u));
+      } else {
+        const u = (t - 0.5) / 0.5;
+        r = Math.round(247 * (1 - u) + 46 * u); g = 204; b = Math.round(113 * u);
       }
-      if (!latestPayload || !latestPayload.regime || !Array.isArray(latestPayload.regime.spans)) return;
-      const spans = latestPayload.regime.spans;
-      if (Array.isArray(spans) && spans.length === 1 && Number(spans[0].from) === Number(spans[0].to) && latestPayload.bars && latestPayload.bars.length) {
-        spans[0].from = Number(latestPayload.bars[0].time);
-        spans[0].to = Number(latestPayload.bars[latestPayload.bars.length - 1].time);
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    function drawRegimeBand() {
+      const canvas = document.getElementById('regime-canvas');
+      if (!canvas || !latestPayload) return;
+      const parent = canvas.parentElement;
+      canvas.width = parent.clientWidth;
+      canvas.height = parent.clientHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const scores = latestPayload.regime_scores || [];
+      const forecast = latestPayload.regime_forecast || [];
+      if (!scores.length && !forecast.length) {
+        ctx.fillStyle = '#2a2e38';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        return;
       }
+
       const tscale = chart.timeScale();
-      const chartH = chartEl.clientHeight;
-      for (const s of spans) {
-        const fromT = mapTimeForChart(s.from);
-        const toT = mapTimeForChart(s.to);
-        if (fromT == null || toT == null) continue;
-        const x0 = tscale.timeToCoordinate(fromT);
-        const x1 = tscale.timeToCoordinate(toT);
+      for (let i = 0; i < scores.length; i++) {
+        const fromT = mapTimeForChart(scores[i].time);
+        const toT = i + 1 < scores.length ? mapTimeForChart(scores[i + 1].time) : null;
+        const x0 = fromT != null ? tscale.timeToCoordinate(fromT) : null;
+        const x1 = toT != null ? tscale.timeToCoordinate(toT) : (x0 != null ? x0 + 2 : null);
         if (x0 == null || x1 == null) continue;
-        const left = Math.min(x0, x1);
-        const width = Math.max(1, Math.abs(x1 - x0));
-        const alpha = confAlpha(s.confidence);
-        const color = Number(s.gate_on) ? 'rgba(46, 204, 113, '+alpha+')' : 'rgba(64, 124, 255, '+alpha+')';
-        ctx.fillStyle = color;
-        ctx.fillRect(left, 0, width, chartH);
+        ctx.fillStyle = scoreToColor(scores[i].score);
+        ctx.fillRect(Math.min(x0, x1), 0, Math.max(1, Math.abs(x1 - x0)), canvas.height);
+      }
+
+      for (let i = 0; i < forecast.length; i++) {
+        const fromT = mapTimeForChart(forecast[i].time);
+        const toT = i + 1 < forecast.length ? mapTimeForChart(forecast[i + 1].time) : null;
+        const x0 = fromT != null ? tscale.timeToCoordinate(fromT) : null;
+        const x1 = toT != null ? tscale.timeToCoordinate(toT) : (x0 != null ? x0 + 15 : null);
+        if (x0 == null || x1 == null) continue;
+        const fade = 1.0 - (i / Math.max(1, forecast.length));
+        ctx.fillStyle = scoreToColor(forecast[i].score, 0.3 + 0.7 * fade);
+        ctx.fillRect(Math.min(x0, x1), 0, Math.max(1, Math.abs(x1 - x0)), canvas.height);
       }
     }
 
+    // ── Heatmap helpers ──
+    function loadBgImage(tag, dataUrl) {
+      if (!dataUrl) return;
+      const img = new Image();
+      img.onload = () => { bgImages[tag] = img; drawAllHeatmaps(); };
+      img.src = dataUrl;
+    }
+
+    function valToCanvas(val, size) {
+      return ((val + 1.0) / 2.0) * size;
+    }
+
+    function drawHeatmap(canvasId, tag, xKey, yKey) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const rect = canvas.parentElement.getBoundingClientRect();
+      const size = Math.max(100, Math.floor(Math.min(rect.width - 24, 400)));
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext('2d');
+      const w = size, h = size;
+      ctx.clearRect(0, 0, w, h);
+
+      if (bgImages[tag]) {
+        ctx.drawImage(bgImages[tag], 0, 0, w, h);
+      } else {
+        ctx.fillStyle = '#181c24';
+        ctx.fillRect(0, 0, w, h);
+      }
+
+      if (!ssPayload) return;
+
+      const rd = (ssPayload.recent_density || {})[tag] || [];
+      if (rd.length) {
+        const maxCount = Math.max(...rd.map(c => c[2]));
+        const binW = w / 28, binH = h / 28;
+        for (const cell of rd) {
+          const alpha = 0.1 + 0.5 * (cell[2] / Math.max(1, maxCount));
+          ctx.fillStyle = `rgba(120, 180, 255, ${alpha})`;
+          const cx = valToCanvas(cell[0], w) - binW / 2;
+          const cy = h - valToCanvas(cell[1], h) - binH / 2;
+          ctx.fillRect(cx, cy, binW, binH);
+        }
+      }
+
+      const traj = ssPayload.trajectory || [];
+      if (traj.length > 1) {
+        for (let i = 1; i < traj.length; i++) {
+          const alpha = 0.05 + 0.95 * (i / traj.length);
+          ctx.strokeStyle = `rgba(100, 160, 255, ${alpha})`;
+          ctx.lineWidth = 1.8;
+          ctx.beginPath();
+          ctx.moveTo(valToCanvas(traj[i-1][xKey], w), h - valToCanvas(traj[i-1][yKey], h));
+          ctx.lineTo(valToCanvas(traj[i][xKey], w), h - valToCanvas(traj[i][yKey], h));
+          ctx.stroke();
+        }
+      }
+
+      const cur = ssPayload.current;
+      if (cur) {
+        const cx = valToCanvas(cur[xKey], w);
+        const cy = h - valToCanvas(cur[yKey], h);
+        ctx.strokeStyle = 'rgba(255, 80, 60, 0.55)';
+        ctx.lineWidth = 0.9;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath(); ctx.moveTo(cx, 0); ctx.lineTo(cx, h); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(0, cy); ctx.lineTo(w, cy); ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.fillStyle = 'red';
+        ctx.beginPath(); ctx.arc(cx, cy, 6, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = 'yellow';
+        ctx.beginPath(); ctx.arc(cx, cy, 3, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+
+    function drawAllHeatmaps() {
+      drawHeatmap('heatmap-xy', 'xy', 'x', 'y');
+      drawHeatmap('heatmap-xz', 'xz', 'x', 'z');
+      drawHeatmap('heatmap-yz', 'yz', 'y', 'z');
+    }
+
+    // ── Axis status bars ──
+    function drawAxisBars() {
+      const canvas = document.getElementById('axis-bars');
+      if (!canvas || !ssPayload || !ssPayload.current) return;
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width, h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      const cur = ssPayload.current;
+      const axes = [
+        { label: 'X Drift', value: cur.x, conf: cur.conf_x, color: '#ff6644' },
+        { label: 'Y Elast.', value: cur.y, conf: cur.conf_y, color: '#44bbff' },
+        { label: 'Z Instab.', value: cur.z, conf: cur.conf_z, color: '#ffcc33' },
+      ];
+
+      const barH = 18, gap = 50;
+      const trackLeft = 70, trackRight = w - 60;
+      const trackW = trackRight - trackLeft;
+      const mid = trackLeft + trackW / 2;
+
+      axes.forEach((a, i) => {
+        const y = 30 + i * gap;
+        ctx.fillStyle = a.color;
+        ctx.font = 'bold 11px system-ui';
+        ctx.textAlign = 'left';
+        ctx.fillText(a.label, 4, y + barH / 2 + 4);
+
+        ctx.fillStyle = '#2a2e38';
+        ctx.beginPath(); ctx.rect(trackLeft, y, trackW, barH); ctx.fill();
+
+        ctx.strokeStyle = '#666'; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(mid, y); ctx.lineTo(mid, y + barH); ctx.stroke();
+
+        const barEnd = mid + a.value * (trackW / 2);
+        ctx.fillStyle = a.color;
+        const barX = Math.min(mid, barEnd);
+        ctx.beginPath(); ctx.rect(barX, y + 2, Math.abs(barEnd - mid), barH - 4); ctx.fill();
+
+        ctx.fillStyle = '#ccc';
+        ctx.font = '10px ui-monospace, monospace';
+        ctx.textAlign = 'left';
+        const vStr = (a.value >= 0 ? '+' : '') + a.value.toFixed(3);
+        const cStr = (a.conf >= 0 ? '+' : '') + a.conf.toFixed(3);
+        ctx.fillText(vStr + '  c:' + cStr, trackRight + 4, y + barH / 2 + 4);
+      });
+    }
+
+    // ── Time mapping (unchanged) ──
     function buildTimeMapFromBars(bars) {
       const m = new Map();
+      const arr = [];
       if (!Array.isArray(bars)) return m;
       for (let i = 0; i < bars.length; i++) {
         const t = Number(bars[i].time);
         if (!Number.isFinite(t)) continue;
+        arr.push(t);
         if (!m.has(t)) m.set(t, i);
       }
+      timeAxis = arr;
       return m;
     }
 
@@ -620,18 +713,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const n = Number(t);
       if (!Number.isFinite(n)) return null;
       if (chartMode !== 'brick' || !timeMap) return n;
-      let idx = timeMap.get(n);
-      if (idx == null && Array.isArray(barsRawRef) && barsRawRef.length) {
-        let lo = 0, hi = barsRawRef.length - 1, best = null;
-        while (lo <= hi) {
-          const m = Math.floor((lo + hi) / 2);
-          const tv = Number(barsRawRef[m].time);
-          if (tv <= n) { best = m; lo = m + 1; } else { hi = m - 1; }
-        }
-        idx = best;
-      }
+      const idx = timeMap.get(n);
       if (idx == null) return null;
       return brickBaseTs + idx * 60;
+    }
+
+    function mapTimeAsOfForChart(t) {
+      if (t == null) return null;
+      const n = Number(t);
+      if (!Number.isFinite(n)) return null;
+      if (chartMode !== 'brick' || !Array.isArray(timeAxis) || timeAxis.length === 0) return n;
+      let lo = 0, hi = timeAxis.length - 1, ans = -1;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (timeAxis[mid] <= n) { ans = mid; lo = mid + 1; } else { hi = mid - 1; }
+      }
+      if (ans < 0) return null;
+      return brickBaseTs + ans * 60;
     }
 
     function mapBarsForChart(bars) {
@@ -644,27 +742,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (!Array.isArray(markers)) return [];
       if (chartMode !== 'brick') return markers;
       return markers.map((m) => {
-        const mapped = mapTimeForChart(m.time);
+        const mapped = mapTimeAsOfForChart(m.time);
         if (mapped == null) return null;
         return { ...m, time: mapped };
       }).filter(Boolean);
-    }
-
-    function mapLineForChart(points) {
-      if (!Array.isArray(points)) return [];
-      if (chartMode !== 'brick') return points;
-      return points.map((p) => {
-        const mapped = mapTimeForChart(p.time);
-        if (mapped == null) return null;
-        return { time: mapped, value: Number(p.value) };
-      }).filter(Boolean);
-    }
-
-    function mapSegmentForChart(seg) {
-      const t0 = mapTimeForChart(seg.from_time);
-      const t1 = mapTimeForChart(seg.to_time);
-      if (t0 == null || t1 == null) return [];
-      return [{ time: t0, value: Number(seg.from_price) }, { time: t1, value: Number(seg.to_price) }];
     }
 
     function fmtNum(v) {
@@ -676,41 +757,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (!Array.isArray(lastBars) || !lastBars.length || level == null || Number.isNaN(Number(level))) return [];
       const first = lastBars[0].time;
       const last = lastBars[lastBars.length - 1].time;
-      const val = Number(level);
-      return [{ time: first, value: val }, { time: last, value: val }];
+      return [{ time: first, value: Number(level) }, { time: last, value: Number(level) }];
     }
 
-    function buildUnifiedExitLine(bars, levels) {
-      if (!Array.isArray(bars) || !bars.length || !levels) return { data: [], mode: 'none' };
-      const sl = Number(levels.sl);
-      const ttp = Number(levels.ttp);
-      const hasSl = Number.isFinite(sl);
-      const hasTtp = Number.isFinite(ttp);
-      if (!hasSl && !hasTtp) return { data: [], mode: 'none' };
-      let entryTime = null;
-      if (levels.entry_bar_ts != null) {
-        entryTime = mapTimeForChart(Number(levels.entry_bar_ts));
-      }
-      if (entryTime == null) {
-        if (levels.side) {
-          const startIdx = Math.max(0, bars.length - Math.round(bars.length * 0.2));
-          entryTime = bars[startIdx].time;
-        } else {
-          entryTime = bars[0].time;
-        }
-      }
-      const lastTime = bars[bars.length - 1].time;
-      if (hasTtp) {
-        const side = String(levels.side || '').toLowerCase();
-        let exitVal = ttp;
-        if (hasSl) {
-          exitVal = (side === 'short') ? Math.min(sl, ttp) : Math.max(sl, ttp);
-        }
-        return { data: [{ time: entryTime, value: exitVal }, { time: lastTime, value: exitVal }], mode: 'ttp' };
-      }
-      return { data: [{ time: entryTime, value: sl }, { time: lastTime, value: sl }], mode: 'sl' };
+    function liveRegimeScore(payload) {
+      const gc = (payload && payload.gate_confidence) ? payload.gate_confidence : null;
+      if (!gc) return null;
+      const pTrend = Number(gc.selected_p_trend);
+      if (!Number.isFinite(pTrend)) return null;
+      return Math.max(-1, Math.min(1, 2 * pTrend - 1));
     }
 
+    // ── Data loading ──
     async function loadMeta() {
       const [st, pos] = await Promise.all([
         fetch('/api/status').then(r => r.json()),
@@ -724,20 +782,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const b = typeof t.bid === 'number' ? t.bid.toFixed(4) : t.bid;
         const a = typeof t.ask === 'number' ? t.ask.toFixed(4) : t.ask;
         const m = t.mid != null ? (typeof t.mid === 'number' ? t.mid.toFixed(4) : t.mid) : null;
-        latestMid = Number(t.mid);
-        document.getElementById('ticker').textContent = m != null ? (m+' (bid '+b+' / ask '+a+')') : (b+' / '+a);
+        document.getElementById('ticker').textContent = m != null ? `${m} (bid ${b} / ask ${a})` : `${b} / ${a}`;
       } else {
-        latestMid = null;
         document.getElementById('ticker').textContent = st.ticker_error || '-';
       }
       document.getElementById('position').textContent = pos.position != null ? String(pos.position) : (pos.error || '-');
-      if (pos.position != null && st.ticker && st.ticker.mid != null) {
-        const mult = Number(pos.contract_multiplier || 1);
-        const notional = Math.abs(Number(pos.position)) * mult * Number(st.ticker.mid);
-        document.getElementById('position-notional').textContent = Number.isFinite(notional) ? notional.toFixed(2)+' USDT' : '-';
-      } else {
-        document.getElementById('position-notional').textContent = '-';
-      }
     }
 
     async function loadChart() {
@@ -746,63 +795,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (!payload.ok) return;
 
       const barsRaw = Array.isArray(payload.bars) ? payload.bars : [];
-      barsRawRef = barsRaw;
       timeMap = buildTimeMapFromBars(barsRaw);
       const bars = mapBarsForChart(barsRaw);
       candle.setData(bars);
       candle.setMarkers(mapMarkersForChart(Array.isArray(payload.markers) ? payload.markers : []));
 
       const levels = payload.levels || {};
-      const exitInfo = buildUnifiedExitLine(bars, levels);
-      exitSeries.setData(exitInfo.data);
-      if (exitInfo.mode === 'ttp') {
-        exitSeries.applyOptions({ color: '#ffcc66', title: 'TTP' });
-      } else if (exitInfo.mode === 'sl') {
-        exitSeries.applyOptions({ color: '#f7768e', title: 'SL' });
-      } else {
-        exitSeries.applyOptions({ color: '#ffcc66', title: 'Exit' });
-      }
-
+      slSeries.setData(levelLineData(bars, levels.sl));
+      ttpSeries.setData(levelLineData(bars, levels.ttp));
       tp1Series.setData(levelLineData(bars, levels.tp1));
       tp2Series.setData(levelLineData(bars, levels.tp2));
-
-      const fibo = payload.fibo || {};
-      fibLongSeries.setData(mapLineForChart(fibo.long || []));
-      fibMidSeries.setData(mapLineForChart(fibo.mid || []));
-      fibShortSeries.setData(mapLineForChart(fibo.short || []));
-
-      const lastBar = bars.length ? bars[bars.length - 1] : null;
-      if (lastBar) {
-        const livePx = Number.isFinite(Number(latestMid)) ? Number(latestMid) : Number(lastBar.close);
-        priceLineSeries.setData([{ time: bars[0].time, value: livePx }, { time: lastBar.time, value: livePx }]);
-      } else {
-        priceLineSeries.setData([]);
-      }
-
-      for (const s of tradeSegmentSeries) chart.removeSeries(s);
-      tradeSegmentSeries.length = 0;
-      const segments = Array.isArray(payload.segments) ? payload.segments : [];
-      for (const seg of segments) {
-        const ls = chart.addLineSeries({ color: seg.color || '#9aa5b1', lineWidth: 2, title: seg.positive ? 'Trade +' : 'Trade -' });
-        ls.setData(mapSegmentForChart(seg));
-        tradeSegmentSeries.push(ls);
-      }
 
       document.getElementById('lvl-sl').textContent = fmtNum(levels.sl);
       document.getElementById('lvl-ttp').textContent = fmtNum(levels.ttp);
       document.getElementById('lvl-tp1').textContent = fmtNum(levels.tp1);
       document.getElementById('lvl-tp2').textContent = fmtNum(levels.tp2);
-      const exitModeEl = document.getElementById('exit-mode');
-      if (exitInfo.mode === 'ttp') {
-        exitModeEl.textContent = 'TTP (trailing)';
-        exitModeEl.className = 'ok';
-      } else if (exitInfo.mode === 'sl') {
-        exitModeEl.textContent = 'SL (stop loss)';
-        exitModeEl.className = 'err';
-      } else {
-        exitModeEl.textContent = '-';
-        exitModeEl.className = '';
-      }
 
       const gate = payload.gate_on;
       document.getElementById('gate').textContent = gate == null ? '-' : (Number(gate) ? 'ON' : 'OFF');
@@ -815,40 +822,45 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         if (Number.isFinite(score)) {
           document.getElementById('confidence').style.color = score >= 0 ? '#9ece6a' : '#f7768e';
         } else {
-          document.getElementById('confidence').style.color = conf >= 0.7 ? '#9ece6a' : (conf >= 0.5 ? '#e0af68' : '#f7768e');
+          const rs = String(payload.regime_state || '').toLowerCase();
+          if (rs === 'trend') {
+            document.getElementById('confidence').style.color = conf >= 0.7 ? '#9ece6a' : (conf >= 0.5 ? '#e0af68' : '#f7768e');
+          } else {
+            document.getElementById('confidence').style.color = conf >= 0.7 ? '#f7768e' : (conf >= 0.5 ? '#e0af68' : '#9ece6a');
+          }
         }
       }
 
-      const rh = payload.renko_health || {};
-      if (rh.age_sec != null) {
-        document.getElementById('hint').textContent = 'Renko age: '+Math.round(Number(rh.age_sec))+'s';
-      }
-
-      if (!hasFittedOnce) {
-        chart.timeScale().fitContent();
-        hasFittedOnce = true;
-      }
-      drawGateShading();
+      chart.timeScale().fitContent();
+      drawRegimeBand();
     }
 
-    chart.timeScale().subscribeVisibleTimeRangeChange(() => drawGateShading());
-    chart.subscribeCrosshairMove((param) => {
-      const t = param && param.time != null ? Number(param.time) : null;
-      if (t == null || !Number.isFinite(t)) { document.getElementById('bar-time').textContent = '-'; return; }
-      if (chartMode !== 'brick') { document.getElementById('bar-time').textContent = new Date(t * 1000).toISOString().slice(11, 16); return; }
-      const idx = Math.max(0, Math.round((t - brickBaseTs) / 60));
-      if (!Array.isArray(barsRawRef) || idx >= barsRawRef.length) { document.getElementById('bar-time').textContent = '-'; return; }
-      const rt = Number(barsRawRef[idx].time);
-      if (!Number.isFinite(rt)) { document.getElementById('bar-time').textContent = '-'; return; }
-      document.getElementById('bar-time').textContent = new Date(rt * 1000).toISOString().slice(11, 16);
-    });
-    window.addEventListener('resize', () => drawGateShading());
+    async function loadStateSpace() {
+      const windowH = document.getElementById('traj-window').value || '8';
+      try {
+        const data = await fetch('/api/dashboard/statespace?window_hours=' + windowH).then(r => r.json());
+        if (!data.ok) return;
+        ssPayload = data;
+        const bg = data.density_bg || {};
+        for (const tag of ['xy', 'xz', 'yz']) {
+          if (bg[tag] && !bgImages[tag]) loadBgImage(tag, bg[tag]);
+        }
+        drawAllHeatmaps();
+        drawAxisBars();
+      } catch (e) { /* state space unavailable */ }
+    }
+
+    chart.timeScale().subscribeVisibleTimeRangeChange(() => drawRegimeBand());
+    window.addEventListener('resize', () => { drawRegimeBand(); drawAllHeatmaps(); });
+    document.getElementById('traj-window').addEventListener('change', loadStateSpace);
 
     async function tick() {
       await Promise.all([loadMeta(), loadChart()]);
     }
     tick();
+    loadStateSpace();
     setInterval(tick, 10000);
+    setInterval(loadStateSpace, 30000);
   </script>
 </body>
 </html>
@@ -856,11 +868,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard() -> Response:
-    return HTMLResponse(
-        content=DASHBOARD_HTML,
-        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0"},
-    )
+def dashboard() -> str:
+    """Simple dashboard UI: API status, SOL ticker from KuCoin, position. Basis für spätere Desktop-App."""
+    return DASHBOARD_HTML
 
 
 @app.post("/webhook/tradingview")
@@ -914,6 +924,7 @@ def main() -> None:
     args = parse_args()
     _sync_gate_conf_artifacts_if_enabled()
     _start_renko_cache_updater_if_enabled()
+    # Railway/cloud set PORT; use it so the app listens on the right port
     port = int(os.environ.get("PORT", str(args.port)))
     uvicorn.run(
         "quant.execution.webhook_server:app",
