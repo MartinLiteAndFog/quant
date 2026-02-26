@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import pandas as pd
 
 from quant.state_space.config import StateSpaceConfig
 from quant.state_space.pipeline import compute_state_space
+from quant.utils.log import get_logger
+
+log = get_logger("quant.dashboard_statespace")
 
 _KEEP_COLS = ["ts", "X_raw", "Y_res", "Z_res", "conf_x", "conf_y", "conf_z"]
 
@@ -23,6 +26,7 @@ def _read_renko_df() -> pd.DataFrame:
     try:
         df = pd.read_parquet(p)
     except Exception:
+        log.warning("failed to read %s", p, exc_info=True)
         return pd.DataFrame()
     if "ts" not in df.columns:
         if isinstance(df.index, pd.DatetimeIndex):
@@ -43,6 +47,7 @@ def _read_state_space_df() -> pd.DataFrame:
     try:
         df = pd.read_parquet(p)
     except Exception:
+        log.warning("failed to read %s", p, exc_info=True)
         return pd.DataFrame()
     if "ts" not in df.columns:
         return pd.DataFrame()
@@ -98,9 +103,9 @@ def load_state_space_trajectory(window_hours: float = 8.0) -> Dict[str, Any]:
         "x": float(last["X_raw"]),
         "y": float(last["Y_res"]),
         "z": float(last["Z_res"]),
-        "conf_x": float(last["conf_x"]),
-        "conf_y": float(last["conf_y"]),
-        "conf_z": float(last["conf_z"]),
+        "conf_x": float(last.get("conf_x", 0.0)),
+        "conf_y": float(last.get("conf_y", 0.0)),
+        "conf_z": float(last.get("conf_z", 0.0)),
     }
 
     return {"trajectory": trajectory, "current": current}
