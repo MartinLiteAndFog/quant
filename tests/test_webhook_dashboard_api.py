@@ -144,6 +144,17 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIsInstance(body.get("gate_confidence"), dict)
 
 
+    def test_chart_payload_includes_regime_scores(self) -> None:
+        body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+        self.assertTrue(body.get("ok"))
+        self.assertIn("regime_scores", body)
+        self.assertIn("regime_forecast", body)
+        self.assertIsInstance(body["regime_scores"], list)
+        self.assertIsInstance(body["regime_forecast"], list)
+        if body["regime_scores"]:
+            self.assertIn("time", body["regime_scores"][0])
+            self.assertIn("score", body["regime_scores"][0])
+
     def test_statespace_endpoint_shape(self) -> None:
         body = api_dashboard_statespace(window_hours=48)
         self.assertIn("trajectory", body)

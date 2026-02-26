@@ -18,6 +18,7 @@ import uvicorn
 
 from quant.execution.dashboard_state import (
     build_regime_overlay,
+    build_regime_scores,
     load_active_levels,
     load_renko_bars,
     load_trade_markers,
@@ -312,6 +313,20 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
         if live_conf is not None and isinstance(regime.get("spans"), list) and regime["spans"]:
             regime["spans"][-1]["confidence"] = live_conf
         confidence_out = live_conf if live_conf is not None else latest.get("confidence")
+
+        regime_score_data = build_regime_scores(symbol=symbol, hours=int(max(1, hours)))
+
+        regime_forecast: list[dict[str, Any]] = []
+        if live_gc and isinstance(live_gc.get("horizons"), list):
+            now_ts = pd.Timestamp.now("UTC")
+            for h in live_gc["horizons"]:
+                minutes = h.get("minutes", 0)
+                p_trend = h.get("p_trend_voxel")
+                if p_trend is not None and isinstance(p_trend, (int, float)):
+                    score = round(2.0 * float(p_trend) - 1.0, 4)
+                    forecast_ts = int((now_ts + pd.Timedelta(minutes=minutes)).timestamp())
+                    regime_forecast.append({"time": forecast_ts, "score": score})
+
         return {
             "ok": True,
             "symbol": symbol,
@@ -324,6 +339,8 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "regime_state": latest.get("regime_state"),
             "gate_confidence": live_gc,
             "gate_confidence_error": live_gc_error,
+            "regime_scores": regime_score_data.get("scores", []),
+            "regime_forecast": regime_forecast,
             "ts": _now_utc_iso(),
         }
     except Exception as e:
@@ -334,6 +351,8 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "markers": [],
             "levels": {},
             "regime": {"spans": [], "points": [], "latest": None},
+            "regime_scores": [],
+            "regime_forecast": [],
             "error": str(e),
             "ts": _now_utc_iso(),
         }
