@@ -11,6 +11,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from contextlib import asynccontextmanager
+
 import pandas as pd
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse
@@ -26,13 +28,35 @@ from quant.execution.dashboard_state import (
 from quant.execution.dashboard_statespace import (
     load_state_space_trajectory,
     compute_recent_density,
+    refresh_state_space_cache,
 )
 from quant.regime import RegimeStore, get_live_gate_confidence
 from ..utils.log import get_logger
 
 log = get_logger("quant.webhook")
 
-app = FastAPI(title="quant-webhook", version="0.1.0")
+
+def _state_space_refresh_loop() -> None:
+    interval = int(os.getenv("DASHBOARD_SS_REFRESH_SEC", "300"))
+    while True:
+        try:
+            info = refresh_state_space_cache()
+            if info.get("ok"):
+                log.info("state space refresh: %d rows", info.get("rows", 0))
+        except Exception as e:
+            log.warning("state space refresh failed: %s", e)
+        time.sleep(max(60, interval))
+
+
+@asynccontextmanager
+async def _lifespan(a: FastAPI):
+    t = threading.Thread(target=_state_space_refresh_loop, daemon=True, name="ss-refresh")
+    t.start()
+    log.info("state space refresh thread started (interval=%ss)", os.getenv("DASHBOARD_SS_REFRESH_SEC", "300"))
+    yield
+
+
+app = FastAPI(title="quant-webhook", version="0.1.0", lifespan=_lifespan)
 
 # Default symbol for dashboard ticker/position
 DEFAULT_SYMBOL = os.getenv("DASHBOARD_SYMBOL", "SOL-USDT")
