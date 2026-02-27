@@ -356,6 +356,24 @@ def api_dashboard_chart(
             probe_ms = load_live_fill_markers(symbol=symbol, start_ts=(oldest_bar_ts * 1000), limit=200) if oldest_bar_ts is not None else []
             trades_path = Path(os.getenv("DASHBOARD_TRADES_PARQUET", "/data/live/trades.parquet"))
             fills_path = Path(os.getenv("DASHBOARD_FILLS_PARQUET", "/data/live/fills_cache.parquet"))
+            trades_meta: Dict[str, Any] = {"exists": trades_path.exists()}
+            if trades_path.exists():
+                try:
+                    tdf = pd.read_parquet(trades_path)
+                    trades_meta = {
+                        "exists": True,
+                        "rows": int(len(tdf)),
+                        "columns": list(map(str, tdf.columns.tolist())),
+                        "has_entry_ts": bool("entry_ts" in tdf.columns),
+                        "has_exit_ts": bool("exit_ts" in tdf.columns),
+                        "non_null_entry_ts": int(pd.to_datetime(tdf.get("entry_ts"), utc=True, errors="coerce").notna().sum()) if "entry_ts" in tdf.columns else 0,
+                        "non_null_exit_ts": int(pd.to_datetime(tdf.get("exit_ts"), utc=True, errors="coerce").notna().sum()) if "exit_ts" in tdf.columns else 0,
+                        "non_null_ts": int(pd.to_datetime(tdf.get("ts"), utc=True, errors="coerce").notna().sum()) if "ts" in tdf.columns else 0,
+                        "sample_first": tdf.head(1).to_dict(orient="records"),
+                        "sample_last": tdf.tail(1).to_dict(orient="records"),
+                    }
+                except Exception as meta_e:
+                    trades_meta = {"exists": True, "read_error": str(meta_e)}
             debug_sources = {
                 "oldest_bar_ts": oldest_bar_ts,
                 "trade_markers_count": len(markers),
@@ -365,6 +383,7 @@ def api_dashboard_chart(
                 "probe_live_ms_count": len(probe_ms),
                 "trades_path": str(trades_path),
                 "trades_exists": trades_path.exists(),
+                "trades_meta": trades_meta,
                 "fills_cache_path": str(fills_path),
                 "fills_cache_exists": fills_path.exists(),
             }
