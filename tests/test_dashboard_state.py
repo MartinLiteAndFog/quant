@@ -5,10 +5,17 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
-from quant.execution.dashboard_state import build_regime_overlay, load_active_levels, load_renko_bars, load_trade_markers
+from quant.execution.dashboard_state import (
+    build_regime_overlay,
+    load_active_levels,
+    load_live_fill_markers,
+    load_renko_bars,
+    load_trade_markers,
+)
 from quant.regime import RegimeDecision, RegimeService, RegimeStore
 
 
@@ -18,6 +25,7 @@ class DashboardStateTests(unittest.TestCase):
         self.tmp_path = Path(self.tmp.name)
         os.environ["REGIME_DB_PATH"] = str(self.tmp_path / "regime.db")
         os.environ["DASHBOARD_RENKO_PARQUET"] = str(self.tmp_path / "renko.parquet")
+        os.environ["DASHBOARD_RENKO_AUTO_REFRESH_ON_READ"] = "0"
         os.environ["DASHBOARD_LEVELS_JSON"] = str(self.tmp_path / "execution_state.json")
         os.environ["DASHBOARD_TRADES_PARQUET"] = str(self.tmp_path / "trades.parquet")
 
@@ -98,6 +106,23 @@ class DashboardStateTests(unittest.TestCase):
         markers = load_trade_markers(max_points=100000)
         # 3 trades -> 3 entries + 3 exits
         self.assertEqual(len(markers), 6)
+
+    @patch("quant.execution.dashboard_state.list_fills")
+    def test_load_live_fill_markers_parses_microsecond_trade_time(self, mock_list_fills) -> None:
+        os.environ["DASHBOARD_FILLS_PARQUET"] = str(self.tmp_path / "fills_cache.parquet")
+        ts = pd.Timestamp("2026-02-27T17:30:00Z")
+        trade_time_us = int(ts.value // 1_000)  # microseconds since epoch
+        mock_list_fills.return_value = [
+            {
+                "tradeTime": trade_time_us,  # no createdAt -> forces tradeTime parsing
+                "side": "buy",
+                "size": 20,
+                "price": 83.0,
+            }
+        ]
+        markers = load_live_fill_markers(symbol="SOL-USDT", limit=10, start_ts=int(ts.timestamp()) - 60)
+        self.assertEqual(len(markers), 1)
+        self.assertEqual(int(markers[0]["time"]), int(ts.timestamp()))
 
 
 if __name__ == "__main__":

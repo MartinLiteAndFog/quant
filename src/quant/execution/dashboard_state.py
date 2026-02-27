@@ -21,6 +21,44 @@ def _to_ts_iso(ts_like: Any) -> Optional[str]:
     return ts.isoformat()
 
 
+def _epoch_seconds_from_any(v: Any) -> Optional[int]:
+    """
+    Parse epoch-like timestamps with mixed precision (s / ms / us / ns) or ISO strings.
+    """
+    if v is None:
+        return None
+    if isinstance(v, pd.Timestamp):
+        ts = pd.Timestamp(v)
+        return int(ts.timestamp()) if pd.notna(ts) else None
+    if isinstance(v, (int, float)):
+        try:
+            x = float(v)
+        except Exception:
+            return None
+        if not (x > 0):
+            return None
+        # Epoch magnitude in 2026:
+        # s  ~1e9, ms ~1e12, us ~1e15, ns ~1e18
+        if x >= 1e18:
+            return int(x / 1e9)   # ns -> s
+        if x >= 1e15:
+            return int(x / 1e6)   # us -> s
+        if x >= 1e12:
+            return int(x / 1e3)   # ms -> s
+        return int(x)             # s
+    s = str(v).strip()
+    if not s:
+        return None
+    try:
+        return _epoch_seconds_from_any(float(s))
+    except Exception:
+        pass
+    ts = pd.to_datetime(s, utc=True, errors="coerce")
+    if pd.isna(ts):
+        return None
+    return int(pd.Timestamp(ts).timestamp())
+
+
 def _live_default(rel_path: str) -> str:
     """Prefer Railway volume (/data/live) when available."""
     if Path("/data").exists():
@@ -317,13 +355,15 @@ def load_live_fill_markers(symbol: str, limit: int = 100, start_ts: Optional[int
             side = str(r.get("side", "")).lower()
             sz = float(r.get("size", 0) or 0)
             px = float(r.get("price", 0) or 0)
-            t_raw = r.get("tradeTime") or r.get("createdAt")
-            t_i = int(float(t_raw))
-            ts = pd.to_datetime(t_i, unit="ns" if t_i > 10**15 else ("ms" if t_i > 10**12 else "s"), utc=True)
+            # Prefer createdAt (typically ms) over tradeTime (can be ns/us depending on endpoint/version).
+            t_raw = r.get("createdAt") or r.get("tradeTime") or r.get("ts")
+            t_sec = _epoch_seconds_from_any(t_raw)
+            if t_sec is None:
+                continue
         except Exception:
             continue
         norm_rows.append(
-            {"time": int(pd.Timestamp(ts).timestamp()), "side": side, "size": float(sz), "price": float(px)}
+            {"time": int(t_sec), "side": side, "size": float(sz), "price": float(px)}
         )
 
     if norm_rows:
@@ -383,6 +423,53 @@ def load_active_levels() -> Dict[str, Any]:
     except Exception:
         return {}
     return {}
+
+
+def load_latest_expected_entry() -> Optional[Dict[str, Any]]:
+    """
+    Best-effort fallback for open-position entry context from expected_trades.jsonl.
+    Returns latest entry-like event (entry / exit_flip) if available.
+    """
+    p = _env_path("DASHBOARD_EXPECTED_TRADES_JSONL", _live_default("expected_trades.jsonl"))
+    if not p.exists():
+        return None
+    rows: List[Dict[str, Any]] = []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            for line in f:
+                ln = line.strip()
+                if not ln:
+                    continue
+                try:
+                    obj = json.loads(ln)
+                except Exception:
+                    continue
+                if not isinstance(obj, dict):
+                    continue
+                action = str(obj.get("action", "")).strip().lower()
+                if action not in ("entry", "exit_flip"):
+                    continue
+                ts = pd.to_datetime(obj.get("ts"), utc=True, errors="coerce")
+                if pd.isna(ts):
+                    continue
+                side_raw = str(obj.get("side", "")).strip().lower()
+                if side_raw not in ("long", "short"):
+                    continue
+                px = pd.to_numeric(obj.get("expected_px"), errors="coerce")
+                rows.append(
+                    {
+                        "entry_time": int(pd.Timestamp(ts).timestamp()),
+                        "side": side_raw,
+                        "entry_price": float(px) if pd.notna(px) else None,
+                        "source": "expected_trades_jsonl",
+                    }
+                )
+    except Exception:
+        return None
+    if not rows:
+        return None
+    rows = sorted(rows, key=lambda x: int(x["entry_time"]))
+    return rows[-1]
 
 
 def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:

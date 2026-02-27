@@ -25,6 +25,7 @@ from quant.execution.dashboard_state import (
     build_regime_overlay,
     build_regime_scores,
     load_active_levels,
+    load_latest_expected_entry,
     load_live_fill_markers,
     load_renko_bars,
     load_renko_health,
@@ -349,11 +350,110 @@ def api_dashboard_chart(
             start_ts=oldest_bar_ts,
             limit=int(max(500, min(20000, max_points * 5))),
         )
-        markers = sorted(markers + markers_live, key=lambda x: int(x.get("time", 0)))
+        levels = load_active_levels()
+        expected_entry = load_latest_expected_entry() or {}
+
+        def _coerce_epoch_seconds(v: Any) -> Optional[int]:
+            if v is None:
+                return None
+            if isinstance(v, pd.Timestamp):
+                return int(pd.Timestamp(v).timestamp())
+            if isinstance(v, (int, float)):
+                try:
+                    x = float(v)
+                except Exception:
+                    return None
+                if not (x > 0):
+                    return None
+                # Heuristic for ns/ms/s
+                if x > 10**15:
+                    return int(x / 1e9)   # ns -> s
+                if x > 10**12:
+                    return int(x / 1e3)   # ms -> s
+                return int(x)             # s
+            s = str(v).strip()
+            if not s:
+                return None
+            try:
+                return _coerce_epoch_seconds(float(s))
+            except Exception:
+                pass
+            try:
+                ts = pd.to_datetime(s, utc=True, errors="coerce")
+                if pd.isna(ts):
+                    return None
+                return int(pd.Timestamp(ts).timestamp())
+            except Exception:
+                return None
+
+        # Normalize common timestamp fields so the frontend can Number(...) them reliably.
+        if isinstance(levels, dict) and levels:
+            for k in ("entry_bar_ts", "ts"):
+                if k in levels:
+                    t_norm = _coerce_epoch_seconds(levels.get(k))
+                    if t_norm is not None:
+                        levels[k] = t_norm
+
+        def _side_to_int(v: Any) -> int:
+            if v is None:
+                return 0
+            if isinstance(v, (int, float)):
+                try:
+                    return int(v)
+                except Exception:
+                    return 0
+            s = str(v).strip().lower()
+            if s in ("long", "l", "buy"):
+                return 1
+            if s in ("short", "s", "sell"):
+                return -1
+            try:
+                return int(float(s))
+            except Exception:
+                return 0
+
+        live_entry_marker = None
+        try:
+            entry_t = levels.get("entry_bar_ts")
+            entry_px = levels.get("entry_px")
+            side_raw = levels.get("side")
+            if side_raw is None:
+                side_raw = expected_entry.get("side")
+            if (entry_t is None) and isinstance(levels, dict):
+                # Fallback: signal-only state may carry a 'ts' timestamp (ISO or epoch).
+                entry_t = levels.get("ts")
+            if entry_t is None:
+                entry_t = expected_entry.get("entry_time")
+            if entry_px is None:
+                entry_px = expected_entry.get("entry_price")
+            if entry_t is not None and side_raw is not None:
+                t_i = _coerce_epoch_seconds(entry_t)
+                if t_i is None:
+                    t_i = 0
+                side_i = _side_to_int(side_raw)
+                px_f = float(entry_px) if entry_px is not None and str(entry_px).strip() else None
+                if t_i > 0 and side_i != 0:
+                    live_entry_marker = {
+                        "time": t_i,
+                        "position": "belowBar" if side_i >= 0 else "aboveBar",
+                        "shape": "arrowUp" if side_i >= 0 else "arrowDown",
+                        "color": "#7aa2f7",
+                        "text": f"live entry {'L' if side_i >= 0 else 'S'}" + (f" @ {px_f:.3f}" if px_f else ""),
+                    }
+        except Exception:
+            live_entry_marker = None
+
+        markers_all = markers + markers_live
+        if live_entry_marker is not None:
+            mt = int(live_entry_marker.get("time", 0))
+            dup = any(int(m.get("time", 0)) == mt and str(m.get("shape", "")) == str(live_entry_marker.get("shape")) for m in markers_all)
+            if not dup:
+                markers_all.append(live_entry_marker)
+
+        markers = sorted(markers_all, key=lambda x: int(x.get("time", 0)))
         if len(markers) > int(max(100, max_points)):
             markers = markers[-int(max(100, max_points)):]
         segments = load_trade_segments(max_points=int(max(100, max_points)))
-        levels = load_active_levels()
         fibo = build_fibo_levels(max_points=int(max(100, max_points)))
         renko_health = load_renko_health()
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
@@ -376,6 +476,35 @@ def api_dashboard_chart(
         regime_score_data = build_regime_scores(symbol=symbol, hours=int(max(1, hours)))
         equity = build_equity_curve(max_points=int(max(100, max_points)))
         diary = build_trading_diary(max_points=int(max(100, max_points)))
+
+        open_position = None
+        try:
+            side_raw = levels.get("side")
+            entry_t = levels.get("entry_bar_ts")
+            entry_px = levels.get("entry_px")
+            sl = levels.get("sl")
+            mode = levels.get("mode")
+            if side_raw is None:
+                side_raw = expected_entry.get("side")
+            side_i = _side_to_int(side_raw)
+            if (entry_t is None) and isinstance(levels, dict):
+                entry_t = levels.get("ts")
+            if entry_t is None:
+                entry_t = expected_entry.get("entry_time")
+            if entry_px is None:
+                entry_px = expected_entry.get("entry_price")
+            t_i = _coerce_epoch_seconds(entry_t) if entry_t is not None and str(entry_t).strip() else None
+            px_f = float(entry_px) if entry_px is not None and str(entry_px).strip() else None
+            if side_i != 0 and t_i and t_i > 0:
+                open_position = {
+                    "side": "long" if side_i >= 0 else "short",
+                    "entry_time": t_i,
+                    "entry_price": px_f,
+                    "sl": float(sl) if sl is not None and str(sl).strip() else None,
+                    "mode": str(mode) if mode is not None else None,
+                }
+        except Exception:
+            open_position = None
 
         regime_forecast: list[dict[str, Any]] = []
         if live_gc and isinstance(live_gc.get("horizons"), list):
@@ -409,6 +538,7 @@ def api_dashboard_chart(
             "equity_source": equity.get("source"),
             "diary_entries": diary.get("entries", []),
             "diary_source": diary.get("source"),
+            "open_position": open_position,
             "ts": _now_utc_iso(),
         }
     except Exception as e:
@@ -428,6 +558,7 @@ def api_dashboard_chart(
             "equity_source": "none",
             "diary_entries": [],
             "diary_source": "none",
+            "open_position": None,
             "error": str(e),
             "ts": _now_utc_iso(),
         }
@@ -900,8 +1031,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ctx.fillStyle = '#8e98bf';
         ctx.font = '11px system-ui';
         ctx.textAlign = 'center';
-        ctx.fillText('No closed trades', w / 2, h / 2);
-        if (detailEl) detailEl.textContent = '-';
+        const op = latestPayload.open_position;
+        if (op && op.side && op.entry_time) {
+          const d = new Date(Number(op.entry_time) * 1000);
+          const hh = String(d.getUTCHours()).padStart(2, '0');
+          const mm = String(d.getUTCMinutes()).padStart(2, '0');
+          ctx.fillText('No closed trades (open position)', w / 2, h / 2 - 6);
+          const ep = Number.isFinite(Number(op.entry_price)) ? Number(op.entry_price).toFixed(3) : '-';
+          const sl = Number.isFinite(Number(op.sl)) ? Number(op.sl).toFixed(3) : '-';
+          ctx.fillText(`${hh}:${mm} ${String(op.side).toUpperCase()} entry:${ep} SL:${sl}`, w / 2, h / 2 + 12);
+          if (detailEl) detailEl.textContent = `open ${String(op.side).toUpperCase()} entry:${ep} SL:${sl}`;
+        } else {
+          ctx.fillText('No closed trades', w / 2, h / 2);
+          if (detailEl) detailEl.textContent = '-';
+        }
         canvas.onmousemove = null;
         return;
       }
@@ -1259,6 +1402,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       document.getElementById('lvl-ttp').textContent = fmtNum(levels.ttp);
       document.getElementById('lvl-tp1').textContent = fmtNum(levels.tp1);
       document.getElementById('lvl-tp2').textContent = fmtNum(levels.tp2);
+      const barTimeEl = document.getElementById('bar-time');
+      let barTs = null;
+      if (levels && levels.entry_bar_ts != null && Number.isFinite(Number(levels.entry_bar_ts))) {
+        barTs = Number(levels.entry_bar_ts);
+      } else if (payload.open_position && payload.open_position.entry_time != null && Number.isFinite(Number(payload.open_position.entry_time))) {
+        barTs = Number(payload.open_position.entry_time);
+      }
+      if (barTimeEl) {
+        if (barTs != null) {
+          const d = new Date(barTs * 1000);
+          const yy = d.getUTCFullYear();
+          const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+          const dd = String(d.getUTCDate()).padStart(2, '0');
+          const hh = String(d.getUTCHours()).padStart(2, '0');
+          const mm = String(d.getUTCMinutes()).padStart(2, '0');
+          barTimeEl.textContent = `${yy}-${mo}-${dd} ${hh}:${mm} UTC`;
+        } else {
+          barTimeEl.textContent = '-';
+        }
+      }
 
       document.getElementById('regime-state').textContent = payload.regime_state || '-';
       const conf = payload.confidence == null ? null : Number(payload.confidence);

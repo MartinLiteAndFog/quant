@@ -435,8 +435,11 @@ def run_once(
     try:
         live_pos = float(broker.get_position(symbol))
     except Exception:
-        live_pos = 0.0
-    if abs(live_pos) < 1e-12:
+        # If we cannot read live position (e.g. missing creds / transient API error),
+        # do NOT overwrite execution_state.json, otherwise we may wipe executor-written
+        # fields like entry_px/entry_bar_ts that the dashboard uses to show the latest trade.
+        live_pos = None
+    if live_pos is not None and abs(live_pos) < 1e-12:
         write_execution_state(
             {
                 "symbol": symbol,

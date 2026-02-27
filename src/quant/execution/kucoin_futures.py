@@ -397,6 +397,8 @@ def list_fills(
     key = (api_key or os.getenv("KUCOIN_FUTURES_API_KEY", "")).strip()
     secret = (api_secret or os.getenv("KUCOIN_FUTURES_API_SECRET", "")).strip()
     pp = (passphrase or os.getenv("KUCOIN_FUTURES_PASSPHRASE", "")).strip()
+    if not key or not secret or not pp:
+        return []
     contract = _symbol_to_contract(symbol) if symbol else ""
     q = []
     if contract:

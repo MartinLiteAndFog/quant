@@ -43,7 +43,12 @@ class WebhookDashboardApiTests(unittest.TestCase):
                 {"entry_ts": "2026-02-20T00:00:00Z", "exit_ts": "2026-02-20T01:00:00Z", "side": 1, "exit_event": "tp_exit"}
             ]
         ).to_parquet(root / "trades.parquet", index=False)
-        (root / "execution_state.json").write_text('{"sl":99.0,"ttp":102.0,"tp1":103.0,"tp2":104.0}', encoding="utf-8")
+        # Include open position snapshot to exercise dashboard fallback marker.
+        entry_bar_ts = int(pd.Timestamp("2026-02-20T00:00:00Z").timestamp())
+        (root / "execution_state.json").write_text(
+            f'{{"sl":99.0,"ttp":102.0,"tp1":103.0,"tp2":104.0,"side":1,"entry_px":100.5,"entry_bar_ts":{entry_bar_ts}}}',
+            encoding="utf-8",
+        )
         art = root / "artifacts"
         art.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(
@@ -115,6 +120,48 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIn("horizons", gc)
         self.assertTrue(len(gc["horizons"]) >= 1)
         self.assertIn("p_trend_voxel", gc["horizons"][0])
+        self.assertIn("open_position", body)
+
+    def test_chart_includes_live_entry_marker_when_trades_missing(self) -> None:
+        root = Path(self.tmp.name)
+        os.environ["DASHBOARD_TRADES_PARQUET"] = str(root / "missing_trades.parquet")
+        body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+        self.assertTrue(body.get("ok"))
+        self.assertIsInstance(body.get("open_position"), dict)
+        self.assertTrue(any("live entry" in str(m.get("text", "")) for m in body.get("markers", [])))
+
+    def test_chart_handles_string_entry_bar_ts(self) -> None:
+        root = Path(self.tmp.name)
+        os.environ["DASHBOARD_TRADES_PARQUET"] = str(root / "missing_trades.parquet")
+        (root / "execution_state.json").write_text(
+            '{"sl":99.0,"side":"long","entry_px":83.0,"entry_bar_ts":"2026-02-20T00:00:00Z"}',
+            encoding="utf-8",
+        )
+        body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+        self.assertTrue(body.get("ok"))
+        self.assertTrue(any("live entry" in str(m.get("text", "")) for m in body.get("markers", [])))
+        self.assertIsInstance(body.get("levels", {}).get("entry_bar_ts"), int)
+
+    def test_chart_falls_back_to_expected_trades_when_levels_missing_entry(self) -> None:
+        root = Path(self.tmp.name)
+        os.environ["DASHBOARD_TRADES_PARQUET"] = str(root / "missing_trades.parquet")
+        (root / "execution_state.json").write_text('{"sl":81.7}', encoding="utf-8")
+        (root / "expected_trades.jsonl").write_text(
+            "\n".join(
+                [
+                    '{"ts":"2026-02-20T00:00:00Z","symbol":"SOL-USDT","side":"long","action":"entry","qty":20,"expected_px":83.0}',
+                    '{"ts":"2026-02-20T00:10:00Z","symbol":"SOL-USDT","side":"short","action":"exit_flip","qty":20,"expected_px":82.5}',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+        self.assertTrue(body.get("ok"))
+        self.assertTrue(any("live entry" in str(m.get("text", "")) for m in body.get("markers", [])))
+        op = body.get("open_position")
+        self.assertIsInstance(op, dict)
+        self.assertIn(op.get("side"), ("long", "short"))
 
     def test_regime_latest_endpoint(self) -> None:
         body = api_regime_latest(symbol="SOL-USDT")
