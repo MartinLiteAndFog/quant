@@ -331,7 +331,12 @@ def api_regime_transitions(symbol: str = DEFAULT_SYMBOL, limit: int = 50) -> Dic
 
 
 @app.get("/api/dashboard/chart")
-def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_points: int = 3000) -> Dict[str, Any]:
+def api_dashboard_chart(
+    symbol: str = DEFAULT_SYMBOL,
+    hours: int = 24 * 7,
+    max_points: int = 3000,
+    debug: int = 0,
+) -> Dict[str, Any]:
     """
     Unified chart payload: renko bars, trades, regime overlays, and active levels.
     """
@@ -344,6 +349,25 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             start_ts=oldest_bar_ts,
             limit=int(max(500, min(20000, max_points * 5))),
         )
+        debug_sources: Dict[str, Any] = {}
+        if int(debug):
+            probe_none = load_live_fill_markers(symbol=symbol, start_ts=None, limit=200)
+            probe_sec = load_live_fill_markers(symbol=symbol, start_ts=oldest_bar_ts, limit=200) if oldest_bar_ts is not None else []
+            probe_ms = load_live_fill_markers(symbol=symbol, start_ts=(oldest_bar_ts * 1000), limit=200) if oldest_bar_ts is not None else []
+            trades_path = Path(os.getenv("DASHBOARD_TRADES_PARQUET", "/data/live/trades.parquet"))
+            fills_path = Path(os.getenv("DASHBOARD_FILLS_PARQUET", "/data/live/fills_cache.parquet"))
+            debug_sources = {
+                "oldest_bar_ts": oldest_bar_ts,
+                "trade_markers_count": len(markers),
+                "live_markers_count": len(markers_live),
+                "probe_live_none_count": len(probe_none),
+                "probe_live_sec_count": len(probe_sec),
+                "probe_live_ms_count": len(probe_ms),
+                "trades_path": str(trades_path),
+                "trades_exists": trades_path.exists(),
+                "fills_cache_path": str(fills_path),
+                "fills_cache_exists": fills_path.exists(),
+            }
         markers = sorted(markers + markers_live, key=lambda x: int(x.get("time", 0)))
         if len(markers) > int(max(100, max_points)):
             markers = markers[-int(max(100, max_points)):]
@@ -400,6 +424,7 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
             "regime_scores": regime_score_data.get("scores", []),
             "regime_forecast": regime_forecast,
             "equity_curve": equity.get("trades", []),
+            "debug_sources": debug_sources if int(debug) else None,
             "ts": _now_utc_iso(),
         }
     except Exception as e:
