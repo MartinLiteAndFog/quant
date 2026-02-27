@@ -517,6 +517,31 @@ def api_dashboard_chart(
                     forecast_ts = int((now_ts + pd.Timedelta(minutes=minutes)).timestamp())
                     regime_forecast.append({"time": forecast_ts, "score": score})
 
+        # #region agent log
+        _newest_bar_ts = int(bars[-1]["time"]) if bars else None
+        _marker_times = sorted([int(m.get("time", 0)) for m in markers])
+        _debug = {
+            "renko_bars_count": len(bars),
+            "oldest_bar_ts": oldest_bar_ts,
+            "newest_bar_ts": _newest_bar_ts,
+            "markers_from_trades_parquet": len(load_trade_markers(max_points=999999)),
+            "markers_from_live_fills": len(markers_live),
+            "markers_total_after_merge": len(markers),
+            "live_entry_marker": live_entry_marker,
+            "marker_newest_5_times": _marker_times[-5:] if _marker_times else [],
+            "levels_keys": sorted(levels.keys()) if isinstance(levels, dict) else None,
+            "levels_side": levels.get("side") if isinstance(levels, dict) else None,
+            "levels_entry_bar_ts": levels.get("entry_bar_ts") if isinstance(levels, dict) else None,
+            "levels_entry_px": levels.get("entry_px") if isinstance(levels, dict) else None,
+            "levels_ts": levels.get("ts") if isinstance(levels, dict) else None,
+            "expected_entry": expected_entry if expected_entry else None,
+            "open_position": open_position,
+            "diary_count": len(diary.get("entries", [])),
+            "diary_source": diary.get("source"),
+            "equity_count": len(equity.get("trades", [])),
+        }
+        # #endregion
+
         return {
             "ok": True,
             "symbol": symbol,
@@ -539,6 +564,7 @@ def api_dashboard_chart(
             "diary_entries": diary.get("entries", []),
             "diary_source": diary.get("source"),
             "open_position": open_position,
+            "_debug": _debug,
             "ts": _now_utc_iso(),
         }
     except Exception as e:
