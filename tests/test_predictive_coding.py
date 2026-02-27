@@ -92,3 +92,24 @@ class TestTemporalPCModel(unittest.TestCase):
         targets = {1: 0.001, 5: 0.002, 15: 0.003, 60: 0.005}
         m.step(obs, targets, is_warmup=True)
         np.testing.assert_array_equal(m.A, A_before)
+
+
+class TestProbabilityLayer(unittest.TestCase):
+    def test_compute_basics(self):
+        from quant.predictive_coding.probability import compute_probabilities
+        mu = {1: 0.001, 5: -0.002, 15: 0.0, 60: 0.005}
+        sigma = {1: 0.001, 5: 0.001, 15: 0.001, 60: 0.002}
+        price = 100.0
+        result = compute_probabilities(mu, sigma, price)
+        self.assertGreater(result[1]["p_up"], 0.5)
+        self.assertLess(result[5]["p_up"], 0.5)
+        self.assertAlmostEqual(result[15]["p_up"], 0.5, places=3)
+        self.assertAlmostEqual(result[1]["price_level"], 100.0 * np.exp(0.001), places=4)
+
+    def test_bands(self):
+        from quant.predictive_coding.probability import compute_probabilities
+        mu = {1: 0.001}
+        sigma = {1: 0.002}
+        result = compute_probabilities(mu, sigma, 100.0)
+        self.assertGreater(result[1]["price_upper"], result[1]["price_level"])
+        self.assertLess(result[1]["price_lower"], result[1]["price_level"])
