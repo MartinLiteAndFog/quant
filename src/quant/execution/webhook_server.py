@@ -374,6 +374,12 @@ def api_dashboard_chart(
                     }
                 except Exception as meta_e:
                     trades_meta = {"exists": True, "read_error": str(meta_e)}
+            fills_pages = None
+            try:
+                from quant.execution.kucoin_futures import debug_fills_page_counts
+                fills_pages = debug_fills_page_counts(symbol=symbol, pages=4, page_size=100)
+            except Exception as page_e:
+                fills_pages = {"error": str(page_e)}
             debug_sources = {
                 "oldest_bar_ts": oldest_bar_ts,
                 "trade_markers_count": len(markers),
@@ -384,6 +390,7 @@ def api_dashboard_chart(
                 "trades_path": str(trades_path),
                 "trades_exists": trades_path.exists(),
                 "trades_meta": trades_meta,
+                "fills_page_probe": fills_pages,
                 "fills_cache_path": str(fills_path),
                 "fills_cache_exists": fills_path.exists(),
             }
