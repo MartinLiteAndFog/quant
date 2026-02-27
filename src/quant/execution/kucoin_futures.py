@@ -223,6 +223,30 @@ class KucoinFuturesBroker(BrokerAPI):
 
         return 0.0
 
+    def get_position_info(self, symbol: str) -> Dict[str, Any]:
+        """Position details including size/side/leverage when provided by API."""
+        contract = _symbol_to_contract(symbol)
+        data = self._req("GET", f"/api/v1/position?symbol={contract}")
+        if not isinstance(data, dict):
+            return {"size": 0.0, "side": None, "leverage": None}
+        size = float(data.get("currentQty", data.get("size", 0)) or 0)
+        side = (data.get("side") or "").lower() or None
+        if side == "short":
+            size = -abs(size)
+        elif side == "long":
+            size = abs(size)
+        lev_raw = data.get("realLeverage", data.get("leverage"))
+        try:
+            lev = float(lev_raw) if lev_raw is not None else None
+        except Exception:
+            lev = None
+        return {
+            "size": float(size),
+            "side": side,
+            "leverage": lev,
+            "raw": data,
+        }
+
     def get_account_balance(self, currency: str = "USDT") -> Dict[str, Any]:
         """Account overview: equity, available balance, margin balance."""
         path = f"/api/v1/account-overview?currency={currency}"

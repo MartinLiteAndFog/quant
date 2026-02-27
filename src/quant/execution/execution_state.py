@@ -9,7 +9,8 @@ import pandas as pd
 
 
 def execution_state_path() -> Path:
-    return Path(os.getenv("DASHBOARD_LEVELS_JSON", "data/live/execution_state.json"))
+    default_path = "/data/live/execution_state.json" if Path("/data").exists() else "data/live/execution_state.json"
+    return Path(os.getenv("DASHBOARD_LEVELS_JSON", default_path))
 
 
 def write_execution_state(state: Dict[str, Any]) -> Path:

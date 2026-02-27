@@ -21,6 +21,13 @@ def _to_ts_iso(ts_like: Any) -> Optional[str]:
     return ts.isoformat()
 
 
+def _live_default(rel_path: str) -> str:
+    """Prefer Railway volume (/data/live) when available."""
+    if Path("/data").exists():
+        return str(Path("/data/live") / rel_path)
+    return str(Path("data/live") / rel_path)
+
+
 def _env_path(name: str, default_value: str) -> Path:
     return Path(os.getenv(name, default_value))
 
@@ -32,7 +39,7 @@ def _truthy(v: Optional[str]) -> bool:
 
 
 def _read_renko_df() -> pd.DataFrame:
-    p = _env_path("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet")
+    p = _env_path("DASHBOARD_RENKO_PARQUET", _live_default("renko_latest.parquet"))
     if not p.exists():
         return pd.DataFrame()
     try:
@@ -73,7 +80,7 @@ def _refresh_renko_cache_if_needed(existing_df: pd.DataFrame) -> pd.DataFrame:
             box=float(os.getenv("DASHBOARD_RENKO_BOX", "0.1")),
             days_back=int(os.getenv("DASHBOARD_RENKO_DAYS_BACK", "14")),
             step_hours=int(os.getenv("DASHBOARD_RENKO_STEP_HOURS", "6")),
-            out_parquet=str(_env_path("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet")),
+            out_parquet=str(_env_path("DASHBOARD_RENKO_PARQUET", _live_default("renko_latest.parquet"))),
         )
         if not bool(info.get("ok", False)):
             _LAST_REFRESH_ERROR = str(info.get("reason") or info.get("error") or "refresh_not_ok")
@@ -168,7 +175,7 @@ def build_fibo_levels(max_points: int = 5000, lookback: Optional[int] = None) ->
 
 
 def load_trade_markers(max_points: int = 5000) -> List[Dict[str, Any]]:
-    p = _env_path("DASHBOARD_TRADES_PARQUET", "data/live/trades.parquet")
+    p = _env_path("DASHBOARD_TRADES_PARQUET", _live_default("trades.parquet"))
     if not p.exists():
         return []
     df = pd.read_parquet(p)
@@ -210,7 +217,7 @@ def load_trade_segments(max_points: int = 2000) -> List[Dict[str, Any]]:
     Return entry->exit line segments for closed trades.
     Color is green for positive PnL, red for negative PnL.
     """
-    p = _env_path("DASHBOARD_TRADES_PARQUET", "data/live/trades.parquet")
+    p = _env_path("DASHBOARD_TRADES_PARQUET", _live_default("trades.parquet"))
     if not p.exists():
         return []
     try:
@@ -268,15 +275,15 @@ def load_trade_segments(max_points: int = 2000) -> List[Dict[str, Any]]:
     return segs
 
 
-def load_live_fill_markers(symbol: str, limit: int = 100) -> List[Dict[str, Any]]:
+def load_live_fill_markers(symbol: str, limit: int = 100, start_ts: Optional[int] = None) -> List[Dict[str, Any]]:
     """
     Build chart markers from live KuCoin fills as a fallback/augmentation
     when local trades parquet is incomplete.
     """
-    rows = list_fills(symbol=symbol, limit=int(max(1, limit)))
-    if not rows:
-        return []
-    out: List[Dict[str, Any]] = []
+    rows = list_fills(symbol=symbol, start_ts=start_ts, limit=int(max(1, limit)))
+    fills_path = _env_path("DASHBOARD_FILLS_PARQUET", _live_default("fills_cache.parquet"))
+
+    norm_rows: List[Dict[str, Any]] = []
     for r in rows:
         try:
             side = str(r.get("side", "")).lower()
@@ -287,9 +294,46 @@ def load_live_fill_markers(symbol: str, limit: int = 100) -> List[Dict[str, Any]
             ts = pd.to_datetime(t_i, unit="ns" if t_i > 10**15 else ("ms" if t_i > 10**12 else "s"), utc=True)
         except Exception:
             continue
+        norm_rows.append(
+            {"time": int(pd.Timestamp(ts).timestamp()), "side": side, "size": float(sz), "price": float(px)}
+        )
+
+    if norm_rows:
+        try:
+            fills_path.parent.mkdir(parents=True, exist_ok=True)
+            fresh_df = pd.DataFrame(norm_rows)
+            if fills_path.exists():
+                old_df = pd.read_parquet(fills_path)
+                all_df = pd.concat([old_df, fresh_df], ignore_index=True)
+            else:
+                all_df = fresh_df
+            all_df = all_df.drop_duplicates(subset=["time", "side", "size", "price"], keep="last").sort_values("time")
+            all_df.to_parquet(fills_path, index=False)
+        except Exception:
+            pass
+
+    if fills_path.exists():
+        try:
+            src_df = pd.read_parquet(fills_path)
+        except Exception:
+            src_df = pd.DataFrame(norm_rows)
+    else:
+        src_df = pd.DataFrame(norm_rows)
+    if src_df.empty:
+        return []
+
+    if start_ts is not None:
+        src_df = src_df[pd.to_numeric(src_df["time"], errors="coerce") >= int(start_ts)]
+    src_df = src_df.sort_values("time").tail(int(max(1, limit)))
+
+    out: List[Dict[str, Any]] = []
+    for _, r in src_df.iterrows():
+        side = str(r.get("side", "")).lower()
+        sz = float(r.get("size", 0) or 0)
+        px = float(r.get("price", 0) or 0)
         out.append(
             {
-                "time": int(pd.Timestamp(ts).timestamp()),
+                "time": int(r.get("time", 0)),
                 "position": "belowBar" if side == "buy" else "aboveBar",
                 "shape": "arrowUp" if side == "buy" else "arrowDown",
                 "color": "#2ecc71" if side == "buy" else "#f7768e",
@@ -301,7 +345,7 @@ def load_live_fill_markers(symbol: str, limit: int = 100) -> List[Dict[str, Any]
 
 
 def load_active_levels() -> Dict[str, Any]:
-    p = _env_path("DASHBOARD_LEVELS_JSON", "data/live/execution_state.json")
+    p = _env_path("DASHBOARD_LEVELS_JSON", _live_default("execution_state.json"))
     if not p.exists():
         return {}
     try:
@@ -375,7 +419,7 @@ def build_regime_overlay(symbol: str, hours: int = 24 * 14) -> Dict[str, Any]:
 
 def build_equity_curve(max_points: int = 500) -> Dict[str, Any]:
     """Cumulative equity curve from closed trades as discrete % steps."""
-    p = _env_path("DASHBOARD_TRADES_PARQUET", "data/live/trades.parquet")
+    p = _env_path("DASHBOARD_TRADES_PARQUET", _live_default("trades.parquet"))
     if not p.exists():
         return {"trades": []}
     try:

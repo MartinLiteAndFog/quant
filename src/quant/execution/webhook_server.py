@@ -297,13 +297,19 @@ def api_position(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
     """Current position from KuCoin Futures (signed: >0 long, <0 short)."""
     key = (os.getenv("KUCOIN_FUTURES_API_KEY") or "").strip()
     if not key:
-        return {"ok": True, "symbol": symbol, "position": None, "hint": "Configure KuCoin API keys."}
+        return {"ok": True, "symbol": symbol, "position": None, "side": None, "leverage": None, "hint": "Configure KuCoin API keys."}
     try:
         broker = _kucoin_broker()
-        pos = broker.get_position(symbol)
-        return {"ok": True, "symbol": symbol, "position": pos}
+        info = broker.get_position_info(symbol)
+        return {
+            "ok": True,
+            "symbol": symbol,
+            "position": info.get("size"),
+            "side": info.get("side"),
+            "leverage": info.get("leverage"),
+        }
     except Exception as e:
-        return {"ok": False, "symbol": symbol, "position": None, "error": str(e)}
+        return {"ok": False, "symbol": symbol, "position": None, "side": None, "leverage": None, "error": str(e)}
 
 
 @app.get("/api/regime/latest")
@@ -332,7 +338,12 @@ def api_dashboard_chart(symbol: str = DEFAULT_SYMBOL, hours: int = 24 * 7, max_p
     try:
         bars = load_renko_bars(max_points=int(max(100, max_points)))
         markers = load_trade_markers(max_points=int(max(1000, max_points * 50)))
-        markers_live = load_live_fill_markers(symbol=symbol, limit=int(max(50, min(500, max_points))))
+        oldest_bar_ts = int(bars[0]["time"]) if bars else None
+        markers_live = load_live_fill_markers(
+            symbol=symbol,
+            start_ts=oldest_bar_ts,
+            limit=int(max(500, min(20000, max_points * 5))),
+        )
         markers = sorted(markers + markers_live, key=lambda x: int(x.get("time", 0)))
         if len(markers) > int(max(100, max_points)):
             markers = markers[-int(max(100, max_points)):]
@@ -517,6 +528,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="hint" style="text-align:center;margin-top:0.25rem;">Regime: red = countertrend, green = trend. Right side = projected.</div>
 
   <div class="traj-controls">
+    <span class="label" style="font-size:0.85rem;">Chart range:</span>
+    <select id="chart-range" class="mono">
+      <option value="14d" selected>14d</option>
+      <option value="30d">30d</option>
+      <option value="all">all</option>
+    </select>
     <span class="label" style="font-size:0.85rem;">Trajectory window:</span>
     <select id="traj-window" class="mono">
       <option value="1">1h</option>
@@ -1065,6 +1082,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return Math.max(-1, Math.min(1, 2 * pTrend - 1));
     }
 
+    function getChartRangeParams() {
+      const v = (document.getElementById('chart-range') || {}).value || '14d';
+      if (v === '30d') return { hours: 24 * 30, max_points: 9000 };
+      if (v === 'all') return { hours: 24 * 120, max_points: 20000 };
+      return { hours: 24 * 14, max_points: 4000 };
+    }
+
     // ── Data loading ──
     async function loadMeta() {
       const [st, pos] = await Promise.all([
@@ -1085,7 +1109,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         document.getElementById('ticker').textContent = st.ticker_error || '-';
         latestMid = null;
       }
-      document.getElementById('position').textContent = pos.position != null ? String(pos.position) : (pos.error || '-');
+      if (pos.position != null) {
+        const lev = (pos.leverage != null && Number.isFinite(Number(pos.leverage))) ? (' x' + Number(pos.leverage).toFixed(1)) : '';
+        document.getElementById('position').textContent = String(pos.position) + lev;
+      } else {
+        document.getElementById('position').textContent = pos.error || '-';
+      }
       if (pos.position != null && st.ticker && st.ticker.mid != null) {
         const mult = Number(pos.contract_multiplier || 1);
         const notional = Math.abs(Number(pos.position)) * mult * Number(st.ticker.mid);
@@ -1102,7 +1131,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     async function loadChart() {
-      const payload = await fetch('/api/dashboard/chart?hours=336&max_points=4000').then(r => r.json());
+      const p = getChartRangeParams();
+      const payload = await fetch('/api/dashboard/chart?hours=' + p.hours + '&max_points=' + p.max_points).then(r => r.json());
       latestPayload = payload;
       if (!payload.ok) return;
 
@@ -1209,6 +1239,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     chart.timeScale().subscribeVisibleTimeRangeChange(() => drawRegimeBand());
     window.addEventListener('resize', () => { drawRegimeBand(); drawAllHeatmaps(); drawEquityCurve(); });
     document.getElementById('traj-window').addEventListener('change', loadStateSpace);
+    document.getElementById('chart-range').addEventListener('change', () => {
+      hasFittedOnce = false;
+      loadChart();
+    });
 
     document.getElementById('traj-slider').addEventListener('input', function() {
       const slider = this;
