@@ -598,7 +598,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       borderDownColor: '#f7768e', borderUpColor: '#2ecc71',
       wickDownColor: '#f7768e', wickUpColor: '#2ecc71',
     });
-    const exitSeries = chart.addLineSeries({ color: '#ffcc66', lineWidth: 2, title: 'Exit', lastValueVisible: true, priceLineVisible: false });
+    const slSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, title: 'SL', lastValueVisible: true, priceLineVisible: false });
+    const ttpSeries = chart.addLineSeries({ color: '#ffcc66', lineWidth: 2, title: 'TTP', lastValueVisible: true, priceLineVisible: false });
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
     const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
@@ -1045,6 +1046,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return [{ time: first, value: Number(level) }, { time: last, value: Number(level) }];
     }
 
+    function levelLineFromEntry(lastBars, level, levels) {
+      if (!Array.isArray(lastBars) || !lastBars.length || level == null || Number.isNaN(Number(level))) return [];
+      let first = lastBars[0].time;
+      if (levels && levels.entry_bar_ts != null) {
+        const mapped = mapTimeForChart(Number(levels.entry_bar_ts));
+        if (mapped != null) first = mapped;
+      }
+      const last = lastBars[lastBars.length - 1].time;
+      return [{ time: first, value: Number(level) }, { time: last, value: Number(level) }];
+    }
+
     function liveRegimeScore(payload) {
       const gc = (payload && payload.gate_confidence) ? payload.gate_confidence : null;
       if (!gc) return null;
@@ -1104,14 +1116,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
       const levels = payload.levels || {};
       const exitInfo = buildUnifiedExitLine(bars, levels);
-      exitSeries.setData(exitInfo.data);
-      if (exitInfo.mode === 'ttp') {
-        exitSeries.applyOptions({ color: '#ffcc66', title: 'TTP' });
-      } else if (exitInfo.mode === 'sl') {
-        exitSeries.applyOptions({ color: '#f7768e', title: 'SL' });
-      } else {
-        exitSeries.applyOptions({ color: '#ffcc66', title: 'Exit' });
-      }
+      slSeries.setData(levelLineFromEntry(bars, levels.sl, levels));
+      ttpSeries.setData(levelLineFromEntry(bars, levels.ttp, levels));
 
       tp1Series.setData(levelLineData(bars, levels.tp1));
       tp2Series.setData(levelLineData(bars, levels.tp2));
