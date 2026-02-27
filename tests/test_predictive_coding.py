@@ -1,6 +1,8 @@
 from __future__ import annotations
 import unittest
+from pathlib import Path
 import numpy as np
+import pandas as pd
 from quant.predictive_coding.config import PCConfig
 
 class TestPCConfig(unittest.TestCase):
@@ -203,3 +205,96 @@ class TestTradeDecisionLayer(unittest.TestCase):
         signal, events = tdl.update(probs, 100.1, bar_idx=5)
         self.assertEqual(tdl.position, 0)
         self.assertTrue(any(e["event"] == "timeout_exit" for e in events))
+
+
+class TestIntegration(unittest.TestCase):
+    def test_end_to_end_synthetic(self):
+        """Full pipeline on synthetic trending data should produce trades."""
+        from quant.predictive_coding.config import PCConfig
+        from quant.predictive_coding.model import TemporalPCModel
+        from quant.predictive_coding.probability import compute_probabilities
+        from quant.predictive_coding.targets import build_obs_features, build_targets, get_valid_range
+        from quant.predictive_coding.trade_logic import TradeDecisionLayer
+
+        np.random.seed(42)
+        n = 2000
+        trend = np.cumsum(np.random.randn(n) * 0.001 + 0.0001)
+        close = 100.0 * np.exp(trend)
+
+        cfg = PCConfig(
+            d_latent=8,
+            n_inference_steps=3,
+            warmup_bars=100,
+            fee_bps=0.0,
+            slippage_bps=0.0,
+            margin=0.01,
+            z_min=0.05,
+            min_edge_bps=0.0,
+        )
+        obs_all = build_obs_features(close)
+        targets_all = build_targets(close, cfg.horizons)
+        start, end = get_valid_range(close, cfg.horizons)
+
+        model = TemporalPCModel(cfg)
+        tdl = TradeDecisionLayer(cfg)
+        n_signals = 0
+
+        for t in range(start, end):
+            obs = obs_all[t]
+            tgt = {h: targets_all[t, i] for i, h in enumerate(cfg.horizons)}
+            if np.any(np.isnan(obs)) or any(np.isnan(v) for v in tgt.values()):
+                continue
+            is_warmup = t < start + cfg.warmup_bars
+            mu, sigma = model.step(obs, tgt, is_warmup=is_warmup)
+            if is_warmup:
+                continue
+            probs = compute_probabilities(mu, sigma, float(close[t]))
+            signal, _ = tdl.update(probs, float(close[t]), t)
+            if signal != 0:
+                n_signals += 1
+
+        self.assertGreater(n_signals, 0)
+
+    def test_run_backtest_function(self):
+        """Test the run_backtest function directly with synthetic data."""
+        import sys
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
+
+        from quant.predictive_coding.config import PCConfig
+        from quant.predictive_coding.model import TemporalPCModel
+        from quant.predictive_coding.probability import compute_probabilities
+        from quant.predictive_coding.targets import build_obs_features, build_targets, get_valid_range
+        from quant.predictive_coding.trade_logic import TradeDecisionLayer
+
+        np.random.seed(123)
+        n = 1000
+        close = 100.0 * np.exp(np.cumsum(np.random.randn(n) * 0.002))
+        ts = pd.date_range("2026-01-01", periods=n, freq="min", tz="UTC")
+        df = pd.DataFrame({"ts": ts, "open": close, "high": close*1.001, "low": close*0.999, "close": close})
+
+        cfg = PCConfig(d_latent=8, n_inference_steps=3, warmup_bars=50,
+                       fee_bps=0.0, slippage_bps=0.0, margin=0.01, z_min=0.05, min_edge_bps=0.0)
+
+        close_arr = df["close"].values.astype(np.float64)
+        obs_all = build_obs_features(close_arr)
+        targets_all = build_targets(close_arr, cfg.horizons)
+        start, end = get_valid_range(close_arr, cfg.horizons, obs_lookback=60)
+
+        model = TemporalPCModel(cfg)
+        trade_logic = TradeDecisionLayer(cfg)
+
+        pred_count = 0
+        for t in range(start, end):
+            obs = obs_all[t]
+            tgt = {h: targets_all[t, i] for i, h in enumerate(cfg.horizons)}
+            if np.any(np.isnan(obs)) or any(np.isnan(v) for v in tgt.values()):
+                continue
+            is_warmup = t < start + cfg.warmup_bars
+            mu, sigma = model.step(obs, tgt, is_warmup=is_warmup)
+            if is_warmup:
+                continue
+            probs = compute_probabilities(mu, sigma, float(close_arr[t]))
+            signal, events = trade_logic.update(probs, float(close_arr[t]), t)
+            pred_count += 1
+
+        self.assertGreater(pred_count, 0)
