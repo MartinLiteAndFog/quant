@@ -43,3 +43,52 @@ class TestTargets(unittest.TestCase):
         start, end = get_valid_range(close, horizons=[1, 5, 15, 60], obs_lookback=60)
         self.assertEqual(start, 60)
         self.assertEqual(end, 500 - 60)
+
+
+class TestTemporalPCModel(unittest.TestCase):
+    def test_init_shapes(self):
+        from quant.predictive_coding.model import TemporalPCModel
+        from quant.predictive_coding.config import PCConfig
+        cfg = PCConfig(d_latent=16)
+        m = TemporalPCModel(cfg)
+        self.assertEqual(m.x.shape, (16,))
+        self.assertEqual(m.A.shape, (16, 16))
+        self.assertEqual(len(m.W), 4)
+        self.assertEqual(m.W[1].shape, (16,))
+        self.assertEqual(m.C.shape, (5, 16))
+
+    def test_step_returns_mu_and_sigma(self):
+        from quant.predictive_coding.model import TemporalPCModel
+        from quant.predictive_coding.config import PCConfig
+        cfg = PCConfig(d_latent=16, warmup_bars=0)
+        m = TemporalPCModel(cfg)
+        obs = np.random.randn(5) * 0.01
+        targets = {1: 0.001, 5: 0.002, 15: 0.003, 60: 0.005}
+        mu, sigma = m.step(obs, targets, is_warmup=False)
+        self.assertEqual(len(mu), 4)
+        self.assertEqual(len(sigma), 4)
+        for s in sigma.values():
+            self.assertGreater(s, 0)
+
+    def test_variance_updates_during_warmup(self):
+        from quant.predictive_coding.model import TemporalPCModel
+        from quant.predictive_coding.config import PCConfig
+        cfg = PCConfig(d_latent=8)
+        m = TemporalPCModel(cfg)
+        v_before = {h: m.v_h[h] for h in cfg.horizons}
+        obs = np.random.randn(5) * 0.01
+        targets = {1: 0.01, 5: 0.02, 15: 0.03, 60: 0.05}
+        m.step(obs, targets, is_warmup=True)
+        changed = any(m.v_h[h] != v_before[h] for h in cfg.horizons)
+        self.assertTrue(changed)
+
+    def test_weights_frozen_during_warmup(self):
+        from quant.predictive_coding.model import TemporalPCModel
+        from quant.predictive_coding.config import PCConfig
+        cfg = PCConfig(d_latent=8)
+        m = TemporalPCModel(cfg)
+        A_before = m.A.copy()
+        obs = np.random.randn(5) * 0.01
+        targets = {1: 0.001, 5: 0.002, 15: 0.003, 60: 0.005}
+        m.step(obs, targets, is_warmup=True)
+        np.testing.assert_array_equal(m.A, A_before)
