@@ -21,6 +21,7 @@ import uvicorn
 from quant.execution.dashboard_state import (
     build_equity_curve,
     build_fibo_levels,
+    build_trading_diary,
     build_regime_overlay,
     build_regime_scores,
     load_active_levels,
@@ -374,6 +375,7 @@ def api_dashboard_chart(
 
         regime_score_data = build_regime_scores(symbol=symbol, hours=int(max(1, hours)))
         equity = build_equity_curve(max_points=int(max(100, max_points)))
+        diary = build_trading_diary(max_points=int(max(100, max_points)))
 
         regime_forecast: list[dict[str, Any]] = []
         if live_gc and isinstance(live_gc.get("horizons"), list):
@@ -404,6 +406,9 @@ def api_dashboard_chart(
             "regime_scores": regime_score_data.get("scores", []),
             "regime_forecast": regime_forecast,
             "equity_curve": equity.get("trades", []),
+            "equity_source": equity.get("source"),
+            "diary_entries": diary.get("entries", []),
+            "diary_source": diary.get("source"),
             "ts": _now_utc_iso(),
         }
     except Exception as e:
@@ -420,9 +425,21 @@ def api_dashboard_chart(
             "regime_scores": [],
             "regime_forecast": [],
             "equity_curve": [],
+            "equity_source": "none",
+            "diary_entries": [],
+            "diary_source": "none",
             "error": str(e),
             "ts": _now_utc_iso(),
         }
+
+
+@app.get("/api/dashboard/diary")
+def api_dashboard_diary(max_points: int = 500) -> Dict[str, Any]:
+    try:
+        diary = build_trading_diary(max_points=int(max(10, max_points)))
+        return {"ok": True, "entries": diary.get("entries", []), "source": diary.get("source"), "ts": _now_utc_iso()}
+    except Exception as e:
+        return {"ok": False, "entries": [], "source": "none", "error": str(e), "ts": _now_utc_iso()}
 
 
 def _load_density_bg_images() -> Dict[str, Optional[str]]:
@@ -522,6 +539,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div class="row"><span class="label">TP2</span><span id="lvl-tp2" class="mono">-</span></div>
       <div style="margin-top:0.5rem;font-size:0.8rem;color:var(--muted);font-weight:600;">Equity Curve</div>
       <canvas id="equity-canvas" style="width:100%;height:160px;display:block;border-radius:6px;margin-top:0.25rem;"></canvas>
+      <div id="equity-meta" class="hint" style="margin-top:0.3rem;">Diary source: -</div>
+      <div id="equity-detail" class="mono" style="font-size:0.75rem;color:var(--text);min-height:1.1rem;">-</div>
       <p id="hint" class="hint"></p>
     </div>
   </div>
@@ -861,6 +880,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     function drawEquityCurve() {
       const canvas = document.getElementById('equity-canvas');
       if (!canvas || !latestPayload) return;
+      const detailEl = document.getElementById('equity-detail');
+      const metaEl = document.getElementById('equity-meta');
       const rect = canvas.getBoundingClientRect();
       canvas.width = Math.floor(rect.width);
       canvas.height = Math.floor(rect.height);
@@ -870,23 +891,45 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.fillStyle = '#181c24';
       ctx.fillRect(0, 0, w, h);
 
-      const trades = latestPayload.equity_curve || [];
+      const trades = Array.isArray(latestPayload.diary_entries) && latestPayload.diary_entries.length
+        ? latestPayload.diary_entries
+        : (latestPayload.equity_curve || []);
+      const source = latestPayload.diary_source || latestPayload.equity_source || 'none';
+      if (metaEl) metaEl.textContent = 'Diary source: ' + source;
       if (!trades.length) {
         ctx.fillStyle = '#8e98bf';
         ctx.font = '11px system-ui';
         ctx.textAlign = 'center';
         ctx.fillText('No closed trades', w / 2, h / 2);
+        if (detailEl) detailEl.textContent = '-';
+        canvas.onmousemove = null;
         return;
       }
 
-      const vals = trades.map(t => t.cum_pct);
+      let running = 0.0;
+      const points = trades.map((t) => {
+        const p = Number(t.pnl_pct || 0);
+        running += p;
+        return {
+          time: Number(t.time || 0),
+          pnl_pct: p,
+          cum_pct: Number.isFinite(Number(t.cum_pct)) ? Number(t.cum_pct) : running,
+          side: t.side || '-',
+          entry_price: t.entry_price,
+          exit_price: t.exit_price,
+          qty: t.qty,
+          source: t.source || source,
+        };
+      });
+
+      const vals = points.map(t => t.cum_pct);
       const minV = Math.min(0, ...vals);
       const maxV = Math.max(0, ...vals);
       const range = Math.max(1, maxV - minV) * 1.15;
       const padL = 8, padR = 8, padT = 14, padB = 14;
       const pw = w - padL - padR, ph = h - padT - padB;
 
-      function tx(i) { return padL + (i / Math.max(1, trades.length - 1)) * pw; }
+      function tx(i) { return padL + (i / Math.max(1, points.length - 1)) * pw; }
       function ty(v) { return padT + (1 - (v - minV) / range) * ph; }
 
       // zero line
@@ -900,26 +943,26 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       // step line
       ctx.lineWidth = 2;
       ctx.beginPath();
-      for (let i = 0; i < trades.length; i++) {
+      for (let i = 0; i < points.length; i++) {
         const x = tx(i);
-        const y = ty(trades[i].cum_pct);
+        const y = ty(points[i].cum_pct);
         if (i === 0) { ctx.moveTo(x, y0); ctx.lineTo(x, y); }
         else {
-          ctx.lineTo(x, ty(trades[i - 1].cum_pct));
+          ctx.lineTo(x, ty(points[i - 1].cum_pct));
           ctx.lineTo(x, y);
         }
       }
-      const lastCum = trades[trades.length - 1].cum_pct;
+      const lastCum = points[points.length - 1].cum_pct;
       ctx.strokeStyle = lastCum >= 0 ? '#9ece6a' : '#f7768e';
       ctx.stroke();
 
       // % labels at each step
       ctx.font = 'bold 9px system-ui';
       ctx.textAlign = 'center';
-      for (let i = 0; i < trades.length; i++) {
+      for (let i = 0; i < points.length; i++) {
         const x = tx(i);
-        const y = ty(trades[i].cum_pct);
-        const pnl = trades[i].pnl_pct;
+        const y = ty(points[i].cum_pct);
+        const pnl = points[i].pnl_pct;
         ctx.fillStyle = pnl >= 0 ? '#9ece6a' : '#f7768e';
         const label = (pnl >= 0 ? '+' : '') + pnl.toFixed(1) + '%';
         ctx.fillText(label, x, y - 5);
@@ -930,6 +973,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.textAlign = 'right';
       ctx.fillStyle = lastCum >= 0 ? '#9ece6a' : '#f7768e';
       ctx.fillText((lastCum >= 0 ? '+' : '') + lastCum.toFixed(1) + '%', w - padR, padT - 2);
+
+      // Connect diary details to the widget: hover a step to inspect trade.
+      canvas.onmousemove = (ev) => {
+        if (!detailEl) return;
+        const r = canvas.getBoundingClientRect();
+        const x = ev.clientX - r.left;
+        let idx = Math.round(((x - padL) / Math.max(1, pw)) * Math.max(1, points.length - 1));
+        idx = Math.max(0, Math.min(points.length - 1, idx));
+        const t = points[idx];
+        const d = new Date(Number(t.time) * 1000);
+        const hh = String(d.getUTCHours()).padStart(2, '0');
+        const mm = String(d.getUTCMinutes()).padStart(2, '0');
+        const ep = Number.isFinite(Number(t.entry_price)) ? Number(t.entry_price).toFixed(3) : '-';
+        const xp = Number.isFinite(Number(t.exit_price)) ? Number(t.exit_price).toFixed(3) : '-';
+        const q = Number.isFinite(Number(t.qty)) ? Number(t.qty).toFixed(2) : '-';
+        detailEl.textContent = `${hh}:${mm} ${String(t.side || '-').toUpperCase()} q:${q} ${ep}→${xp} pnl:${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(2)}% cum:${t.cum_pct >= 0 ? '+' : ''}${t.cum_pct.toFixed(2)}%`;
+      };
+      if (detailEl) {
+        const t = points[points.length - 1];
+        detailEl.textContent = `latest ${String(t.side || '-').toUpperCase()} pnl:${t.pnl_pct >= 0 ? '+' : ''}${t.pnl_pct.toFixed(2)}% cum:${t.cum_pct >= 0 ? '+' : ''}${t.cum_pct.toFixed(2)}%`;
+      }
     }
 
     // ── Time cursor for heatmaps ──

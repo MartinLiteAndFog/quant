@@ -32,6 +32,39 @@ def _env_path(name: str, default_value: str) -> Path:
     return Path(os.getenv(name, default_value))
 
 
+def _read_trades_df() -> pd.DataFrame:
+    p = _env_path("DASHBOARD_TRADES_PARQUET", _live_default("trades.parquet"))
+    if not p.exists():
+        return pd.DataFrame()
+    try:
+        return pd.read_parquet(p)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _read_fills_df() -> pd.DataFrame:
+    p = _env_path("DASHBOARD_FILLS_PARQUET", _live_default("fills_cache.parquet"))
+    if not p.exists():
+        return pd.DataFrame()
+    try:
+        df = pd.read_parquet(p)
+    except Exception:
+        return pd.DataFrame()
+    if df.empty:
+        return pd.DataFrame()
+    need = {"time", "side", "size", "price"}
+    if not need.issubset(set(df.columns)):
+        return pd.DataFrame()
+    df = df.copy()
+    df["time"] = pd.to_numeric(df["time"], errors="coerce")
+    df["side"] = df["side"].astype(str).str.lower()
+    df["size"] = pd.to_numeric(df["size"], errors="coerce")
+    df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    df = df.dropna(subset=["time", "side", "size", "price"])
+    df = df[df["size"] > 0].sort_values("time").reset_index(drop=True)
+    return df
+
+
 def _truthy(v: Optional[str]) -> bool:
     if v is None:
         return False
@@ -175,10 +208,9 @@ def build_fibo_levels(max_points: int = 5000, lookback: Optional[int] = None) ->
 
 
 def load_trade_markers(max_points: int = 5000) -> List[Dict[str, Any]]:
-    p = _env_path("DASHBOARD_TRADES_PARQUET", _live_default("trades.parquet"))
-    if not p.exists():
+    df = _read_trades_df()
+    if df.empty:
         return []
-    df = pd.read_parquet(p)
     if "entry_ts" not in df.columns and "ts" in df.columns:
         df = df.rename(columns={"ts": "entry_ts"})
     if "entry_ts" not in df.columns:
@@ -217,12 +249,8 @@ def load_trade_segments(max_points: int = 2000) -> List[Dict[str, Any]]:
     Return entry->exit line segments for closed trades.
     Color is green for positive PnL, red for negative PnL.
     """
-    p = _env_path("DASHBOARD_TRADES_PARQUET", _live_default("trades.parquet"))
-    if not p.exists():
-        return []
-    try:
-        df = pd.read_parquet(p)
-    except Exception:
+    df = _read_trades_df()
+    if df.empty:
         return []
 
     if "entry_ts" not in df.columns and "ts" in df.columns:
@@ -357,6 +385,120 @@ def load_active_levels() -> Dict[str, Any]:
     return {}
 
 
+def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
+    """
+    Build a normalized trading diary online from closed trades parquet;
+    fallback to reconstructed closed trades from fills cache.
+    """
+    out: List[Dict[str, Any]] = []
+
+    df = _read_trades_df()
+    if not df.empty:
+        if "entry_ts" not in df.columns and "ts" in df.columns:
+            df = df.rename(columns={"ts": "entry_ts"})
+        if "entry_ts" in df.columns and "exit_ts" in df.columns:
+            df["entry_ts"] = pd.to_datetime(df["entry_ts"], utc=True, errors="coerce")
+            df["exit_ts"] = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
+            df = df.dropna(subset=["entry_ts", "exit_ts"]).sort_values("exit_ts").tail(int(max(1, max_points)))
+
+            entry_col = next((c for c in ("entry_px", "entry_price", "price_entry", "entry") if c in df.columns), None)
+            exit_col = next((c for c in ("exit_px", "exit_price", "price_exit", "exit") if c in df.columns), None)
+            pnl_cols = [c for c in ("pnl_pct", "pnl", "pnl_abs", "net_pnl") if c in df.columns]
+            pnl_col = pnl_cols[0] if pnl_cols else None
+            side_col = "side" if "side" in df.columns else None
+            qty_col = next((c for c in ("qty", "size", "contracts") if c in df.columns), None)
+
+            for _, r in df.iterrows():
+                epx = float(r[entry_col]) if entry_col and pd.notna(r.get(entry_col)) else None
+                xpx = float(r[exit_col]) if exit_col and pd.notna(r.get(exit_col)) else None
+                side = int(r[side_col]) if side_col and pd.notna(r.get(side_col)) else 1
+                qty = float(r[qty_col]) if qty_col and pd.notna(r.get(qty_col)) else None
+                pnl_pct = None
+                if pnl_col and pd.notna(r.get(pnl_col)):
+                    pnl_pct = float(r[pnl_col])
+                    if pnl_col not in ("pnl_pct",) and epx and epx > 0:
+                        pnl_pct = pnl_pct / epx * 100.0
+                elif epx and xpx and epx > 0:
+                    pnl_pct = ((xpx - epx) / epx * 100.0) * (1 if side >= 0 else -1)
+                if pnl_pct is None:
+                    continue
+                out.append(
+                    {
+                        "id": f"p_{int(pd.Timestamp(r['exit_ts']).timestamp())}_{'L' if side >= 0 else 'S'}",
+                        "entry_time": int(pd.Timestamp(r["entry_ts"]).timestamp()),
+                        "time": int(pd.Timestamp(r["exit_ts"]).timestamp()),
+                        "side": "long" if side >= 0 else "short",
+                        "qty": qty,
+                        "entry_price": epx,
+                        "exit_price": xpx,
+                        "pnl_pct": round(float(pnl_pct), 4),
+                        "source": "trades_parquet",
+                    }
+                )
+            if out:
+                out = sorted(out, key=lambda x: int(x["time"]))[-int(max(1, max_points)) :]
+                return {"entries": out, "source": "trades_parquet"}
+
+    fills = _read_fills_df()
+    if fills.empty:
+        return {"entries": [], "source": "none"}
+
+    pos_qty = 0.0
+    avg_entry = 0.0
+    pos_open_ts: Optional[int] = None
+    events: List[Dict[str, Any]] = []
+
+    for _, r in fills.iterrows():
+        t = int(r["time"])
+        side = str(r["side"])
+        qty = float(r["size"])
+        px = float(r["price"])
+        signed = qty if side == "buy" else -qty
+
+        if pos_qty == 0 or (pos_qty > 0 and signed > 0) or (pos_qty < 0 and signed < 0):
+            new_abs = abs(pos_qty) + abs(signed)
+            if new_abs > 0:
+                avg_entry = ((abs(pos_qty) * avg_entry) + (abs(signed) * px)) / new_abs
+            pos_qty += signed
+            if pos_open_ts is None:
+                pos_open_ts = t
+            continue
+
+        close_qty = min(abs(pos_qty), abs(signed))
+        direction = 1.0 if pos_qty > 0 else -1.0
+        pnl_per_unit = (px - avg_entry) * direction
+        pnl_pct = (pnl_per_unit / avg_entry * 100.0) if avg_entry > 0 else 0.0
+        events.append(
+            {
+                "id": f"f_{t}_{len(events)}",
+                "entry_time": int(pos_open_ts or t),
+                "time": t,
+                "side": "long" if direction > 0 else "short",
+                "qty": float(close_qty),
+                "entry_price": float(avg_entry) if avg_entry > 0 else None,
+                "exit_price": float(px),
+                "pnl_pct": round(float(pnl_pct), 4),
+                "source": "fills_reconstructed",
+            }
+        )
+
+        remainder = abs(signed) - close_qty
+        if remainder <= 1e-12:
+            pos_qty += signed
+            if abs(pos_qty) <= 1e-12:
+                pos_qty = 0.0
+                avg_entry = 0.0
+                pos_open_ts = None
+            continue
+
+        pos_qty = remainder if signed > 0 else -remainder
+        avg_entry = px
+        pos_open_ts = t
+
+    events = sorted(events, key=lambda x: int(x["time"]))[-int(max(1, max_points)) :]
+    return {"entries": events, "source": "fills_reconstructed"}
+
+
 def build_regime_overlay(symbol: str, hours: int = 24 * 14) -> Dict[str, Any]:
     store = RegimeStore()
     end_ts = pd.Timestamp.now("UTC")
@@ -418,54 +560,27 @@ def build_regime_overlay(symbol: str, hours: int = 24 * 14) -> Dict[str, Any]:
 
 
 def build_equity_curve(max_points: int = 500) -> Dict[str, Any]:
-    """Cumulative equity curve from closed trades as discrete % steps."""
-    p = _env_path("DASHBOARD_TRADES_PARQUET", _live_default("trades.parquet"))
-    if not p.exists():
-        return {"trades": []}
-    try:
-        df = pd.read_parquet(p)
-    except Exception:
-        return {"trades": []}
-
-    if "entry_ts" not in df.columns and "ts" in df.columns:
-        df = df.rename(columns={"ts": "entry_ts"})
-    if "entry_ts" not in df.columns or "exit_ts" not in df.columns:
-        return {"trades": []}
-
-    df["exit_ts"] = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
-    df = df.dropna(subset=["exit_ts"]).sort_values("exit_ts").tail(int(max(1, max_points)))
-
-    entry_col = next((c for c in ("entry_px", "entry_price", "price_entry", "entry") if c in df.columns), None)
-    exit_col = next((c for c in ("exit_px", "exit_price", "price_exit", "exit") if c in df.columns), None)
-    pnl_cols = [c for c in ("pnl_pct", "pnl", "pnl_abs", "net_pnl") if c in df.columns]
-    pnl_col = pnl_cols[0] if pnl_cols else None
-    side_col = "side" if "side" in df.columns else None
-
-    trades: list[dict] = []
-    cum_pct = 0.0
-    for _, r in df.iterrows():
-        if pnl_col and pd.notna(r.get(pnl_col)):
-            pnl_pct = float(r[pnl_col])
-            if pnl_col not in ("pnl_pct",) and entry_col and pd.notna(r.get(entry_col)):
-                epx = float(r[entry_col])
-                if epx > 0:
-                    pnl_pct = pnl_pct / epx * 100.0
-        elif entry_col and exit_col and pd.notna(r.get(entry_col)) and pd.notna(r.get(exit_col)):
-            epx = float(r[entry_col])
-            xpx = float(r[exit_col])
-            side = int(r[side_col]) if side_col and pd.notna(r.get(side_col)) else 1
-            pnl_pct = ((xpx - epx) / epx * 100.0) * (1 if side >= 0 else -1) if epx > 0 else 0.0
-        else:
-            continue
-
-        cum_pct += pnl_pct
-        trades.append({
-            "time": int(pd.Timestamp(r["exit_ts"]).timestamp()),
-            "pnl_pct": round(pnl_pct, 2),
-            "cum_pct": round(cum_pct, 2),
-        })
-
-    return {"trades": trades}
+    """Cumulative equity curve from normalized diary entries."""
+    diary = build_trading_diary(max_points=max_points)
+    entries = diary.get("entries", [])
+    cum = 0.0
+    curve: List[Dict[str, Any]] = []
+    for e in entries:
+        pnl_pct = float(e.get("pnl_pct", 0.0))
+        cum += pnl_pct
+        curve.append(
+            {
+                "time": int(e.get("time", 0)),
+                "pnl_pct": round(pnl_pct, 4),
+                "cum_pct": round(cum, 4),
+                "side": e.get("side"),
+                "entry_price": e.get("entry_price"),
+                "exit_price": e.get("exit_price"),
+                "qty": e.get("qty"),
+                "source": e.get("source"),
+            }
+        )
+    return {"trades": curve, "source": diary.get("source", "none")}
 
 
 def build_regime_scores(symbol: str, hours: int = 24 * 14) -> Dict[str, List]:
