@@ -1132,8 +1132,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     async function loadChart() {
       const p = getChartRangeParams();
-      const payload = await fetch('/api/dashboard/chart?hours=' + p.hours + '&max_points=' + p.max_points).then(r => r.json());
+      const runId = 'run_' + Date.now();
+      const chartUrl = '/api/dashboard/chart?hours=' + p.hours + '&max_points=' + p.max_points;
+      // #region agent log
+      fetch('http://127.0.0.1:7354/ingest/78898fdf-94b5-4767-ac9d-5523f68e162c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fc473a'},body:JSON.stringify({sessionId:'fc473a',runId,hypothesisId:'H1',location:'webhook_server.py:DASHBOARD_HTML:loadChart:preFetch',message:'chart request params',data:{chartUrl,rangeHours:p.hours,maxPoints:p.max_points,rangeSelection:(document.getElementById('chart-range')||{}).value||'n/a'},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
+      const payload = await fetch(chartUrl).then(r => r.json());
       latestPayload = payload;
+      // #region agent log
+      fetch('http://127.0.0.1:7354/ingest/78898fdf-94b5-4767-ac9d-5523f68e162c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fc473a'},body:JSON.stringify({sessionId:'fc473a',runId,hypothesisId:'H2',location:'webhook_server.py:DASHBOARD_HTML:loadChart:postFetch',message:'chart payload counters',data:{ok:payload&&payload.ok,barsCount:Array.isArray(payload&&payload.bars)?payload.bars.length:-1,markersCount:Array.isArray(payload&&payload.markers)?payload.markers.length:-1,segmentsCount:Array.isArray(payload&&payload.segments)?payload.segments.length:-1,equityCount:Array.isArray(payload&&payload.equity_curve)?payload.equity_curve.length:-1,error:payload&&payload.error?String(payload.error):null},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       if (!payload.ok) return;
 
       const barsRaw = Array.isArray(payload.bars) ? payload.bars : [];
@@ -1173,6 +1181,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ls.setData(mapSegmentForChart(seg));
         tradeSegmentSeries.push(ls);
       }
+      // #region agent log
+      fetch('http://127.0.0.1:7354/ingest/78898fdf-94b5-4767-ac9d-5523f68e162c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fc473a'},body:JSON.stringify({sessionId:'fc473a',runId,hypothesisId:'H3',location:'webhook_server.py:DASHBOARD_HTML:loadChart:seriesState',message:'series data ranges',data:{barsFirstTime:barsRaw.length?barsRaw[0].time:null,barsLastTime:barsRaw.length?barsRaw[barsRaw.length-1].time:null,markerFirstTime:(Array.isArray(payload.markers)&&payload.markers.length)?payload.markers[0].time:null,markerLastTime:(Array.isArray(payload.markers)&&payload.markers.length)?payload.markers[payload.markers.length-1].time:null,equityFirstTime:(Array.isArray(payload.equity_curve)&&payload.equity_curve.length)?payload.equity_curve[0].time:null,equityLastTime:(Array.isArray(payload.equity_curve)&&payload.equity_curve.length)?payload.equity_curve[payload.equity_curve.length-1].time:null},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
 
       const exitModeEl = document.getElementById('exit-mode');
       if (exitInfo.mode === 'ttp') {
@@ -1212,6 +1223,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         chart.timeScale().fitContent();
         hasFittedOnce = true;
       }
+      // #region agent log
+      fetch('http://127.0.0.1:7354/ingest/78898fdf-94b5-4767-ac9d-5523f68e162c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fc473a'},body:JSON.stringify({sessionId:'fc473a',runId,hypothesisId:'H4',location:'webhook_server.py:DASHBOARD_HTML:loadChart:postRender',message:'post render state',data:{hasFittedOnce,chartMode,exitMode:exitInfo.mode,sl:levels&&levels.sl!=null?Number(levels.sl):null,ttp:levels&&levels.ttp!=null?Number(levels.ttp):null},timestamp:Date.now()})}).catch(()=>{});
+      // #endregion
       drawRegimeBand();
       drawEquityCurve();
     }
