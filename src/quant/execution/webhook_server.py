@@ -335,7 +335,6 @@ def api_dashboard_chart(
     symbol: str = DEFAULT_SYMBOL,
     hours: int = 24 * 7,
     max_points: int = 3000,
-    debug: int = 0,
 ) -> Dict[str, Any]:
     """
     Unified chart payload: renko bars, trades, regime overlays, and active levels.
@@ -349,51 +348,6 @@ def api_dashboard_chart(
             start_ts=oldest_bar_ts,
             limit=int(max(500, min(20000, max_points * 5))),
         )
-        debug_sources: Dict[str, Any] = {}
-        if int(debug):
-            probe_none = load_live_fill_markers(symbol=symbol, start_ts=None, limit=200)
-            probe_sec = load_live_fill_markers(symbol=symbol, start_ts=oldest_bar_ts, limit=200) if oldest_bar_ts is not None else []
-            probe_ms = load_live_fill_markers(symbol=symbol, start_ts=(oldest_bar_ts * 1000), limit=200) if oldest_bar_ts is not None else []
-            trades_path = Path(os.getenv("DASHBOARD_TRADES_PARQUET", "/data/live/trades.parquet"))
-            fills_path = Path(os.getenv("DASHBOARD_FILLS_PARQUET", "/data/live/fills_cache.parquet"))
-            trades_meta: Dict[str, Any] = {"exists": trades_path.exists()}
-            if trades_path.exists():
-                try:
-                    tdf = pd.read_parquet(trades_path)
-                    trades_meta = {
-                        "exists": True,
-                        "rows": int(len(tdf)),
-                        "columns": list(map(str, tdf.columns.tolist())),
-                        "has_entry_ts": bool("entry_ts" in tdf.columns),
-                        "has_exit_ts": bool("exit_ts" in tdf.columns),
-                        "non_null_entry_ts": int(pd.to_datetime(tdf.get("entry_ts"), utc=True, errors="coerce").notna().sum()) if "entry_ts" in tdf.columns else 0,
-                        "non_null_exit_ts": int(pd.to_datetime(tdf.get("exit_ts"), utc=True, errors="coerce").notna().sum()) if "exit_ts" in tdf.columns else 0,
-                        "non_null_ts": int(pd.to_datetime(tdf.get("ts"), utc=True, errors="coerce").notna().sum()) if "ts" in tdf.columns else 0,
-                        "sample_first": tdf.head(1).to_dict(orient="records"),
-                        "sample_last": tdf.tail(1).to_dict(orient="records"),
-                    }
-                except Exception as meta_e:
-                    trades_meta = {"exists": True, "read_error": str(meta_e)}
-            fills_pages = None
-            try:
-                from quant.execution.kucoin_futures import debug_fills_page_counts
-                fills_pages = debug_fills_page_counts(symbol=symbol, pages=4, page_size=100)
-            except Exception as page_e:
-                fills_pages = {"error": str(page_e)}
-            debug_sources = {
-                "oldest_bar_ts": oldest_bar_ts,
-                "trade_markers_count": len(markers),
-                "live_markers_count": len(markers_live),
-                "probe_live_none_count": len(probe_none),
-                "probe_live_sec_count": len(probe_sec),
-                "probe_live_ms_count": len(probe_ms),
-                "trades_path": str(trades_path),
-                "trades_exists": trades_path.exists(),
-                "trades_meta": trades_meta,
-                "fills_page_probe": fills_pages,
-                "fills_cache_path": str(fills_path),
-                "fills_cache_exists": fills_path.exists(),
-            }
         markers = sorted(markers + markers_live, key=lambda x: int(x.get("time", 0)))
         if len(markers) > int(max(100, max_points)):
             markers = markers[-int(max(100, max_points)):]
@@ -450,7 +404,6 @@ def api_dashboard_chart(
             "regime_scores": regime_score_data.get("scores", []),
             "regime_forecast": regime_forecast,
             "equity_curve": equity.get("trades", []),
-            "debug_sources": debug_sources if int(debug) else None,
             "ts": _now_utc_iso(),
         }
     except Exception as e:
@@ -1183,16 +1136,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
     async function loadChart() {
       const p = getChartRangeParams();
-      const runId = 'run_' + Date.now();
       const chartUrl = '/api/dashboard/chart?hours=' + p.hours + '&max_points=' + p.max_points;
-      // #region agent log
-      fetch('http://127.0.0.1:7354/ingest/78898fdf-94b5-4767-ac9d-5523f68e162c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fc473a'},body:JSON.stringify({sessionId:'fc473a',runId,hypothesisId:'H1',location:'webhook_server.py:DASHBOARD_HTML:loadChart:preFetch',message:'chart request params',data:{chartUrl,rangeHours:p.hours,maxPoints:p.max_points,rangeSelection:(document.getElementById('chart-range')||{}).value||'n/a'},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       const payload = await fetch(chartUrl).then(r => r.json());
       latestPayload = payload;
-      // #region agent log
-      fetch('http://127.0.0.1:7354/ingest/78898fdf-94b5-4767-ac9d-5523f68e162c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fc473a'},body:JSON.stringify({sessionId:'fc473a',runId,hypothesisId:'H2',location:'webhook_server.py:DASHBOARD_HTML:loadChart:postFetch',message:'chart payload counters',data:{ok:payload&&payload.ok,barsCount:Array.isArray(payload&&payload.bars)?payload.bars.length:-1,markersCount:Array.isArray(payload&&payload.markers)?payload.markers.length:-1,segmentsCount:Array.isArray(payload&&payload.segments)?payload.segments.length:-1,equityCount:Array.isArray(payload&&payload.equity_curve)?payload.equity_curve.length:-1,error:payload&&payload.error?String(payload.error):null},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       if (!payload.ok) return;
 
       const barsRaw = Array.isArray(payload.bars) ? payload.bars : [];
@@ -1232,9 +1178,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ls.setData(mapSegmentForChart(seg));
         tradeSegmentSeries.push(ls);
       }
-      // #region agent log
-      fetch('http://127.0.0.1:7354/ingest/78898fdf-94b5-4767-ac9d-5523f68e162c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fc473a'},body:JSON.stringify({sessionId:'fc473a',runId,hypothesisId:'H3',location:'webhook_server.py:DASHBOARD_HTML:loadChart:seriesState',message:'series data ranges',data:{barsFirstTime:barsRaw.length?barsRaw[0].time:null,barsLastTime:barsRaw.length?barsRaw[barsRaw.length-1].time:null,markerFirstTime:(Array.isArray(payload.markers)&&payload.markers.length)?payload.markers[0].time:null,markerLastTime:(Array.isArray(payload.markers)&&payload.markers.length)?payload.markers[payload.markers.length-1].time:null,equityFirstTime:(Array.isArray(payload.equity_curve)&&payload.equity_curve.length)?payload.equity_curve[0].time:null,equityLastTime:(Array.isArray(payload.equity_curve)&&payload.equity_curve.length)?payload.equity_curve[payload.equity_curve.length-1].time:null},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
 
       const exitModeEl = document.getElementById('exit-mode');
       if (exitInfo.mode === 'ttp') {
@@ -1274,9 +1217,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         chart.timeScale().fitContent();
         hasFittedOnce = true;
       }
-      // #region agent log
-      fetch('http://127.0.0.1:7354/ingest/78898fdf-94b5-4767-ac9d-5523f68e162c',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'fc473a'},body:JSON.stringify({sessionId:'fc473a',runId,hypothesisId:'H4',location:'webhook_server.py:DASHBOARD_HTML:loadChart:postRender',message:'post render state',data:{hasFittedOnce,chartMode,exitMode:exitInfo.mode,sl:levels&&levels.sl!=null?Number(levels.sl):null,ttp:levels&&levels.ttp!=null?Number(levels.ttp):null},timestamp:Date.now()})}).catch(()=>{});
-      // #endregion
       drawRegimeBand();
       drawEquityCurve();
     }

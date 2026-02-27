@@ -415,30 +415,3 @@ def list_fills(
     return list(items)
 
 
-def debug_fills_page_counts(
-    *,
-    symbol: str = "",
-    pages: int = 3,
-    page_size: int = 100,
-) -> Dict[str, Any]:
-    """Debug helper: inspect whether older fills exist on further pages."""
-    key = (os.getenv("KUCOIN_FUTURES_API_KEY", "")).strip()
-    secret = (os.getenv("KUCOIN_FUTURES_API_SECRET", "")).strip()
-    pp = (os.getenv("KUCOIN_FUTURES_PASSPHRASE", "")).strip()
-    contract = _symbol_to_contract(symbol) if symbol else ""
-    out: Dict[str, Any] = {"symbol": contract, "pages": []}
-    for p in range(1, int(max(1, pages)) + 1):
-        q = []
-        if contract:
-            q.append(f"symbol={contract}")
-        q.append(f"pageSize={int(max(1, page_size))}")
-        q.append(f"currentPage={p}")
-        path = "/api/v1/fills?" + "&".join(q)
-        try:
-            data = _request("GET", path, api_key=key, api_secret=secret, passphrase=pp)
-            items = data if isinstance(data, list) else (data.get("items", data.get("data", [])) or [])
-            out["pages"].append({"page": p, "count": int(len(items))})
-        except Exception as e:
-            out["pages"].append({"page": p, "error": str(e)})
-            break
-    return out
