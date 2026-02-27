@@ -113,3 +113,93 @@ class TestProbabilityLayer(unittest.TestCase):
         result = compute_probabilities(mu, sigma, 100.0)
         self.assertGreater(result[1]["price_upper"], result[1]["price_level"])
         self.assertLess(result[1]["price_lower"], result[1]["price_level"])
+
+
+class TestTradeDecisionLayer(unittest.TestCase):
+    def test_no_trade_during_cooldown(self):
+        from quant.predictive_coding.trade_logic import TradeDecisionLayer
+        from quant.predictive_coding.config import PCConfig
+        cfg = PCConfig(cooldown_bars=3)
+        tdl = TradeDecisionLayer(cfg)
+        tdl.position = 0
+        tdl.cooldown_remaining = 3
+        probs = {h: {"mu": 0.01, "sigma": 0.001, "z": 10.0, "p_up": 0.99,
+                      "price_level": 101.0, "price_upper": 102.0, "price_lower": 100.0}
+                 for h in [1, 5, 15, 60]}
+        signal, events = tdl.update(probs, 100.0, bar_idx=10)
+        self.assertEqual(signal, 0)
+        self.assertEqual(tdl.cooldown_remaining, 2)
+
+    def test_long_entry(self):
+        from quant.predictive_coding.trade_logic import TradeDecisionLayer
+        from quant.predictive_coding.config import PCConfig
+        cfg = PCConfig(margin=0.02, z_min=0.1, min_edge_bps=0.0, fee_bps=0.0, slippage_bps=0.0)
+        tdl = TradeDecisionLayer(cfg)
+        probs = {}
+        for h in [1, 5, 15, 60]:
+            probs[h] = {"mu": 0.005, "sigma": 0.001, "z": 5.0, "p_up": 0.99,
+                        "price_level": 100.5, "price_upper": 101.0, "price_lower": 100.0}
+        signal, events = tdl.update(probs, 100.0, bar_idx=10)
+        self.assertEqual(signal, 1)
+        self.assertEqual(tdl.position, 1)
+
+    def test_short_entry(self):
+        from quant.predictive_coding.trade_logic import TradeDecisionLayer
+        from quant.predictive_coding.config import PCConfig
+        cfg = PCConfig(margin=0.02, z_min=0.1, min_edge_bps=0.0, fee_bps=0.0, slippage_bps=0.0)
+        tdl = TradeDecisionLayer(cfg)
+        probs = {}
+        for h in [1, 5, 15, 60]:
+            probs[h] = {"mu": -0.005, "sigma": 0.001, "z": -5.0, "p_up": 0.01,
+                        "price_level": 99.5, "price_upper": 100.0, "price_lower": 99.0}
+        signal, events = tdl.update(probs, 100.0, bar_idx=10)
+        self.assertEqual(signal, -1)
+        self.assertEqual(tdl.position, -1)
+
+    def test_stop_loss(self):
+        from quant.predictive_coding.trade_logic import TradeDecisionLayer
+        from quant.predictive_coding.config import PCConfig
+        cfg = PCConfig(sl_pct=0.01, fee_bps=0.0, slippage_bps=0.0, margin=0.0, z_min=0.0, min_edge_bps=0.0)
+        tdl = TradeDecisionLayer(cfg)
+        tdl.position = 1
+        tdl.entry_price = 100.0
+        tdl.entry_bar = 0
+        tdl.chosen_horizon = 5
+        probs = {h: {"mu": -0.02, "sigma": 0.01, "z": -2.0, "p_up": 0.02,
+                      "price_level": 98.0, "price_upper": 99.0, "price_lower": 97.0}
+                 for h in [1, 5, 15, 60]}
+        signal, events = tdl.update(probs, 98.5, bar_idx=5)
+        self.assertEqual(tdl.position, 0)
+        self.assertTrue(any(e["event"] == "sl_exit" for e in events))
+
+    def test_take_profit(self):
+        from quant.predictive_coding.trade_logic import TradeDecisionLayer
+        from quant.predictive_coding.config import PCConfig
+        cfg = PCConfig(tp_pct=0.02, fee_bps=0.0, slippage_bps=0.0, margin=0.0, z_min=0.0, min_edge_bps=0.0)
+        tdl = TradeDecisionLayer(cfg)
+        tdl.position = 1
+        tdl.entry_price = 100.0
+        tdl.entry_bar = 0
+        tdl.chosen_horizon = 5
+        probs = {h: {"mu": 0.03, "sigma": 0.01, "z": 3.0, "p_up": 0.99,
+                      "price_level": 103.0, "price_upper": 104.0, "price_lower": 102.0}
+                 for h in [1, 5, 15, 60]}
+        signal, events = tdl.update(probs, 103.0, bar_idx=3)
+        self.assertEqual(tdl.position, 0)
+        self.assertTrue(any(e["event"] == "tp_exit" for e in events))
+
+    def test_timeout_exit(self):
+        from quant.predictive_coding.trade_logic import TradeDecisionLayer
+        from quant.predictive_coding.config import PCConfig
+        cfg = PCConfig(fee_bps=0.0, slippage_bps=0.0, margin=0.0, z_min=0.0, min_edge_bps=0.0)
+        tdl = TradeDecisionLayer(cfg)
+        tdl.position = 1
+        tdl.entry_price = 100.0
+        tdl.entry_bar = 0
+        tdl.chosen_horizon = 5
+        probs = {h: {"mu": 0.001, "sigma": 0.01, "z": 0.1, "p_up": 0.54,
+                      "price_level": 100.1, "price_upper": 101.0, "price_lower": 99.0}
+                 for h in [1, 5, 15, 60]}
+        signal, events = tdl.update(probs, 100.1, bar_idx=5)
+        self.assertEqual(tdl.position, 0)
+        self.assertTrue(any(e["event"] == "timeout_exit" for e in events))
