@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
-from quant.execution.kucoin_futures import list_fills
+from quant.execution.kucoin_futures import KucoinFuturesBroker, list_fills
 from quant.regime import RegimeStore
 
 _LAST_REFRESH_TS: Optional[pd.Timestamp] = None
@@ -410,6 +410,79 @@ def load_live_fill_markers(symbol: str, limit: int = 100, start_ts: Optional[int
         )
     out = sorted(out, key=lambda x: int(x["time"]))
     return out
+
+
+def load_fills_cache_rows(max_points: int = 500) -> List[Dict[str, Any]]:
+    """Expose normalized fills cache rows for diagnostics/UI."""
+    df = _read_fills_df()
+    if df.empty:
+        return []
+    df = df.sort_values("time").tail(int(max(1, max_points)))
+    out: List[Dict[str, Any]] = []
+    for _, r in df.iterrows():
+        out.append(
+            {
+                "time": int(r["time"]),
+                "side": str(r["side"]),
+                "size": float(r["size"]),
+                "price": float(r["price"]),
+            }
+        )
+    return out
+
+
+def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
+    """
+    Load/refresh realized account-equity history in USDT.
+    Uses periodic snapshots from KuCoin account balance.
+    """
+    p = _env_path("DASHBOARD_EQUITY_PARQUET", _live_default("equity_history.parquet"))
+    refresh_sec = int(os.getenv("DASHBOARD_EQUITY_REFRESH_SEC", "60"))
+    currency = os.getenv("DASHBOARD_EQUITY_CCY", "USDT")
+
+    if p.exists():
+        try:
+            df = pd.read_parquet(p)
+        except Exception:
+            df = pd.DataFrame(columns=["time", "equity"])
+    else:
+        df = pd.DataFrame(columns=["time", "equity"])
+
+    if not df.empty:
+        df["time"] = pd.to_numeric(df["time"], errors="coerce")
+        df["equity"] = pd.to_numeric(df["equity"], errors="coerce")
+        df = df.dropna(subset=["time", "equity"]).sort_values("time").drop_duplicates(subset=["time"], keep="last")
+
+    key = os.getenv("KUCOIN_FUTURES_API_KEY", "").strip()
+    sec = os.getenv("KUCOIN_FUTURES_API_SECRET", "").strip()
+    pp = os.getenv("KUCOIN_FUTURES_PASSPHRASE", "").strip()
+    now_sec = int(pd.Timestamp.now("UTC").timestamp())
+    can_refresh = bool(key and sec and pp)
+    stale = True
+    if not df.empty:
+        last_t = int(df.iloc[-1]["time"])
+        stale = (now_sec - last_t) >= max(5, refresh_sec)
+
+    if can_refresh and stale:
+        try:
+            broker = KucoinFuturesBroker(api_key=key, api_secret=sec, passphrase=pp)
+            bal = broker.get_account_balance(currency=currency)
+            eq = float(bal.get("equity", 0.0) or 0.0)
+            if eq > 0:
+                snap = pd.DataFrame([{"time": now_sec, "equity": eq}])
+                df = pd.concat([df, snap], ignore_index=True) if not df.empty else snap
+                df = df.sort_values("time").drop_duplicates(subset=["time"], keep="last")
+                p.parent.mkdir(parents=True, exist_ok=True)
+                df.to_parquet(p, index=False)
+        except Exception:
+            pass
+
+    if df.empty:
+        return {"points": [], "source": "none"}
+
+    df = df.sort_values("time").tail(int(max(1, max_points))).reset_index(drop=True)
+    points = [{"time": int(r["time"]), "equity": float(r["equity"])} for _, r in df.iterrows()]
+    return {"points": points, "source": "kucoin_equity_snapshots"}
 
 
 def load_active_levels() -> Dict[str, Any]:
