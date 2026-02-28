@@ -1,0 +1,196 @@
+# Visual Layer v0.2 defaults (script-first, deterministic)
+
+version: "0.2"
+random_seed: 1337
+
+paths:
+  # input artifacts (relative to --in-dir unless absolute)
+  state_space: "state_space.parquet"            # ts, X_raw, Y_res, Z_res
+  voxel_map: "voxel_map.parquet"                # ts, voxel_id, bin_x, bin_y, bin_z (bin_* optional)
+  voxel_stats: "voxel_stats.parquet"            # voxel_id + diagnostics
+  transitions_topk: "transitions_topk.parquet"  # from_voxel_id, to_voxel_id, p, rank
+  basins: "basins_v02_components.parquet"       # voxel_id, basin_id (+ optional basin summaries)
+  basin_flows: "basin_flows.parquet"            # optional; may be stale; v0.2 recomputes reliably
+
+columns:
+  ts: "ts"
+  x: "X_raw"
+  y: "Y_res"
+  z: "Z_res"
+  voxel_id: "voxel_id"
+  from_voxel_id: "from_voxel_id"
+  to_voxel_id: "to_voxel_id"
+  basin_id: "basin_id"
+
+render:
+  backend_default: "plotly"   # plotly | mpl
+  write_png: true
+  write_svg: false
+  write_html: true
+  dpi: 150
+
+  # plotly defaults
+  plotly:
+    point_opacity: 0.85
+    edge_opacity: 0.20
+    edge_width_min: 1.0
+    edge_width_max: 6.0
+    max_points: 60000          # safety for 3D scatter
+    max_edges: 2500            # safety for lines
+
+  # matplotlib defaults
+  mpl:
+    figsize: [10, 8]
+    marker_size_min: 6
+    marker_size_max: 80
+
+scales:
+  # general robust scaling and clipping
+  quantile_clip:
+    enabled: true
+    low: 0.02
+    high: 0.98
+
+  log_scale_metrics:
+    # apply log1p for heavy-tailed metrics
+    enabled: true
+    metrics: ["pi", "occ_eff", "holding_time", "flow_mass"]
+
+  cdf_stretch:
+    # rank/CDF stretch for high-contrast colormaps
+    enabled: true
+    metrics: ["pi", "holding_time"]
+
+  normalize_to_0_1:
+    enabled: true
+    metrics: ["pi", "occ_eff", "holding_time", "escape", "entropy", "speed", "flow_mass"]
+
+  size_metric_default: "occ_eff"
+  color_metric_default: "pi"
+
+filters:
+  voxels:
+    # Show only the most important region by cumulative mass.
+    # Example: 0.60 keeps smallest set of voxels whose cumulative pi >= 60%.
+    mass_cumsum_keep: 0.60
+
+    # fallback guardrails (used when mass_cumsum_keep is missing/None)
+    min_pi_quantile: 0.20
+    min_occ_eff_quantile: 0.00
+    max_voxels: 125
+
+  transitions:
+    use_flow_mass: true
+    min_p: 0.0
+    min_flow_mass_quantile: 0.90
+    max_edges_global: 600
+    topk_per_from: 5
+    drop_self_edges: false
+
+  trajectories:
+    # legacy layer-path defaults; main control lives in figures.trajectory_3d
+    mode: "change_only"
+    stride: 5
+    max_points: 20000
+    time_color: true
+
+slices:
+  enabled: true
+  aggregations:
+    metric: "pi"
+    method: "sum"
+  output:
+    xy: "slices_xy.png"
+    xz: "slices_xz.png"
+    yz: "slices_yz.png"
+
+figures:
+  state_space_occupancy:
+    enabled: true
+    size_metric: "occ_eff"
+    color_metric: "pi"
+    title: "State Space Occupancy (top mass voxels + NOW)"
+    out_html: "state_space_occupancy.html"
+    out_png: "state_space_occupancy.png"
+
+  state_space_persistence:
+    enabled: true
+    size_metric: "occ_eff"
+    color_metric: "holding_time"
+    title: "State Space Persistence (top mass voxels + NOW)"
+    out_html: "state_space_persistence.html"
+    out_png: "state_space_persistence.png"
+
+  transitions_3d:
+    enabled: true
+    title: "Transitions (filtered by flow mass)"
+    out_html: "transitions.html"
+    out_png: "transitions.png"
+
+  trajectory_3d:
+    enabled: true
+    default_last_n_rows: 200000
+    title: "Trajectory (compressed state-wander)"
+    out_html: "trajectory.html"
+    out_png: "trajectory.png"
+
+    # new: hard compression + anti-spaghetti defaults
+    max_points: 3000
+    min_dwell_steps: 3
+    draw_lines: false
+    draw_jump_edges: true
+    jump_quantile: 0.99
+
+  basins_view:
+    enabled: true
+    default_basin_policy: "max_mass"
+    default_basin_id: 0
+    title: "Basins v0.2 (Top-N + NOW)"
+    out_html: "basins.html"
+    out_png: "basins.png"
+
+    # v0.2 basins plot declutter
+    top_n_basins: 6
+    noise_basin_id: -1
+    other_color: "lightgray"
+    noise_color: "#dddddd"
+    label_cores: true
+
+    # v0.2 basin flows
+    basin_flows_out_parquet: "basin_flows_v02.parquet"
+
+    # matrices (Top-N basins only)
+    matrix_mode: ["row_prob", "log_flow"]
+    matrix_include_diag: true
+    matrix_clip_quantile: 0.99
+    basin_flow_matrix_rowprob_png: "basin_flow_matrix_rowprob.png"
+    basin_flow_matrix_logflow_png: "basin_flow_matrix_logflow.png"
+
+exports:
+  enabled: true
+  out_dir: "exports/graph"
+  voxels_nodes: "voxels_nodes.parquet"
+  transitions_edges: "transitions_edges.parquet"
+  basin_nodes: "basin_nodes.parquet"
+  basin_edges: "basin_edges.parquet"
+
+docs:
+  enabled: true
+  out_dir: "docs/visual"
+  overview_md: "v0.2_overview.md"
+  plot_catalog_md: "plot_catalog.md"
+  style_guide_md: "style_guide.md"
+
+# ---------------------------------------------------------------------------
+# Gate Confidence Projection
+# ---------------------------------------------------------------------------
+gate:
+  path: "data/regimes/SOLUSDT_tv5mIMBA_gate2of3_qch0.4_qadx0.6_qer0.3_daily.csv"
+  ts_col: "ts"
+  col: "gate_on_2of3"
+  asof_direction: "backward"
+
+confidence:
+  horizons_minutes: [5, 30, 120, 240]
+  use_basins: true
+  ignore_noise_basin: true

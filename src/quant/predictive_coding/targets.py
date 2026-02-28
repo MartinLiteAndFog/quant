@@ -18,13 +18,23 @@ def build_obs_features(close: np.ndarray) -> np.ndarray:
     r1 = np.full(n, np.nan)
     r1[1:] = log_close[1:] - log_close[:-1]
 
+    # Vectorized rolling std using cumulative sums
+    r1_filled = np.where(np.isnan(r1), 0.0, r1)
+    r1_valid = (~np.isnan(r1)).astype(np.float64)
+    cs = np.cumsum(r1_filled)
+    cs2 = np.cumsum(r1_filled**2)
+    cn = np.cumsum(r1_valid)
+
     for i, w in enumerate([20, 60]):
         col_idx = 3 + i
-        for t in range(w, n):
-            window = r1[t - w + 1 : t + 1]
-            valid = window[~np.isnan(window)]
-            if len(valid) >= 2:
-                obs[t, col_idx] = np.std(valid, ddof=1)
+        s = cs[w:] - cs[:-w]
+        s2 = cs2[w:] - cs2[:-w]
+        cnt = cn[w:] - cn[:-w]
+        with np.errstate(invalid="ignore", divide="ignore"):
+            var = (s2 - s**2 / cnt) / (cnt - 1)
+            std = np.sqrt(np.maximum(var, 0.0))
+        valid_mask = cnt >= 2
+        obs[w:, col_idx] = np.where(valid_mask, std, np.nan)
     return obs
 
 

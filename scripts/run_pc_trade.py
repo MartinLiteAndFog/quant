@@ -1,3 +1,4 @@
+# scripts/run_pc_trade.py
 from __future__ import annotations
 
 import argparse
@@ -21,10 +22,19 @@ def _read_ohlcv(path: str) -> pd.DataFrame:
             df = df.reset_index().rename(columns={"index": "ts"})
         else:
             raise ValueError("parquet missing 'ts' column and not datetime-indexed")
+
     df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
-    df = df.dropna(subset=["ts"]).sort_values("ts").drop_duplicates("ts", keep="last").reset_index(drop=True)
+    df = (
+        df.dropna(subset=["ts"])
+          .sort_values("ts")
+          .drop_duplicates("ts", keep="last")
+          .reset_index(drop=True)
+    )
+
     for c in ["open", "high", "low", "close"]:
-        df[c] = pd.to_numeric(df[c], errors="coerce")
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
     df = df.dropna(subset=["close"]).reset_index(drop=True)
     return df
 
@@ -55,76 +65,106 @@ def run_backtest(df: pd.DataFrame, cfg: PCConfig) -> dict:
         px = float(close[t])
         obs = obs_all[t]
 
-        if np.any(~np.isfinite(obs)) or not np.isfinite(px) or px <= 0.0:
+        if np.any(~np.isfinite(obs)):
             continue
 
+        is_warmup = (t - start) < cfg.warmup_bars
+
+        # causal model step: NO targets
         pred = model.step(price_now=px, obs=obs.astype(np.float64))
 
-        is_warmup = (t - start) < cfg.warmup_bars
         if is_warmup:
             continue
 
-        probs: dict[int, dict[str, float]] = {}
+        # probs dict expected by TradeDecisionLayer
+        probs = {}
         for h in cfg.horizons:
             probs[h] = {
                 "mu": float(pred["mu"][h]),
                 "sigma": float(pred["sigma"][h]),
-                "z": float(pred["z"][h]),
                 "p_up": float(pred["p_up"][h]),
                 "price_level": float(pred["price_level"][h]),
                 "price_upper": float(pred["price_upper"][h]),
                 "price_lower": float(pred["price_lower"][h]),
             }
 
-        signal, events = trade_logic.update(probs, px, t)
+        # update trading logic (supports both update(probs, px, t) and update(probs, px, bar_idx=t))
+        try:
+            signal, events = trade_logic.update(probs, px, bar_idx=t)
+        except TypeError:
+            signal, events = trade_logic.update(probs, px, t)
 
-        row = {"ts": ts[t], "close": px}
+        # --- predictions row (now includes tension proxies) ---
+        row = {"ts": ts[t], "close": px, "signal": int(signal)}
+
+        # model uncertainty proxies
+        v_temp = float(getattr(model, "v_temporal", np.nan))
+        row["v_temporal"] = v_temp
+        row["sigma_temporal"] = float(np.sqrt(v_temp + cfg.eps)) if np.isfinite(v_temp) else np.nan
+
+        v_obs = getattr(model, "v_obs", None)
+        if v_obs is not None:
+            v_obs = np.asarray(v_obs, dtype=float)
+            row["v_obs_mean"] = float(np.nanmean(v_obs))
+            row["sigma_obs_mean"] = float(np.nanmean(np.sqrt(v_obs + cfg.eps)))
+        else:
+            row["v_obs_mean"] = np.nan
+            row["sigma_obs_mean"] = np.nan
+
+        # per-horizon outputs + raw variances
         for h in cfg.horizons:
             p = probs[h]
             row[f"mu_{h}"] = p["mu"]
             row[f"sigma_{h}"] = p["sigma"]
             row[f"p_up_{h}"] = p["p_up"]
             row[f"price_level_{h}"] = p["price_level"]
-        row["signal"] = signal
+
+            # also log v_h if present
+            v_h = getattr(model, "v_h", None)
+            if isinstance(v_h, dict) and h in v_h:
+                row[f"v_h_{h}"] = float(v_h[h])
+
         pred_rows.append(row)
 
+        # --- events + equity ---
         for ev in events:
             ev_row = {
                 "ts": ts[t],
-                "event": ev["event"],
-                "side": ev.get("side", 0),
-                "price": ev.get("price", px),
-                "pnl_pct": ev.get("pnl_pct", 0.0),
-                "seq": ev.get("seq", 0),
-                "horizon": ev.get("horizon", 0),
+                "event": ev.get("event", ""),
+                "side": int(ev.get("side", 0)),
+                "price": float(ev.get("price", px)),
+                "pnl_pct": float(ev.get("pnl_pct", 0.0)),
+                "seq": int(ev.get("seq", 0)),
+                "horizon": int(ev.get("horizon", 0)),
+                "edge": float(ev.get("edge", 0.0)),
             }
             event_rows.append(ev_row)
 
-            if ev["event"] == "entry":
+            if ev_row["event"] == "entry":
                 open_trade = {
                     "entry_ts": ts[t],
-                    "entry_px": ev["price"],
-                    "side": ev["side"],
-                    "horizon": ev.get("horizon", 0),
-                    "edge": ev.get("edge", 0.0),
-                    "p_at_entry": probs.get(ev.get("horizon", 1), {}).get("p_up", 0.5),
+                    "entry_px": ev_row["price"],
+                    "side": ev_row["side"],
+                    "horizon": ev_row["horizon"],
+                    "edge": ev_row["edge"],
+                    "p_at_entry": float(probs.get(ev_row["horizon"], {}).get("p_up", 0.5)),
                 }
-            elif ev["event"] in ("sl_exit", "tp_exit", "timeout_exit", "flip_exit"):
+            elif ev_row["event"] in ("sl_exit", "tp_exit", "timeout_exit", "flip_exit"):
                 if open_trade is not None:
-                    pnl = float(ev.get("pnl_pct", 0.0)) - cfg.total_cost
-                    equity *= (1 + pnl)
+                    pnl = ev_row["pnl_pct"] - float(cfg.total_cost)
+                    equity *= (1.0 + pnl)
                     trade_pairs.append({
                         **open_trade,
                         "exit_ts": ts[t],
-                        "exit_px": float(ev.get("price", px)),
-                        "pnl_pct": pnl,
-                        "exit_event": ev["event"],
+                        "exit_px": ev_row["price"],
+                        "pnl_pct": float(pnl),
+                        "exit_event": ev_row["event"],
                     })
                     open_trade = None
 
         peak_equity = max(peak_equity, equity)
         dd = (peak_equity - equity) / peak_equity if peak_equity > 0 else 0.0
-        equity_rows.append({"ts": ts[t], "equity": equity, "drawdown": dd})
+        equity_rows.append({"ts": ts[t], "equity": float(equity), "drawdown": float(dd)})
 
     predictions_df = pd.DataFrame(pred_rows)
     events_df = pd.DataFrame(event_rows) if event_rows else pd.DataFrame()
@@ -133,18 +173,20 @@ def run_backtest(df: pd.DataFrame, cfg: PCConfig) -> dict:
 
     n_trades = len(trades_df)
     stats = {
-        "total_return_pct": (equity - 1) * 100,
-        "max_drawdown_pct": float(equity_df["drawdown"].max() * 100) if len(equity_df) else 0.0,
-        "trade_count": n_trades,
-        "hit_rate": float((trades_df["pnl_pct"] > 0).mean() * 100) if n_trades else 0.0,
-        "avg_trade_pnl_bps": float(trades_df["pnl_pct"].mean() * 10_000) if n_trades else 0.0,
-        "avg_winner_bps": float(trades_df.loc[trades_df["pnl_pct"] > 0, "pnl_pct"].mean() * 10_000) if n_trades and (trades_df["pnl_pct"] > 0).any() else 0.0,
-        "avg_loser_bps": float(trades_df.loc[trades_df["pnl_pct"] <= 0, "pnl_pct"].mean() * 10_000) if n_trades and (trades_df["pnl_pct"] <= 0).any() else 0.0,
-        "fee_bps": cfg.fee_bps,
-        "slippage_bps": cfg.slippage_bps,
-        "total_fee_drag_bps": n_trades * (cfg.fee_bps + cfg.slippage_bps),
-        "bars_processed": end - start - cfg.warmup_bars,
-        "warmup_bars": cfg.warmup_bars,
+        "total_return_pct": float((equity - 1.0) * 100.0),
+        "max_drawdown_pct": float(equity_df["drawdown"].max() * 100.0) if len(equity_df) else 0.0,
+        "trade_count": int(n_trades),
+        "hit_rate": float((trades_df["pnl_pct"] > 0).mean() * 100.0) if n_trades else 0.0,
+        "avg_trade_pnl_bps": float(trades_df["pnl_pct"].mean() * 10_000.0) if n_trades else 0.0,
+        "avg_winner_bps": float(trades_df.loc[trades_df["pnl_pct"] > 0, "pnl_pct"].mean() * 10_000.0)
+            if n_trades and (trades_df["pnl_pct"] > 0).any() else 0.0,
+        "avg_loser_bps": float(trades_df.loc[trades_df["pnl_pct"] <= 0, "pnl_pct"].mean() * 10_000.0)
+            if n_trades and (trades_df["pnl_pct"] <= 0).any() else 0.0,
+        "fee_bps": float(cfg.fee_bps),
+        "slippage_bps": float(cfg.slippage_bps),
+        "total_fee_drag_bps": float(n_trades * (cfg.fee_bps + cfg.slippage_bps)),
+        "bars_processed": int(max(0, (end - start) - cfg.warmup_bars)),
+        "warmup_bars": int(cfg.warmup_bars),
     }
 
     return {
@@ -157,10 +199,11 @@ def run_backtest(df: pd.DataFrame, cfg: PCConfig) -> dict:
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Predictive-Coding Backtest Runner")
+    ap = argparse.ArgumentParser(description="Predictive-Coding Backtest Runner (Causal v0.2, logs tension proxies)")
     ap.add_argument("--input", required=True, help="Path to OHLCV parquet")
     ap.add_argument("--run-id", default=None)
 
+    # model
     ap.add_argument("--d-latent", type=int, default=32)
     ap.add_argument("--n-inference-steps", type=int, default=5)
     ap.add_argument("--lr-x", type=float, default=0.05)
@@ -170,6 +213,7 @@ def main():
     ap.add_argument("--warmup-bars", type=int, default=200)
     ap.add_argument("--beta-obs", type=float, default=0.2)
 
+    # trade params (kept in config for TradeDecisionLayer)
     ap.add_argument("--fee-bps", type=float, default=7.0)
     ap.add_argument("--slippage-bps", type=float, default=2.0)
     ap.add_argument("--margin", type=float, default=0.02)
@@ -207,12 +251,12 @@ def main():
     results = run_backtest(df, cfg)
 
     stats = results["stats"]
-    print("\n=== Predictive-Coding Backtest Results ===")
+    print("\n=== Predictive-Coding Backtest Results (Causal v0.2) ===")
     for k, v in stats.items():
         print(f"  {k}: {v}")
 
     run_id = args.run_id or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out_dir = Path("data/runs") / run_id / "pc"
+    out_dir = Path("data/runs") / run_id / "pc_v02"
     out_dir.mkdir(parents=True, exist_ok=True)
 
     results["predictions"].to_parquet(out_dir / "predictions.parquet", index=False)

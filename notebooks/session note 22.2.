@@ -1,0 +1,106 @@
+# Quant Session Notes — 2026-02-22 (SOL-USDT OFF-Regime TP2)
+
+## Ziel
+Komplementär zur ON-Countertrade-Strategie ein OFF-Setup bauen, das **dasselbe Gate** nutzt, aber eine **andere Exit/Trade-Logik** (TP1/TP2 + SL + optional Flip auf opposite IMBA).
+
+---
+
+## Wichtigste Learnings
+
+### 1) „Zu viele Trades“ = Signal-File + Event vs State
+- Trade-Dichte wurde anfangs falsch interpretiert.
+- Entscheidend ist **nicht** `signals_on_OFF_days` (Daily merge_asof auf Signal-Timestamps),
+  sondern **brick-aligned Signal-Events im Gate**:
+  - Signals werden per `searchsorted` auf **Renko-Bricks gemappt** (Signal ts → erster Brick ts ≥ Signal ts).
+  - Pro Brick bleibt **max. 1 Signal-Event** (Kollisionen: „last wins“).
+  - Gate wird ebenfalls auf Brick-Timeline aligned.
+- Relevante Kennzahl: **`brick_events_in_gate`**.
+  - Beispiel (Renko-IMBA JSONL): `signals_parsed=6470`, `brick_events_total=6454`, `brick_events_in_gate≈3531`.
+  - `entries/trades` liegen knapp darunter (same-direction Events in-position werden ignoriert).
+
+### 2) OFF muss dieselben IMBA-Signale wie ON verwenden
+- ON-Countertrade Gewinner-Runs nutzen:
+  - `data/signals/SOL-USDT/imba_TV_5m_sens200_from1m.jsonl` (parsed ~2758)
+  - Gate: `data/regimes/SOLUSDT_tv5mIMBA_gate2of3_qch0.4_qadx0.6_qer0.3_daily.csv`
+- OFF-Tests liefen zeitweise (falsch) auf einem anderen Signal-Universum:
+  - `.../imba_renko_box0.1_lb240_sl1.5_FROM_...jsonl` (parsed ~6470, ns-offsets)
+  - führt zu deutlich höherer Trade-Dichte und nicht-komplementärem Verhalten.
+- Fix: OFF-Backtests konsequent mit dem **gleichen Signal-File** wie ON fahren.
+
+---
+
+## Neue Engine: `renko_runner_tp2` (OFF-TP2)
+
+### Output-Definition (Nomenklatur bereinigt)
+- **Trade** = kompletter Vorgang **Entry → final Flat**.
+- **Leg** = Teil-Exit (TP1 partial / TP2 remainder / SL / BE / Regime exit / Signal exit).
+- Files:
+  - `legs.parquet` / `legs_real.parquet` = alle Legs
+  - `trades.parquet` / `trades_real.parquet` = Trades (aggregiert pro `trade_id`)
+- Fees:
+  - **1× roundtrip pro Trade** (konsistent mit `renko_runner`), nicht pro Leg.
+
+### Trade-Logik (so umgesetzt)
+**FLAT**
+- Entry nur wenn:
+  - `gate_on == 1` (OFF-Gate aktiv, also `gate_off_2of3`),
+  - und **Signal-Event** auf Brick: `ev ∈ {+1,-1}`.
+- Entry-Preis: Brick `close`.
+
+**IN POSITION**
+Reihenfolge pro Brick:
+1. **Regime off** (`gate_on==0`) → exit remainder @ `close` (trade flat).
+2. **BE (neu, nach TP1)**: wenn `be_active` und Preis berührt Entry → exit remainder @ Entry (0%).
+3. **SL**: aus Swing-Extrem + clamp(min_sl_pct,max_sl_pct) → exit remainder @ SL-Preis.
+4. **TP2**: wenn erreicht → exit remainder @ TP2-Preis.
+5. **TP1** (einmalig): partial exit `tp1_frac` @ TP1-Preis; danach `be_active=True`.
+6. **Opposite IMBA-Event**: close remainder @ `close`, optional sofortiger **Flip-Entry** (gleiches Brick, `close`).
+7. Same-direction Events in Position → ignorieren.
+
+### Break-Even (neu)
+- Nach `tp1_exit` wird `be_active=True`.
+- BE-Preis = **Entry** (0%).
+- BE wird **vor SL** geprüft.
+- Neue Zähler/Events:
+  - `be_exits`, `be_armed`, `be_exit`.
+
+---
+
+## Gate-Files
+- ON nutzt: `..._daily.csv` (`gate_on_2of3`)
+- OFF nutzt: `..._daily_OFF.csv` (`gate_off_2of3`)
+- OFF-Gate-ON-Rate ~55% (für OFF-Strategie).
+
+---
+
+## Reality Checks / Ergebnisse (TV5mSens200 + OFF-TP2)
+Config Beispiel:
+- `tp1=4%`, `tp2=8%`, `tp1_frac=0.5`
+- `min_sl=3%`, `max_sl=8%`, `swing_lookback=180` (eff. capped 50)
+- `flip_on_opposite=True`
+- BE nach TP1 aktiv (Entry=0)
+- Signals: `imba_TV_5m_sens200_from1m.jsonl`
+
+Run-Kennzahlen (Beispiel):
+- Trades ~1233, Legs ~1573
+- PnL-Verteilung (Trade-Level, real):
+  - winrate ~46%
+  - mean ~+0.585% / trade
+  - median ~−0.29%
+  - max ~+7.1%, min ~−4.3%
+  - Top-10 Anteil ~9.2% (nicht ausreißergetrieben)
+
+Fee-Sensitivität:
+- Bei fee=13 bps sehr stark positiv.
+- Selbst bei fee=25 bps bleibt real-net deutlich positiv (Edge groß genug im TV-Signal-Setup).
+
+---
+
+## Offene To-Dos / Nächste Schritte
+1) TP1-Sweep (ab 1% aufwärts), danach TP2-Sweep (conditional: TP2>TP1).
+2) Fee-Stress-Test auf Kandidaten: 8 / 13 / 20 / 25 bps.
+3) Optional: `tp1_frac` sweep (0.3 / 0.5 / 0.7).
+4) Optional: Flip-Schalter testen (`--no-flip-on-opposite`) zur Frequenz-Reduktion.
+5) Optional: Gate-Feintuning für OFF (wenn nötig: weniger Signal-Events im Gate).
+
+---

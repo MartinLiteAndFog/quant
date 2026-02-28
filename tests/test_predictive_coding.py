@@ -50,7 +50,6 @@ class TestTargets(unittest.TestCase):
 class TestTemporalPCModel(unittest.TestCase):
     def test_init_shapes(self):
         from quant.predictive_coding.model import TemporalPCModel
-        from quant.predictive_coding.config import PCConfig
         cfg = PCConfig(d_latent=16)
         m = TemporalPCModel(cfg)
         self.assertEqual(m.x.shape, (16,))
@@ -59,40 +58,38 @@ class TestTemporalPCModel(unittest.TestCase):
         self.assertEqual(m.W[1].shape, (16,))
         self.assertEqual(m.C.shape, (5, 16))
 
-    def test_step_returns_mu_and_sigma(self):
+    def test_step_returns_forecasts(self):
         from quant.predictive_coding.model import TemporalPCModel
-        from quant.predictive_coding.config import PCConfig
         cfg = PCConfig(d_latent=16, warmup_bars=0)
         m = TemporalPCModel(cfg)
         obs = np.random.randn(5) * 0.01
-        targets = {1: 0.001, 5: 0.002, 15: 0.003, 60: 0.005}
-        mu, sigma = m.step(obs, targets, is_warmup=False)
-        self.assertEqual(len(mu), 4)
-        self.assertEqual(len(sigma), 4)
-        for s in sigma.values():
-            self.assertGreater(s, 0)
+        out = m.step(price_now=100.0, obs=obs)
+        for key in ["mu", "sigma", "z", "p_up", "price_level", "price_upper", "price_lower"]:
+            self.assertIn(key, out)
+            self.assertEqual(len(out[key]), 4)
+        for h in cfg.horizons:
+            self.assertGreater(out["sigma"][h], 0.0)
+            self.assertTrue(0.0 <= out["p_up"][h] <= 1.0)
 
     def test_variance_updates_during_warmup(self):
         from quant.predictive_coding.model import TemporalPCModel
-        from quant.predictive_coding.config import PCConfig
         cfg = PCConfig(d_latent=8)
         m = TemporalPCModel(cfg)
-        v_before = {h: m.v_h[h] for h in cfg.horizons}
-        obs = np.random.randn(5) * 0.01
-        targets = {1: 0.01, 5: 0.02, 15: 0.03, 60: 0.05}
-        m.step(obs, targets, is_warmup=True)
-        changed = any(m.v_h[h] != v_before[h] for h in cfg.horizons)
-        self.assertTrue(changed)
+        v_before = dict(m.v_h)
+        obs1 = np.random.randn(5) * 0.01
+        obs2 = np.random.randn(5) * 0.01
+        # Need >= h+1 steps for v_h[h] updates; check h=1 changes after 2 steps
+        m.step(price_now=100.0, obs=obs1)
+        m.step(price_now=100.1, obs=obs2)
+        self.assertNotEqual(m.v_h[1], v_before[1])
 
     def test_weights_frozen_during_warmup(self):
         from quant.predictive_coding.model import TemporalPCModel
-        from quant.predictive_coding.config import PCConfig
-        cfg = PCConfig(d_latent=8)
+        cfg = PCConfig(d_latent=8, warmup_bars=10_000)
         m = TemporalPCModel(cfg)
         A_before = m.A.copy()
         obs = np.random.randn(5) * 0.01
-        targets = {1: 0.001, 5: 0.002, 15: 0.003, 60: 0.005}
-        m.step(obs, targets, is_warmup=True)
+        m.step(price_now=100.0, obs=obs)
         np.testing.assert_array_equal(m.A, A_before)
 
 
@@ -210,10 +207,8 @@ class TestTradeDecisionLayer(unittest.TestCase):
 class TestIntegration(unittest.TestCase):
     def test_end_to_end_synthetic(self):
         """Full pipeline on synthetic trending data should produce trades."""
-        from quant.predictive_coding.config import PCConfig
         from quant.predictive_coding.model import TemporalPCModel
-        from quant.predictive_coding.probability import compute_probabilities
-        from quant.predictive_coding.targets import build_obs_features, build_targets, get_valid_range
+        from quant.predictive_coding.targets import build_obs_features, get_valid_range
         from quant.predictive_coding.trade_logic import TradeDecisionLayer
 
         np.random.seed(42)
@@ -232,7 +227,6 @@ class TestIntegration(unittest.TestCase):
             min_edge_bps=0.0,
         )
         obs_all = build_obs_features(close)
-        targets_all = build_targets(close, cfg.horizons)
         start, end = get_valid_range(close, cfg.horizons)
 
         model = TemporalPCModel(cfg)
@@ -241,14 +235,20 @@ class TestIntegration(unittest.TestCase):
 
         for t in range(start, end):
             obs = obs_all[t]
-            tgt = {h: targets_all[t, i] for i, h in enumerate(cfg.horizons)}
-            if np.any(np.isnan(obs)) or any(np.isnan(v) for v in tgt.values()):
+            if np.any(~np.isfinite(obs)):
                 continue
-            is_warmup = t < start + cfg.warmup_bars
-            mu, sigma = model.step(obs, tgt, is_warmup=is_warmup)
-            if is_warmup:
+            pred = model.step(price_now=float(close[t]), obs=obs)
+            if (t - start) < cfg.warmup_bars:
                 continue
-            probs = compute_probabilities(mu, sigma, float(close[t]))
+            probs = {h: {
+                "mu": float(pred["mu"][h]),
+                "sigma": float(pred["sigma"][h]),
+                "z": float(pred["z"][h]),
+                "p_up": float(pred["p_up"][h]),
+                "price_level": float(pred["price_level"][h]),
+                "price_upper": float(pred["price_upper"][h]),
+                "price_lower": float(pred["price_lower"][h]),
+            } for h in cfg.horizons}
             signal, _ = tdl.update(probs, float(close[t]), t)
             if signal != 0:
                 n_signals += 1
@@ -260,10 +260,8 @@ class TestIntegration(unittest.TestCase):
         import sys
         sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-        from quant.predictive_coding.config import PCConfig
         from quant.predictive_coding.model import TemporalPCModel
-        from quant.predictive_coding.probability import compute_probabilities
-        from quant.predictive_coding.targets import build_obs_features, build_targets, get_valid_range
+        from quant.predictive_coding.targets import build_obs_features, get_valid_range
         from quant.predictive_coding.trade_logic import TradeDecisionLayer
 
         np.random.seed(123)
@@ -277,7 +275,6 @@ class TestIntegration(unittest.TestCase):
 
         close_arr = df["close"].values.astype(np.float64)
         obs_all = build_obs_features(close_arr)
-        targets_all = build_targets(close_arr, cfg.horizons)
         start, end = get_valid_range(close_arr, cfg.horizons, obs_lookback=60)
 
         model = TemporalPCModel(cfg)
@@ -286,14 +283,20 @@ class TestIntegration(unittest.TestCase):
         pred_count = 0
         for t in range(start, end):
             obs = obs_all[t]
-            tgt = {h: targets_all[t, i] for i, h in enumerate(cfg.horizons)}
-            if np.any(np.isnan(obs)) or any(np.isnan(v) for v in tgt.values()):
+            if np.any(~np.isfinite(obs)):
                 continue
-            is_warmup = t < start + cfg.warmup_bars
-            mu, sigma = model.step(obs, tgt, is_warmup=is_warmup)
-            if is_warmup:
+            pred = model.step(price_now=float(close_arr[t]), obs=obs)
+            if (t - start) < cfg.warmup_bars:
                 continue
-            probs = compute_probabilities(mu, sigma, float(close_arr[t]))
+            probs = {h: {
+                "mu": float(pred["mu"][h]),
+                "sigma": float(pred["sigma"][h]),
+                "z": float(pred["z"][h]),
+                "p_up": float(pred["p_up"][h]),
+                "price_level": float(pred["price_level"][h]),
+                "price_upper": float(pred["price_upper"][h]),
+                "price_lower": float(pred["price_lower"][h]),
+            } for h in cfg.horizons}
             signal, events = trade_logic.update(probs, float(close_arr[t]), t)
             pred_count += 1
 

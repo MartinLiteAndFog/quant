@@ -13,6 +13,14 @@ import pandas as pd
 from quant.strategies.signal_io import load_signals
 from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
 
+# TP2 engine (Gate OFF strategy) – used when --regime-csv-off is provided
+from quant.backtest.renko_runner_tp2 import (
+    TP2Params,
+    _signals_to_brick_events,
+    legs_to_trades,
+    run_tp2_engine,
+)
+
 
 def _read_ohlcv_parquet(path: str) -> pd.DataFrame:
     df = pd.read_parquet(path)
@@ -106,10 +114,10 @@ def _pair_trades_from_events(events: pd.DataFrame, price_col: str = "price") -> 
 
     Rules:
       - 'entry' opens a trade.
-      - Any exit in {tp_exit, sl_exit, signal_flip_exit, be_exit} closes the current trade.
+      - Any exit in {tp_exit, sl_exit, signal_flip_exit, be_exit, regime_exit} closes the current trade.
       - If the exit is a FLIP exit (tp_exit or signal_flip_exit), we immediately open a NEW trade
         in the opposite direction at the SAME timestamp/price (synthetic entry).
-      - If the exit is a FLAT exit (sl_exit or be_exit), we go flat (no synthetic entry).
+      - If the exit is a FLAT exit (sl_exit, be_exit, regime_exit), we go flat (no synthetic entry).
     """
     if events is None or len(events) == 0:
         return pd.DataFrame(columns=["entry_ts", "exit_ts", "entry_px", "exit_px", "side", "exit_event", "pnl_pct"])
@@ -120,9 +128,9 @@ def _pair_trades_from_events(events: pd.DataFrame, price_col: str = "price") -> 
     sort_cols = ["ts", "seq"] if "seq" in ev.columns else ["ts"]
     ev = ev.sort_values(sort_cols, kind="mergesort").reset_index(drop=True)
 
-    exits = {"tp_exit", "sl_exit", "signal_flip_exit", "be_exit"}
+    exits = {"tp_exit", "sl_exit", "signal_flip_exit", "be_exit", "regime_exit"}
     flip_exits = {"tp_exit", "signal_flip_exit"}
-    flat_exits = {"sl_exit", "be_exit"}
+    flat_exits = {"sl_exit", "be_exit", "regime_exit"}
 
     open_side = None
     open_ts = None
@@ -440,6 +448,20 @@ def main() -> None:
     ap.add_argument("--regime-col", type=str, default="gate_on")
     ap.add_argument("--regime-default-off", action="store_true")
 
+    # Gate OFF (TP2 strategy): use with --regime-csv-off; optional second gate for merged ON+OFF
+    ap.add_argument("--regime-csv-off", type=str, default=None, help="Gate for OFF sessions (TP2 strategy). With --regime-csv: merged ON+OFF run.")
+    ap.add_argument("--regime-ts-col-off", type=str, default="ts")
+    ap.add_argument("--regime-col-off", type=str, default="gate_on")
+
+    # TP2 params (Gate OFF strategy)
+    ap.add_argument("--tp1-pct", type=float, default=0.015)
+    ap.add_argument("--tp2-pct", type=float, default=0.030)
+    ap.add_argument("--tp1-frac", type=float, default=0.5)
+    ap.add_argument("--tp2-min-sl-pct", type=float, default=0.030)
+    ap.add_argument("--tp2-max-sl-pct", type=float, default=0.080)
+    ap.add_argument("--tp2-swing-lookback", type=int, default=180)
+    ap.add_argument("--no-flip-on-opposite", action="store_true", help="TP2: do not flip on opposite signal")
+
     ap.add_argument("--chop-len", type=int, default=14)
     ap.add_argument("--chop-on", type=float, default=58.0)
     ap.add_argument("--chop-off", type=float, default=52.0)
@@ -452,8 +474,18 @@ def main() -> None:
     ap.add_argument("--er-on", type=float, default=0.30)
     ap.add_argument("--er-off", type=float, default=0.40)
 
-    ap.add_argument("--fills-parquet", type=str, default=None)
-    ap.add_argument("--fill-col", type=str, default="fill_ohlc4")
+    ap.add_argument(
+        "--fills-parquet",
+        type=str,
+        default=None,
+        help="OHLC or fills parquet: use real prices for PnL (merge_asof on event ts). Writes trades_real.parquet + equity_real.parquet.",
+    )
+    ap.add_argument(
+        "--fill-col",
+        type=str,
+        default="close",
+        help="Column in fills-parquet for price (e.g. 'close' for OHLC close). Used only if --fills-parquet is set.",
+    )
 
     args = ap.parse_args()
 
@@ -493,6 +525,23 @@ def main() -> None:
             on_rate = float(regime_on.mean()) * 100.0
             print(f"INFO regime={args.regime} ON-rate={on_rate:.2f}%")
 
+    # Gate OFF (TP2 strategy): load when --regime-csv-off is set
+    gate_off_aligned: Optional[pd.Series] = None
+    if args.regime_csv_off:
+        gate_off_aligned = _load_external_regime_to_bricks(
+            bars_ts=bars["ts"],
+            regime_csv=str(args.regime_csv_off),
+            ts_col=str(args.regime_ts_col_off),
+            value_col=str(args.regime_col_off),
+            default_off=True,
+        )
+        off_rate = float(gate_off_aligned.mean()) * 100.0 if len(gate_off_aligned) else 0.0
+        print(f"INFO regime OFF csv={args.regime_csv_off} ON-rate={off_rate:.2f}%")
+
+    # Merged: flip during Gate ON, TP2 during Gate OFF. OFF-only: only TP2 when no ON gate.
+    run_flip = (args.regime_csv is not None or args.regime != "none") or not args.regime_csv_off
+    run_tp2 = bool(args.regime_csv_off)
+
     params = FlipParams(
         fee_bps=float(args.fee_bps),
         ttp_trail_pct=float(args.ttp_trail_pct),
@@ -501,15 +550,71 @@ def main() -> None:
         swing_lookback=int(args.swing_lookback),
     )
 
-    pos, events, _terminal = run_flip_state_machine(
-        bars=bars[["ts", "open", "high", "low", "close"]].copy(),
-        signals_df=signals_df,
-        params=params,
-        regime_on=regime_on,
-    )
+    events = None
+    trades = pd.DataFrame()
+    equity = pd.DataFrame({"ts": [], "equity": []})
 
-    trades = _pair_trades_from_events(events, price_col="price")
-    equity = _equity_from_trades(trades, initial_capital=1.0)
+    if run_flip:
+        pos, events, *_ = run_flip_state_machine(
+            bars=bars[["ts", "open", "high", "low", "close"]].copy(),
+            signals_df=signals_df,
+            params=params,
+            regime_on=regime_on,
+        )
+        trades = _pair_trades_from_events(events, price_col="price")
+        equity = _equity_from_trades(trades, initial_capital=1.0)
+
+    events_tp2 = None
+    legs_tp2 = None
+    trades_tp2 = pd.DataFrame()
+    equity_tp2 = pd.DataFrame({"ts": [], "equity": []})
+
+    if run_tp2 and gate_off_aligned is not None:
+        sig_event = _signals_to_brick_events(bricks_ts=bars["ts"], sig_df=signals_df)
+        gate_on_tp2 = pd.Series(gate_off_aligned.astype(int).values)
+        params_tp2 = TP2Params(
+            tp1_pct=float(args.tp1_pct),
+            tp2_pct=float(args.tp2_pct),
+            tp1_frac=float(args.tp1_frac),
+            min_sl_pct=float(args.tp2_min_sl_pct),
+            max_sl_pct=float(args.tp2_max_sl_pct),
+            swing_lookback=int(args.tp2_swing_lookback),
+            flip_on_opposite=not args.no_flip_on_opposite,
+        )
+        events_tp2, legs_tp2 = run_tp2_engine(
+            bricks=bars[["ts", "open", "high", "low", "close"]].copy(),
+            sig_event=sig_event,
+            gate_on=gate_on_tp2,
+            params=params_tp2,
+        )
+        trades_tp2 = legs_to_trades(legs_tp2)
+        if len(trades_tp2):
+            pnl = trades_tp2["pnl_pct"].astype(float)
+            eq = float(1.0) * np.cumprod(1.0 + pnl.values)
+            equity_tp2 = pd.DataFrame({"ts": trades_tp2["exit_ts"].values, "equity": eq})
+
+    # Combined run (Gate ON + Gate OFF): merge trades and equity
+    if run_flip and run_tp2:
+        trades_flip = trades.copy()
+        trades_flip["strategy"] = "on"
+        trades_tp2_out = trades_tp2.copy()
+        trades_tp2_out["strategy"] = "off"
+        common = ["entry_ts", "exit_ts", "side", "entry_px", "exit_px", "exit_event", "pnl_pct", "strategy"]
+        for c in common:
+            if c not in trades_tp2_out.columns and c != "strategy":
+                trades_tp2_out[c] = np.nan
+        trades_combined = pd.concat(
+            [trades_flip[common], trades_tp2_out[common]],
+            ignore_index=True,
+        ).sort_values("exit_ts").reset_index(drop=True)
+        equity_combined = _equity_from_trades(trades_combined, initial_capital=1.0)
+        trades = trades_combined
+        equity = equity_combined
+        print(f"INFO merged: flip trades={len(trades_flip)} tp2 trades={len(trades_tp2_out)} combined={len(trades)}")
+    elif run_tp2 and not run_flip and len(trades_tp2):
+        trades = trades_tp2.copy()
+        trades["strategy"] = "off"
+        equity = equity_tp2
 
     equity0 = 1.0
     equity1 = float(equity["equity"].iloc[-1]) if len(equity) else equity0
@@ -521,15 +626,15 @@ def main() -> None:
     else:
         max_drawdown_pct = 0.0
 
-    entries_count = int((events["event"] == "entry").sum()) if len(events) else 0
-    flips_count = int(events["event"].isin(["tp_exit", "signal_flip_exit"]).sum()) if len(events) else 0
-    sl_count = int((events["event"] == "sl_exit").sum()) if len(events) else 0
+    entries_count = int((events["event"] == "entry").sum()) if events is not None and len(events) else 0
+    flips_count = int(events["event"].isin(["tp_exit", "signal_flip_exit"]).sum()) if events is not None and len(events) else 0
+    sl_count = int((events["event"] == "sl_exit").sum()) if events is not None and len(events) else 0
 
     # effective (engine clamps internally to <=50; mirror that here)
     effective_swing_lb = int(min(int(args.swing_lookback), 50))
 
     # =========================
-    # REAL pricing via fills (optional)
+    # REAL pricing via fills (optional; flip events only)
     # =========================
     fills_miss_rate = None
     trades_real = pd.DataFrame()
@@ -537,7 +642,7 @@ def main() -> None:
     total_return_pct_real = None
     max_drawdown_pct_real = None
 
-    if args.fills_parquet:
+    if args.fills_parquet and events is not None:
         fills = _read_fills_parquet(str(args.fills_parquet), str(args.fill_col))
         events2, fills_miss_rate = _map_events_to_fills_asof(events, fills, str(args.fill_col))
 
@@ -571,7 +676,6 @@ def main() -> None:
         "end": str(bars["ts"].max()) if len(bars) else None,
         "total_return_pct": float(total_return_pct),
         "max_drawdown_pct": float(max_drawdown_pct),
-        # clearer counts:
         "trades": int(len(trades)),
         "entries_count": entries_count,
         "flips_count": flips_count,
@@ -584,10 +688,12 @@ def main() -> None:
         "ttp_trail_pct": float(args.ttp_trail_pct),
         "regime": ("external" if args.regime_csv else str(args.regime)),
         "regime_csv": (str(args.regime_csv) if args.regime_csv else None),
+        "regime_csv_off": (str(args.regime_csv_off) if args.regime_csv_off else None),
+        "run_flip": run_flip,
+        "run_tp2": run_tp2,
         "signals_jsonl": str(args.signals_jsonl),
         "parquet": str(args.parquet),
         "box": float(args.box),
-        # real pricing meta
         "fills_parquet": (str(args.fills_parquet) if args.fills_parquet else None),
         "fill_col": (str(args.fill_col) if args.fills_parquet else None),
         "fills_miss_rate": (float(fills_miss_rate) if fills_miss_rate is not None else None),
@@ -595,6 +701,10 @@ def main() -> None:
         "total_return_pct_real": (float(total_return_pct_real) if total_return_pct_real is not None else None),
         "max_drawdown_pct_real": (float(max_drawdown_pct_real) if max_drawdown_pct_real is not None else None),
     }
+    if run_tp2 and events_tp2 is not None and hasattr(events_tp2, "attrs"):
+        stats["tp2_entries"] = int(events_tp2.attrs.get("counts", {}).get("trades_entries", 0))
+        stats["tp2_sl_exits"] = int(events_tp2.attrs.get("counts", {}).get("sl_exits", 0))
+        stats["tp2_regime_exits"] = int(events_tp2.attrs.get("counts", {}).get("regime_exits", 0))
 
     print(f"INFO stats {stats}")
     print(f"INFO events {0 if events is None else len(events)}")
@@ -608,16 +718,24 @@ def main() -> None:
     (out_dir / "stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
     if events is not None:
         events.to_parquet(out_dir / "events.parquet", index=False)
+    if events_tp2 is not None:
+        events_tp2.to_parquet(out_dir / "events_tp2.parquet", index=False)
+    if legs_tp2 is not None and len(legs_tp2):
+        legs_tp2.to_parquet(out_dir / "legs.parquet", index=False)
     trades.to_parquet(out_dir / "trades.parquet", index=False)
     equity.to_parquet(out_dir / "equity.parquet", index=False)
 
-    if args.fills_parquet:
+    if args.fills_parquet and len(trades_real):
         trades_real.to_parquet(out_dir / "trades_real.parquet", index=False)
         equity_real.to_parquet(out_dir / "equity_real.parquet", index=False)
 
     if regime_on is not None:
         pd.DataFrame({"ts": regime_on.index.values, "regime_on": regime_on.astype(int).values}).to_parquet(
             out_dir / "regime.parquet", index=False
+        )
+    if gate_off_aligned is not None:
+        pd.DataFrame({"ts": gate_off_aligned.index.values, "gate_off": gate_off_aligned.astype(int).values}).to_parquet(
+            out_dir / "regime_off.parquet", index=False
         )
 
     print(f"INFO wrote {out_dir}")

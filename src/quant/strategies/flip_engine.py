@@ -277,6 +277,17 @@ def run_flip_state_machine(
         gate = True if regime is None else bool(regime.iloc[i])
         out_pos.iloc[i] = pos
 
+        # Regime off: exit remainder at close (flat)
+        if not gate and pos != 0:
+            pnl = realized_pnl_pct(px)
+            emit(ts, "regime_exit", pos, px, pnl, "Regime off -> flat")
+            pos = 0
+            entry_px = None
+            best_fav = None
+            mode = None
+            out_pos.iloc[i] = pos
+            continue
+
         impulse = int(impulses.iloc[i]) if len(impulses) else 0
 
         # =========================

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import List
+from typing import List, Optional
 
 
 @dataclass
@@ -16,12 +16,21 @@ class PCConfig:
     lr_C: float = 1e-4
     lambda_A: float = 1e-4       # shrink-to-identity strength
     alpha_v: float = 0.01        # variance EMA rate
-    v_min: float = 1e-10
-    v_max: float = 1e-2
+    v_min: float = 1e-12
+    v_max: float = 1e2
+    eps: float = 1e-12
+    pi_ceil: float = 1e6
     tau: float = 0.05            # state carry rate
     beta_obs: float = 0.2        # obs term damping
     k_robust: float = 5.0        # residual clipping at k*sigma
+    k_mu_out: float = 2.5        # cap mu used for trading/probabilities
+    x_clip: float = 10.0         # element-wise clamp on latent state
+    dx_clip: Optional[float] = None
     warmup_bars: int = 200
+    v_temporal_init: float = 1e-4
+    v_obs_init: float = 1e-3
+    v_h_base: float = 1e-6       # v_h_init = h * v_h_base
+    seed: int = 0
 
     # --- Trade logic ---
     fee_bps: float = 7.0
