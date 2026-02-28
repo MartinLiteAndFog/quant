@@ -300,18 +300,30 @@ def _verify_execution_fill_ratio(
         )
 
 
-def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any]) -> None:
+def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Optional[float] = None) -> None:
     """Write current flip-engine state to execution_state.json for the dashboard."""
     if not terminal:
+        return
+    # If exchange reports an open position but model terminal state is flat/unknown,
+    # keep existing dashboard state instead of wiping entry/side fields.
+    side = terminal.get("side")
+    entry_px = terminal.get("entry_px")
+    if live_pos is not None and abs(float(live_pos)) > 1e-12 and (side is None or entry_px is None):
+        log.warning(
+            "executor skip dashboard-state overwrite: live_pos=%s terminal_side=%s terminal_entry_px=%s",
+            live_pos,
+            side,
+            entry_px,
+        )
         return
     entry_bar_ts = terminal.get("entry_bar_ts")
     write_execution_state({
         "symbol": symbol,
-        "side": terminal.get("side"),
+        "side": side,
         "mode": terminal.get("mode"),
         "sl": terminal.get("sl"),
         "ttp": terminal.get("ttp"),
-        "entry_px": terminal.get("entry_px"),
+        "entry_px": entry_px,
         "entry_bar_ts": int(pd.Timestamp(entry_bar_ts).timestamp()) if entry_bar_ts is not None else None,
     })
 
@@ -332,7 +344,6 @@ def run_once(
     renko_bars = _load_renko_bars(renko_path, limit=int(os.getenv("LIVE_EXECUTOR_RENKO_LIMIT", "4000")))
     signals_df = _load_signals_df(signals_root=signals_root, symbol=symbol)
     ev, terminal_state = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
-    _write_dashboard_levels(symbol, terminal_state)
     if ev is None:
         sig = _latest_signal(signals_root=signals_root, symbol=symbol)
         if sig is None:
@@ -382,6 +393,7 @@ def run_once(
         return state
 
     pos = float(broker.get_position(symbol))
+    _write_dashboard_levels(symbol, terminal_state, live_pos=pos)
     target_side = (-event_side if event in ("signal_flip_exit", "tp_exit") else event_side)
     want_side = "long" if target_side > 0 else "short"
     current_side = "long" if pos > 0 else ("short" if pos < 0 else "flat")
