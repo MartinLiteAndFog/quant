@@ -225,6 +225,81 @@ def _qty_from_max_eur(max_eur: float, leverage: float, mid_price: float) -> int:
     return int(notional // float(mid_price))
 
 
+def _resolve_max_eur(
+    broker: KucoinFuturesBroker,
+    configured_max_eur: float,
+    *,
+    use_full_equity: bool,
+    equity_fraction: float,
+) -> float:
+    if (not use_full_equity) and configured_max_eur > 0:
+        return float(configured_max_eur)
+    try:
+        bal = broker.get_account_balance(currency="USDT")
+        eq = float(bal.get("equity", 0.0) or 0.0)
+        frac = float(max(0.0, min(1.0, equity_fraction)))
+        return float(eq * frac)
+    except Exception:
+        return float(configured_max_eur)
+
+
+def _verify_execution_fill_ratio(
+    *,
+    broker: KucoinFuturesBroker,
+    symbol: str,
+    action: str,
+    target_side: Optional[str],
+    target_qty: float,
+    min_ratio: float,
+) -> None:
+    """
+    Lightweight runtime checker:
+    warn if resulting position deviates materially from intended target.
+    """
+    try:
+        pos_after = float(broker.get_position(symbol))
+    except Exception as e:
+        log.warning("executor verify skipped (position unavailable): %s", e)
+        return
+
+    min_ratio = float(max(0.0, min(1.0, min_ratio)))
+    if action.startswith("exit_"):
+        ok = abs(pos_after) <= 1e-9
+        if not ok:
+            log.warning("executor verify FAIL action=%s expected_flat got_pos=%s", action, pos_after)
+        else:
+            log.info("executor verify OK action=%s flat", action)
+        return
+
+    if target_qty <= 0 or target_side not in ("long", "short"):
+        return
+    got_qty = abs(pos_after)
+    ratio = (got_qty / float(target_qty)) if target_qty > 0 else 0.0
+    got_side = "long" if pos_after > 0 else ("short" if pos_after < 0 else "flat")
+    side_ok = got_side == target_side
+    qty_ok = ratio >= min_ratio
+    if side_ok and qty_ok:
+        log.info(
+            "executor verify OK action=%s side=%s qty=%s target=%s ratio=%.3f",
+            action,
+            got_side,
+            got_qty,
+            target_qty,
+            ratio,
+        )
+    else:
+        log.warning(
+            "executor verify FAIL action=%s want_side=%s got_side=%s got_qty=%s target_qty=%s ratio=%.3f min_ratio=%.3f",
+            action,
+            target_side,
+            got_side,
+            got_qty,
+            target_qty,
+            ratio,
+            min_ratio,
+        )
+
+
 def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any]) -> None:
     """Write current flip-engine state to execution_state.json for the dashboard."""
     if not terminal:
@@ -283,9 +358,24 @@ def run_once(
 
     bid, ask = broker.get_best_bid_ask(symbol)
     mid = (bid + ask) / 2.0 if (bid and ask) else (ask or bid or 0.0)
-    qty = _qty_from_max_eur(max_eur=max_eur, leverage=leverage, mid_price=float(mid))
+    use_full_equity = _truthy(os.getenv("LIVE_EXECUTOR_USE_FULL_EQUITY", "1"))
+    equity_fraction = float(os.getenv("LIVE_EXECUTOR_EQUITY_FRACTION", "1.0"))
+    sizing_max_eur = _resolve_max_eur(
+        broker=broker,
+        configured_max_eur=max_eur,
+        use_full_equity=use_full_equity,
+        equity_fraction=equity_fraction,
+    )
+    qty = _qty_from_max_eur(max_eur=sizing_max_eur, leverage=leverage, mid_price=float(mid))
     if qty <= 0:
-        log.warning("executor qty=0 (max_eur=%s leverage=%s mid=%s) -> skip", max_eur, leverage, mid)
+        log.warning(
+            "executor qty=0 (configured_max_eur=%s sizing_max_eur=%s leverage=%s mid=%s use_full_equity=%s) -> skip",
+            max_eur,
+            sizing_max_eur,
+            leverage,
+            mid,
+            use_full_equity,
+        )
         state.last_signal_ts = ts_iso
         state.last_signal_value = sig_v
         state.last_action = "skip_qty_0"
@@ -308,6 +398,9 @@ def run_once(
         action = f"exit_{current_side}" if abs(pos) > 1e-12 else "hold"
     else:
         action = f"enter_{want_side}" if abs(pos) < 1e-12 else (f"flip_to_{want_side}" if ((pos > 0 and sig_v < 0) or (pos < 0 and sig_v > 0)) else "hold")
+    # Keep exposure near target size while in-position.
+    if action == "hold" and current_side == want_side and abs(pos) + 1e-12 < float(qty):
+        action = f"scale_{want_side}"
 
     # Record expected trade for post-trade monitoring.
     if action in ("enter_long", "enter_short", "flip_to_long", "flip_to_short"):
@@ -332,13 +425,35 @@ def run_once(
             res = oms.enter(symbol=symbol, side=want_side, qty=float(qty))
             log.info("executor enter result=%s", res)
         elif action.startswith("flip_to_"):
-            res = oms.exit_tp_or_flip(symbol=symbol, side=current_side, qty=abs(float(pos)), flip_to=want_side)
-            log.info("executor flip result=%s", res)
+            # First flatten current side quantity, then re-enter target qty.
+            flat_res = oms.exit_tp_or_flip(symbol=symbol, side=current_side, qty=abs(float(pos)), flip_to=None)
+            log.info("executor flip flatten result=%s", flat_res)
+            if bool(getattr(flat_res, "ok", False)):
+                res = oms.enter(symbol=symbol, side=want_side, qty=float(qty))
+                log.info("executor flip re-enter result=%s", res)
+            else:
+                log.warning("executor flip aborted: flatten failed")
         elif action.startswith("exit_"):
             res = oms.exit_sl(symbol=symbol, side=current_side, qty=abs(float(pos)))
             log.info("executor exit result=%s", res)
+        elif action.startswith("scale_"):
+            add_qty = max(0.0, float(qty) - abs(float(pos)))
+            if add_qty > 0:
+                res = oms.enter(symbol=symbol, side=want_side, qty=add_qty)
+                log.info("executor scale result=%s add_qty=%s target_qty=%s pos_before=%s", res, add_qty, qty, pos)
+            else:
+                log.info("executor scale skipped add_qty=0 target_qty=%s pos_before=%s", qty, pos)
         else:
             log.info("executor hold symbol=%s pos=%s sig=%s event=%s", symbol, pos, sig_v, event)
+
+        _verify_execution_fill_ratio(
+            broker=broker,
+            symbol=symbol,
+            action=action or "hold",
+            target_side=want_side if action.startswith(("enter_", "flip_to_", "scale_")) else None,
+            target_qty=float(qty),
+            min_ratio=float(os.getenv("LIVE_EXECUTOR_MIN_FILL_RATIO", "0.95")),
+        )
 
     state.last_signal_ts = ts_iso
     state.last_signal_value = sig_v
