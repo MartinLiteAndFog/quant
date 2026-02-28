@@ -822,7 +822,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       wickDownColor: '#f7768e', wickUpColor: '#2ecc71',
     });
     const slSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, title: 'SL', lastValueVisible: true, priceLineVisible: false });
-    const ttpSeries = chart.addLineSeries({ color: '#ffcc66', lineWidth: 2, title: 'TTP', lastValueVisible: true, priceLineVisible: false });
+    const ttpSeries = chart.addLineSeries({
+      color: '#ffd166',
+      lineWidth: 3,
+      lineStyle: 2,
+      title: 'TTP',
+      lastValueVisible: true,
+      priceLineVisible: true,
+    });
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
     const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
@@ -1074,48 +1081,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.fillStyle = '#181c24';
       ctx.fillRect(0, 0, w, h);
 
-      const realEq = Array.isArray(latestPayload.equity_real) ? latestPayload.equity_real : [];
-      const source = latestPayload.equity_real_source || latestPayload.diary_source || latestPayload.equity_source || 'none';
-      if (metaEl) metaEl.textContent = 'Equity source: ' + source;
-      if (realEq.length >= 2) {
-        const points = realEq.map((p) => ({
-          time: Number(p.time || 0),
-          equity: Number(p.equity || 0),
-        })).filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
-        if (points.length >= 2) {
-          const vals = points.map(p => p.equity);
-          const minV = Math.min(...vals);
-          const maxV = Math.max(...vals);
-          const range = Math.max(1e-6, (maxV - minV) * 1.15);
-          const padL = 8, padR = 8, padT = 14, padB = 14;
-          const pw = w - padL - padR, ph = h - padT - padB;
-          function tx(i) { return padL + (i / Math.max(1, points.length - 1)) * pw; }
-          function ty(v) { return padT + (1 - (v - minV) / range) * ph; }
-
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          for (let i = 0; i < points.length; i++) {
-            const x = tx(i), y = ty(points[i].equity);
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-          }
-          const delta = points[points.length - 1].equity - points[0].equity;
-          ctx.strokeStyle = delta >= 0 ? '#9ece6a' : '#f7768e';
-          ctx.stroke();
-
-          const pct = points[0].equity > 0 ? (delta / points[0].equity) * 100.0 : 0.0;
-          ctx.font = 'bold 11px system-ui';
-          ctx.textAlign = 'right';
-          ctx.fillStyle = delta >= 0 ? '#9ece6a' : '#f7768e';
-          ctx.fillText(`${delta >= 0 ? '+' : ''}${delta.toFixed(2)} USDT (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`, w - padR, padT - 2);
-          if (detailEl) detailEl.textContent = `latest ${points[points.length - 1].equity.toFixed(2)} USDT`;
-          canvas.onmousemove = null;
-          return;
-        }
-      }
-
       const trades = Array.isArray(latestPayload.diary_entries) && latestPayload.diary_entries.length
         ? latestPayload.diary_entries
         : (latestPayload.equity_curve || []);
+      const source = latestPayload.diary_source || latestPayload.equity_source || 'none';
+      if (metaEl) metaEl.textContent = 'Trade source: ' + source;
       if (!trades.length) {
         ctx.fillStyle = '#8e98bf';
         ctx.font = '11px system-ui';
