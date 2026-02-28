@@ -418,14 +418,74 @@ def load_fills_cache_rows(max_points: int = 500) -> List[Dict[str, Any]]:
     if df.empty:
         return []
     df = df.sort_values("time").tail(int(max(1, max_points)))
+
+    expected_by_time: List[Dict[str, Any]] = []
+    exp = load_latest_expected_entry()
+    # Build richer expected-event map from expected_trades.jsonl if available.
+    p_exp = _env_path("DASHBOARD_EXPECTED_TRADES_JSONL", _live_default("expected_trades.jsonl"))
+    if p_exp.exists():
+        try:
+            with open(p_exp, "r", encoding="utf-8") as f:
+                for ln in f:
+                    s = ln.strip()
+                    if not s:
+                        continue
+                    try:
+                        obj = json.loads(s)
+                    except Exception:
+                        continue
+                    ts = pd.to_datetime(obj.get("ts"), utc=True, errors="coerce")
+                    if pd.isna(ts):
+                        continue
+                    note = str(obj.get("note", "") or "")
+                    action = str(obj.get("action", "") or "").lower()
+                    reason = action
+                    if "event=" in note:
+                        try:
+                            reason = note.split("event=", 1)[1].split()[0].strip()
+                        except Exception:
+                            reason = action
+                    expected_by_time.append(
+                        {
+                            "time": int(pd.Timestamp(ts).timestamp()),
+                            "reason": reason or action or "unknown",
+                        }
+                    )
+        except Exception:
+            expected_by_time = []
+    if not expected_by_time and exp is not None:
+        expected_by_time = [{"time": int(exp["entry_time"]), "reason": "entry"}]
+
+    expected_by_time = sorted(expected_by_time, key=lambda x: int(x["time"]))
+
+    def infer_reason(fill_ts: int) -> str:
+        if not expected_by_time:
+            return "-"
+        best = None
+        best_dt = 10**12
+        for e in expected_by_time:
+            dt = abs(int(e["time"]) - int(fill_ts))
+            if dt < best_dt:
+                best_dt = dt
+                best = e
+        # Only map if reasonably close in time.
+        if best is None or best_dt > 180:
+            return "-"
+        return str(best.get("reason") or "-")
+
     out: List[Dict[str, Any]] = []
     for _, r in df.iterrows():
+        ts_i = int(r["time"])
+        ts = pd.to_datetime(ts_i, unit="s", utc=True, errors="coerce")
+        dt_utc = ts.strftime("%Y-%m-%d %H:%M:%S UTC") if pd.notna(ts) else "-"
         out.append(
             {
-                "time": int(r["time"]),
+                "time": ts_i,
+                "time_utc": dt_utc,
                 "side": str(r["side"]),
                 "size": float(r["size"]),
                 "price": float(r["price"]),
+                "reason": infer_reason(ts_i),
             }
         )
     return out

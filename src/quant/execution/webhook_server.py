@@ -683,8 +683,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .heatmap-title { color: var(--text); font-size: 0.85rem; text-align: center; margin-bottom: 0.25rem; }
     .traj-controls { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem; }
     .traj-controls select { background: var(--card); color: var(--text); border: 1px solid #2a3044; border-radius: 4px; padding: 2px 6px; font-size: 0.85rem; }
-    .fills-list { margin-top: 0.35rem; max-height: 170px; overflow: auto; border: 1px solid #2a3044; border-radius: 6px; }
-    .fills-row { display: grid; grid-template-columns: 48px 46px 42px 1fr; gap: 6px; padding: 3px 6px; font-size: 0.72rem; border-bottom: 1px solid #252b3f; }
+    .fills-list { margin-top: 0.35rem; max-height: 190px; overflow: auto; border: 1px solid #2a3044; border-radius: 6px; }
+    .fills-row { display: grid; grid-template-columns: 122px 40px 40px 56px 1fr; gap: 6px; padding: 3px 6px; font-size: 0.72rem; border-bottom: 1px solid #252b3f; }
     .fills-row:last-child { border-bottom: 0; }
     .fills-row.head { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: #1e2333; z-index: 1; }
     .fills-buy { color: #2ecc71; }
@@ -722,7 +722,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div id="equity-detail" class="mono" style="font-size:0.75rem;color:var(--text);min-height:1.1rem;">-</div>
       <div style="margin-top:0.5rem;font-size:0.8rem;color:var(--muted);font-weight:600;">Recent fills (raw)</div>
       <div id="fills-list" class="fills-list">
-        <div class="fills-row head"><span>time</span><span>side</span><span>qty</span><span>price</span></div>
+        <div class="fills-row head"><span>time (UTC)</span><span>side</span><span>qty</span><span>price</span><span>reason</span></div>
       </div>
       <p id="hint" class="hint"></p>
     </div>
@@ -1564,18 +1564,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const data = await fetch('/api/dashboard/fills?max_points=30').then(r => r.json());
         if (!data.ok) return;
         const rows = Array.isArray(data.rows) ? data.rows : [];
-        const lines = ['<div class=\"fills-row head\"><span>time</span><span>side</span><span>qty</span><span>price</span></div>'];
+        const lines = ['<div class=\"fills-row head\"><span>time (UTC)</span><span>side</span><span>qty</span><span>price</span><span>reason</span></div>'];
         for (let i = Math.max(0, rows.length - 20); i < rows.length; i++) {
           const r = rows[i] || {};
           const t = Number(r.time || 0);
-          const d = Number.isFinite(t) && t > 0 ? new Date(t * 1000) : null;
-          const hh = d ? String(d.getUTCHours()).padStart(2, '0') : '--';
-          const mm = d ? String(d.getUTCMinutes()).padStart(2, '0') : '--';
+          const ts = (typeof r.time_utc === 'string' && r.time_utc) ? r.time_utc : '-';
           const side = String(r.side || '-').toLowerCase();
           const cls = side === 'buy' ? 'fills-buy' : (side === 'sell' ? 'fills-sell' : '');
           const qty = Number.isFinite(Number(r.size)) ? Number(r.size).toFixed(2) : '-';
           const px = Number.isFinite(Number(r.price)) ? Number(r.price).toFixed(3) : '-';
-          lines.push(`<div class=\"fills-row\"><span>${hh}:${mm}</span><span class=\"${cls}\">${side}</span><span>${qty}</span><span>${px}</span></div>`);
+          const reason = String(r.reason || '-');
+          lines.push(`<div class=\"fills-row\"><span>${ts}</span><span class=\"${cls}\">${side}</span><span>${qty}</span><span>${px}</span><span>${reason}</span></div>`);
         }
         host.innerHTML = lines.join('');
       } catch (e) { /* fills unavailable */ }
