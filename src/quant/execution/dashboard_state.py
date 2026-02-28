@@ -605,6 +605,74 @@ def load_latest_expected_entry() -> Optional[Dict[str, Any]]:
     return rows[-1]
 
 
+def _cluster_fills_df(fills: pd.DataFrame, window_sec: int = 90) -> pd.DataFrame:
+    """
+    Cluster adjacent same-side fills within a short time window into one execution block.
+    Price is size-weighted average, time is last fill timestamp in block.
+    """
+    if fills.empty:
+        return fills
+    df = fills.copy().sort_values("time").reset_index(drop=True)
+    out_rows: List[Dict[str, Any]] = []
+    cur_side: Optional[str] = None
+    cur_start_t: Optional[int] = None
+    cur_last_t: Optional[int] = None
+    cur_qty = 0.0
+    cur_notional = 0.0
+
+    def flush() -> None:
+        nonlocal cur_side, cur_start_t, cur_last_t, cur_qty, cur_notional
+        if cur_side is None or cur_last_t is None or cur_qty <= 0:
+            return
+        out_rows.append(
+            {
+                "time": int(cur_last_t),
+                "side": str(cur_side),
+                "size": float(cur_qty),
+                "price": float(cur_notional / cur_qty) if cur_qty > 0 else 0.0,
+                "cluster_from": int(cur_start_t or cur_last_t),
+                "cluster_to": int(cur_last_t),
+            }
+        )
+        cur_side = None
+        cur_start_t = None
+        cur_last_t = None
+        cur_qty = 0.0
+        cur_notional = 0.0
+
+    for _, r in df.iterrows():
+        t = int(r["time"])
+        side = str(r["side"])
+        qty = float(r["size"])
+        px = float(r["price"])
+        if qty <= 0:
+            continue
+        if cur_side is None:
+            cur_side = side
+            cur_start_t = t
+            cur_last_t = t
+            cur_qty = qty
+            cur_notional = qty * px
+            continue
+        if side == cur_side and (t - int(cur_last_t or t)) <= int(max(1, window_sec)):
+            cur_last_t = t
+            cur_qty += qty
+            cur_notional += qty * px
+            continue
+        flush()
+        cur_side = side
+        cur_start_t = t
+        cur_last_t = t
+        cur_qty = qty
+        cur_notional = qty * px
+    flush()
+
+    if not out_rows:
+        return pd.DataFrame(columns=df.columns)
+    out = pd.DataFrame(out_rows)
+    return out.sort_values("time").reset_index(drop=True)
+
+
 def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
     """
     Build a normalized trading diary online from closed trades parquet;
@@ -662,6 +730,10 @@ def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
     fills = _read_fills_df()
     if fills.empty:
         return {"entries": [], "source": "none"}
+    cluster_window_sec = int(os.getenv("DASHBOARD_FILLS_CLUSTER_SEC", "90"))
+    fills = _cluster_fills_df(fills, window_sec=cluster_window_sec)
+    if fills.empty:
+        return {"entries": [], "source": "none"}
 
     pos_qty = 0.0
     avg_entry = 0.0
@@ -698,7 +770,7 @@ def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
                 "entry_price": float(avg_entry) if avg_entry > 0 else None,
                 "exit_price": float(px),
                 "pnl_pct": round(float(pnl_pct), 4),
-                "source": "fills_reconstructed",
+                "source": "fills_reconstructed_clustered",
             }
         )
 
@@ -716,7 +788,7 @@ def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
         pos_open_ts = t
 
     events = sorted(events, key=lambda x: int(x["time"]))[-int(max(1, max_points)) :]
-    return {"entries": events, "source": "fills_reconstructed"}
+    return {"entries": events, "source": "fills_reconstructed_clustered"}
 
 
 def build_regime_overlay(symbol: str, hours: int = 24 * 14) -> Dict[str, Any]:
