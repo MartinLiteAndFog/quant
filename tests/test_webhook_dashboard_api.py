@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from quant.execution.webhook_server import api_dashboard_chart, api_regime_latest, api_dashboard_statespace
+from quant.execution.webhook_server import api_dashboard_chart, api_regime_latest, api_dashboard_statespace, api_gate_solusd
 from quant.regime import RegimeDecision, RegimeService, RegimeStore
 
 
@@ -27,6 +27,7 @@ class WebhookDashboardApiTests(unittest.TestCase):
         os.environ["GATE_CONF_HORIZONS_MINUTES"] = "5,30,120,240"
         os.environ["GATE_CONF_CACHE_SEC"] = "0"
         os.environ["GATE_CONF_NOW_MODE"] = "last_ts"
+        os.environ["PC_PREDICTIONS_PARQUET"] = str(root / "pc_predictions.parquet")
 
         renko = pd.DataFrame(
             {
@@ -89,6 +90,30 @@ class WebhookDashboardApiTests(unittest.TestCase):
                 "gate_on_2of3": [0, 1],
             }
         ).to_csv(root / "gate_daily.csv", index=False)
+        pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-02-20", periods=300, freq="min", tz="UTC"),
+                "close": [100.0 + (i * 0.01) for i in range(300)],
+                "v_temporal": [0.1 + ((i % 7) * 0.01) for i in range(300)],
+                "v_obs_mean": [0.2 + ((i % 5) * 0.02) for i in range(300)],
+            }
+        ).to_parquet(root / "pc_predictions.parquet", index=False)
+        pd.DataFrame(
+            [
+                {"time": int(pd.Timestamp("2026-02-20T00:00:00Z").timestamp()), "equity": 1000.0},
+                {"time": int(pd.Timestamp("2026-02-20T01:00:00Z").timestamp()), "equity": 1010.0},
+            ]
+        ).to_parquet(root / "equity_history.parquet", index=False)
+        os.environ["DASHBOARD_EQUITY_PARQUET"] = str(root / "equity_history.parquet")
+        pd.DataFrame(
+            [
+                {"ts": int(pd.Timestamp("2026-02-20T00:00:00Z").timestamp()), "equity_usd": 500.0},
+                {"ts": int(pd.Timestamp("2026-02-20T01:00:00Z").timestamp()), "equity_usd": 505.0},
+            ]
+        ).to_csv(root / "kraken_equity.csv", index=False)
+        os.environ["KRAKEN_EQUITY_CSV"] = str(root / "kraken_equity.csv")
+        (root / "kraken_metrics.json").write_text('{"equity_usd":505.0,"position_side":"long"}', encoding="utf-8")
+        os.environ["KRAKEN_METRICS_JSON"] = str(root / "kraken_metrics.json")
 
         svc = RegimeService(RegimeStore())
         svc.upsert_decision(
@@ -121,6 +146,15 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertTrue(len(gc["horizons"]) >= 1)
         self.assertIn("p_trend_voxel", gc["horizons"][0])
         self.assertIn("open_position", body)
+        self.assertIn("equity_kraken", body)
+        self.assertIn("equity_combined", body)
+        self.assertIn("kraken_metrics", body)
+
+    def test_gate_solusd_endpoint(self) -> None:
+        body = api_gate_solusd()
+        self.assertIn("gate_on", body)
+        self.assertIn("gate_off", body)
+        self.assertIn("ts", body)
 
     def test_chart_includes_live_entry_marker_when_trades_missing(self) -> None:
         root = Path(self.tmp.name)
