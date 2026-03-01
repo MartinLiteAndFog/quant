@@ -12,6 +12,8 @@ from quant.regime import RegimeStore
 
 _LAST_REFRESH_TS: Optional[pd.Timestamp] = None
 _LAST_REFRESH_ERROR: Optional[str] = None
+_LAST_FILLS_REFRESH_TS: Optional[pd.Timestamp] = None
+_LAST_FILLS_REFRESH_ERROR: Optional[str] = None
 
 
 def _to_ts_iso(ts_like: Any) -> Optional[str]:
@@ -355,64 +357,84 @@ def load_trade_segments(max_points: int = 2000) -> List[Dict[str, Any]]:
     return segs
 
 
-def load_live_fill_markers(symbol: str, limit: int = 100, start_ts: Optional[int] = None) -> List[Dict[str, Any]]:
+def _refresh_fills_cache_if_needed(symbol: str, fills_path: Path) -> None:
     """
-    Build chart markers from live KuCoin fills as a fallback/augmentation
-    when local trades parquet is incomplete.
+    Refresh fills cache from KuCoin with cooldown to avoid API spam.
     """
-    rows = list_fills(symbol=symbol, start_ts=start_ts, limit=int(max(1, limit)))
-    fills_path = _env_path("DASHBOARD_FILLS_PARQUET", _live_default("fills_cache.parquet"))
+    global _LAST_FILLS_REFRESH_TS, _LAST_FILLS_REFRESH_ERROR
+    if not _truthy(os.getenv("DASHBOARD_FILLS_AUTO_REFRESH_ON_READ", "1")):
+        return
+    now = pd.Timestamp.now("UTC")
+    cooldown_sec = int(os.getenv("DASHBOARD_FILLS_REFRESH_COOLDOWN_SEC", "20"))
+    if _LAST_FILLS_REFRESH_TS is not None and (now - _LAST_FILLS_REFRESH_TS) < pd.Timedelta(seconds=max(1, cooldown_sec)):
+        return
 
-    norm_rows: List[Dict[str, Any]] = []
-    for r in rows:
-        try:
-            side = str(r.get("side", "")).lower()
-            sz = float(r.get("size", 0) or 0)
-            px = float(r.get("price", 0) or 0)
-            # Prefer createdAt (typically ms) over tradeTime (can be ns/us depending on endpoint/version).
-            t_raw = r.get("createdAt") or r.get("tradeTime") or r.get("ts")
-            t_sec = _epoch_seconds_from_any(t_raw)
-            if t_sec is None:
+    fetch_limit = int(os.getenv("DASHBOARD_FILLS_FETCH_LIMIT", "200"))
+    try:
+        rows = list_fills(symbol=symbol, limit=int(max(10, fetch_limit)))
+        norm_rows: List[Dict[str, Any]] = []
+        for r in rows:
+            try:
+                side = str(r.get("side", "")).lower()
+                sz = float(r.get("size", 0) or 0)
+                px = float(r.get("price", 0) or 0)
+                t_raw = r.get("createdAt") or r.get("tradeTime") or r.get("ts")
+                t_sec = _epoch_seconds_from_any(t_raw)
+                if t_sec is None:
+                    continue
+                client_oid = str(r.get("clientOid") or r.get("client_oid") or "").strip()
+                order_id = str(r.get("orderId") or r.get("order_id") or "").strip()
+                reduce_only = bool(r.get("reduceOnly", r.get("reduce_only", False)))
+            except Exception:
                 continue
-            client_oid = str(r.get("clientOid") or r.get("client_oid") or "").strip()
-            order_id = str(r.get("orderId") or r.get("order_id") or "").strip()
-            reduce_only = bool(r.get("reduceOnly", r.get("reduce_only", False)))
-        except Exception:
-            continue
-        norm_rows.append(
-            {
-                "time": int(t_sec),
-                "side": side,
-                "size": float(sz),
-                "price": float(px),
-                "client_oid": client_oid or None,
-                "order_id": order_id or None,
-                "reduce_only": reduce_only,
-            }
-        )
+            norm_rows.append(
+                {
+                    "time": int(t_sec),
+                    "side": side,
+                    "size": float(sz),
+                    "price": float(px),
+                    "client_oid": client_oid or None,
+                    "order_id": order_id or None,
+                    "reduce_only": reduce_only,
+                }
+            )
 
-    if norm_rows:
-        try:
+        if norm_rows:
             fills_path.parent.mkdir(parents=True, exist_ok=True)
             fresh_df = pd.DataFrame(norm_rows)
             if fills_path.exists():
-                old_df = pd.read_parquet(fills_path)
-                all_df = pd.concat([old_df, fresh_df], ignore_index=True)
+                try:
+                    old_df = pd.read_parquet(fills_path)
+                    all_df = pd.concat([old_df, fresh_df], ignore_index=True)
+                except Exception:
+                    all_df = fresh_df
             else:
                 all_df = fresh_df
             dedupe_cols = [c for c in ("time", "side", "size", "price", "order_id", "client_oid") if c in all_df.columns]
             all_df = all_df.drop_duplicates(subset=dedupe_cols, keep="last").sort_values("time")
             all_df.to_parquet(fills_path, index=False)
-        except Exception:
-            pass
+        _LAST_FILLS_REFRESH_TS = now
+        _LAST_FILLS_REFRESH_ERROR = None
+    except Exception as e:
+        _LAST_FILLS_REFRESH_TS = now
+        _LAST_FILLS_REFRESH_ERROR = f"fills_refresh_failed:{e}"
+
+
+def load_live_fill_markers(symbol: str, limit: int = 100, start_ts: Optional[int] = None) -> List[Dict[str, Any]]:
+    """
+    Build chart markers from live KuCoin fills as a fallback/augmentation
+    when local trades parquet is incomplete.
+    """
+    fills_path = _env_path("DASHBOARD_FILLS_PARQUET", _live_default("fills_cache.parquet"))
+    _refresh_fills_cache_if_needed(symbol=symbol, fills_path=fills_path)
 
     if fills_path.exists():
         try:
             src_df = pd.read_parquet(fills_path)
         except Exception:
-            src_df = pd.DataFrame(norm_rows)
+            src_df = pd.DataFrame()
     else:
-        src_df = pd.DataFrame(norm_rows)
+        src_df = pd.DataFrame()
     if src_df.empty:
         return []
 
@@ -438,8 +460,11 @@ def load_live_fill_markers(symbol: str, limit: int = 100, start_ts: Optional[int
     return out
 
 
-def load_fills_cache_rows(max_points: int = 500) -> List[Dict[str, Any]]:
+def load_fills_cache_rows(max_points: int = 500, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     """Expose normalized fills cache rows for diagnostics/UI."""
+    fills_path = _env_path("DASHBOARD_FILLS_PARQUET", _live_default("fills_cache.parquet"))
+    sym = str(symbol or os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"))
+    _refresh_fills_cache_if_needed(symbol=sym, fills_path=fills_path)
     df = _read_fills_df()
     if df.empty:
         return []

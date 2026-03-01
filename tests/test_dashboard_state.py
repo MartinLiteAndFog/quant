@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pandas as pd
 
+import quant.execution.dashboard_state as ds
 from quant.execution.dashboard_state import (
     build_regime_overlay,
     load_active_levels,
@@ -29,6 +30,10 @@ class DashboardStateTests(unittest.TestCase):
         os.environ["DASHBOARD_RENKO_AUTO_REFRESH_ON_READ"] = "0"
         os.environ["DASHBOARD_LEVELS_JSON"] = str(self.tmp_path / "execution_state.json")
         os.environ["DASHBOARD_TRADES_PARQUET"] = str(self.tmp_path / "trades.parquet")
+        ds._LAST_REFRESH_TS = None
+        ds._LAST_REFRESH_ERROR = None
+        ds._LAST_FILLS_REFRESH_TS = None
+        ds._LAST_FILLS_REFRESH_ERROR = None
 
         # Seed renko parquet
         renko = pd.DataFrame(
@@ -83,6 +88,8 @@ class DashboardStateTests(unittest.TestCase):
     def tearDown(self) -> None:
         os.environ.pop("DASHBOARD_FILLS_PARQUET", None)
         os.environ.pop("DASHBOARD_EXPECTED_TRADES_JSONL", None)
+        os.environ.pop("DASHBOARD_FILLS_REFRESH_COOLDOWN_SEC", None)
+        os.environ.pop("DASHBOARD_FILLS_AUTO_REFRESH_ON_READ", None)
         self.tmp.cleanup()
 
     def test_load_renko_bars(self) -> None:
@@ -113,6 +120,7 @@ class DashboardStateTests(unittest.TestCase):
     @patch("quant.execution.dashboard_state.list_fills")
     def test_load_live_fill_markers_parses_microsecond_trade_time(self, mock_list_fills) -> None:
         os.environ["DASHBOARD_FILLS_PARQUET"] = str(self.tmp_path / "fills_cache.parquet")
+        os.environ["DASHBOARD_FILLS_REFRESH_COOLDOWN_SEC"] = "0"
         ts = pd.Timestamp("2026-02-27T17:30:00Z")
         trade_time_us = int(ts.value // 1_000)  # microseconds since epoch
         mock_list_fills.return_value = [
@@ -126,6 +134,25 @@ class DashboardStateTests(unittest.TestCase):
         markers = load_live_fill_markers(symbol="SOL-USDT", limit=10, start_ts=int(ts.timestamp()) - 60)
         self.assertEqual(len(markers), 1)
         self.assertEqual(int(markers[0]["time"]), int(ts.timestamp()))
+
+    @patch("quant.execution.dashboard_state.list_fills")
+    def test_load_live_fill_markers_respects_refresh_cooldown(self, mock_list_fills) -> None:
+        os.environ["DASHBOARD_FILLS_PARQUET"] = str(self.tmp_path / "fills_cache.parquet")
+        os.environ["DASHBOARD_FILLS_REFRESH_COOLDOWN_SEC"] = "999"
+        ts = pd.Timestamp("2026-02-27T17:40:00Z")
+        mock_list_fills.return_value = [
+            {
+                "createdAt": int(ts.timestamp() * 1000),
+                "side": "sell",
+                "size": 2,
+                "price": 84.0,
+            }
+        ]
+        m1 = load_live_fill_markers(symbol="SOL-USDT", limit=10, start_ts=int(ts.timestamp()) - 60)
+        m2 = load_live_fill_markers(symbol="SOL-USDT", limit=10, start_ts=int(ts.timestamp()) - 60)
+        self.assertEqual(len(m1), 1)
+        self.assertEqual(len(m2), 1)
+        self.assertEqual(mock_list_fills.call_count, 1)
 
     def test_load_fills_cache_rows_prefers_client_oid_reason_mapping(self) -> None:
         fills_path = self.tmp_path / "fills_cache.parquet"

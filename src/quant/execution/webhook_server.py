@@ -43,6 +43,8 @@ from quant.regime import RegimeStore, get_live_gate_confidence
 from ..utils.log import get_logger
 
 log = get_logger("quant.webhook")
+_STATUS_CACHE: Dict[str, Dict[str, Any]] = {}
+_POSITION_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _state_space_refresh_loop() -> None:
@@ -114,6 +116,30 @@ def _truthy(v: Optional[str]) -> bool:
     if v is None:
         return False
     return str(v).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _cache_ttl_sec() -> float:
+    try:
+        return float(os.getenv("DASHBOARD_API_CACHE_SEC", "8"))
+    except Exception:
+        return 8.0
+
+
+def _cache_get(cache: Dict[str, Dict[str, Any]], key: str) -> Optional[Dict[str, Any]]:
+    e = cache.get(key)
+    if not isinstance(e, dict):
+        return None
+    t = float(e.get("_ts", 0.0) or 0.0)
+    if (time.time() - t) > max(0.5, _cache_ttl_sec()):
+        return None
+    v = e.get("value")
+    if isinstance(v, dict):
+        return dict(v)
+    return None
+
+
+def _cache_put(cache: Dict[str, Dict[str, Any]], key: str, value: Dict[str, Any]) -> None:
+    cache[key] = {"_ts": time.time(), "value": dict(value)}
 
 
 def _start_renko_cache_updater_if_enabled() -> None:
@@ -273,12 +299,18 @@ def _kucoin_broker():
 @app.get("/api/status")
 def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
     """API status: whether KuCoin credentials are set, and current ticker (bid/ask) from KuCoin."""
+    cache_key = _normalize_symbol(symbol)
+    cached = _cache_get(_STATUS_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
     key = (os.getenv("KUCOIN_FUTURES_API_KEY") or "").strip()
     out = {"ok": True, "ts": _now_utc_iso(), "api_configured": bool(key)}
     if not key:
         out["ticker"] = None
         out["balance"] = None
         out["hint"] = "Set KUCOIN_FUTURES_API_KEY, KUCOIN_FUTURES_API_SECRET, KUCOIN_FUTURES_PASSPHRASE (e.g. in .env or cloud env vars)."
+        _cache_put(_STATUS_CACHE, cache_key, out)
         return out
     try:
         broker = _kucoin_broker()
@@ -293,27 +325,39 @@ def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
     except Exception as e:
         out["balance"] = None
         out["balance_error"] = str(e)
+    _cache_put(_STATUS_CACHE, cache_key, out)
     return out
 
 
 @app.get("/api/position")
 def api_position(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
     """Current position from KuCoin Futures (signed: >0 long, <0 short)."""
+    cache_key = _normalize_symbol(symbol)
+    cached = _cache_get(_POSITION_CACHE, cache_key)
+    if cached is not None:
+        return cached
+
     key = (os.getenv("KUCOIN_FUTURES_API_KEY") or "").strip()
     if not key:
-        return {"ok": True, "symbol": symbol, "position": None, "side": None, "leverage": None, "hint": "Configure KuCoin API keys."}
+        out = {"ok": True, "symbol": symbol, "position": None, "side": None, "leverage": None, "hint": "Configure KuCoin API keys."}
+        _cache_put(_POSITION_CACHE, cache_key, out)
+        return out
     try:
         broker = _kucoin_broker()
         info = broker.get_position_info(symbol)
-        return {
+        out = {
             "ok": True,
             "symbol": symbol,
             "position": info.get("size"),
             "side": info.get("side"),
             "leverage": info.get("leverage"),
         }
+        _cache_put(_POSITION_CACHE, cache_key, out)
+        return out
     except Exception as e:
-        return {"ok": False, "symbol": symbol, "position": None, "side": None, "leverage": None, "error": str(e)}
+        out = {"ok": False, "symbol": symbol, "position": None, "side": None, "leverage": None, "error": str(e)}
+        _cache_put(_POSITION_CACHE, cache_key, out)
+        return out
 
 
 @app.post("/api/manual/order")
@@ -665,9 +709,9 @@ def api_dashboard_diary(max_points: int = 500) -> Dict[str, Any]:
 
 
 @app.get("/api/dashboard/fills")
-def api_dashboard_fills(max_points: int = 500) -> Dict[str, Any]:
+def api_dashboard_fills(symbol: str = DEFAULT_SYMBOL, max_points: int = 500) -> Dict[str, Any]:
     try:
-        rows = load_fills_cache_rows(max_points=int(max(10, max_points)))
+        rows = load_fills_cache_rows(symbol=symbol, max_points=int(max(10, max_points)))
         return {"ok": True, "rows": rows, "count": len(rows), "ts": _now_utc_iso()}
     except Exception as e:
         return {"ok": False, "rows": [], "count": 0, "error": str(e), "ts": _now_utc_iso()}
@@ -747,6 +791,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .fills-row.head { color: var(--muted); font-weight: 600; position: sticky; top: 0; background: #1e2333; z-index: 1; }
     .fills-buy { color: #2ecc71; }
     .fills-sell { color: #f7768e; }
+    .manual-grid { display: grid; grid-template-columns: 1fr 72px; gap: 6px; margin-top: 0.35rem; }
+    .manual-grid select, .manual-grid input, .manual-grid button {
+      background: #141823; color: var(--text); border: 1px solid #2a3044; border-radius: 6px; padding: 4px 6px; font-size: 0.75rem;
+    }
+    .manual-btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 0.35rem; }
+    .manual-btn-row button {
+      background: #1a2030; color: var(--text); border: 1px solid #2a3044; border-radius: 6px; padding: 4px 6px; font-size: 0.74rem; cursor: pointer;
+    }
+    .manual-send { width: 100%; margin-top: 0.35rem; background: #25314a; color: var(--text); border: 1px solid #3a4b72; border-radius: 6px; padding: 5px 8px; font-size: 0.78rem; cursor: pointer; }
+    .manual-result { font-size: 0.72rem; margin-top: 0.35rem; min-height: 1rem; white-space: pre-wrap; word-break: break-word; }
     @media (max-width: 1200px) { .layout { grid-template-columns: 1fr; } .chart-wrap { height: 520px; } .bottom-row { grid-template-columns: 1fr 1fr; } }
     @media (max-width: 800px) { .bottom-row { grid-template-columns: 1fr; } }
   </style>
@@ -782,6 +836,24 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       <div id="fills-list" class="fills-list">
         <div class="fills-row head"><span>time (UTC)</span><span>side</span><span>qty</span><span>price</span><span>reason</span></div>
       </div>
+      <div style="margin-top:0.55rem;font-size:0.8rem;color:var(--muted);font-weight:600;">Manual orders</div>
+      <div class="manual-grid">
+        <select id="manual-action" class="mono">
+          <option value="cancel_short" selected>cancel_short</option>
+          <option value="cancel_long">cancel_long</option>
+          <option value="flatten">flatten</option>
+          <option value="enter_long">enter_long</option>
+          <option value="enter_short">enter_short</option>
+          <option value="cancel_all_orders">cancel_all_orders</option>
+        </select>
+        <input id="manual-qty" class="mono" type="number" min="0" step="1" placeholder="qty">
+      </div>
+      <div class="manual-btn-row">
+        <button id="manual-cancel-short" type="button">Cancel short</button>
+        <button id="manual-cancel-long" type="button">Cancel long</button>
+      </div>
+      <button id="manual-send" class="manual-send" type="button">Send manual order</button>
+      <div id="manual-result" class="manual-result mono">-</div>
       <p id="hint" class="hint"></p>
     </div>
   </div>
@@ -908,6 +980,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     let hasFittedOnce = false;
     const bgImages = { xy: null, xz: null, yz: null };
     let ssPayload = null;
+    let lastSegmentsSig = '';
+    let tickInFlight = false;
+
+    function escapeHtml(v) {
+      return String(v == null ? '' : v)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
 
     // ── Regime gradient helpers ──
     function scoreToColor(score, alpha) {
@@ -1505,6 +1588,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const payload = await fetch(chartUrl).then(r => r.json());
       latestPayload = payload;
       if (!payload.ok) return;
+      const prevLogicalRange = hasFittedOnce ? chart.timeScale().getVisibleLogicalRange() : null;
 
       const barsRaw = Array.isArray(payload.bars) ? payload.bars : [];
       timeMap = buildTimeMapFromBars(barsRaw);
@@ -1535,13 +1619,17 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         priceLineSeries.setData([]);
       }
 
-      for (const s of tradeSegmentSeries) chart.removeSeries(s);
-      tradeSegmentSeries.length = 0;
       const segments = Array.isArray(payload.segments) ? payload.segments : [];
-      for (const seg of segments) {
-        const ls = chart.addLineSeries({ color: seg.color || '#9aa5b1', lineWidth: 2, title: seg.positive ? 'Trade +' : 'Trade -' });
-        ls.setData(mapSegmentForChart(seg));
-        tradeSegmentSeries.push(ls);
+      const segSig = JSON.stringify(segments.map((s) => [s.from_time, s.to_time, s.from_price, s.to_price, s.color, !!s.positive]));
+      if (segSig !== lastSegmentsSig) {
+        for (const s of tradeSegmentSeries) chart.removeSeries(s);
+        tradeSegmentSeries.length = 0;
+        for (const seg of segments) {
+          const ls = chart.addLineSeries({ color: seg.color || '#9aa5b1', lineWidth: 2, title: seg.positive ? 'Trade +' : 'Trade -' });
+          ls.setData(mapSegmentForChart(seg));
+          tradeSegmentSeries.push(ls);
+        }
+        lastSegmentsSig = segSig;
       }
 
       const exitModeEl = document.getElementById('exit-mode');
@@ -1601,6 +1689,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       if (!hasFittedOnce) {
         chart.timeScale().fitContent();
         hasFittedOnce = true;
+      } else if (prevLogicalRange) {
+        chart.timeScale().setVisibleLogicalRange(prevLogicalRange);
       }
       drawRegimeBand();
       drawEquityCurve();
@@ -1630,23 +1720,61 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const host = document.getElementById('fills-list');
       if (!host) return;
       try {
-        const data = await fetch('/api/dashboard/fills?max_points=30').then(r => r.json());
+        const data = await fetch('/api/dashboard/fills?max_points=200').then(r => r.json());
         if (!data.ok) return;
         const rows = Array.isArray(data.rows) ? data.rows : [];
         const lines = ['<div class=\"fills-row head\"><span>time (UTC)</span><span>side</span><span>qty</span><span>price</span><span>reason</span></div>'];
-        for (let i = Math.max(0, rows.length - 20); i < rows.length; i++) {
+        for (let i = Math.max(0, rows.length - 80); i < rows.length; i++) {
           const r = rows[i] || {};
-          const t = Number(r.time || 0);
           const ts = (typeof r.time_utc === 'string' && r.time_utc) ? r.time_utc : '-';
           const side = String(r.side || '-').toLowerCase();
           const cls = side === 'buy' ? 'fills-buy' : (side === 'sell' ? 'fills-sell' : '');
           const qty = Number.isFinite(Number(r.size)) ? Number(r.size).toFixed(2) : '-';
           const px = Number.isFinite(Number(r.price)) ? Number(r.price).toFixed(3) : '-';
-          const reason = String(r.reason || '-');
-          lines.push(`<div class=\"fills-row\"><span>${ts}</span><span class=\"${cls}\">${side}</span><span>${qty}</span><span>${px}</span><span>${reason}</span></div>`);
+          const reasonBase = String(r.reason || '-');
+          const cid = (typeof r.client_oid === 'string' && r.client_oid) ? ` [${r.client_oid}]` : '';
+          const reason = reasonBase + cid;
+          lines.push(
+            `<div class=\"fills-row\"><span>${escapeHtml(ts)}</span><span class=\"${cls}\">${escapeHtml(side)}</span><span>${escapeHtml(qty)}</span><span>${escapeHtml(px)}</span><span>${escapeHtml(reason)}</span></div>`
+          );
         }
         host.innerHTML = lines.join('');
       } catch (e) { /* fills unavailable */ }
+    }
+
+    async function sendManualOrder(actionOverride) {
+      const actionEl = document.getElementById('manual-action');
+      const qtyEl = document.getElementById('manual-qty');
+      const resultEl = document.getElementById('manual-result');
+      if (!actionEl || !qtyEl || !resultEl) return;
+      const action = String(actionOverride || actionEl.value || '').trim();
+      if (!action) return;
+      const qtyRaw = String(qtyEl.value || '').trim();
+      const payload = { action };
+      const isEntry = action === 'enter_long' || action === 'enter_short';
+      if (qtyRaw.length) {
+        const q = Number(qtyRaw);
+        if (Number.isFinite(q) && q > 0) payload.qty = q;
+      }
+      if (isEntry && payload.qty == null) {
+        resultEl.textContent = 'qty is required for enter_long / enter_short';
+        return;
+      }
+      const headers = { 'Content-Type': 'application/json' };
+      const tok = String(qs.get('token') || '').trim();
+      if (tok) headers['x-webhook-token'] = tok;
+      resultEl.textContent = 'sending...';
+      try {
+        const data = await fetch('/api/manual/order', {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(payload),
+        }).then(r => r.json());
+        resultEl.textContent = JSON.stringify(data);
+        await Promise.all([loadMeta(), loadFills(), loadChart()]);
+      } catch (e) {
+        resultEl.textContent = String(e && e.message ? e.message : e);
+      }
     }
 
     chart.timeScale().subscribeVisibleTimeRangeChange(() => drawRegimeBand());
@@ -1685,10 +1813,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
 
     async function tick() {
-      await Promise.all([loadMeta(), loadChart(), loadFills()]);
+      if (tickInFlight) return;
+      tickInFlight = true;
+      try {
+        await Promise.all([loadMeta(), loadChart(), loadFills()]);
+      } finally {
+        tickInFlight = false;
+      }
     }
     tick();
     loadStateSpace();
+    document.getElementById('manual-send').addEventListener('click', () => sendManualOrder(null));
+    document.getElementById('manual-cancel-short').addEventListener('click', () => sendManualOrder('cancel_short'));
+    document.getElementById('manual-cancel-long').addEventListener('click', () => sendManualOrder('cancel_long'));
     setInterval(tick, uiRefreshMs);
     setInterval(loadStateSpace, ssRefreshMs);
   </script>

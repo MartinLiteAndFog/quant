@@ -4,10 +4,12 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
-from quant.execution.webhook_server import api_dashboard_chart, api_regime_latest, api_dashboard_statespace, dashboard
+import quant.execution.webhook_server as ws
+from quant.execution.webhook_server import api_dashboard_chart, api_regime_latest, api_dashboard_statespace, api_status, dashboard
 from quant.regime import RegimeDecision, RegimeService, RegimeStore
 
 
@@ -102,8 +104,14 @@ class WebhookDashboardApiTests(unittest.TestCase):
                 reason_code="seed",
             )
         )
+        ws._STATUS_CACHE.clear()
+        ws._POSITION_CACHE.clear()
 
     def tearDown(self) -> None:
+        ws._STATUS_CACHE.clear()
+        ws._POSITION_CACHE.clear()
+        os.environ.pop("DASHBOARD_API_CACHE_SEC", None)
+        os.environ.pop("KUCOIN_FUTURES_API_KEY", None)
         self.tmp.cleanup()
 
     def test_chart_payload_shape(self) -> None:
@@ -215,6 +223,34 @@ class WebhookDashboardApiTests(unittest.TestCase):
         html = dashboard()
         self.assertIn("const uiRefreshMsDefault = 2500;", html)
         self.assertIn("const ssRefreshMsDefault = 12000;", html)
+        self.assertIn("id=\"manual-action\"", html)
+        self.assertIn("/api/manual/order", html)
+
+    def test_api_status_uses_cache_within_ttl(self) -> None:
+        os.environ["KUCOIN_FUTURES_API_KEY"] = "x"
+        os.environ["DASHBOARD_API_CACHE_SEC"] = "120"
+
+        class _DummyBroker:
+            def __init__(self):
+                self.ticker_calls = 0
+                self.balance_calls = 0
+
+            def get_best_bid_ask(self, symbol):
+                self.ticker_calls += 1
+                return (100.0, 101.0)
+
+            def get_account_balance(self, currency="USDT"):
+                self.balance_calls += 1
+                return {"equity": 123.0}
+
+        b = _DummyBroker()
+        with patch("quant.execution.webhook_server._kucoin_broker", return_value=b):
+            a = api_status(symbol="SOL-USDT")
+            c = api_status(symbol="SOL-USDT")
+        self.assertTrue(a.get("ok"))
+        self.assertTrue(c.get("ok"))
+        self.assertEqual(b.ticker_calls, 1)
+        self.assertEqual(b.balance_calls, 1)
 
 
 if __name__ == "__main__":

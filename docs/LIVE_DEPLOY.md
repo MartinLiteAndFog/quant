@@ -91,6 +91,9 @@ Wenn du willst, kann der Webservice selbst im Hintergrund den Dashboard-Renko-Ca
 - `DASHBOARD_RENKO_REFRESH_COOLDOWN_SEC=15`
 - `DASHBOARD_UI_REFRESH_MS=4000`
 - `DASHBOARD_STATESPACE_REFRESH_MS=15000`
+- `DASHBOARD_API_CACHE_SEC=8`
+- `DASHBOARD_FILLS_REFRESH_COOLDOWN_SEC=20`
+- `DASHBOARD_FILLS_FETCH_LIMIT=200`
 
 Hinweis: Das aktualisiert nur die Dashboard-Renko-Datei (`DASHBOARD_RENKO_PARQUET`), nicht die Trading-Logik an sich.
 
