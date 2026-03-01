@@ -65,15 +65,40 @@ class MatchedTrade:
     pnl_pct_actual: Optional[float] = None
 
 
+def _default_live_dir() -> Path:
+    """Use mounted volume by default when available."""
+    if Path("/data").exists():
+        return Path("/data/live")
+    return Path("data/live")
+
+
 def _live_dir() -> Path:
-    return Path(os.getenv("QUANT_LIVE_DIR", "data/live"))
+    raw = (os.getenv("QUANT_LIVE_DIR") or "").strip()
+    if raw:
+        return Path(raw)
+    return _default_live_dir()
+
+
+def _expected_trades_path(live_dir: Optional[Path] = None) -> Path:
+    """
+    Resolve expected-trades path.
+    Priority:
+      1) explicit live_dir argument
+      2) DASHBOARD_EXPECTED_TRADES_JSONL env (shared dashboard path)
+      3) QUANT_LIVE_DIR or mounted /data/live fallback
+    """
+    if live_dir is not None:
+        return Path(live_dir) / "expected_trades.jsonl"
+    env_path = (os.getenv("DASHBOARD_EXPECTED_TRADES_JSONL") or "").strip()
+    if env_path:
+        return Path(env_path)
+    return _live_dir() / "expected_trades.jsonl"
 
 
 def record_expected(trade: ExpectedTrade, live_dir: Optional[Path] = None) -> None:
     """Append one expected trade to JSONL for later matching."""
-    d = _live_dir() if live_dir is None else live_dir
-    d.mkdir(parents=True, exist_ok=True)
-    path = d / "expected_trades.jsonl"
+    path = _expected_trades_path(live_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(asdict(trade), ensure_ascii=False, separators=(",", ":"), default=str)
     with open(path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
@@ -82,8 +107,7 @@ def record_expected(trade: ExpectedTrade, live_dir: Optional[Path] = None) -> No
 
 def load_expected_trades(live_dir: Optional[Path] = None, since_ts: Optional[str] = None) -> pd.DataFrame:
     """Load expected trades from JSONL."""
-    d = _live_dir() if live_dir is None else live_dir
-    path = d / "expected_trades.jsonl"
+    path = _expected_trades_path(live_dir)
     if not path.exists():
         return pd.DataFrame()
     rows = []

@@ -12,6 +12,7 @@ import pandas as pd
 from quant.execution.dashboard_state import (
     build_regime_overlay,
     load_active_levels,
+    load_fills_cache_rows,
     load_live_fill_markers,
     load_renko_bars,
     load_trade_markers,
@@ -80,6 +81,8 @@ class DashboardStateTests(unittest.TestCase):
         )
 
     def tearDown(self) -> None:
+        os.environ.pop("DASHBOARD_FILLS_PARQUET", None)
+        os.environ.pop("DASHBOARD_EXPECTED_TRADES_JSONL", None)
         self.tmp.cleanup()
 
     def test_load_renko_bars(self) -> None:
@@ -123,6 +126,48 @@ class DashboardStateTests(unittest.TestCase):
         markers = load_live_fill_markers(symbol="SOL-USDT", limit=10, start_ts=int(ts.timestamp()) - 60)
         self.assertEqual(len(markers), 1)
         self.assertEqual(int(markers[0]["time"]), int(ts.timestamp()))
+
+    def test_load_fills_cache_rows_prefers_client_oid_reason_mapping(self) -> None:
+        fills_path = self.tmp_path / "fills_cache.parquet"
+        expected_path = self.tmp_path / "expected_trades.jsonl"
+        os.environ["DASHBOARD_FILLS_PARQUET"] = str(fills_path)
+        os.environ["DASHBOARD_EXPECTED_TRADES_JSONL"] = str(expected_path)
+
+        base_ts = int(pd.Timestamp("2026-02-27T17:30:00Z").timestamp())
+        pd.DataFrame(
+            [
+                {
+                    "time": base_ts,
+                    "side": "buy",
+                    "size": 5.0,
+                    "price": 83.0,
+                    "client_oid": "manual-flatten-short-001",
+                },
+                {
+                    "time": base_ts + 1,
+                    "side": "buy",
+                    "size": 5.0,
+                    "price": 83.0,
+                    "client_oid": "other-oid",
+                },
+            ]
+        ).to_parquet(fills_path, index=False)
+
+        expected_path.write_text(
+            "\n".join(
+                [
+                    '{"ts":"2026-02-27T17:29:58Z","symbol":"SOL-USDT","side":"short","action":"exit_sl","qty":5,"client_oid":"manual-flatten-short-001","note":"event=manual_flatten_short source=test"}',
+                    '{"ts":"2026-02-27T17:29:59Z","symbol":"SOL-USDT","side":"short","action":"exit_sl","qty":5,"client_oid":"different-oid","note":"event=sl_exit source=test"}',
+                ]
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        rows = load_fills_cache_rows(max_points=10)
+        self.assertEqual(len(rows), 2)
+        row = next(r for r in rows if r.get("client_oid") == "manual-flatten-short-001")
+        self.assertEqual(row.get("reason"), "manual_flatten_short")
 
 
 if __name__ == "__main__":

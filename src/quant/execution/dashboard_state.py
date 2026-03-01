@@ -94,10 +94,24 @@ def _read_fills_df() -> pd.DataFrame:
     if not need.issubset(set(df.columns)):
         return pd.DataFrame()
     df = df.copy()
+    # Normalize optional metadata columns used for richer reason mapping.
+    if "client_oid" not in df.columns and "clientOid" in df.columns:
+        df["client_oid"] = df["clientOid"]
+    if "order_id" not in df.columns and "orderId" in df.columns:
+        df["order_id"] = df["orderId"]
+    if "reduce_only" not in df.columns and "reduceOnly" in df.columns:
+        df["reduce_only"] = df["reduceOnly"]
     df["time"] = pd.to_numeric(df["time"], errors="coerce")
     df["side"] = df["side"].astype(str).str.lower()
     df["size"] = pd.to_numeric(df["size"], errors="coerce")
     df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    if "client_oid" in df.columns:
+        df["client_oid"] = df["client_oid"].where(df["client_oid"].notna(), "").astype(str)
+    if "order_id" in df.columns:
+        df["order_id"] = df["order_id"].where(df["order_id"].notna(), "").astype(str)
+    if "reduce_only" in df.columns:
+        # Keep nullable/bool semantics when present.
+        df["reduce_only"] = df["reduce_only"].astype("boolean")
     df = df.dropna(subset=["time", "side", "size", "price"])
     df = df[df["size"] > 0].sort_values("time").reset_index(drop=True)
     return df
@@ -134,8 +148,8 @@ def _refresh_renko_cache_if_needed(existing_df: pd.DataFrame) -> pd.DataFrame:
     if not _truthy(os.getenv("DASHBOARD_RENKO_AUTO_REFRESH_ON_READ", "1")):
         return existing_df
     now = pd.Timestamp.now("UTC")
-    stale_min = int(os.getenv("DASHBOARD_RENKO_STALE_MIN", "5"))
-    refresh_cooldown_sec = int(os.getenv("DASHBOARD_RENKO_REFRESH_COOLDOWN_SEC", "60"))
+    stale_min = int(os.getenv("DASHBOARD_RENKO_STALE_MIN", "1"))
+    refresh_cooldown_sec = int(os.getenv("DASHBOARD_RENKO_REFRESH_COOLDOWN_SEC", "15"))
     is_stale = True
     if not existing_df.empty:
         last_ts = pd.Timestamp(existing_df["ts"].iloc[-1])
@@ -360,10 +374,21 @@ def load_live_fill_markers(symbol: str, limit: int = 100, start_ts: Optional[int
             t_sec = _epoch_seconds_from_any(t_raw)
             if t_sec is None:
                 continue
+            client_oid = str(r.get("clientOid") or r.get("client_oid") or "").strip()
+            order_id = str(r.get("orderId") or r.get("order_id") or "").strip()
+            reduce_only = bool(r.get("reduceOnly", r.get("reduce_only", False)))
         except Exception:
             continue
         norm_rows.append(
-            {"time": int(t_sec), "side": side, "size": float(sz), "price": float(px)}
+            {
+                "time": int(t_sec),
+                "side": side,
+                "size": float(sz),
+                "price": float(px),
+                "client_oid": client_oid or None,
+                "order_id": order_id or None,
+                "reduce_only": reduce_only,
+            }
         )
 
     if norm_rows:
@@ -375,7 +400,8 @@ def load_live_fill_markers(symbol: str, limit: int = 100, start_ts: Optional[int
                 all_df = pd.concat([old_df, fresh_df], ignore_index=True)
             else:
                 all_df = fresh_df
-            all_df = all_df.drop_duplicates(subset=["time", "side", "size", "price"], keep="last").sort_values("time")
+            dedupe_cols = [c for c in ("time", "side", "size", "price", "order_id", "client_oid") if c in all_df.columns]
+            all_df = all_df.drop_duplicates(subset=dedupe_cols, keep="last").sort_values("time")
             all_df.to_parquet(fills_path, index=False)
         except Exception:
             pass
@@ -420,6 +446,7 @@ def load_fills_cache_rows(max_points: int = 500) -> List[Dict[str, Any]]:
     df = df.sort_values("time").tail(int(max(1, max_points)))
 
     expected_by_time: List[Dict[str, Any]] = []
+    expected_by_client_oid: Dict[str, str] = {}
     exp = load_latest_expected_entry()
     # Build richer expected-event map from expected_trades.jsonl if available.
     p_exp = _env_path("DASHBOARD_EXPECTED_TRADES_JSONL", _live_default("expected_trades.jsonl"))
@@ -445,20 +472,28 @@ def load_fills_cache_rows(max_points: int = 500) -> List[Dict[str, Any]]:
                             reason = note.split("event=", 1)[1].split()[0].strip()
                         except Exception:
                             reason = action
+                    client_oid = str(obj.get("client_oid") or obj.get("clientOid") or "").strip()
                     expected_by_time.append(
                         {
                             "time": int(pd.Timestamp(ts).timestamp()),
                             "reason": reason or action or "unknown",
+                            "client_oid": client_oid or None,
                         }
                     )
+                    if client_oid:
+                        expected_by_client_oid[client_oid] = reason or action or "unknown"
         except Exception:
             expected_by_time = []
+            expected_by_client_oid = {}
     if not expected_by_time and exp is not None:
         expected_by_time = [{"time": int(exp["entry_time"]), "reason": "entry"}]
 
     expected_by_time = sorted(expected_by_time, key=lambda x: int(x["time"]))
 
-    def infer_reason(fill_ts: int) -> str:
+    def infer_reason(fill_ts: int, fill_client_oid: Optional[str]) -> str:
+        cid = str(fill_client_oid or "").strip()
+        if cid and cid in expected_by_client_oid:
+            return str(expected_by_client_oid[cid])
         if not expected_by_time:
             return "-"
         best = None
@@ -478,6 +513,14 @@ def load_fills_cache_rows(max_points: int = 500) -> List[Dict[str, Any]]:
         ts_i = int(r["time"])
         ts = pd.to_datetime(ts_i, unit="s", utc=True, errors="coerce")
         dt_utc = ts.strftime("%Y-%m-%d %H:%M:%S UTC") if pd.notna(ts) else "-"
+        fill_client_oid = str(r.get("client_oid", "") or "").strip()
+        fill_order_id = str(r.get("order_id", "") or "").strip()
+        fill_reduce_only = None
+        if "reduce_only" in df.columns:
+            try:
+                fill_reduce_only = bool(r.get("reduce_only"))
+            except Exception:
+                fill_reduce_only = None
         out.append(
             {
                 "time": ts_i,
@@ -485,7 +528,10 @@ def load_fills_cache_rows(max_points: int = 500) -> List[Dict[str, Any]]:
                 "side": str(r["side"]),
                 "size": float(r["size"]),
                 "price": float(r["price"]),
-                "reason": infer_reason(ts_i),
+                "reason": infer_reason(ts_i, fill_client_oid),
+                "client_oid": fill_client_oid or None,
+                "order_id": fill_order_id or None,
+                "reduce_only": fill_reduce_only,
             }
         )
     return out

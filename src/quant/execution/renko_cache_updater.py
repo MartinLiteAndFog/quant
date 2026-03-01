@@ -146,7 +146,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--days-back", type=int, default=int(os.getenv("DASHBOARD_RENKO_DAYS_BACK", "14")))
     p.add_argument("--step-hours", type=int, default=int(os.getenv("DASHBOARD_RENKO_STEP_HOURS", "6")))
     p.add_argument("--out-parquet", default=os.getenv("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet"))
-    p.add_argument("--poll-sec", type=float, default=float(os.getenv("DASHBOARD_RENKO_POLL_SEC", "300")))
+    p.add_argument("--poll-sec", type=float, default=float(os.getenv("DASHBOARD_RENKO_POLL_SEC", "60")))
     p.add_argument("--once", action="store_true")
     return p.parse_args()
 

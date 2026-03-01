@@ -86,9 +86,21 @@ Wenn du willst, kann der Webservice selbst im Hintergrund den Dashboard-Renko-Ca
 - `DASHBOARD_RENKO_BOX=0.1`
 - `DASHBOARD_RENKO_DAYS_BACK=14`
 - `DASHBOARD_RENKO_STEP_HOURS=6`
-- `DASHBOARD_RENKO_POLL_SEC=300`
+- `DASHBOARD_RENKO_POLL_SEC=60`
+- `DASHBOARD_RENKO_STALE_MIN=1`
+- `DASHBOARD_RENKO_REFRESH_COOLDOWN_SEC=15`
+- `DASHBOARD_UI_REFRESH_MS=4000`
+- `DASHBOARD_STATESPACE_REFRESH_MS=15000`
 
 Hinweis: Das aktualisiert nur die Dashboard-Renko-Datei (`DASHBOARD_RENKO_PARQUET`), nicht die Trading-Logik an sich.
+
+### Manual order command (with trade-log integration)
+
+Manual orders can be sent via CLI and are written to `expected_trades.jsonl` (with manual event tags), so fills appear in the dashboard trade/fills log with reason labels:
+
+```bash
+PYTHONPATH=src python3 -m quant.execution.manual_orders --symbol SOL-USDT --action cancel_short
+```
 
 ## Live-Ausführung (Signal + Gate-Routing + Trailing + Executor)
 

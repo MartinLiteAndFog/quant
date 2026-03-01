@@ -304,25 +304,60 @@ def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Opt
     """Write current flip-engine state to execution_state.json for the dashboard."""
     if not terminal:
         return
-    # If exchange reports an open position but model terminal state is flat/unknown,
-    # keep existing dashboard state instead of wiping entry/side fields.
-    side = terminal.get("side")
+
+    def _norm_side(v: Any) -> Optional[str]:
+        if isinstance(v, (int, float)):
+            if float(v) > 0:
+                return "long"
+            if float(v) < 0:
+                return "short"
+            return None
+        s = str(v or "").strip().lower()
+        if s in ("1", "+1", "long", "buy"):
+            return "long"
+        if s in ("-1", "short", "sell"):
+            return "short"
+        return None
+
+    side = _norm_side(terminal.get("side"))
     entry_px = terminal.get("entry_px")
-    if live_pos is not None and abs(float(live_pos)) > 1e-12 and (side is None or entry_px is None):
-        log.warning(
-            "executor skip dashboard-state overwrite: live_pos=%s terminal_side=%s terminal_entry_px=%s",
-            live_pos,
-            side,
-            entry_px,
-        )
-        return
     entry_bar_ts = terminal.get("entry_bar_ts")
+    sl = terminal.get("sl")
+    ttp = terminal.get("ttp")
+
+    if live_pos is not None:
+        lp = float(live_pos)
+        if abs(lp) <= 1e-12:
+            # After manual flatten (or any external close), clear stale in-position levels.
+            side = None
+            entry_px = None
+            entry_bar_ts = None
+            sl = None
+            ttp = None
+        else:
+            live_side = "long" if lp > 0 else "short"
+            if side != live_side:
+                # Live position is source-of-truth for side; avoid showing stale opposite state.
+                side = live_side
+                entry_px = None
+                entry_bar_ts = None
+                sl = None
+                ttp = None
+            elif entry_px is None:
+                log.warning(
+                    "executor skip dashboard-state overwrite: live_pos=%s terminal_side=%s terminal_entry_px=%s",
+                    live_pos,
+                    side,
+                    entry_px,
+                )
+                return
+
     write_execution_state({
         "symbol": symbol,
         "side": side,
         "mode": terminal.get("mode"),
-        "sl": terminal.get("sl"),
-        "ttp": terminal.get("ttp"),
+        "sl": sl,
+        "ttp": ttp,
         "entry_px": entry_px,
         "entry_bar_ts": int(pd.Timestamp(entry_bar_ts).timestamp()) if entry_bar_ts is not None else None,
     })
@@ -414,17 +449,48 @@ def run_once(
     if action == "hold" and current_side == want_side and abs(pos) + 1e-12 < float(qty):
         action = f"scale_{want_side}"
 
-    # Record expected trade for post-trade monitoring.
-    if action in ("enter_long", "enter_short", "flip_to_long", "flip_to_short"):
+    # Record expected trade intents for fills-reason mapping in dashboard.
+    exp_side: Optional[str] = None
+    exp_action: Optional[str] = None
+    exp_qty: Optional[float] = None
+    exp_note: Optional[str] = None
+    if action in ("enter_long", "enter_short"):
+        exp_side = want_side
+        exp_action = "entry"
+        exp_qty = float(qty)
+        exp_note = f"executor action={action} event={event} current={current_side}"
+    elif action in ("flip_to_long", "flip_to_short"):
+        exp_side = want_side
+        exp_action = "exit_flip"
+        exp_qty = float(qty)
+        exp_note = f"executor action={action} event={event} current={current_side}"
+    elif action.startswith("exit_") and abs(pos) > 1e-12:
+        exp_side = current_side
+        if event in ("sl_exit", "be_exit"):
+            exp_action = "exit_sl"
+        elif event in ("tp_exit",):
+            exp_action = "exit_tp"
+        else:
+            exp_action = "exit_flip"
+        exp_qty = abs(float(pos))
+        exp_note = f"executor action={action} event={event} current={current_side}"
+    elif action.startswith("scale_"):
+        add_qty = max(0.0, float(qty) - abs(float(pos)))
+        if add_qty > 0:
+            exp_side = want_side
+            exp_action = "entry"
+            exp_qty = float(add_qty)
+            exp_note = f"executor action={action} event=scale current={current_side}"
+    if exp_side is not None and exp_action is not None and exp_qty is not None and exp_qty > 0:
         record_expected(
             ExpectedTrade(
                 ts=ts_iso,
                 symbol=symbol,
-                side=want_side,
-                action=("entry" if action.startswith("enter_") else "exit_flip"),
-                qty=float(qty),
+                side=exp_side,
+                action=exp_action,
+                qty=float(exp_qty),
                 expected_px=float(mid) if mid > 0 else None,
-                note=f"executor action={action} event={event} current={current_side}",
+                note=exp_note,
             )
         )
 
@@ -433,18 +499,20 @@ def run_once(
     elif dry_run:
         log.warning("executor DRY_RUN=1 -> simulated action=%s", action)
     else:
+        def _ok(res: Any) -> bool:
+            if isinstance(res, dict):
+                return bool(res.get("ok", False))
+            return bool(getattr(res, "ok", False))
+
         if action.startswith("enter_"):
             res = oms.enter(symbol=symbol, side=want_side, qty=float(qty))
             log.info("executor enter result=%s", res)
         elif action.startswith("flip_to_"):
-            # First flatten current side quantity, then re-enter target qty.
-            flat_res = oms.exit_tp_or_flip(symbol=symbol, side=current_side, qty=abs(float(pos)), flip_to=None)
-            log.info("executor flip flatten result=%s", flat_res)
-            if bool(getattr(flat_res, "ok", False)):
-                res = oms.enter(symbol=symbol, side=want_side, qty=float(qty))
-                log.info("executor flip re-enter result=%s", res)
-            else:
-                log.warning("executor flip aborted: flatten failed")
+            # Delegate flatten->reenter sequence to OMS so flip intent is atomic.
+            flip_res = oms.exit_tp_or_flip(symbol=symbol, side=current_side, qty=abs(float(pos)), flip_to=want_side)
+            log.info("executor flip result=%s", flip_res)
+            if not _ok(flip_res):
+                log.warning("executor flip aborted: flatten/re-enter failed")
         elif action.startswith("exit_"):
             res = oms.exit_sl(symbol=symbol, side=current_side, qty=abs(float(pos)))
             log.info("executor exit result=%s", res)
