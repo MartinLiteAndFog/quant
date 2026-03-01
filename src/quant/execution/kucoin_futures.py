@@ -12,6 +12,7 @@ import base64
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import time
@@ -21,7 +22,7 @@ from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
 
 from quant.execution.oms import BrokerAPI
-from quant.utils.log import get_logger
+from quant.utils.log import get_logger, log_throttled
 
 log = get_logger("quant.kucoin_futures")
 
@@ -114,10 +115,27 @@ def _request(
             out = json.loads(e.read().decode("utf-8"))
         except Exception:
             out = {"code": str(e.code), "msg": str(e.reason)}
-        log.warning("kucoin_futures request failed path=%s code=%s body=%s", path, e.code, out)
+        log_throttled(
+            log,
+            logging.WARNING,
+            f"kucoin_request_failed:{path}:{e.code}",
+            float(os.getenv("KUCOIN_LOG_THROTTLE_SEC", "30")),
+            "kucoin_futures request failed path=%s code=%s body=%s",
+            path,
+            e.code,
+            out,
+        )
         raise
     except URLError as e:
-        log.warning("kucoin_futures request error path=%s err=%s", path, e.reason)
+        log_throttled(
+            log,
+            logging.WARNING,
+            f"kucoin_request_error:{path}",
+            float(os.getenv("KUCOIN_LOG_THROTTLE_SEC", "30")),
+            "kucoin_futures request error path=%s err=%s",
+            path,
+            e.reason,
+        )
         raise
     if not out.get("code", "").startswith("2"):
         raise RuntimeError(f"KuCoin API error: {out.get('msg', out)}")
@@ -143,7 +161,13 @@ class KucoinFuturesBroker(BrokerAPI):
         self._margin_mode = (os.getenv("KUCOIN_FUTURES_MARGIN_MODE", "") or "").strip().lower()
         self._price_tick = float(os.getenv("KUCOIN_FUTURES_PRICE_TICK", "0.001"))
         if not self._key or not self._secret or not self._pass:
-            log.warning("KuCoin Futures credentials missing; set KUCOIN_FUTURES_* env vars")
+            log_throttled(
+                log,
+                logging.WARNING,
+                "kucoin_missing_credentials",
+                float(os.getenv("KUCOIN_LOG_THROTTLE_SEC", "300")),
+                "KuCoin Futures credentials missing; set KUCOIN_FUTURES_* env vars",
+            )
 
     def _req(self, method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return _request(
@@ -287,7 +311,15 @@ class KucoinFuturesBroker(BrokerAPI):
         try:
             self._req("DELETE", path)
         except Exception as e:
-            log.warning("cancel_all %s failed: %s", contract, e)
+            log_throttled(
+                log,
+                logging.WARNING,
+                f"kucoin_cancel_all_failed:{contract}",
+                float(os.getenv("KUCOIN_LOG_THROTTLE_SEC", "30")),
+                "cancel_all %s failed: %s",
+                contract,
+                e,
+            )
 
     def place_limit(
         self,
@@ -338,7 +370,15 @@ class KucoinFuturesBroker(BrokerAPI):
                 last_err = e
                 msg = str(e).lower()
                 if "margin mode" in msg and "does not match" in msg:
-                    log.warning("marginMode=%s mismatch for %s, trying fallback", mm, contract)
+                    log_throttled(
+                        log,
+                        logging.WARNING,
+                        f"kucoin_margin_mode_mismatch:{contract}",
+                        float(os.getenv("KUCOIN_LOG_THROTTLE_SEC", "60")),
+                        "marginMode=%s mismatch for %s, trying fallback",
+                        mm,
+                        contract,
+                    )
                     continue
                 raise
         if last_err:

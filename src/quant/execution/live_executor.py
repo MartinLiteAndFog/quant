@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import time
 from dataclasses import asdict, dataclass
@@ -15,7 +16,7 @@ from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
 from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
 from quant.strategies.signal_io import read_signals_jsonl
-from quant.utils.log import get_logger
+from quant.utils.log import get_logger, log_throttled
 
 log = get_logger("quant.live_executor")
 
@@ -60,7 +61,7 @@ def _safe_ts(v: Any) -> Optional[pd.Timestamp]:
 
 
 def _now_iso() -> str:
-    return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 @dataclass
@@ -259,16 +260,38 @@ def _verify_execution_fill_ratio(
     try:
         pos_after = float(broker.get_position(symbol))
     except Exception as e:
-        log.warning("executor verify skipped (position unavailable): %s", e)
+        log_throttled(
+            log,
+            logging.WARNING,
+            f"executor_verify_skipped:{symbol}",
+            float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "60")),
+            "executor verify skipped (position unavailable): %s",
+            e,
+        )
         return
 
     min_ratio = float(max(0.0, min(1.0, min_ratio)))
     if action.startswith("exit_"):
         ok = abs(pos_after) <= 1e-9
         if not ok:
-            log.warning("executor verify FAIL action=%s expected_flat got_pos=%s", action, pos_after)
+            log_throttled(
+                log,
+                logging.WARNING,
+                f"executor_verify_exit_fail:{symbol}:{action}",
+                float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "60")),
+                "executor verify FAIL action=%s expected_flat got_pos=%s",
+                action,
+                pos_after,
+            )
         else:
-            log.info("executor verify OK action=%s flat", action)
+            log_throttled(
+                log,
+                logging.INFO,
+                f"executor_verify_exit_ok:{symbol}:{action}",
+                float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "300")),
+                "executor verify OK action=%s flat",
+                action,
+            )
         return
 
     if target_qty <= 0 or target_side not in ("long", "short"):
@@ -279,7 +302,11 @@ def _verify_execution_fill_ratio(
     side_ok = got_side == target_side
     qty_ok = ratio >= min_ratio
     if side_ok and qty_ok:
-        log.info(
+        log_throttled(
+            log,
+            logging.INFO,
+            f"executor_verify_ok:{symbol}:{action}:{target_side}",
+            float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "300")),
             "executor verify OK action=%s side=%s qty=%s target=%s ratio=%.3f",
             action,
             got_side,
@@ -288,7 +315,11 @@ def _verify_execution_fill_ratio(
             ratio,
         )
     else:
-        log.warning(
+        log_throttled(
+            log,
+            logging.WARNING,
+            f"executor_verify_fail:{symbol}:{action}:{target_side}",
+            float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "60")),
             "executor verify FAIL action=%s want_side=%s got_side=%s got_qty=%s target_qty=%s ratio=%.3f min_ratio=%.3f",
             action,
             target_side,
@@ -344,7 +375,11 @@ def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Opt
                 sl = None
                 ttp = None
             elif entry_px is None:
-                log.warning(
+                log_throttled(
+                    log,
+                    logging.WARNING,
+                    f"executor_skip_state_overwrite:{symbol}",
+                    float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "120")),
                     "executor skip dashboard-state overwrite: live_pos=%s terminal_side=%s terminal_entry_px=%s",
                     live_pos,
                     side,
@@ -382,7 +417,14 @@ def run_once(
     if ev is None:
         sig = _latest_signal(signals_root=signals_root, symbol=symbol)
         if sig is None:
-            log.info("executor no signal yet symbol=%s", symbol)
+            log_throttled(
+                log,
+                logging.INFO,
+                f"executor_no_signal:{symbol}",
+                float(os.getenv("LIVE_EXECUTOR_NO_SIGNAL_LOG_SEC", "60")),
+                "executor no signal yet symbol=%s",
+                symbol,
+            )
             return state
         ts = sig["ts"]
         sig_v = int(sig["signal"])
@@ -414,7 +456,11 @@ def run_once(
     )
     qty = _qty_from_max_eur(max_eur=sizing_max_eur, leverage=leverage, mid_price=float(mid))
     if qty <= 0:
-        log.warning(
+        log_throttled(
+            log,
+            logging.WARNING,
+            f"executor_qty_zero:{symbol}",
+            float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "60")),
             "executor qty=0 (configured_max_eur=%s sizing_max_eur=%s leverage=%s mid=%s use_full_equity=%s) -> skip",
             max_eur,
             sizing_max_eur,
@@ -598,7 +644,14 @@ def main() -> None:
             )
             _write_state(state_path, st)
         except Exception as e:
-            log.warning("executor loop error: %s", e)
+            log_throttled(
+                log,
+                logging.WARNING,
+                f"executor_loop_error:{symbol}",
+                float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "30")),
+                "executor loop error: %s",
+                e,
+            )
             _write_state(state_path, st)
 
         if args.once:

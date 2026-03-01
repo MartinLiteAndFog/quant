@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import time
 from dataclasses import asdict, dataclass
@@ -16,7 +17,7 @@ from quant.execution.strategy_router import strategy_for_gate, trend_signals_fro
 from quant.features.renko import renko_from_close
 from quant.regime import RegimeStateRecord, RegimeStore
 from quant.strategies.imba import ImbaParams, compute_imba_signals
-from quant.utils.log import get_logger
+from quant.utils.log import get_logger, log_throttled
 
 log = get_logger("quant.live_signal_worker")
 
@@ -300,13 +301,27 @@ def run_once(
 ) -> WorkerState:
     bars = _fetch_recent_1m_ohlcv(broker, symbol=symbol, limit=candles_limit)
     if len(bars) < max(lookback, 20):
-        log.info("live-signal bars=%s waiting for enough data", len(bars))
+        log_throttled(
+            log,
+            logging.INFO,
+            f"live_signal_wait_bars:{symbol}",
+            float(os.getenv("LIVE_SIGNAL_LOG_THROTTLE_SEC", "60")),
+            "live-signal bars=%s waiting for enough data",
+            len(bars),
+        )
         state.last_poll_ts = _now_utc_iso()
         return state
 
     bricks = renko_from_close(bars[["ts", "close"]], box=float(renko_box))
     if bricks.empty:
-        log.info("live-signal no renko bricks (box=%s)", renko_box)
+        log_throttled(
+            log,
+            logging.INFO,
+            f"live_signal_no_bricks:{symbol}",
+            float(os.getenv("LIVE_SIGNAL_LOG_THROTTLE_SEC", "60")),
+            "live-signal no renko bricks (box=%s)",
+            renko_box,
+        )
         state.last_poll_ts = _now_utc_iso()
         return state
 
@@ -455,7 +470,11 @@ def run_once(
         )
     latest_calc = active_base.iloc[-1] if len(active_base) else None
     if latest_calc is not None:
-        log.info(
+        log_throttled(
+            log,
+            logging.INFO,
+            f"live_signal_status:{symbol}",
+            float(os.getenv("LIVE_SIGNAL_STATUS_LOG_SEC", "60")),
             "live-signal status symbol=%s strategy=%s gate_on=%s latest_calc_ts=%s latest_calc_sig=%s emitted_now=%s",
             symbol,
             active_mode,
@@ -508,7 +527,14 @@ def main() -> None:
             )
             _write_state(state_path, st)
         except Exception as e:
-            log.warning("live-signal worker loop error: %s", e)
+            log_throttled(
+                log,
+                logging.WARNING,
+                f"live_signal_loop_error:{args.symbol}",
+                float(os.getenv("LIVE_SIGNAL_ERROR_LOG_SEC", "30")),
+                "live-signal worker loop error: %s",
+                e,
+            )
             st.last_poll_ts = _now_utc_iso()
             _write_state(state_path, st)
 

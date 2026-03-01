@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import time
 from pathlib import Path
@@ -10,7 +11,7 @@ import pandas as pd
 
 from quant.execution.kucoin_futures import KucoinFuturesBroker, _symbol_to_contract
 from quant.features.renko import renko_from_close
-from quant.utils.log import get_logger
+from quant.utils.log import get_logger, log_throttled
 
 log = get_logger("quant.renko_cache_updater")
 KLINE_PAGE_LIMIT = 200
@@ -72,7 +73,16 @@ def _fetch_1m_close_paged(
                 f"/api/v1/kline/query?symbol={contract}&granularity=1&from={from_ms}&to={to_ms}",
             )
         except Exception as e:
-            log.warning("fetch page failed symbol=%s from=%s err=%s", symbol, cur.isoformat(), e)
+            log_throttled(
+                log,
+                logging.WARNING,
+                f"renko_cache_fetch_page_failed:{symbol}",
+                float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
+                "fetch page failed symbol=%s from=%s err=%s",
+                symbol,
+                cur.isoformat(),
+                e,
+            )
             rows = []
         rows = rows if isinstance(rows, list) else []
 
@@ -162,10 +172,24 @@ def main() -> None:
                 step_hours=int(args.step_hours),
                 out_parquet=str(args.out_parquet),
             )
-            log.info("renko cache refresh: %s", info)
+            log_throttled(
+                log,
+                logging.INFO,
+                "renko_cache_refresh_info",
+                float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
+                "renko cache refresh: %s",
+                info,
+            )
             print(info)
         except Exception as e:
-            log.warning("renko cache refresh failed: %s", e)
+            log_throttled(
+                log,
+                logging.WARNING,
+                "renko_cache_refresh_failed",
+                float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
+                "renko cache refresh failed: %s",
+                e,
+            )
             print({"ok": False, "error": str(e)})
 
         if args.once:

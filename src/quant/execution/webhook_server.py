@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import shutil
 import threading
@@ -40,7 +41,7 @@ from quant.execution.dashboard_statespace import (
     refresh_state_space_cache,
 )
 from quant.regime import RegimeStore, get_live_gate_confidence
-from ..utils.log import get_logger
+from ..utils.log import get_logger, log_throttled
 
 log = get_logger("quant.webhook")
 _STATUS_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -53,9 +54,23 @@ def _state_space_refresh_loop() -> None:
         try:
             info = refresh_state_space_cache()
             if info.get("ok"):
-                log.info("state space refresh: %d rows", info.get("rows", 0))
+                log_throttled(
+                    log,
+                    logging.INFO,
+                    "webhook_state_space_refresh_ok",
+                    float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
+                    "state space refresh: %d rows",
+                    info.get("rows", 0),
+                )
         except Exception as e:
-            log.warning("state space refresh failed: %s", e)
+            log_throttled(
+                log,
+                logging.WARNING,
+                "webhook_state_space_refresh_fail",
+                float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
+                "state space refresh failed: %s",
+                e,
+            )
         time.sleep(max(60, interval))
 
 
@@ -171,9 +186,23 @@ def _start_renko_cache_updater_if_enabled() -> None:
                     step_hours=int(step_hours),
                     out_parquet=str(out_parquet),
                 )
-                log.info("dashboard renko updater: %s", info)
+                log_throttled(
+                    log,
+                    logging.INFO,
+                    "webhook_renko_updater_ok",
+                    float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
+                    "dashboard renko updater: %s",
+                    info,
+                )
             except Exception as e:
-                log.warning("dashboard renko updater failed: %s", e)
+                log_throttled(
+                    log,
+                    logging.WARNING,
+                    "webhook_renko_updater_fail",
+                    float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
+                    "dashboard renko updater failed: %s",
+                    e,
+                )
             time.sleep(max(5.0, float(poll_sec)))
 
     t = threading.Thread(target=_loop, name="dashboard-renko-updater", daemon=True)
@@ -568,7 +597,14 @@ def api_dashboard_chart(
             live_gc = get_live_gate_confidence()
         except Exception as e:
             live_gc_error = str(e)
-            log.warning("live gate confidence unavailable: %s", e)
+            log_throttled(
+                log,
+                logging.WARNING,
+                "webhook_live_gate_conf_unavailable",
+                float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
+                "live gate confidence unavailable: %s",
+                e,
+            )
         selected_p_trend = (live_gc or {}).get("selected_p_trend")
         live_conf = float(max(0.0, min(1.0, selected_p_trend))) if isinstance(selected_p_trend, (float, int)) else None
         if live_conf is not None and isinstance(regime.get("latest"), dict):
