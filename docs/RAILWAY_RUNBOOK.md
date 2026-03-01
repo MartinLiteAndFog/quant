@@ -79,8 +79,11 @@ Set these in both services where applicable.
 ### Dashboard refresh controls
 
 - `DASHBOARD_RENKO_AUTO_REFRESH_ON_READ=1`
-- `DASHBOARD_RENKO_STALE_MIN=5`
-- `DASHBOARD_RENKO_REFRESH_COOLDOWN_SEC=60`
+- `DASHBOARD_RENKO_STALE_MIN=1`
+- `DASHBOARD_RENKO_REFRESH_COOLDOWN_SEC=15`
+- `DASHBOARD_RENKO_POLL_SEC=60`
+- `DASHBOARD_UI_REFRESH_MS=4000`
+- `DASHBOARD_STATESPACE_REFRESH_MS=15000`
 - `DASHBOARD_RENKO_DAYS_BACK=14`
 - `DASHBOARD_RENKO_STEP_HOURS=6`  # code clamps effective fetch window to API-safe chunks
 
@@ -153,6 +156,12 @@ tail -n 20 /data/live/signals/SOLUSDT/$(date -u +%Y%m%d).jsonl
 Rollback (instant):
 
 - `LIVE_EXECUTOR_DRY_RUN=1` and/or `LIVE_TRADING_ENABLED=0`
+
+Manual flatten command (short -> flat), with expected-trade logging so dashboard fill reason is visible:
+
+```bash
+PYTHONPATH=src python3 -m quant.execution.manual_orders --symbol SOL-USDT --action cancel_short
+```
 
 ## 10) Known caveats
 

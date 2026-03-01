@@ -18,3 +18,4 @@ dependencies = [
 [project.scripts]
 quant-backtest = "quant.backtest.renko_runner:main"
 quant-webhook = "quant.execution.webhook_server:main"
+quant-manual-order = "quant.execution.manual_orders:main"

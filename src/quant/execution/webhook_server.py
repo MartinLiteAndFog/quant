@@ -76,11 +76,11 @@ def _ensure_dir(p: Path) -> None:
 
 
 def _today_utc() -> str:
-    return pd.Timestamp.utcnow().strftime("%Y%m%d")
+    return pd.Timestamp.now("UTC").strftime("%Y%m%d")
 
 
 def _now_utc_iso() -> str:
-    return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
@@ -130,7 +130,7 @@ def _start_renko_cache_updater_if_enabled() -> None:
     box = float(os.getenv("DASHBOARD_RENKO_BOX", "0.1"))
     days_back = int(os.getenv("DASHBOARD_RENKO_DAYS_BACK", "14"))
     step_hours = int(os.getenv("DASHBOARD_RENKO_STEP_HOURS", "6"))
-    poll_sec = float(os.getenv("DASHBOARD_RENKO_POLL_SEC", "300"))
+    poll_sec = float(os.getenv("DASHBOARD_RENKO_POLL_SEC", "60"))
 
     def _loop() -> None:
         # Lazy import to avoid startup dependency when updater is disabled.
@@ -314,6 +314,64 @@ def api_position(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
         }
     except Exception as e:
         return {"ok": False, "symbol": symbol, "position": None, "side": None, "leverage": None, "error": str(e)}
+
+
+@app.post("/api/manual/order")
+async def api_manual_order(
+    request: Request,
+    x_webhook_token: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """
+    Execute a manual order using the same KuCoin adapter as live execution.
+    Example payload:
+      {"symbol":"SOL-USDT","action":"cancel_short"}
+    """
+    if _auth_required():
+        _check_token(x_webhook_token)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+    symbol = str(payload.get("symbol") or DEFAULT_SYMBOL)
+    action = str(payload.get("action") or "").strip()
+    if not action:
+        raise HTTPException(status_code=400, detail="missing action")
+
+    qty_raw = payload.get("qty")
+    qty = None
+    if qty_raw not in (None, ""):
+        try:
+            qty = float(qty_raw)
+        except Exception:
+            raise HTTPException(status_code=400, detail="qty must be numeric")
+
+    try:
+        wait_sec = float(payload.get("wait_sec", os.getenv("MANUAL_ORDER_WAIT_SEC", "20")))
+    except Exception:
+        wait_sec = 20.0
+    dry_run = bool(payload.get("dry_run", False))
+
+    try:
+        from quant.execution.manual_orders import execute_manual_action
+
+        result = execute_manual_action(
+            broker=_kucoin_broker(),
+            symbol=symbol,
+            action=action,
+            qty=qty,
+            wait_sec=wait_sec,
+            dry_run=dry_run,
+        )
+        if isinstance(result, dict):
+            result.setdefault("ts", _now_utc_iso())
+            return result
+        return {"ok": True, "result": result, "ts": _now_utc_iso()}
+    except Exception as e:
+        return {"ok": False, "symbol": symbol, "action": action, "error": str(e), "ts": _now_utc_iso()}
 
 
 @app.get("/api/regime/latest")
@@ -776,6 +834,10 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <script>
     const chartEl = document.getElementById('chart');
     const qs = new URLSearchParams(window.location.search);
+    const uiRefreshMsDefault = __UI_REFRESH_MS__;
+    const ssRefreshMsDefault = __SS_REFRESH_MS__;
+    const uiRefreshMs = Math.max(1000, Number(qs.get('refresh_ms') || uiRefreshMsDefault));
+    const ssRefreshMs = Math.max(5000, Number(qs.get('statespace_refresh_ms') || ssRefreshMsDefault));
     const chartMode = (qs.get('mode') || 'brick').toLowerCase();
     const brickBaseTs = 1704067200;
     const chart = LightweightCharts.createChart(chartEl, {
@@ -1627,8 +1689,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     tick();
     loadStateSpace();
-    setInterval(tick, 10000);
-    setInterval(loadStateSpace, 30000);
+    setInterval(tick, uiRefreshMs);
+    setInterval(loadStateSpace, ssRefreshMs);
   </script>
 </body>
 </html>
@@ -1638,7 +1700,21 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard() -> str:
     """Simple dashboard UI: API status, SOL ticker from KuCoin, position. Basis für spätere Desktop-App."""
-    return DASHBOARD_HTML
+    try:
+        ui_ms = int(float(os.getenv("DASHBOARD_UI_REFRESH_MS", "4000")))
+    except Exception:
+        ui_ms = 4000
+    try:
+        ss_ms = int(float(os.getenv("DASHBOARD_STATESPACE_REFRESH_MS", "15000")))
+    except Exception:
+        ss_ms = 15000
+    ui_ms = max(1000, ui_ms)
+    ss_ms = max(5000, ss_ms)
+    return (
+        DASHBOARD_HTML
+        .replace("__UI_REFRESH_MS__", str(ui_ms))
+        .replace("__SS_REFRESH_MS__", str(ss_ms))
+    )
 
 
 @app.post("/webhook/tradingview")
