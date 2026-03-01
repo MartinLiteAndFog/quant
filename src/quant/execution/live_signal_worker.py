@@ -125,10 +125,11 @@ def _fetch_recent_1m_ohlcv(broker: KucoinFuturesBroker, symbol: str, limit: int)
 
 def _renko_to_ohlc(bricks: pd.DataFrame) -> pd.DataFrame:
     b = bricks.copy()
+    b["_seq"] = range(len(b))
     b["ts"] = pd.to_datetime(b["ts"], utc=True)
     b["open"] = pd.to_numeric(b["open"], errors="coerce")
     b["close"] = pd.to_numeric(b["close"], errors="coerce")
-    b = b.dropna(subset=["ts", "open", "close"]).sort_values("ts").reset_index(drop=True)
+    b = b.dropna(subset=["ts", "open", "close"]).sort_values(["ts", "_seq"], kind="mergesort").reset_index(drop=True)
     if b.empty:
         return pd.DataFrame(columns=["ts", "open", "high", "low", "close"])
 
@@ -147,6 +148,7 @@ def _renko_to_ohlc(bricks: pd.DataFrame) -> pd.DataFrame:
             grp = out["ts"].astype("int64")
             idx_in_grp = out.groupby(grp).cumcount()
             out["ts"] = out["ts"] + pd.to_timedelta(idx_in_grp, unit="ns")
+    out = out.drop(columns=["_seq"], errors="ignore")
     return out
 
 

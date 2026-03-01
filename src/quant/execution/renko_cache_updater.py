@@ -28,6 +28,8 @@ def _build_renko_ohlc(bricks: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(columns=["ts", "open", "high", "low", "close"])
 
     b = bricks.copy().reset_index(drop=True)
+    # Preserve original brick emission order for identical timestamps.
+    b["_seq"] = range(len(b))
     b["ts"] = pd.to_datetime(b["ts"], utc=True, errors="coerce")
     out = pd.DataFrame(
         {
@@ -36,15 +38,17 @@ def _build_renko_ohlc(bricks: pd.DataFrame) -> pd.DataFrame:
             "high": b[["open", "close"]].max(axis=1),
             "low": b[["open", "close"]].min(axis=1),
             "close": pd.to_numeric(b["close"], errors="coerce"),
+            "_seq": b["_seq"],
         }
     ).dropna()
-    out = out.sort_values("ts").reset_index(drop=True)
+    out = out.sort_values(["ts", "_seq"], kind="mergesort").reset_index(drop=True)
     if len(out) > 1:
         dup = out["ts"].duplicated(keep=False)
         if dup.any():
             grp = out["ts"].astype("int64")
             idx_in_grp = out.groupby(grp).cumcount()
             out["ts"] = out["ts"] + pd.to_timedelta(idx_in_grp, unit="ns")
+    out = out.drop(columns=["_seq"], errors="ignore")
     return out.reset_index(drop=True)
 
 

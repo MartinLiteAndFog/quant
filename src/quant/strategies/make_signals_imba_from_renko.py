@@ -39,10 +39,11 @@ def _renko_to_ohlc(bricks: pd.DataFrame) -> pd.DataFrame:
       low  = min(open, close)
     """
     b = bricks.copy()
+    b["_seq"] = range(len(b))
     b["ts"] = pd.to_datetime(b["ts"], utc=True)
     b["open"] = pd.to_numeric(b["open"], errors="coerce")
     b["close"] = pd.to_numeric(b["close"], errors="coerce")
-    b = b.dropna(subset=["ts", "open", "close"]).sort_values("ts").reset_index(drop=True)
+    b = b.dropna(subset=["ts", "open", "close"]).sort_values(["ts", "_seq"], kind="mergesort").reset_index(drop=True)
 
     hi = b[["open", "close"]].max(axis=1)
     lo = b[["open", "close"]].min(axis=1)
