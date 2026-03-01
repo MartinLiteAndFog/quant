@@ -142,6 +142,7 @@ class KucoinFuturesBroker(BrokerAPI):
         self._order_leverage = float(os.getenv("KUCOIN_FUTURES_ORDER_LEVERAGE", os.getenv("LIVE_EXECUTOR_LEVERAGE", "1")))
         self._margin_mode = (os.getenv("KUCOIN_FUTURES_MARGIN_MODE", "") or "").strip().lower()
         self._price_tick = float(os.getenv("KUCOIN_FUTURES_PRICE_TICK", "0.001"))
+        self._contract_multiplier_cache: Dict[str, float] = {}
         if not self._key or not self._secret or not self._pass:
             log.warning("KuCoin Futures credentials missing; set KUCOIN_FUTURES_* env vars")
 
@@ -246,6 +247,25 @@ class KucoinFuturesBroker(BrokerAPI):
             "leverage": lev,
             "raw": data,
         }
+
+    def get_contract_multiplier(self, symbol: str) -> float:
+        """
+        Contract value multiplier used to convert contracts -> quote notional.
+        KuCoin futures contract payload includes `multiplier` for this.
+        """
+        contract = _symbol_to_contract(symbol)
+        if contract in self._contract_multiplier_cache:
+            return float(self._contract_multiplier_cache[contract])
+        try:
+            data = self._req("GET", f"/api/v1/contracts/{contract}")
+            mult = float(data.get("multiplier", 1.0) or 1.0)
+            if mult <= 0:
+                mult = 1.0
+        except Exception as e:
+            log.warning("contract multiplier lookup failed symbol=%s err=%s", contract, e)
+            mult = 1.0
+        self._contract_multiplier_cache[contract] = float(mult)
+        return float(mult)
 
     def get_account_balance(self, currency: str = "USDT") -> Dict[str, Any]:
         """Account overview: equity, available balance, margin balance."""
@@ -399,14 +419,28 @@ def list_fills(
     pp = (passphrase or os.getenv("KUCOIN_FUTURES_PASSPHRASE", "")).strip()
     if not key or not secret or not pp:
         return []
+
+    def _to_epoch_ms(v: Optional[int]) -> Optional[int]:
+        if v is None:
+            return None
+        try:
+            x = int(v)
+        except Exception:
+            return None
+        if x <= 0:
+            return None
+        return (x * 1000) if x < 10**12 else x
+
     contract = _symbol_to_contract(symbol) if symbol else ""
     q = []
     if contract:
         q.append(f"symbol={contract}")
-    if start_ts:
-        q.append(f"from={start_ts}")
-    if end_ts:
-        q.append(f"to={end_ts}")
+    start_ms = _to_epoch_ms(start_ts)
+    end_ms = _to_epoch_ms(end_ts)
+    if start_ms:
+        q.append(f"from={start_ms}")
+    if end_ms:
+        q.append(f"to={end_ms}")
     q.append(f"pageSize={limit}")
     path = "/api/v1/fills?" + "&".join(q)
     try:
@@ -415,5 +449,4 @@ def list_fills(
         return []
     items = data if isinstance(data, list) else (data.get("items", data.get("data", [])) or [])
     return list(items)
-
 

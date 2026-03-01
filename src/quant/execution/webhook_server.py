@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse, Response
 import uvicorn
 
 from quant.execution.dashboard_state import (
+    build_combined_equity,
     build_equity_curve,
     build_fibo_levels,
     build_trading_diary,
@@ -28,12 +29,15 @@ from quant.execution.dashboard_state import (
     load_fills_cache_rows,
     load_latest_expected_entry,
     load_live_fill_markers,
+    load_kraken_equity_history,
+    load_kraken_metrics,
     load_real_equity_history,
     load_renko_bars,
     load_renko_health,
     load_trade_segments,
     load_trade_markers,
 )
+from quant.execution.gate_provider import get_live_gate_state
 from quant.execution.dashboard_statespace import (
     load_state_space_trajectory,
     compute_recent_density,
@@ -478,6 +482,12 @@ def api_dashboard_chart(
         regime_score_data = build_regime_scores(symbol=symbol, hours=int(max(1, hours)))
         equity = build_equity_curve(max_points=int(max(100, max_points)))
         equity_real = load_real_equity_history(max_points=int(max(100, max_points)))
+        equity_kraken = load_kraken_equity_history(max_points=int(max(100, max_points)))
+        kraken_metrics = load_kraken_metrics()
+        equity_combined = build_combined_equity(
+            kucoin_points=equity_real.get("points", []),
+            kraken_points_usd=equity_kraken.get("points", []),
+        )
         diary = build_trading_diary(max_points=int(max(100, max_points)))
 
         open_position = None
@@ -566,6 +576,11 @@ def api_dashboard_chart(
             "equity_source": equity.get("source"),
             "equity_real": equity_real.get("points", []),
             "equity_real_source": equity_real.get("source"),
+            "equity_kraken": equity_kraken.get("points", []),
+            "equity_kraken_source": equity_kraken.get("source"),
+            "equity_combined": equity_combined.get("points", []),
+            "equity_combined_source": equity_combined.get("source"),
+            "kraken_metrics": kraken_metrics,
             "diary_entries": diary.get("entries", []),
             "diary_source": diary.get("source"),
             "open_position": open_position,
@@ -589,11 +604,38 @@ def api_dashboard_chart(
             "equity_source": "none",
             "equity_real": [],
             "equity_real_source": "none",
+            "equity_kraken": [],
+            "equity_kraken_source": "none",
+            "equity_combined": [],
+            "equity_combined_source": "none",
+            "kraken_metrics": {},
             "diary_entries": [],
             "diary_source": "none",
             "open_position": None,
             "error": str(e),
             "ts": _now_utc_iso(),
+        }
+
+
+@app.get("/api/gate/solusd")
+def api_gate_solusd() -> Dict[str, Any]:
+    try:
+        out = get_live_gate_state()
+        return {
+            "ok": True,
+            "ts": out.get("ts"),
+            "gate_on": int(out.get("gate_on", 0) or 0),
+            "gate_off": int(out.get("gate_off", 1) or 1),
+            "source": out.get("source"),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "ts": _now_utc_iso(),
+            "gate_on": 0,
+            "gate_off": 1,
+            "source": "error",
+            "error": str(e),
         }
 
 
@@ -1081,40 +1123,56 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.fillStyle = '#181c24';
       ctx.fillRect(0, 0, w, h);
 
-      const realEq = Array.isArray(latestPayload.equity_real) ? latestPayload.equity_real : [];
-      const source = latestPayload.equity_real_source || latestPayload.diary_source || latestPayload.equity_source || 'none';
-      if (metaEl) metaEl.textContent = 'Equity source: ' + source;
-      if (realEq.length >= 2) {
-        const points = realEq.map((p) => ({
-          time: Number(p.time || 0),
-          equity: Number(p.equity || 0),
-        })).filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
-        if (points.length >= 2) {
-          const vals = points.map(p => p.equity);
-          const minV = Math.min(...vals);
-          const maxV = Math.max(...vals);
+      const kucoinEq = Array.isArray(latestPayload.equity_real) ? latestPayload.equity_real : [];
+      const krakenEq = Array.isArray(latestPayload.equity_kraken) ? latestPayload.equity_kraken : [];
+      const combinedEq = Array.isArray(latestPayload.equity_combined) ? latestPayload.equity_combined : [];
+      const source = latestPayload.equity_combined_source || latestPayload.equity_real_source || latestPayload.diary_source || latestPayload.equity_source || 'none';
+      if (metaEl) metaEl.textContent = 'Equity source: ' + source + ' (green=Combined, blue=KuCoin, orange=Kraken)';
+      if (combinedEq.length >= 2 || kucoinEq.length >= 2 || krakenEq.length >= 2) {
+        const normalize = (arr) => arr.map((p) => ({ time: Number(p.time || 0), equity: Number(p.equity || 0) }))
+          .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
+        const pCombined = normalize(combinedEq);
+        const pKucoin = normalize(kucoinEq);
+        const pKraken = normalize(krakenEq);
+        const allVals = [...pCombined, ...pKucoin, ...pKraken].map(p => p.equity);
+        if (allVals.length >= 2) {
+          const minV = Math.min(...allVals);
+          const maxV = Math.max(...allVals);
           const range = Math.max(1e-6, (maxV - minV) * 1.15);
           const padL = 8, padR = 8, padT = 14, padB = 14;
           const pw = w - padL - padR, ph = h - padT - padB;
-          function tx(i) { return padL + (i / Math.max(1, points.length - 1)) * pw; }
-          function ty(v) { return padT + (1 - (v - minV) / range) * ph; }
 
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          for (let i = 0; i < points.length; i++) {
-            const x = tx(i), y = ty(points[i].equity);
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-          }
-          const delta = points[points.length - 1].equity - points[0].equity;
-          ctx.strokeStyle = delta >= 0 ? '#9ece6a' : '#f7768e';
-          ctx.stroke();
+          const drawLine = (pts, color) => {
+            if (!Array.isArray(pts) || pts.length < 2) return;
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = color;
+            ctx.beginPath();
+            for (let i = 0; i < pts.length; i++) {
+              const x = padL + (i / Math.max(1, pts.length - 1)) * pw;
+              const y = padT + (1 - (pts[i].equity - minV) / range) * ph;
+              if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+          };
 
-          const pct = points[0].equity > 0 ? (delta / points[0].equity) * 100.0 : 0.0;
+          drawLine(pKucoin, '#7aa2f7');
+          drawLine(pKraken, '#ff9e64');
+          drawLine(pCombined, '#9ece6a');
+
+          const anchor = pCombined.length ? pCombined : (pKucoin.length ? pKucoin : pKraken);
+          const delta = anchor.length >= 2 ? (anchor[anchor.length - 1].equity - anchor[0].equity) : 0;
+          const pct = (anchor.length >= 1 && anchor[0].equity > 0) ? (delta / anchor[0].equity) * 100.0 : 0.0;
           ctx.font = 'bold 11px system-ui';
           ctx.textAlign = 'right';
           ctx.fillStyle = delta >= 0 ? '#9ece6a' : '#f7768e';
           ctx.fillText(`${delta >= 0 ? '+' : ''}${delta.toFixed(2)} USDT (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`, w - padR, padT - 2);
-          if (detailEl) detailEl.textContent = `latest ${points[points.length - 1].equity.toFixed(2)} USDT`;
+
+          const latestCombined = pCombined.length ? pCombined[pCombined.length - 1].equity : null;
+          const latestKucoin = pKucoin.length ? pKucoin[pKucoin.length - 1].equity : null;
+          const latestKraken = pKraken.length ? pKraken[pKraken.length - 1].equity : null;
+          if (detailEl) {
+            detailEl.textContent = `combined:${latestCombined !== null ? latestCombined.toFixed(2) : '-'} kucoin:${latestKucoin !== null ? latestKucoin.toFixed(2) : '-'} kraken:${latestKraken !== null ? latestKraken.toFixed(2) : '-'}`;
+          }
           canvas.onmousemove = null;
           return;
         }
