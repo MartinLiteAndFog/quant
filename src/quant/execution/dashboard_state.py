@@ -23,6 +23,27 @@ def _to_ts_iso(ts_like: Any) -> Optional[str]:
     return ts.isoformat()
 
 
+def _fill_client_oid_prefixes() -> List[str]:
+    raw = str(os.getenv("DASHBOARD_FILLS_CLIENT_OID_PREFIXES", "") or "").strip()
+    if not raw:
+        return []
+    return [x.strip() for x in raw.split(",") if x.strip()]
+
+
+def _fill_row_allowed(client_oid: str) -> bool:
+    """
+    Optional filter to isolate fills by client_oid prefixes.
+    If no prefixes configured, all rows are allowed.
+    """
+    prefixes = _fill_client_oid_prefixes()
+    if not prefixes:
+        return True
+    cid = str(client_oid or "").strip()
+    if not cid:
+        return _truthy(os.getenv("DASHBOARD_FILLS_INCLUDE_EMPTY_CLIENT_OID", "0"))
+    return any(cid.startswith(p) for p in prefixes)
+
+
 def _epoch_seconds_from_any(v: Any) -> Optional[int]:
     """
     Parse epoch-like timestamps with mixed precision (s / ms / us / ns) or ISO strings.
@@ -187,10 +208,17 @@ def load_renko_bars(max_points: int = 5000) -> List[Dict[str, Any]]:
         return []
     df = df.tail(int(max(1, max_points)))
     out: List[Dict[str, Any]] = []
+    last_t = -1
     for _, r in df.iterrows():
+        t_i = int(pd.Timestamp(r["ts"]).timestamp())
+        # Ensure strictly increasing chart times; Renko can emit multiple bricks
+        # on one minute, and second-resolution APIs otherwise collide visually.
+        if t_i <= last_t:
+            t_i = last_t + 1
+        last_t = t_i
         out.append(
             {
-                "time": int(pd.Timestamp(r["ts"]).timestamp()),
+                "time": t_i,
                 "open": float(r["open"]),
                 "high": float(r["high"]),
                 "low": float(r["low"]),
@@ -383,6 +411,8 @@ def _refresh_fills_cache_if_needed(symbol: str, fills_path: Path) -> None:
                 if t_sec is None:
                     continue
                 client_oid = str(r.get("clientOid") or r.get("client_oid") or "").strip()
+                if not _fill_row_allowed(client_oid):
+                    continue
                 order_id = str(r.get("orderId") or r.get("order_id") or "").strip()
                 reduce_only = bool(r.get("reduceOnly", r.get("reduce_only", False)))
             except Exception:
@@ -441,6 +471,8 @@ def load_live_fill_markers(symbol: str, limit: int = 100, start_ts: Optional[int
     if start_ts is not None:
         src_df = src_df[pd.to_numeric(src_df["time"], errors="coerce") >= int(start_ts)]
     src_df = src_df.sort_values("time").tail(int(max(1, limit)))
+    if "client_oid" in src_df.columns:
+        src_df = src_df[src_df["client_oid"].map(lambda x: _fill_row_allowed(str(x or "")))]
 
     out: List[Dict[str, Any]] = []
     for _, r in src_df.iterrows():

@@ -87,9 +87,15 @@ Set these in both services where applicable.
 - `DASHBOARD_API_CACHE_SEC=8`
 - `DASHBOARD_FILLS_REFRESH_COOLDOWN_SEC=20`
 - `DASHBOARD_FILLS_FETCH_LIMIT=200`
+- `DASHBOARD_FILL_MARKER_LIMIT=1200`
 - `DASHBOARD_LOG_THROTTLE_SEC=60`
 - `DASHBOARD_RENKO_DAYS_BACK=14`
 - `DASHBOARD_RENKO_STEP_HOURS=6`  # code clamps effective fetch window to API-safe chunks
+
+Optional isolation if the same account runs multiple systems:
+
+- `DASHBOARD_FILLS_CLIENT_OID_PREFIXES=entry-,tp_flip-,TP_,SL_,manual-`
+- `DASHBOARD_FILLS_INCLUDE_EMPTY_CLIENT_OID=0`
 
 ### Log-rate controls (Railway log quota)
 

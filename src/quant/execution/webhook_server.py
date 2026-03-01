@@ -481,7 +481,7 @@ def api_dashboard_chart(
         markers_live = load_live_fill_markers(
             symbol=symbol,
             start_ts=oldest_bar_ts,
-            limit=int(max(500, min(20000, max_points * 5))),
+            limit=int(max(200, min(int(os.getenv("DASHBOARD_FILL_MARKER_LIMIT", "1200")), max_points))),
         )
         levels = load_active_levels()
         expected_entry = load_latest_expected_entry() or {}
