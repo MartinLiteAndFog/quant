@@ -1633,7 +1633,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const px = Number(mid);
       if (!Number.isFinite(px)) return hasCurr ? curr : null;
       const mode = String((payload && payload.open_position && payload.open_position.mode) || levels.mode || '').trim().toUpperCase();
-      if (mode !== 'TTP') return hasCurr ? curr : null;
+      if (mode && mode !== 'TTP') return hasCurr ? curr : null;
       const side = resolveActiveSide(levels, payload);
       if (!side) return hasCurr ? curr : null;
       const trail = resolveTtpTrailPct(payload);
