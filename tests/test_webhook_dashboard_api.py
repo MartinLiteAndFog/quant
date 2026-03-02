@@ -225,6 +225,9 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIn("const ssRefreshMsDefault = 12000;", html)
         self.assertIn("id=\"manual-action\"", html)
         self.assertIn("/api/manual/order", html)
+        self.assertIn("id=\"chart-refresh-btn\"", html)
+        self.assertIn("visibilitychange", html)
+        self.assertIn("refreshNow(", html)
 
     def test_api_status_uses_cache_within_ttl(self) -> None:
         os.environ["KUCOIN_FUTURES_API_KEY"] = "x"

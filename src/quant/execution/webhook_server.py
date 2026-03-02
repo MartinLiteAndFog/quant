@@ -806,6 +806,20 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     .card { background: var(--card); border-radius: 10px; padding: 0.75rem; }
     .chart-wrap { position: relative; height: 620px; border-radius: 10px; overflow: hidden; }
     #chart { position: absolute; inset: 0; }
+    .chart-refresh-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      z-index: 4;
+      background: rgba(20,24,35,0.92);
+      color: var(--text);
+      border: 1px solid #3a4b72;
+      border-radius: 6px;
+      padding: 5px 8px;
+      font-size: 0.74rem;
+      cursor: pointer;
+    }
+    .chart-refresh-btn:disabled { opacity: 0.65; cursor: default; }
     .row { display: flex; justify-content: space-between; gap: 1rem; margin: 0.4rem 0; }
     .label { color: var(--muted); }
     .ok { color: var(--ok); }
@@ -846,6 +860,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="layout">
     <div class="card">
       <div class="chart-wrap">
+        <button id="chart-refresh-btn" class="chart-refresh-btn" type="button" title="Refresh chart/data now">Refresh</button>
         <div id="chart"></div>
       </div>
     </div>
@@ -1018,6 +1033,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     let ssPayload = null;
     let lastSegmentsSig = '';
     let tickInFlight = false;
+    let refreshInFlight = false;
+    let pullStartY = null;
+    let pullTriggered = false;
 
     function escapeHtml(v) {
       return String(v == null ? '' : v)
@@ -1778,6 +1796,25 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       } catch (e) { /* fills unavailable */ }
     }
 
+    async function refreshNow(reason) {
+      if (refreshInFlight) return;
+      refreshInFlight = true;
+      const btn = document.getElementById('chart-refresh-btn');
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Refreshing...';
+      }
+      try {
+        await Promise.all([tick(), loadStateSpace()]);
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = 'Refresh';
+        }
+        refreshInFlight = false;
+      }
+    }
+
     async function sendManualOrder(actionOverride) {
       const actionEl = document.getElementById('manual-action');
       const qtyEl = document.getElementById('manual-qty');
@@ -1859,6 +1896,34 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     tick();
     loadStateSpace();
+    const chartRefreshBtn = document.getElementById('chart-refresh-btn');
+    if (chartRefreshBtn) chartRefreshBtn.addEventListener('click', () => refreshNow('button'));
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') refreshNow('visible');
+    });
+    window.addEventListener('focus', () => refreshNow('focus'));
+    window.addEventListener('pageshow', () => refreshNow('pageshow'));
+    window.addEventListener('touchstart', (ev) => {
+      if (!ev.touches || ev.touches.length !== 1) return;
+      const topY = window.scrollY || document.documentElement.scrollTop || 0;
+      if (topY <= 2) {
+        pullStartY = ev.touches[0].clientY;
+        pullTriggered = false;
+      }
+    }, { passive: true });
+    window.addEventListener('touchmove', (ev) => {
+      if (pullStartY == null || pullTriggered) return;
+      if (!ev.touches || ev.touches.length !== 1) return;
+      const dy = ev.touches[0].clientY - pullStartY;
+      if (dy >= 90) {
+        pullTriggered = true;
+        refreshNow('pull');
+      }
+    }, { passive: true });
+    window.addEventListener('touchend', () => {
+      pullStartY = null;
+      pullTriggered = false;
+    }, { passive: true });
     document.getElementById('manual-send').addEventListener('click', () => sendManualOrder(null));
     document.getElementById('manual-cancel-short').addEventListener('click', () => sendManualOrder('cancel_short'));
     document.getElementById('manual-cancel-long').addEventListener('click', () => sendManualOrder('cancel_long'));
