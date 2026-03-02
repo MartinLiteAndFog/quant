@@ -64,6 +64,69 @@ def _now_iso() -> str:
     return pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def _resolve_ttp_trail_pct() -> float:
+    raw = os.getenv("LIVE_FLIP_TTP_TRAIL_PCT", os.getenv("LIVE_TTP_TRAIL_PCT", "0.012"))
+    try:
+        v = float(raw)
+    except Exception:
+        v = 0.012
+    return float(max(1e-6, min(0.5, v)))
+
+
+def _coerce_float(v: Any) -> Optional[float]:
+    try:
+        x = float(v)
+    except Exception:
+        return None
+    if not (x == x):  # NaN check
+        return None
+    return x
+
+
+def _apply_live_ttp_guard(
+    terminal: Dict[str, Any],
+    *,
+    live_pos: float,
+    live_mid: float,
+    ttp_trail_pct: float,
+) -> Dict[str, Any]:
+    """
+    Keep TTP consistent with configured trail distance relative to latest live quote.
+    This prevents stale-renko drift where dashboard TTP can lag far from market.
+    """
+    if not isinstance(terminal, dict):
+        return {}
+    out = dict(terminal)
+    if abs(float(live_pos)) <= 1e-12:
+        return out
+    mid = _coerce_float(live_mid)
+    if mid is None or mid <= 0:
+        return out
+
+    live_side = "long" if float(live_pos) > 0 else "short"
+    side_raw = str(out.get("side") or "").strip().lower()
+    side = side_raw if side_raw in ("long", "short") else live_side
+    if side != live_side:
+        side = live_side
+    out["side"] = side
+
+    mode = str(out.get("mode") or "").strip().upper()
+    if mode != "TTP":
+        return out
+
+    trail = float(max(1e-6, ttp_trail_pct))
+    cur_ttp = _coerce_float(out.get("ttp"))
+    if side == "long":
+        # Do not allow stale TTP below the live-trail floor.
+        floor_ttp = float(mid * (1.0 - trail))
+        out["ttp"] = floor_ttp if cur_ttp is None else float(max(cur_ttp, floor_ttp))
+    else:
+        # Do not allow stale TTP above the live-trail cap.
+        cap_ttp = float(mid * (1.0 + trail))
+        out["ttp"] = cap_ttp if cur_ttp is None else float(min(cur_ttp, cap_ttp))
+    return out
+
+
 @dataclass
 class ExecutorState:
     last_signal_ts: Optional[str] = None
@@ -474,6 +537,12 @@ def run_once(
         return state
 
     pos = float(broker.get_position(symbol))
+    terminal_state = _apply_live_ttp_guard(
+        terminal_state,
+        live_pos=pos,
+        live_mid=float(mid),
+        ttp_trail_pct=_resolve_ttp_trail_pct(),
+    )
     _write_dashboard_levels(symbol, terminal_state, live_pos=pos)
     target_side = (-event_side if event in ("signal_flip_exit", "tp_exit") else event_side)
     want_side = "long" if target_side > 0 else "short"

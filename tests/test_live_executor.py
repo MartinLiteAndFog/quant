@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from quant.execution.live_executor import ExecutorState, run_once
+from quant.execution.live_executor import ExecutorState, run_once, _apply_live_ttp_guard
 
 
 class _DummyBroker:
@@ -134,6 +134,28 @@ class LiveExecutorTests(unittest.TestCase):
             leverage=1.0,
         )
         self.assertEqual(len(oms.flip_calls), 1)
+
+    def test_apply_live_ttp_guard_short_caps_stale_ttp(self) -> None:
+        terminal = {"side": "short", "mode": "TTP", "ttp": 83.996}
+        out = _apply_live_ttp_guard(
+            terminal,
+            live_pos=-30.0,
+            live_mid=82.70,
+            ttp_trail_pct=0.012,
+        )
+        # 82.70 * 1.012 = 83.6924 ; stale higher ttp must be capped.
+        self.assertAlmostEqual(float(out["ttp"]), 83.6924, places=4)
+
+    def test_apply_live_ttp_guard_short_does_not_loosen(self) -> None:
+        terminal = {"side": "short", "mode": "TTP", "ttp": 83.50}
+        out = _apply_live_ttp_guard(
+            terminal,
+            live_pos=-30.0,
+            live_mid=82.70,
+            ttp_trail_pct=0.012,
+        )
+        # Existing tighter stop must remain.
+        self.assertAlmostEqual(float(out["ttp"]), 83.50, places=6)
 
 
 if __name__ == "__main__":
