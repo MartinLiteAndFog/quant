@@ -157,6 +157,20 @@ def _cache_put(cache: Dict[str, Dict[str, Any]], key: str, value: Dict[str, Any]
     cache[key] = {"_ts": time.time(), "value": dict(value)}
 
 
+def _resolve_ttp_trail_pct() -> float:
+    for key in ("LIVE_TTP_TRAIL_PCT", "LIVE_FLIP_TTP_TRAIL_PCT"):
+        raw = os.getenv(key)
+        if raw is None:
+            continue
+        try:
+            v = float(raw)
+        except Exception:
+            continue
+        if 0.0 < v < 0.5:
+            return v
+    return 0.012
+
+
 def _start_renko_cache_updater_if_enabled() -> None:
     """
     Optional background updater for dashboard Renko cache.
@@ -474,6 +488,7 @@ def api_dashboard_chart(
     """
     Unified chart payload: renko bars, trades, regime overlays, and active levels.
     """
+    ttp_trail_pct = _resolve_ttp_trail_pct()
     try:
         bars = load_renko_bars(max_points=int(max(100, max_points)))
         markers = load_trade_markers(max_points=int(max(1000, max_points * 50)))
@@ -689,6 +704,7 @@ def api_dashboard_chart(
             "bars": bars,
             "markers": markers,
             "levels": levels,
+            "ttp_trail_pct": ttp_trail_pct,
             "regime": regime,
             "confidence": confidence_out,
             "gate_on": latest.get("gate_on"),
@@ -717,6 +733,7 @@ def api_dashboard_chart(
             "bars": [],
             "markers": [],
             "levels": {},
+            "ttp_trail_pct": ttp_trail_pct,
             "regime": {"spans": [], "points": [], "latest": None},
             "segments": [],
             "fibo": {"lookback": None, "long": [], "mid": [], "short": [], "latest": {}},
@@ -1027,6 +1044,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     let timeMap = null;
     let timeAxis = [];
     let barsRawRef = [];
+    let chartBarsRef = [];
+    let chartLevelsRef = {};
     let latestMid = null;
     let hasFittedOnce = false;
     const bgImages = { xy: null, xz: null, yz: null };
@@ -1580,6 +1599,61 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return [{ time: first, value: Number(level) }, { time: last, value: Number(level) }];
     }
 
+    function normalizeSide(sideRaw) {
+      if (sideRaw == null) return null;
+      const s = String(sideRaw).trim().toLowerCase();
+      if (!s) return null;
+      if (s === 'long' || s === 'l' || s === 'buy' || s === '1' || s === '+1') return 'long';
+      if (s === 'short' || s === 's' || s === 'sell' || s === '-1') return 'short';
+      const n = Number(sideRaw);
+      if (Number.isFinite(n)) {
+        if (n > 0) return 'long';
+        if (n < 0) return 'short';
+      }
+      return null;
+    }
+
+    function resolveActiveSide(levels, payload) {
+      const op = payload && payload.open_position ? payload.open_position : null;
+      const fromOpenPos = normalizeSide(op && op.side);
+      if (fromOpenPos) return fromOpenPos;
+      return normalizeSide(levels && levels.side);
+    }
+
+    function resolveTtpTrailPct(payload) {
+      const v = Number(payload && payload.ttp_trail_pct);
+      if (Number.isFinite(v) && v > 0 && v < 0.5) return v;
+      return 0.012;
+    }
+
+    function computeLiveTtpLevel(levels, payload, mid) {
+      if (!levels) return null;
+      const curr = Number(levels.ttp);
+      const hasCurr = Number.isFinite(curr);
+      const px = Number(mid);
+      if (!Number.isFinite(px)) return hasCurr ? curr : null;
+      const mode = String((payload && payload.open_position && payload.open_position.mode) || levels.mode || '').trim().toUpperCase();
+      if (mode !== 'TTP') return hasCurr ? curr : null;
+      const side = resolveActiveSide(levels, payload);
+      if (!side) return hasCurr ? curr : null;
+      const trail = resolveTtpTrailPct(payload);
+      const candidate = side === 'short' ? px * (1.0 + trail) : px * (1.0 - trail);
+      if (!hasCurr) return candidate;
+      return side === 'short' ? Math.min(curr, candidate) : Math.max(curr, candidate);
+    }
+
+    function refreshTtpLine() {
+      if (!Array.isArray(chartBarsRef) || !chartBarsRef.length) {
+        ttpSeries.setData([]);
+        return;
+      }
+      const levels = chartLevelsRef || {};
+      const ttpLive = computeLiveTtpLevel(levels, latestPayload, latestMid);
+      ttpSeries.setData(levelLineFromEntry(chartBarsRef, ttpLive, levels));
+      const ttpEl = document.getElementById('lvl-ttp');
+      if (ttpEl) ttpEl.textContent = fmtNum(ttpLive);
+    }
+
     function liveRegimeScore(payload) {
       const gc = (payload && payload.gate_confidence) ? payload.gate_confidence : null;
       if (!gc) return null;
@@ -1615,6 +1689,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         document.getElementById('ticker').textContent = st.ticker_error || '-';
         latestMid = null;
       }
+      refreshTtpLine();
       if (pos.position != null) {
         const lev = (pos.leverage != null && Number.isFinite(Number(pos.leverage))) ? (' x' + Number(pos.leverage).toFixed(1)) : '';
         document.getElementById('position').textContent = String(pos.position) + lev;
@@ -1651,11 +1726,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       candle.setMarkers(mapMarkersForChart(Array.isArray(payload.markers) ? payload.markers : []));
 
       barsRawRef = barsRaw;
+      chartBarsRef = bars;
 
       const levels = payload.levels || {};
+      chartLevelsRef = levels;
       const exitInfo = buildUnifiedExitLine(bars, levels);
       slSeries.setData(levelLineFromEntry(bars, levels.sl, levels));
-      ttpSeries.setData(levelLineFromEntry(bars, levels.ttp, levels));
+      refreshTtpLine();
 
       tp1Series.setData(levelLineData(bars, levels.tp1));
       tp2Series.setData(levelLineData(bars, levels.tp2));
@@ -1699,7 +1776,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
 
       document.getElementById('lvl-sl').textContent = fmtNum(levels.sl);
-      document.getElementById('lvl-ttp').textContent = fmtNum(levels.ttp);
       document.getElementById('lvl-tp1').textContent = fmtNum(levels.tp1);
       document.getElementById('lvl-tp2').textContent = fmtNum(levels.tp2);
       const barTimeEl = document.getElementById('bar-time');

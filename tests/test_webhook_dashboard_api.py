@@ -120,6 +120,8 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIn("bars", body)
         self.assertIn("markers", body)
         self.assertIn("levels", body)
+        self.assertIn("ttp_trail_pct", body)
+        self.assertGreater(float(body["ttp_trail_pct"]), 0.0)
         self.assertIn("regime", body)
         self.assertTrue(len(body["bars"]) >= 1)
         self.assertIn("gate_confidence", body)
@@ -228,6 +230,8 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIn("id=\"chart-refresh-btn\"", html)
         self.assertIn("visibilitychange", html)
         self.assertIn("refreshNow(", html)
+        self.assertIn("computeLiveTtpLevel", html)
+        self.assertIn("refreshTtpLine()", html)
 
     def test_api_status_uses_cache_within_ttl(self) -> None:
         os.environ["KUCOIN_FUTURES_API_KEY"] = "x"
