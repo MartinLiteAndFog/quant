@@ -457,8 +457,6 @@ def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Opt
         "sl": sl,
         "ttp": ttp,
         "entry_px": entry_px,
-        "best_fav": terminal.get("best_fav"),
-        "ttp_trail_pct": _resolve_ttp_trail_pct(),
         "entry_bar_ts": int(pd.Timestamp(entry_bar_ts).timestamp()) if entry_bar_ts is not None else None,
     })
 

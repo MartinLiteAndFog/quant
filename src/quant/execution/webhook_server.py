@@ -689,7 +689,6 @@ def api_dashboard_chart(
             "bars": bars,
             "markers": markers,
             "levels": levels,
-            "ttp_trail_pct": float(levels.get("ttp_trail_pct") or os.getenv("LIVE_FLIP_TTP_TRAIL_PCT", os.getenv("LIVE_TTP_TRAIL_PCT", "0.012"))),
             "regime": regime,
             "confidence": confidence_out,
             "gate_on": latest.get("gate_on"),
@@ -1009,28 +1008,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
     const slSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, title: 'SL', lastValueVisible: true, priceLineVisible: false });
     const ttpSeries = chart.addLineSeries({
-      color: '#2ecc71',
-      lineWidth: 2,
-      lineStyle: 0,
-      lineType: 1,
+      color: '#ffd166',
+      lineWidth: 3,
+      lineStyle: 2,
       title: 'TTP',
       lastValueVisible: true,
-      priceLineVisible: false,
-    });
-    const entryLineSeries = chart.addLineSeries({
-      color: '#ffffff',
-      lineWidth: 1,
-      lineStyle: 0,
-      title: 'Entry',
-      lastValueVisible: true,
-      priceLineVisible: false,
-      crosshairMarkerVisible: false,
+      priceLineVisible: true,
     });
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
-    const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 2, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const fibMidSeries = chart.addLineSeries({ color: '#e0af68', lineWidth: 2, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibMidSeries = chart.addLineSeries({ color: '#bfc7d5', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 3, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     const priceLineSeries = chart.addLineSeries({ color: '#9aa5b1', lineWidth: 1, title: 'Last', lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     const tradeSegmentSeries = [];
 
@@ -1568,38 +1557,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return { data: [{ time: entryTime, value: sl }, { time: lastTime, value: sl }], mode: 'sl' };
     }
 
-    function buildTTPTrail(bars, levels, ttpTrailPct) {
-      if (!Array.isArray(bars) || !bars.length || !levels) return [];
-      const entryPx = Number(levels.entry_px);
-      const sideStr = String(levels.side || '').toLowerCase();
-      if (!Number.isFinite(entryPx) || !sideStr) return [];
-      const isLong = sideStr === 'long' || sideStr === 'l' || sideStr === '1';
-      const trail = Number.isFinite(Number(ttpTrailPct)) && Number(ttpTrailPct) > 0 ? Number(ttpTrailPct) : 0.012;
-      let entryT = null;
-      if (levels.entry_bar_ts != null) {
-        entryT = mapTimeForChart(Number(levels.entry_bar_ts));
-      }
-      if (entryT == null) return [];
-      let startIdx = bars.length - 1;
-      for (let i = 0; i < bars.length; i++) {
-        if (Number(bars[i].time) >= Number(entryT)) { startIdx = i; break; }
-      }
-      let bestFav = entryPx;
-      const points = [];
-      for (let i = startIdx; i < bars.length; i++) {
-        const h = Number(bars[i].high || bars[i].close);
-        const l = Number(bars[i].low || bars[i].close);
-        if (isLong) {
-          bestFav = Math.max(bestFav, h);
-          points.push({ time: bars[i].time, value: bestFav * (1 - trail) });
-        } else {
-          bestFav = Math.min(bestFav, l);
-          points.push({ time: bars[i].time, value: bestFav * (1 + trail) });
-        }
-      }
-      return points;
-    }
-
     function fmtNum(v) {
       if (v == null || Number.isNaN(Number(v))) return '-';
       return Number(v).toFixed(4);
@@ -1698,10 +1655,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       const levels = payload.levels || {};
       const exitInfo = buildUnifiedExitLine(bars, levels);
       slSeries.setData(levelLineFromEntry(bars, levels.sl, levels));
-
-      const ttpTrailData = buildTTPTrail(bars, levels, payload.ttp_trail_pct);
-      ttpSeries.setData(ttpTrailData.length > 0 ? ttpTrailData : levelLineFromEntry(bars, levels.ttp, levels));
-      entryLineSeries.setData(levelLineFromEntry(bars, levels.entry_px, levels));
+      ttpSeries.setData(levelLineFromEntry(bars, levels.ttp, levels));
 
       tp1Series.setData(levelLineData(bars, levels.tp1));
       tp2Series.setData(levelLineData(bars, levels.tp2));
