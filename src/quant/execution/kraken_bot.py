@@ -29,7 +29,7 @@ def _live_default(rel_path: str) -> str:
 
 
 def _now_iso() -> str:
-    return pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    return pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _read_local_gate(path: Path) -> Dict[str, Any]:
@@ -151,7 +151,7 @@ def run_once(client: KrakenFuturesClient, gate_url: str, gate_cache_path: Path, 
     _append_equity(equity_path, ts=ts, equity_usd=float(row["equity_usd"]))
 
     # sanity logs
-    gate_age_sec = max(0.0, (pd.Timestamp.utcnow() - pd.Timestamp(row["gate_ts"])).total_seconds()) if row.get("gate_ts") else None
+    gate_age_sec = max(0.0, (pd.Timestamp.now("UTC") - pd.Timestamp(row["gate_ts"])).total_seconds()) if row.get("gate_ts") else None
     log.info(
         "kraken-bot ts=%s gate_on=%s mode=%s gate_age_sec=%s equity=%s pos=%s/%s action=%s",
         ts,
