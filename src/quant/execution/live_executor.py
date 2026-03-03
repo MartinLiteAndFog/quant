@@ -233,15 +233,15 @@ def _resolve_max_eur(
     use_full_equity: bool,
     equity_fraction: float,
 ) -> float:
-    if (not use_full_equity) and configured_max_eur > 0:
-        return float(configured_max_eur)
     try:
         bal = broker.get_account_balance(currency="USDT")
         eq = float(bal.get("equity", 0.0) or 0.0)
-        frac = float(max(0.0, min(1.0, equity_fraction)))
-        return float(eq * frac)
+        if eq > 0:
+            frac = float(max(0.0, min(1.0, equity_fraction)))
+            return float(eq * frac)
     except Exception:
-        return float(configured_max_eur)
+        pass
+    return float(configured_max_eur)
 
 
 def _verify_execution_fill_ratio(
@@ -325,6 +325,8 @@ def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Opt
         "sl": terminal.get("sl"),
         "ttp": terminal.get("ttp"),
         "entry_px": entry_px,
+        "best_fav": terminal.get("best_fav"),
+        "ttp_trail_pct": _resolve_ttp_trail_pct(),
         "entry_bar_ts": int(pd.Timestamp(entry_bar_ts).timestamp()) if entry_bar_ts is not None else None,
     })
 
@@ -452,11 +454,21 @@ def run_once(
             res = oms.enter(symbol=symbol, side=want_side, qty=float(qty))
             log.info("executor enter result=%s", res)
         elif action.startswith("flip_to_"):
-            # First flatten current side quantity, then re-enter target qty.
             flat_res = oms.exit_tp_or_flip(symbol=symbol, side=current_side, qty=abs(float(pos)), flip_to=None)
             log.info("executor flip flatten result=%s", flat_res)
             if bool(getattr(flat_res, "ok", False)):
-                res = oms.enter(symbol=symbol, side=want_side, qty=float(qty))
+                flip_sizing = _resolve_max_eur(
+                    broker=broker, configured_max_eur=max_eur,
+                    use_full_equity=True, equity_fraction=equity_fraction,
+                )
+                flip_qty = _qty_from_max_eur(
+                    max_eur=flip_sizing, leverage=leverage,
+                    mid_price=float(mid), contract_multiplier=float(contract_multiplier),
+                )
+                if flip_qty <= 0:
+                    flip_qty = qty
+                log.info("executor flip re-size: pre=%s post=%s", qty, flip_qty)
+                res = oms.enter(symbol=symbol, side=want_side, qty=float(flip_qty))
                 log.info("executor flip re-enter result=%s", res)
             else:
                 log.warning("executor flip aborted: flatten failed")

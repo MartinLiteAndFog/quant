@@ -100,7 +100,8 @@ class TestGateStatePriorityChain(unittest.TestCase):
                 del os.environ[k]
 
     def test_prefers_csv_when_gate_prefer_csv_set(self):
-        """GATE_PREFER_CSV=1 (default): exact backtest parity from gate_base_2of3"""
+        """GATE_PREFER_CSV=1 (explicit): exact backtest parity from gate_base_2of3"""
+        os.environ["GATE_PREFER_CSV"] = "1"
         pd.DataFrame({
             "ts": ["2026-03-01T12:00:00Z"],
             "gate_base_2of3": [1],

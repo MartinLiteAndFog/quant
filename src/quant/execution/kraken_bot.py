@@ -111,7 +111,7 @@ class FlipParams:
     ttp_trail_pct: float = 0.012
     min_sl_pct: float = 0.015
     max_sl_pct: float = 0.030
-    swing_lookback: int = 250
+    swing_lookback: int = 50  # backtest caps to 50 (flip_engine.py:183)
 
 
 @dataclass
@@ -121,7 +121,7 @@ class TP2Params:
     tp1_frac: float = 0.5
     min_sl_pct: float = 0.030
     max_sl_pct: float = 0.080
-    swing_lookback: int = 180
+    swing_lookback: int = 50  # backtest caps to 50 (renko_runner_tp2.py:259)
     flip_on_opposite: bool = True
 
 
@@ -130,7 +130,7 @@ def load_flip_params() -> FlipParams:
         ttp_trail_pct=float(os.getenv("KRAKEN_TTP_TRAIL_PCT", "0.012")),
         min_sl_pct=float(os.getenv("KRAKEN_FLIP_MIN_SL_PCT", "0.015")),
         max_sl_pct=float(os.getenv("KRAKEN_FLIP_MAX_SL_PCT", "0.030")),
-        swing_lookback=int(os.getenv("KRAKEN_FLIP_SWING_LOOKBACK", "250")),
+        swing_lookback=min(int(os.getenv("KRAKEN_FLIP_SWING_LOOKBACK", "50")), 50),
     )
 
 
@@ -141,7 +141,7 @@ def load_tp2_params() -> TP2Params:
         tp1_frac=float(os.getenv("KRAKEN_TP1_FRAC", "0.5")),
         min_sl_pct=float(os.getenv("KRAKEN_TP2_MIN_SL_PCT", "0.030")),
         max_sl_pct=float(os.getenv("KRAKEN_TP2_MAX_SL_PCT", "0.080")),
-        swing_lookback=int(os.getenv("KRAKEN_TP2_SWING_LOOKBACK", "180")),
+        swing_lookback=min(int(os.getenv("KRAKEN_TP2_SWING_LOOKBACK", "50")), 50),
         flip_on_opposite=_truthy(os.getenv("KRAKEN_FLIP_ON_OPPOSITE", "1")),
     )
 
@@ -418,24 +418,47 @@ def run_once_logic(
 # Action executor
 # ---------------------------------------------------------------------------
 
-def execute_actions(client: KrakenFuturesClient, actions: List[Dict[str, Any]], dry_run: bool) -> List[Dict[str, Any]]:
+def execute_actions(
+    client: KrakenFuturesClient,
+    actions: List[Dict[str, Any]],
+    dry_run: bool,
+    equity_pct: float = 0.9,
+    leverage: float = 1.0,
+) -> List[Dict[str, Any]]:
     results = []
+    just_closed = False
     for a in actions:
         if dry_run:
             log.info("DRY_RUN: %s", a)
             results.append({**a, "executed": False, "dry_run": True})
+            if a.get("action") == "close_all":
+                just_closed = True
             continue
         try:
             act = a["action"]
             if act == "close_all":
                 res = client.close_position()
                 results.append({**a, "executed": True, "result": res})
+                just_closed = True
             elif act == "close_partial":
                 res = client.place_market(a["close_side"], size=float(a["size"]), reduce_only=True)
                 results.append({**a, "executed": True, "result": res})
             elif act.startswith("enter_"):
-                res = client.place_market(a["side"], size=float(a["size"]))
-                results.append({**a, "executed": True, "result": res})
+                size = float(a["size"])
+                if just_closed:
+                    try:
+                        mark = client.get_mark_price()
+                        eq = client.get_account_equity()
+                        fresh_eq = float(eq.get("equity_usd", 0.0) or 0.0)
+                        fresh_size = compute_target_size(fresh_eq, mark, leverage, equity_pct)
+                        if fresh_size > 0:
+                            log.info("flip re-size: pre=%.1f post=%.1f equity=%.2f", size, fresh_size, fresh_eq)
+                            size = fresh_size
+                    except Exception as e:
+                        log.warning("flip re-size failed, using original: %s", e)
+                res = client.place_market(a["side"], size=size)
+                results.append({**a, "size": size, "executed": True, "result": res})
+                just_closed = False
             else:
                 results.append({**a, "executed": False, "error": "unknown_action"})
         except Exception as e:
@@ -541,7 +564,7 @@ def run_once(
         tp2_p=tp2_p,
     )
 
-    action_results = execute_actions(client, actions, dry_run=dry_run)
+    action_results = execute_actions(client, actions, dry_run=dry_run, equity_pct=equity_pct, leverage=leverage)
 
     save_state(new_state, state_path)
 

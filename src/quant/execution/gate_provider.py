@@ -145,8 +145,9 @@ def get_live_gate_state() -> Dict[str, Any]:
       3. Gate CSV (gate_base_2of3, exact backtest source)
       4. default_off
     """
-    # GATE_PREFER_CSV=1 (default): use gate CSV first for exact backtest parity (gate_base_2of3)
-    prefer_csv = str(os.getenv("GATE_PREFER_CSV", "1")).strip().lower() in ("1", "true", "yes", "on")
+    # GATE_PREFER_CSV=0 (default): prefer live statespace for real-time gate updates.
+    # Set GATE_PREFER_CSV=1 only for offline/backtest parity with the static CSV.
+    prefer_csv = str(os.getenv("GATE_PREFER_CSV", "0")).strip().lower() in ("1", "true", "yes", "on")
     if prefer_csv:
         gate_csv = Path(os.getenv("PC_GATE_CSV", _live_default("regimes/pc_3axis_gate_latest.csv")))
         if gate_csv.exists():
