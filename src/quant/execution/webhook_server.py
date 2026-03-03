@@ -127,6 +127,66 @@ def _signals_root() -> Path:
     return Path(os.getenv("SIGNALS_DIR", "data/signals"))
 
 
+def _canon_symbol(sym: str) -> str:
+    s = (sym or "").upper()
+    return "".join(ch for ch in s if ch.isalnum())
+
+
+def _norm_symbol_dir(sym: str) -> str:
+    return sym.strip().upper().replace("/", "-").replace(":", "-").replace(" ", "")
+
+
+def _safe_ts(v: Any) -> Optional[pd.Timestamp]:
+    ts = pd.to_datetime(v, utc=True, errors="coerce")
+    if pd.isna(ts):
+        return None
+    return pd.Timestamp(ts)
+
+
+def _latest_signal_from_jsonl(root: Path, symbol: str) -> Optional[Dict[str, Any]]:
+    """Return newest non-zero signal from JSONL files (mirrors live_executor._latest_signal)."""
+    wanted = _canon_symbol(symbol)
+    candidate_dirs: list[Path] = []
+    if root.exists():
+        for p in root.iterdir():
+            if p.is_dir() and _canon_symbol(p.name) == wanted:
+                candidate_dirs.append(p)
+
+    if not candidate_dirs:
+        sym_dir = root / _norm_symbol_dir(symbol)
+        if sym_dir.exists():
+            candidate_dirs = [sym_dir]
+    if not candidate_dirs:
+        return None
+
+    all_files: list[Path] = []
+    for d in candidate_dirs:
+        all_files.extend(d.glob("*.jsonl"))
+    for fp in reversed(sorted(all_files)):
+        try:
+            with fp.open("r", encoding="utf-8") as f:
+                lines = [ln.strip() for ln in f if ln.strip()]
+            for ln in reversed(lines):
+                try:
+                    obj = json.loads(ln)
+                except Exception:
+                    continue
+                sig = obj.get("signal")
+                ts = _safe_ts(obj.get("ts"))
+                if ts is None:
+                    continue
+                try:
+                    sig_i = int(sig)
+                except Exception:
+                    continue
+                if sig_i == 0:
+                    continue
+                return {"ts": ts, "signal": 1 if sig_i > 0 else -1, "raw": obj}
+        except Exception:
+            continue
+    return None
+
+
 def _auth_required() -> bool:
     return bool(os.getenv("WEBHOOK_TOKEN", "").strip())
 
@@ -783,6 +843,49 @@ def api_gate_solusd() -> Dict[str, Any]:
             "source": "error",
             "error": str(e),
         }
+
+
+@app.get("/api/signals/latest/solusd")
+def api_signals_latest_solusd() -> Dict[str, Any]:
+    try:
+        root = _signals_root()
+        sig = _latest_signal_from_jsonl(root, "SOL-USDT")
+        if sig is None:
+            return {"ok": True, "ts": _now_utc_iso(), "signal": 0, "source": "no_signal"}
+        return {
+            "ok": True,
+            "ts": str(sig["ts"]),
+            "signal": int(sig["signal"]),
+            "source": "jsonl",
+        }
+    except Exception as e:
+        return {"ok": False, "ts": _now_utc_iso(), "signal": 0, "error": str(e)}
+
+
+@app.get("/api/renko/latest/solusd")
+def api_renko_latest_solusd(lookback: int = 250) -> Dict[str, Any]:
+    try:
+        path = Path(os.getenv("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet"))
+        if not path.exists():
+            return {"ok": False, "error": "no_renko_data"}
+        df = pd.read_parquet(path)
+        if df.empty or "close" not in df.columns:
+            return {"ok": False, "error": "empty_renko_data"}
+        df = df.sort_values("ts") if "ts" in df.columns else df
+        lb = min(max(lookback, 1), 500)
+        swing_low = float(df["low"].rolling(lb, min_periods=1).min().iloc[-1])
+        swing_high = float(df["high"].rolling(lb, min_periods=1).max().iloc[-1])
+        return {
+            "ok": True,
+            "ts": str(df["ts"].iloc[-1]) if "ts" in df.columns else _now_utc_iso(),
+            "swing_low": round(swing_low, 6),
+            "swing_high": round(swing_high, 6),
+            "last_close": round(float(df["close"].iloc[-1]), 6),
+            "n_bars": len(df),
+            "lookback_used": lb,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.get("/api/dashboard/diary")
