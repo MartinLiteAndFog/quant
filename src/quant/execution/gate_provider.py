@@ -67,13 +67,103 @@ def _q_train(a: np.ndarray, train_slice: slice, q: float) -> float:
     return float(np.quantile(x, q)) if len(x) else float("nan")
 
 
+def get_live_gate_from_statespace() -> Optional[Dict[str, Any]]:
+    """
+    Compute gate_on/gate_off from the live state space parquet.
+    Returns None if state space data is unavailable or too old.
+
+    3-axis gate logic (2-of-3):
+      g1: |X_raw| <= drift_thresh     (not trending strongly)
+      g2: Y_res >= elasticity_thresh  (mean-reverting)
+      g3: Z_res <= instability_thresh (stable regime)
+      gate_on = (g1 + g2 + g3) >= 2
+    """
+    ss_path = Path(os.getenv(
+        "DASHBOARD_STATESPACE_PARQUET",
+        _live_default("live/state_space_latest.parquet"),
+    ))
+    if not ss_path.exists():
+        return None
+
+    try:
+        df = pd.read_parquet(ss_path)
+    except Exception:
+        return None
+
+    need = {"ts", "X_raw", "Y_res", "Z_res"}
+    if not need.issubset(set(df.columns)) or df.empty:
+        return None
+
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    df = df.dropna(subset=["ts", "X_raw", "Y_res", "Z_res"]).sort_values("ts")
+    if df.empty:
+        return None
+
+    max_age_sec = float(os.getenv("LIVE_GATE_MAX_AGE_SEC", "1800"))
+    last_ts = df["ts"].iloc[-1]
+    age = (pd.Timestamp.now("UTC") - last_ts).total_seconds()
+    if age > max_age_sec:
+        return None
+
+    last = df.iloc[-1]
+    x = float(last["X_raw"])
+    y = float(last["Y_res"])
+    z = float(last["Z_res"])
+
+    drift_thresh = float(os.getenv("LIVE_GATE_DRIFT_THRESH", "0.3"))
+    elasticity_thresh = float(os.getenv("LIVE_GATE_ELASTICITY_THRESH", "0.0"))
+    instability_thresh = float(os.getenv("LIVE_GATE_INSTABILITY_THRESH", "0.3"))
+
+    g1 = int(abs(x) <= drift_thresh)
+    g2 = int(y >= elasticity_thresh)
+    g3 = int(z <= instability_thresh)
+    gate_on = int((g1 + g2 + g3) >= 2)
+
+    ts_str = pd.Timestamp(last_ts).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return {
+        "ts": ts_str,
+        "gate_on": gate_on,
+        "gate_off": int(1 - gate_on),
+        "source": "statespace_live",
+        "x": round(x, 4),
+        "y": round(y, 4),
+        "z": round(z, 4),
+        "g1_drift": g1,
+        "g2_elasticity": g2,
+        "g3_instability": g3,
+        "age_sec": round(age, 1),
+    }
+
+
 def get_live_gate_state() -> Dict[str, Any]:
     """
     Build live gate state for SOL-USD from the existing PC gate definition logic.
 
-    Uses predictions parquet as the live feature source, computes base_2of3 gate,
-    then returns latest gate_on / gate_off pair.
+    Priority (unless GATE_PREFER_CSV=1 for exact backtest parity):
+      1. Live state space parquet (refreshed every 5 min)
+      2. Predictions parquet (same logic as make_pc_3axis_gate_v2)
+      3. Gate CSV (gate_base_2of3, exact backtest source)
+      4. default_off
     """
+    # GATE_PREFER_CSV=1 (default): use gate CSV first for exact backtest parity (gate_base_2of3)
+    prefer_csv = str(os.getenv("GATE_PREFER_CSV", "1")).strip().lower() in ("1", "true", "yes", "on")
+    if prefer_csv:
+        gate_csv = Path(os.getenv("PC_GATE_CSV", _live_default("regimes/pc_3axis_gate_latest.csv")))
+        if gate_csv.exists():
+            try:
+                df = pd.read_csv(gate_csv)
+                if not df.empty and "gate_base_2of3" in df.columns:
+                    row = df.iloc[-1]
+                    gate_on = int(row.get("gate_base_2of3", 0) or 0)
+                    ts = str(row.get("ts") or pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"))
+                    return {"ts": ts, "gate_on": gate_on, "gate_off": int(1 - gate_on), "source": "gate_csv"}
+            except Exception:
+                pass
+
+    ss_gate = get_live_gate_from_statespace()
+    if ss_gate is not None:
+        return ss_gate
+
     pred_path = Path(os.getenv("PC_PREDICTIONS_PARQUET", _live_default("runs/PC_GATE_FULLRANGE/pc_v02/predictions.parquet")))
     if not pred_path.exists():
         # Fallback to latest row from prebuilt gate CSV.
@@ -83,10 +173,10 @@ def get_live_gate_state() -> Dict[str, Any]:
             if not df.empty and "gate_base_2of3" in df.columns:
                 row = df.iloc[-1]
                 gate_on = int(row.get("gate_base_2of3", 0) or 0)
-                ts = str(row.get("ts") or pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"))
+                ts = str(row.get("ts") or pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"))
                 return {"ts": ts, "gate_on": gate_on, "gate_off": int(1 - gate_on), "source": "gate_csv"}
         return {
-            "ts": pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "ts": pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
             "gate_on": 0,
             "gate_off": 1,
             "source": "default_off",
@@ -96,7 +186,7 @@ def get_live_gate_state() -> Dict[str, Any]:
     df = pd.read_parquet(pred_path)
     if df.empty or "ts" not in df.columns:
         return {
-            "ts": pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "ts": pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
             "gate_on": 0,
             "gate_off": 1,
             "source": "default_off",
@@ -108,7 +198,7 @@ def get_live_gate_state() -> Dict[str, Any]:
     df = df.dropna(subset=["ts", "close", "v_temporal"]).sort_values("ts").reset_index(drop=True)
     if df.empty:
         return {
-            "ts": pd.Timestamp.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "ts": pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
             "gate_on": 0,
             "gate_off": 1,
             "source": "default_off",
