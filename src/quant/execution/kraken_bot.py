@@ -483,13 +483,33 @@ def fetch_renko(url: str, lookback: int) -> Dict[str, Any]:
 # Main loop
 # ---------------------------------------------------------------------------
 
+def compute_target_size(
+    equity_usd: float,
+    mark_price: float,
+    leverage: float,
+    equity_pct: float,
+) -> float:
+    """
+    Compute position size in SOL from equity percentage.
+    
+    equity_pct=0.90 means use 90% of equity * leverage / mark_price.
+    Result is floored to 1 decimal to meet Kraken's minimum tick.
+    """
+    if mark_price <= 0 or equity_usd <= 0:
+        return 0.0
+    notional = equity_usd * equity_pct * leverage
+    size = notional / mark_price
+    return float(int(size * 10) / 10)  # floor to 0.1 SOL
+
+
 def run_once(
     client: KrakenFuturesClient,
     state: BotState,
     gate_url: str,
     signal_url: str,
     renko_url: str,
-    target_size: float,
+    equity_pct: float,
+    leverage: float,
     dry_run: bool,
     flip_p: FlipParams,
     tp2_p: TP2Params,
@@ -500,6 +520,10 @@ def run_once(
     gate = fetch_gate(gate_url)
     sig = fetch_signal(signal_url)
     mark = client.get_mark_price()
+    eq = client.get_account_equity()
+    equity_usd = float(eq.get("equity_usd", 0.0) or 0.0)
+
+    target_size = compute_target_size(equity_usd, mark, leverage, equity_pct)
 
     active_lookback = flip_p.swing_lookback if state.engine == "flip" else tp2_p.swing_lookback
     renko = fetch_renko(renko_url, active_lookback)
@@ -521,14 +545,14 @@ def run_once(
 
     save_state(new_state, state_path)
 
-    eq = client.get_account_equity()
     ts = _now_iso()
     row = {
         "ts": ts,
-        "equity_usd": float(eq.get("equity_usd", 0.0) or 0.0),
+        "equity_usd": equity_usd,
         "wallet_usd": float(eq.get("wallet_usd", 0.0) or 0.0),
         "upnl_usd": float(eq.get("upnl_usd", 0.0) or 0.0),
         "mark_price": round(mark, 4),
+        "target_size": target_size,
         "gate_on": gate["gate_on"],
         "gate_source": gate.get("source", "?"),
         "engine": new_state.engine,
@@ -573,7 +597,8 @@ def main() -> None:
     signal_url = os.getenv("KRAKEN_SIGNAL_URL", "http://127.0.0.1:8000/api/signals/latest/solusd")
     renko_url = os.getenv("KRAKEN_RENKO_URL", "http://127.0.0.1:8000/api/renko/latest/solusd")
 
-    target_size = float(os.getenv("KRAKEN_TARGET_SIZE", "0"))
+    equity_pct = float(os.getenv("KRAKEN_EQUITY_PCT", "0.90"))
+    leverage = float(os.getenv("KRAKEN_LEVERAGE", "5"))
     dry_run = _truthy(os.getenv("KRAKEN_DRY_RUN", "1"))
 
     state_path = Path(os.getenv("KRAKEN_STATE_JSON", _live_default("bot_state.json")))
@@ -584,14 +609,14 @@ def main() -> None:
     tp2_p = load_tp2_params()
 
     state = load_state(state_path) or BotState()
-    log.info("bot starting state=%s dry_run=%s target_size=%s", state.mode, dry_run, target_size)
+    log.info("bot starting state=%s dry_run=%s equity_pct=%s leverage=%s", state.mode, dry_run, equity_pct, leverage)
 
     while True:
         try:
             state = run_once(
                 client=client, state=state,
                 gate_url=gate_url, signal_url=signal_url, renko_url=renko_url,
-                target_size=target_size, dry_run=dry_run,
+                equity_pct=equity_pct, leverage=leverage, dry_run=dry_run,
                 flip_p=flip_p, tp2_p=tp2_p,
                 metrics_path=metrics_path, equity_path=equity_path, state_path=state_path,
             )

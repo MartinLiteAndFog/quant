@@ -7,6 +7,7 @@ from quant.execution.kraken_bot import (
     FlipParams,
     TP2Params,
     compute_swing_sl,
+    compute_target_size,
     run_once_logic,
 )
 
@@ -185,6 +186,24 @@ class TestTP2BE(unittest.TestCase):
         ns, acts = _tick(s, gate_on=0, mark=103.5)
         self.assertEqual(ns.mode, "FLAT")
         self.assertEqual(acts[0]["reason"], "tp2_exit")
+
+
+class TestTargetSize(unittest.TestCase):
+    def test_90pct_equity_5x_leverage(self):
+        # 111 USD * 0.90 * 5 / 85.0 = 5.8 → floored to 5.8
+        size = compute_target_size(111.0, 85.0, leverage=5.0, equity_pct=0.90)
+        self.assertAlmostEqual(size, 5.8)
+
+    def test_50pct_equity(self):
+        # 111 * 0.50 * 5 / 85 = 3.26 → floored to 3.2
+        size = compute_target_size(111.0, 85.0, leverage=5.0, equity_pct=0.50)
+        self.assertAlmostEqual(size, 3.2)
+
+    def test_zero_mark_returns_zero(self):
+        self.assertEqual(compute_target_size(111.0, 0.0, 5.0, 0.90), 0.0)
+
+    def test_zero_equity_returns_zero(self):
+        self.assertEqual(compute_target_size(0.0, 85.0, 5.0, 0.90), 0.0)
 
 
 class TestSwingSL(unittest.TestCase):
