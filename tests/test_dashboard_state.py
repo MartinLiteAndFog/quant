@@ -11,7 +11,10 @@ import pandas as pd
 
 import quant.execution.dashboard_state as ds
 from quant.execution.dashboard_state import (
+    build_combined_equity,
     build_regime_overlay,
+    load_kraken_equity_history,
+    load_kraken_metrics,
     load_active_levels,
     load_fills_cache_rows,
     load_live_fill_markers,
@@ -195,6 +198,37 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         row = next(r for r in rows if r.get("client_oid") == "manual-flatten-short-001")
         self.assertEqual(row.get("reason"), "manual_flatten_short")
+
+    def test_kraken_metrics_and_equity_loaders(self) -> None:
+        metrics_path = self.tmp_path / "kraken_metrics.json"
+        equity_path = self.tmp_path / "kraken_equity.csv"
+        os.environ["KRAKEN_METRICS_JSON"] = str(metrics_path)
+        os.environ["KRAKEN_EQUITY_CSV"] = str(equity_path)
+
+        metrics_path.write_text(
+            json.dumps({"ts": "2026-02-20T00:00:00Z", "equity_usd": 1000.0, "wallet_usd": 990.0, "upnl_usd": 10.0}),
+            encoding="utf-8",
+        )
+        pd.DataFrame(
+            [
+                {"ts": int(pd.Timestamp("2026-02-20T00:00:00Z").timestamp()), "equity_usd": 1000.0},
+                {"ts": int(pd.Timestamp("2026-02-20T01:00:00Z").timestamp()), "equity_usd": 1010.0},
+            ]
+        ).to_csv(equity_path, index=False)
+
+        m = load_kraken_metrics()
+        h = load_kraken_equity_history(max_points=100)
+        self.assertEqual(float(m.get("equity_usd", 0.0)), 1000.0)
+        self.assertEqual(len(h.get("points", [])), 2)
+
+    def test_build_combined_equity(self) -> None:
+        kucoin = [{"time": 100, "equity": 200.0}, {"time": 200, "equity": 210.0}]
+        kraken = [{"time": 100, "equity": 300.0}, {"time": 300, "equity": 320.0}]
+        out = build_combined_equity(kucoin_points=kucoin, kraken_points_usd=kraken)
+        pts = out.get("points", [])
+        self.assertTrue(len(pts) >= 2)
+        self.assertEqual(int(pts[0]["time"]), 100)
+        self.assertAlmostEqual(float(pts[0]["equity"]), 500.0, places=6)
 
 
 if __name__ == "__main__":

@@ -282,11 +282,12 @@ def _latest_backtest_event(
     return events.iloc[-1], terminal
 
 
-def _qty_from_max_eur(max_eur: float, leverage: float, mid_price: float) -> int:
-    if max_eur <= 0 or leverage <= 0 or mid_price <= 0:
+def _qty_from_max_eur(max_eur: float, leverage: float, mid_price: float, contract_multiplier: float = 1.0) -> int:
+    if max_eur <= 0 or leverage <= 0 or mid_price <= 0 or contract_multiplier <= 0:
         return 0
     notional = float(max_eur) * float(leverage)
-    return int(notional // float(mid_price))
+    per_contract_notional = float(mid_price) * float(contract_multiplier)
+    return int(notional // per_contract_notional)
 
 
 def _resolve_max_eur(
@@ -517,18 +518,32 @@ def run_once(
         use_full_equity=use_full_equity,
         equity_fraction=equity_fraction,
     )
-    qty = _qty_from_max_eur(max_eur=sizing_max_eur, leverage=leverage, mid_price=float(mid))
+    contract_multiplier = 1.0
+    try:
+        multiplier_getter = getattr(broker, "get_contract_multiplier", None)
+        if callable(multiplier_getter):
+            contract_multiplier = float(multiplier_getter(symbol))
+    except Exception as e:
+        log.warning("executor failed to fetch contract multiplier symbol=%s err=%s", symbol, e)
+        contract_multiplier = 1.0
+    qty = _qty_from_max_eur(
+        max_eur=sizing_max_eur,
+        leverage=leverage,
+        mid_price=float(mid),
+        contract_multiplier=float(contract_multiplier),
+    )
     if qty <= 0:
         log_throttled(
             log,
             logging.WARNING,
             f"executor_qty_zero:{symbol}",
             float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "60")),
-            "executor qty=0 (configured_max_eur=%s sizing_max_eur=%s leverage=%s mid=%s use_full_equity=%s) -> skip",
+            "executor qty=0 (configured_max_eur=%s sizing_max_eur=%s leverage=%s mid=%s contract_multiplier=%s use_full_equity=%s) -> skip",
             max_eur,
             sizing_max_eur,
             leverage,
             mid,
+            contract_multiplier,
             use_full_equity,
         )
         state.last_signal_ts = ts_iso

@@ -648,6 +648,81 @@ def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
     return {"points": points, "source": "kucoin_equity_snapshots"}
 
 
+def load_kraken_metrics() -> Dict[str, Any]:
+    p = _env_path("KRAKEN_METRICS_JSON", _live_default("kraken/metrics.json"))
+    if not p.exists():
+        return {}
+    try:
+        obj = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return obj if isinstance(obj, dict) else {}
+
+
+def load_kraken_equity_history(max_points: int = 500) -> Dict[str, Any]:
+    p = _env_path("KRAKEN_EQUITY_CSV", _live_default("kraken/equity.csv"))
+    if not p.exists():
+        return {"points": [], "source": "none"}
+    try:
+        df = pd.read_csv(p)
+    except Exception:
+        return {"points": [], "source": "none"}
+    if df.empty or not {"ts", "equity_usd"}.issubset(set(df.columns)):
+        return {"points": [], "source": "none"}
+
+    df = df.copy()
+    df["ts"] = pd.to_numeric(df["ts"], errors="coerce")
+    df["equity_usd"] = pd.to_numeric(df["equity_usd"], errors="coerce")
+    df = df.dropna(subset=["ts", "equity_usd"]).sort_values("ts").drop_duplicates(subset=["ts"], keep="last")
+    if df.empty:
+        return {"points": [], "source": "none"}
+    df = df.tail(int(max(1, max_points))).reset_index(drop=True)
+    pts = [{"time": int(r["ts"]), "equity": float(r["equity_usd"])} for _, r in df.iterrows()]
+    return {"points": pts, "source": "kraken_equity_snapshots_usd"}
+
+
+def build_combined_equity(
+    kucoin_points: List[Dict[str, Any]],
+    kraken_points_usd: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """Combine KuCoin USDT and Kraken USD equity into one USDT-denominated series."""
+    if not kucoin_points and not kraken_points_usd:
+        return {"points": [], "source": "none"}
+
+    usdt_per_usd = float(os.getenv("DASHBOARD_USDT_PER_USD", "1.0") or 1.0)
+
+    k1 = pd.DataFrame(kucoin_points or [])
+    k2 = pd.DataFrame(kraken_points_usd or [])
+    if k1.empty and k2.empty:
+        return {"points": [], "source": "none"}
+
+    if k1.empty:
+        k1 = pd.DataFrame(columns=["time", "equity"])
+    if k2.empty:
+        k2 = pd.DataFrame(columns=["time", "equity"])
+
+    k1["time"] = pd.to_numeric(k1.get("time"), errors="coerce")
+    k1["equity"] = pd.to_numeric(k1.get("equity"), errors="coerce")
+    k1 = k1.dropna(subset=["time", "equity"]).sort_values("time")
+
+    k2["time"] = pd.to_numeric(k2.get("time"), errors="coerce")
+    k2["equity"] = pd.to_numeric(k2.get("equity"), errors="coerce") * float(usdt_per_usd)
+    k2 = k2.dropna(subset=["time", "equity"]).sort_values("time")
+
+    if k1.empty and k2.empty:
+        return {"points": [], "source": "none"}
+
+    t1 = set(int(x) for x in k1["time"].tolist()) if not k1.empty else set()
+    t2 = set(int(x) for x in k2["time"].tolist()) if not k2.empty else set()
+    all_times = sorted(t1 | t2)
+    rows: List[Dict[str, Any]] = []
+    for t in all_times:
+        e1 = float(k1[k1["time"] <= t]["equity"].iloc[-1]) if (not k1.empty and (k1["time"] <= t).any()) else 0.0
+        e2 = float(k2[k2["time"] <= t]["equity"].iloc[-1]) if (not k2.empty and (k2["time"] <= t).any()) else 0.0
+        rows.append({"time": int(t), "equity": float(e1 + e2)})
+    return {"points": rows, "source": "kucoin_usdt_plus_kraken_usd_to_usdt"}
+
+
 def load_active_levels() -> Dict[str, Any]:
     p = _env_path("DASHBOARD_LEVELS_JSON", _live_default("execution_state.json"))
     if not p.exists():
