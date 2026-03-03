@@ -29,7 +29,10 @@ class KrakenFuturesClient:
         if not self.key or not self.secret:
             return {"Content-Type": "application/x-www-form-urlencoded", "User-Agent": "quant-kraken/1"}
         post_data = body.decode("utf-8") if body else ""
-        message = post_data + nonce + endpoint_path
+        sign_path = endpoint_path
+        if sign_path.startswith("/derivatives"):
+            sign_path = sign_path[len("/derivatives"):]
+        message = post_data + nonce + sign_path
         digest = hashlib.sha256(message.encode("utf-8")).digest()
         secret_decoded = base64.b64decode(self.secret)
         sig = hmac.new(secret_decoded, digest, hashlib.sha512).digest()
