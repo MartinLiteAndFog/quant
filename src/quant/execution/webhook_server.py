@@ -227,7 +227,7 @@ def _start_renko_cache_updater_if_enabled() -> None:
     Controlled via env:
       ENABLE_DASHBOARD_RENKO_UPDATER=1
     """
-    if not _truthy(os.getenv("ENABLE_DASHBOARD_RENKO_UPDATER", "0")):
+    if not _truthy(os.getenv("ENABLE_DASHBOARD_RENKO_UPDATER", "1")):
         return
 
     symbol = os.getenv("DASHBOARD_SYMBOL", "SOL-USDT")
@@ -279,6 +279,54 @@ def _start_renko_cache_updater_if_enabled() -> None:
         days_back,
         step_hours,
         poll_sec,
+    )
+
+
+def _start_live_signal_worker_if_enabled() -> None:
+    """
+    Background thread that computes IMBA signals from live renko bars.
+    Controlled via env: ENABLE_LIVE_SIGNAL_WORKER=1
+    """
+    if not _truthy(os.getenv("ENABLE_LIVE_SIGNAL_WORKER", "1")):
+        return
+
+    symbol = os.getenv("LIVE_SYMBOL", "SOL-USDT")
+    renko_box = float(os.getenv("LIVE_RENKO_BOX", "0.1"))
+    lookback = int(os.getenv("LIVE_IMBA_LOOKBACK", "250"))
+    sl_abs = float(os.getenv("LIVE_IMBA_SL_ABS", "1.5"))
+    candles_limit = int(os.getenv("LIVE_CANDLES_LIMIT", "1500"))
+    poll_sec = float(os.getenv("LIVE_SIGNAL_POLL_SEC", "15"))
+    signals_dir = Path(os.getenv("SIGNALS_DIR", "data/signals"))
+    state_file = Path(os.getenv("LIVE_SIGNAL_STATE", "data/live/live_signal_state.json"))
+    default_gate_on = int(os.getenv("LIVE_DEFAULT_GATE_ON", "0"))
+
+    def _loop() -> None:
+        from quant.execution.live_signal_worker import run_once as sw_run_once, WorkerState, _read_state, _write_state
+        from quant.brokers.kucoin_futures import KucoinFuturesBroker
+        from quant.regime.store import RegimeStore
+
+        broker = KucoinFuturesBroker()
+        regime_store = RegimeStore()
+        st = _read_state(state_file)
+
+        while True:
+            try:
+                st = sw_run_once(
+                    broker, symbol=symbol, renko_box=renko_box, lookback=lookback,
+                    sl_abs=sl_abs, candles_limit=candles_limit,
+                    signals_dir=signals_dir, regime_store=regime_store,
+                    default_gate_on=default_gate_on, state=st,
+                )
+                _write_state(state_file, st)
+            except Exception as e:
+                log.warning("live signal worker error: %s", e)
+            time.sleep(max(5.0, poll_sec))
+
+    t = threading.Thread(target=_loop, name="live-signal-worker", daemon=True)
+    t.start()
+    log.info(
+        "started live signal worker symbol=%s box=%s lookback=%s poll_sec=%s",
+        symbol, renko_box, lookback, poll_sec,
     )
 
 
@@ -863,16 +911,20 @@ def api_signals_latest_solusd() -> Dict[str, Any]:
 
 
 @app.get("/api/renko/latest/solusd")
-def api_renko_latest_solusd(lookback: int = 250) -> Dict[str, Any]:
+def api_renko_latest_solusd(lookback: int = 50) -> Dict[str, Any]:
     try:
+        from quant.execution.dashboard_state import _refresh_renko_cache_if_needed, _read_renko_df
+
         path = Path(os.getenv("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet"))
-        if not path.exists():
-            return {"ok": False, "error": "no_renko_data"}
-        df = pd.read_parquet(path)
+        if path.exists():
+            df = pd.read_parquet(path)
+        else:
+            df = pd.DataFrame()
+        df = _refresh_renko_cache_if_needed(df)
         if df.empty or "close" not in df.columns:
-            return {"ok": False, "error": "empty_renko_data"}
+            return {"ok": False, "error": "no_renko_data"}
         df = df.sort_values("ts") if "ts" in df.columns else df
-        lb = min(max(lookback, 1), 500)
+        lb = min(max(lookback, 1), 50)  # backtest caps swing lookback to 50
         swing_low = float(df["low"].rolling(lb, min_periods=1).min().iloc[-1])
         swing_high = float(df["high"].rolling(lb, min_periods=1).max().iloc[-1])
         return {
@@ -2220,6 +2272,7 @@ def main() -> None:
     args = parse_args()
     _sync_gate_conf_artifacts_if_enabled()
     _start_renko_cache_updater_if_enabled()
+    _start_live_signal_worker_if_enabled()
     # Railway/cloud set PORT; use it so the app listens on the right port
     port = int(os.environ.get("PORT", str(args.port)))
     uvicorn.run(
