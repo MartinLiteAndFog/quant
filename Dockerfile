@@ -6,6 +6,7 @@ WORKDIR /app
 # Abhängigkeiten + Paket installieren (dasselbe Python wie zur Laufzeit)
 COPY pyproject.toml .
 COPY src ./src
+COPY data/regimes/pc_3axis_gate_latest.csv ./data/regimes/pc_3axis_gate_latest.csv
 RUN pip install --no-cache-dir .
 
 # PORT aus der Umgebung lesen (Python), keine Shell-Expansion – Railway setzt PORT
