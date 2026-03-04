@@ -86,6 +86,7 @@ class LiveExecutorTests(unittest.TestCase):
         os.environ["LIVE_FLIP_TTP_TRAIL_PCT"] = "0.10"
         os.environ["LIVE_FLIP_MIN_SL_PCT"] = "0.015"
         os.environ["LIVE_FLIP_MAX_SL_PCT"] = "0.030"
+        os.environ["LIVE_REGIME_MODE"] = "none"
 
     def tearDown(self) -> None:
         self.tmp.cleanup()

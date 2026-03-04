@@ -125,6 +125,50 @@ def align_impulses_exact(times: pd.DatetimeIndex, signals_df: Optional[pd.DataFr
     return out
 
 
+def align_impulses_nearest(
+    times: pd.DatetimeIndex,
+    signals_df: Optional[pd.DataFrame],
+    tolerance_sec: int = 120,
+) -> pd.Series:
+    """Align impulses to the nearest bar within *tolerance_sec*.
+
+    Unlike align_impulses_exact, this handles the common live scenario where
+    the signal worker and the renko cache produce bricks with slightly
+    different timestamps from the same 1-minute source data.
+    """
+    out = pd.Series(0, index=times, dtype="int64")
+    sig = _coerce_signals_df_to_series(signals_df)
+    if len(sig) == 0 or len(times) == 0:
+        return out
+
+    # Try exact first (fast path).
+    common = out.index.intersection(sig.index)
+    if len(common) == len(sig):
+        out.loc[common] = sig.loc[common].astype(int)
+        return out
+
+    tol = pd.Timedelta(seconds=int(max(1, tolerance_sec)))
+    bar_ts = times.sort_values()
+
+    for sig_ts, sig_val in sig.items():
+        idx = bar_ts.searchsorted(sig_ts, side="right")
+        candidates = []
+        if idx > 0:
+            candidates.append(bar_ts[idx - 1])
+        if idx < len(bar_ts):
+            candidates.append(bar_ts[idx])
+        best = None
+        best_dt = tol + pd.Timedelta(seconds=1)
+        for c in candidates:
+            dt = abs(c - sig_ts)
+            if dt < best_dt:
+                best_dt = dt
+                best = c
+        if best is not None and best_dt <= tol:
+            out.at[best] = int(sig_val)
+    return out
+
+
 def _align_regime_ffill(times: pd.DatetimeIndex, regime_on: Optional[pd.Series]) -> Optional[pd.Series]:
     """
     Align regime to bar times using forward-fill.
@@ -156,6 +200,8 @@ def run_flip_state_machine(
     signals_df: Optional[pd.DataFrame],
     params: FlipParams,
     regime_on: Optional[pd.Series] = None,
+    impulse_align: str = "exact",
+    impulse_tolerance_sec: int = 120,
 ) -> Tuple[pd.Series, pd.DataFrame, Dict[str, Any]]:
     """
     bars: DataFrame with at least ['ts','close'] and optionally ['high','low'] for swing stops.
@@ -171,7 +217,10 @@ def run_flip_state_machine(
     times = pd.DatetimeIndex(bars["ts"])
     close = pd.to_numeric(bars["close"], errors="coerce").astype(float).values
 
-    impulses = align_impulses_exact(times, signals_df)
+    if impulse_align == "nearest":
+        impulses = align_impulses_nearest(times, signals_df, tolerance_sec=impulse_tolerance_sec)
+    else:
+        impulses = align_impulses_exact(times, signals_df)
     regime = _align_regime_ffill(times, regime_on)
 
     fee_rt = _fee_roundtrip(params.fee_bps)

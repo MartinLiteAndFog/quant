@@ -14,7 +14,9 @@ import pandas as pd
 from quant.execution.execution_state import write_execution_state
 from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
-from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
+from quant.regime import RegimeStore
+from quant.strategies.flip_engine import FlipParams, run_flip_state_machine, align_impulses_nearest
+from quant.strategies.regime_indicators import build_regime_on
 from quant.strategies.signal_io import read_signals_jsonl
 from quant.utils.log import get_logger, log_throttled
 
@@ -253,11 +255,32 @@ def _load_renko_bars(path: Path, limit: int = 4000) -> pd.DataFrame:
 
 
 def _event_sig(row: pd.Series) -> str:
+    """Stable dedup signature that does not depend on run-local seq."""
     ts = pd.Timestamp(row["ts"]).isoformat()
-    seq = int(row.get("seq", 0))
     event = str(row.get("event", ""))
     side = int(row.get("side", 0))
-    return f"{ts}|{seq}|{event}|{side}"
+    price = f"{float(row.get('price', 0)):.6f}"
+    return f"{ts}|{event}|{side}|{price}"
+
+
+def _build_live_regime(renko_bars: pd.DataFrame) -> Optional[pd.Series]:
+    """Build a CHOP/ADX/ER gate from renko bars for the executor's state machine."""
+    mode = os.getenv("LIVE_REGIME_MODE", "chop_adx_er")
+    if mode.lower() in ("none", "off", ""):
+        return None
+    return build_regime_on(
+        bars=renko_bars,
+        mode=mode,
+        chop_len=int(os.getenv("LIVE_REGIME_CHOP_LEN", "14")),
+        chop_on=float(os.getenv("LIVE_REGIME_CHOP_ON", "58")),
+        chop_off=float(os.getenv("LIVE_REGIME_CHOP_OFF", "52")),
+        adx_len=int(os.getenv("LIVE_REGIME_ADX_LEN", "14")),
+        adx_on=float(os.getenv("LIVE_REGIME_ADX_ON", "18")),
+        adx_off=float(os.getenv("LIVE_REGIME_ADX_OFF", "25")),
+        er_len=int(os.getenv("LIVE_REGIME_ER_LEN", "40")),
+        er_on=float(os.getenv("LIVE_REGIME_ER_ON", "0.30")),
+        er_off=float(os.getenv("LIVE_REGIME_ER_OFF", "0.40")),
+    )
 
 
 def _latest_backtest_event(
@@ -275,7 +298,16 @@ def _latest_backtest_event(
         be_trigger_pct=float(os.getenv("LIVE_FLIP_BE_TRIGGER_PCT", "0")),
         be_offset_pct=float(os.getenv("LIVE_FLIP_BE_OFFSET_PCT", "0")),
     )
-    _, events, terminal = run_flip_state_machine(bars=renko_bars, signals_df=signals_df, params=params, regime_on=None)
+    regime_on = _build_live_regime(renko_bars)
+    tolerance = int(os.getenv("LIVE_SIGNAL_ALIGN_TOLERANCE_SEC", "120"))
+    _, events, terminal = run_flip_state_machine(
+        bars=renko_bars,
+        signals_df=signals_df,
+        params=params,
+        regime_on=regime_on,
+        impulse_align="nearest",
+        impulse_tolerance_sec=tolerance,
+    )
     if events is None or events.empty:
         return None, terminal
     events = events.sort_values(["ts", "seq"]).reset_index(drop=True)
@@ -481,6 +513,18 @@ def run_once(
     signals_df = _load_signals_df(signals_root=signals_root, symbol=symbol)
     ev, terminal_state = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
     if ev is None:
+        # Fallback: only fire if we have NEVER processed an event and are truly flat.
+        try:
+            fallback_pos = float(broker.get_position(symbol))
+        except Exception:
+            fallback_pos = None
+        if fallback_pos is not None and abs(fallback_pos) > 1e-12:
+            log_throttled(
+                log, logging.INFO, f"executor_fallback_skip_has_pos:{symbol}",
+                float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "60")),
+                "executor fallback skipped: already in position (%s)", fallback_pos,
+            )
+            return state
         sig = _latest_signal(signals_root=signals_root, symbol=symbol)
         if sig is None:
             log_throttled(
@@ -497,9 +541,9 @@ def run_once(
         ts_iso = ts.isoformat()
         if state.last_signal_ts == ts_iso and state.last_signal_value == sig_v:
             return state
-        event = "entry" if sig_v > 0 else "entry"
+        event = "entry"
         event_side = sig_v
-        ev_sig = f"{ts_iso}|0|fallback_signal|{sig_v}"
+        ev_sig = f"{ts_iso}|fallback_signal|{sig_v}|0.000000"
     else:
         ev_sig = _event_sig(ev)
         if state.last_event_sig == ev_sig:
@@ -580,6 +624,22 @@ def run_once(
     # Keep exposure near target size while in-position.
     if action == "hold" and current_side == want_side and abs(pos) + 1e-12 < float(qty):
         action = f"scale_{want_side}"
+
+    # Position consistency guard: skip if live position already matches desired state.
+    if action in ("enter_long", "enter_short") and current_side == want_side:
+        log.info("executor position_guard: already %s, skipping %s (event=%s)", current_side, action, event)
+        state.last_signal_ts = ts_iso
+        state.last_signal_value = sig_v
+        state.last_event_sig = ev_sig
+        state.last_action = f"guard_already_{current_side}"
+        return state
+    if action.startswith("flip_to_") and current_side == want_side:
+        log.info("executor position_guard: already %s, skipping %s (event=%s)", current_side, action, event)
+        state.last_signal_ts = ts_iso
+        state.last_signal_value = sig_v
+        state.last_event_sig = ev_sig
+        state.last_action = f"guard_already_{current_side}"
+        return state
 
     # Record expected trade intents for fills-reason mapping in dashboard.
     exp_side: Optional[str] = None

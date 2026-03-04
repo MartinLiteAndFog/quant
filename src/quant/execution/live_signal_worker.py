@@ -17,6 +17,7 @@ from quant.execution.strategy_router import strategy_for_gate, trend_signals_fro
 from quant.features.renko import renko_from_close
 from quant.regime import RegimeStateRecord, RegimeStore
 from quant.strategies.imba import ImbaParams, compute_imba_signals
+from quant.strategies.regime_indicators import build_regime_on
 from quant.utils.log import get_logger, log_throttled
 
 log = get_logger("quant.live_signal_worker")
@@ -266,12 +267,43 @@ def _filter_after(df: pd.DataFrame, ts_iso: Optional[str]) -> pd.DataFrame:
     return out[out["ts"] > ts].copy()
 
 
-def _load_or_seed_gate(regime_store: RegimeStore, symbol: str, default_gate_on: int) -> Dict[str, Any]:
-    latest = regime_store.get_latest_state(symbol=symbol)
-    if latest:
-        return latest
+def _compute_live_gate(renko_ohlc: pd.DataFrame) -> Optional[bool]:
+    """Compute the CHOP/ADX/ER gate from live renko bars. Returns True (ON) or False (OFF), or None if disabled."""
+    mode = os.getenv("LIVE_REGIME_MODE", "chop_adx_er")
+    if mode.lower() in ("none", "off", ""):
+        return None
+    if renko_ohlc.empty or len(renko_ohlc) < 20:
+        return None
+    regime = build_regime_on(
+        bars=renko_ohlc,
+        mode=mode,
+        chop_len=int(os.getenv("LIVE_REGIME_CHOP_LEN", "14")),
+        chop_on=float(os.getenv("LIVE_REGIME_CHOP_ON", "58")),
+        chop_off=float(os.getenv("LIVE_REGIME_CHOP_OFF", "52")),
+        adx_len=int(os.getenv("LIVE_REGIME_ADX_LEN", "14")),
+        adx_on=float(os.getenv("LIVE_REGIME_ADX_ON", "18")),
+        adx_off=float(os.getenv("LIVE_REGIME_ADX_OFF", "25")),
+        er_len=int(os.getenv("LIVE_REGIME_ER_LEN", "40")),
+        er_on=float(os.getenv("LIVE_REGIME_ER_ON", "0.30")),
+        er_off=float(os.getenv("LIVE_REGIME_ER_OFF", "0.40")),
+    )
+    if regime is None or regime.empty:
+        return None
+    return bool(regime.iloc[-1])
+
+
+def _load_or_seed_gate(regime_store: RegimeStore, symbol: str, default_gate_on: int, renko_ohlc: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+    computed_gate = _compute_live_gate(renko_ohlc) if renko_ohlc is not None else None
+
+    if computed_gate is not None:
+        gate_on = 1 if computed_gate else 0
+    else:
+        latest = regime_store.get_latest_state(symbol=symbol)
+        if latest:
+            return latest
+        gate_on = int(default_gate_on)
+
     now = _now_utc_iso()
-    gate_on = int(default_gate_on)
     regime_store.upsert_regime_state(
         RegimeStateRecord(
             ts=now,
@@ -279,10 +311,10 @@ def _load_or_seed_gate(regime_store: RegimeStore, symbol: str, default_gate_on: 
             gate_on=gate_on,
             regime_state=strategy_for_gate(gate_on),
             regime_score=1.0 if gate_on else -1.0,
-            confidence=0.5,
-            reason_code="live_signal_default_gate_seed",
+            confidence=0.7 if gate_on else 0.3,
+            reason_code="live_chop_adx_er" if computed_gate is not None else "live_signal_default_gate_seed",
             model_version="live-signal-v1",
-            feature_values_json="{}",
+            feature_values_json=json.dumps({"regime_mode": os.getenv("LIVE_REGIME_MODE", "chop_adx_er")}, separators=(",", ":")),
         )
     )
     return regime_store.get_latest_state(symbol=symbol) or {"gate_on": gate_on, "regime_state": strategy_for_gate(gate_on)}
@@ -328,7 +360,7 @@ def run_once(
         return state
 
     renko_ohlc = _renko_to_ohlc(bricks)
-    gate = _load_or_seed_gate(regime_store=regime_store, symbol=symbol, default_gate_on=default_gate_on)
+    gate = _load_or_seed_gate(regime_store=regime_store, symbol=symbol, default_gate_on=default_gate_on, renko_ohlc=renko_ohlc)
     gate_on = int(gate.get("gate_on", default_gate_on))
     active_mode = strategy_for_gate(gate_on)
 
