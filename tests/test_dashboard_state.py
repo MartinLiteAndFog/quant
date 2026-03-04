@@ -221,6 +221,22 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(float(m.get("equity_usd", 0.0)), 1000.0)
         self.assertEqual(len(h.get("points", [])), 2)
 
+    def test_kraken_equity_loader_accepts_legacy_timestamp_and_equity_columns(self) -> None:
+        equity_path = self.tmp_path / "kraken_equity_legacy.csv"
+        os.environ["KRAKEN_EQUITY_CSV"] = str(equity_path)
+        pd.DataFrame(
+            [
+                {"time": "2026-02-20T00:00:00Z", "equity": 1000.0},
+                {"time": "2026-02-20T01:00:00Z", "equity": 1015.0},
+            ]
+        ).to_csv(equity_path, index=False)
+
+        h = load_kraken_equity_history(max_points=100)
+        pts = h.get("points", [])
+        self.assertEqual(len(pts), 2)
+        self.assertEqual(int(pts[0]["time"]), int(pd.Timestamp("2026-02-20T00:00:00Z").timestamp()))
+        self.assertAlmostEqual(float(pts[1]["equity"]), 1015.0, places=6)
+
     def test_build_combined_equity(self) -> None:
         kucoin = [{"time": 100, "equity": 200.0}, {"time": 200, "equity": 210.0}]
         kraken = [{"time": 100, "equity": 300.0}, {"time": 300, "equity": 320.0}]

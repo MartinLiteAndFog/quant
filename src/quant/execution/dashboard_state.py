@@ -667,11 +667,26 @@ def load_kraken_equity_history(max_points: int = 500) -> Dict[str, Any]:
         df = pd.read_csv(p)
     except Exception:
         return {"points": [], "source": "none"}
-    if df.empty or not {"ts", "equity_usd"}.issubset(set(df.columns)):
+    if df.empty:
         return {"points": [], "source": "none"}
 
     df = df.copy()
-    df["ts"] = pd.to_numeric(df["ts"], errors="coerce")
+    # Backward compatibility: older snapshots may use "time"/"timestamp" and
+    # "equity"/"portfolio_value" naming instead of "ts"/"equity_usd".
+    if "ts" not in df.columns:
+        for c in ("time", "timestamp", "datetime"):
+            if c in df.columns:
+                df["ts"] = df[c]
+                break
+    if "equity_usd" not in df.columns:
+        for c in ("equity", "portfolio_value", "portfolioValue", "value"):
+            if c in df.columns:
+                df["equity_usd"] = df[c]
+                break
+    if not {"ts", "equity_usd"}.issubset(set(df.columns)):
+        return {"points": [], "source": "none"}
+
+    df["ts"] = df["ts"].map(_epoch_seconds_from_any)
     df["equity_usd"] = pd.to_numeric(df["equity_usd"], errors="coerce")
     df = df.dropna(subset=["ts", "equity_usd"]).sort_values("ts").drop_duplicates(subset=["ts"], keep="last")
     if df.empty:
