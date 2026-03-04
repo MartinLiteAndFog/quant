@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pandas as pd
 
-from quant.execution.live_executor import ExecutorState, run_once, _apply_live_ttp_guard
+from quant.execution.live_executor import (
+    ExecutorState, run_once, _apply_live_ttp_guard, _snap_signals_to_bars,
+)
 
 
 class _DummyBroker:
@@ -224,6 +226,111 @@ class LiveExecutorTests(unittest.TestCase):
                          "New short signal with mismatched timestamp must still activate a trade")
         self.assertEqual(len(oms2.enter_calls), 1)
         self.assertEqual(oms2.enter_calls[0][1], "short")
+
+    def test_snap_signals_to_bars_exact_match_unchanged(self) -> None:
+        """Signals already matching bar timestamps are not modified."""
+        bars = pd.DataFrame({"ts": pd.to_datetime(["2026-02-25T10:00:00Z", "2026-02-25T10:01:00Z"], utc=True)})
+        sigs = pd.DataFrame({"ts": pd.to_datetime(["2026-02-25T10:00:00Z"], utc=True), "signal": [1]})
+        out = _snap_signals_to_bars(sigs, bars)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out.iloc[0]["ts"], pd.Timestamp("2026-02-25T10:00:00Z"))
+
+    def test_snap_signals_to_bars_snaps_within_tolerance(self) -> None:
+        """Signal 30s off from a bar is snapped to the nearest bar."""
+        bars = pd.DataFrame({"ts": pd.to_datetime(["2026-02-25T10:00:00Z", "2026-02-25T10:02:00Z"], utc=True)})
+        sigs = pd.DataFrame({"ts": pd.to_datetime(["2026-02-25T10:00:30Z"], utc=True), "signal": [-1]})
+        out = _snap_signals_to_bars(sigs, bars)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out.iloc[0]["ts"], pd.Timestamp("2026-02-25T10:00:00Z"))
+        self.assertEqual(int(out.iloc[0]["signal"]), -1)
+
+    def test_snap_signals_to_bars_outside_tolerance_kept(self) -> None:
+        """Signal outside tolerance window keeps its original timestamp."""
+        bars = pd.DataFrame({"ts": pd.to_datetime(["2026-02-25T10:00:00Z"], utc=True)})
+        sigs = pd.DataFrame({"ts": pd.to_datetime(["2026-02-25T11:00:00Z"], utc=True), "signal": [1]})
+        out = _snap_signals_to_bars(sigs, bars, tolerance=pd.Timedelta(minutes=5))
+        self.assertEqual(out.iloc[0]["ts"], pd.Timestamp("2026-02-25T11:00:00Z"))
+
+    def test_mismatched_signal_with_position_triggers_flip(self) -> None:
+        """When in a long position and a short signal arrives with mismatched
+        timestamp, the executor must flip (not just hold)."""
+        broker = _DummyBroker(pos=5.0, bid=84.9, ask=85.1)
+        oms = _DummyOms()
+
+        st = run_once(
+            broker=broker,
+            oms=oms,
+            symbol="SOL-USDT",
+            signals_root=self.signals_root,
+            state=ExecutorState(),
+            live_enabled=True,
+            dry_run=False,
+            max_eur=1000.0,
+            leverage=1.0,
+        )
+
+        new_rec = {"ts": "2026-02-25T10:05:00Z", "signal": -1}
+        with (self.symbol_dir / "20260225.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(new_rec) + "\n")
+
+        oms2 = _DummyOms()
+        st = run_once(
+            broker=broker,
+            oms=oms2,
+            symbol="SOL-USDT",
+            signals_root=self.signals_root,
+            state=st,
+            live_enabled=True,
+            dry_run=False,
+            max_eur=1000.0,
+            leverage=1.0,
+        )
+
+        self.assertEqual(st.last_action, "flip_to_short",
+                         "Short signal while long must trigger a flip, not hold")
+        self.assertEqual(len(oms2.flip_calls), 1)
+        self.assertEqual(oms2.flip_calls[0][1], "long")
+
+    def test_snapped_signal_processed_by_flip_engine(self) -> None:
+        """Signal with slightly off timestamp gets snapped to a bar and
+        processed by the flip engine (not just fallback)."""
+        bars = pd.DataFrame({
+            "ts": pd.to_datetime([
+                "2026-02-25T10:00:00Z",
+                "2026-02-25T10:01:00Z",
+                "2026-02-25T10:02:00Z",
+            ], utc=True),
+            "open": [100.0, 100.0, 100.0],
+            "high": [100.0, 100.0, 100.0],
+            "low": [100.0, 100.0, 100.0],
+            "close": [100.0, 100.0, 100.0],
+        })
+        renko_path = self.root / "renko_snap.parquet"
+        bars.to_parquet(renko_path, index=False)
+        os.environ["LIVE_EXECUTOR_RENKO_PARQUET"] = str(renko_path)
+
+        rec = {"ts": "2026-02-25T10:00:17Z", "signal": 1}
+        snap_dir = self.signals_root / "SOL-USDT"
+        snap_dir.mkdir(parents=True, exist_ok=True)
+        (snap_dir / "20260225_snap.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
+
+        broker = _DummyBroker(pos=0.0, bid=99.9, ask=100.1)
+        oms = _DummyOms()
+        st = run_once(
+            broker=broker,
+            oms=oms,
+            symbol="SOL-USDT",
+            signals_root=self.signals_root,
+            state=ExecutorState(),
+            live_enabled=True,
+            dry_run=False,
+            max_eur=1000.0,
+            leverage=1.0,
+        )
+        self.assertIn(st.last_action, ("enter_long", "enter_short", "flip_to_long", "flip_to_short"),
+                       "Snapped signal must result in a trade action, not be ignored")
+        self.assertTrue(len(oms.enter_calls) > 0 or len(oms.flip_calls) > 0,
+                        "At least one OMS call must have been made")
 
     def test_apply_live_ttp_guard_short_does_not_loosen(self) -> None:
         terminal = {"side": "short", "mode": "TTP", "ttp": 83.50}

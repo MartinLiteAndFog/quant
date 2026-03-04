@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+import numpy as np
 import pandas as pd
 
 from quant.execution.execution_state import write_execution_state
@@ -260,12 +261,66 @@ def _event_sig(row: pd.Series) -> str:
     return f"{ts}|{seq}|{event}|{side}"
 
 
+def _snap_signals_to_bars(
+    signals_df: pd.DataFrame,
+    bars: pd.DataFrame,
+    tolerance: pd.Timedelta = pd.Timedelta(minutes=5),
+) -> pd.DataFrame:
+    """Snap signal timestamps to the nearest renko bar within *tolerance*.
+
+    The live signal worker and the renko cache updater build renko
+    independently, so a signal's ``ts`` may not exactly match any bar in
+    ``renko_latest.parquet``.  Without snapping, ``align_impulses_exact``
+    silently drops the signal and no trade is activated.
+    """
+    if signals_df.empty or bars.empty:
+        return signals_df
+
+    sig = signals_df.copy()
+    sig["ts"] = pd.to_datetime(sig["ts"], utc=True, errors="coerce")
+    sig = sig.dropna(subset=["ts"])
+    if sig.empty:
+        return sig
+
+    bar_times = pd.DatetimeIndex(pd.to_datetime(bars["ts"], utc=True, errors="coerce")).dropna()
+    if len(bar_times) == 0:
+        return sig
+
+    bar_times_sorted = bar_times.sort_values()
+    snapped: list = []
+    n_snapped = 0
+    for t in sig["ts"]:
+        if t in bar_times_sorted:
+            snapped.append(t)
+            continue
+        idx = bar_times_sorted.searchsorted(t)
+        candidates = []
+        if idx > 0:
+            candidates.append(bar_times_sorted[idx - 1])
+        if idx < len(bar_times_sorted):
+            candidates.append(bar_times_sorted[idx])
+        if candidates:
+            nearest = min(candidates, key=lambda bt: abs(bt - t))
+            if abs(nearest - t) <= tolerance:
+                snapped.append(nearest)
+                n_snapped += 1
+                continue
+        snapped.append(t)
+
+    if n_snapped > 0:
+        log.info("executor snapped %d/%d signal timestamps to nearest renko bar", n_snapped, len(sig))
+
+    sig["ts"] = snapped
+    return sig.drop_duplicates("ts", keep="last").reset_index(drop=True)
+
+
 def _latest_backtest_event(
     renko_bars: pd.DataFrame, signals_df: pd.DataFrame,
 ) -> Tuple[Optional[pd.Series], Dict[str, Any]]:
     """Returns (latest_event_row, terminal_state_dict)."""
     if renko_bars.empty or signals_df.empty:
         return None, {}
+    signals_df = _snap_signals_to_bars(signals_df, renko_bars)
     params = FlipParams(
         fee_bps=float(os.getenv("LIVE_FLIP_FEE_BPS", "0")),
         ttp_trail_pct=float(os.getenv("LIVE_FLIP_TTP_TRAIL_PCT", "0.012")),
@@ -504,7 +559,7 @@ def run_once(
         ts_iso = ts.isoformat()
         if state.last_signal_ts == ts_iso and state.last_signal_value == sig_v:
             return state
-        event = "entry"
+        event = "fallback_signal"
         event_side = sig_v
         ev_sig = f"{ts_iso}|0|fallback_signal|{sig_v}"
         _used_fallback = True
