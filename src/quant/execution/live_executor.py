@@ -480,7 +480,14 @@ def run_once(
     renko_bars = _load_renko_bars(renko_path, limit=int(os.getenv("LIVE_EXECUTOR_RENKO_LIMIT", "4000")))
     signals_df = _load_signals_df(signals_root=signals_root, symbol=symbol)
     ev, terminal_state = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
-    if ev is None:
+    _used_fallback = False
+    use_fallback_signal = (ev is None)
+    if ev is not None:
+        ev_sig = _event_sig(ev)
+        if state.last_event_sig == ev_sig:
+            use_fallback_signal = True
+
+    if use_fallback_signal:
         sig = _latest_signal(signals_root=signals_root, symbol=symbol)
         if sig is None:
             log_throttled(
@@ -497,13 +504,16 @@ def run_once(
         ts_iso = ts.isoformat()
         if state.last_signal_ts == ts_iso and state.last_signal_value == sig_v:
             return state
-        event = "entry" if sig_v > 0 else "entry"
+        event = "entry"
         event_side = sig_v
         ev_sig = f"{ts_iso}|0|fallback_signal|{sig_v}"
+        _used_fallback = True
+        if ev is not None:
+            log.info(
+                "executor fallback: flip-engine event stale, using direct signal ts=%s sig=%s symbol=%s",
+                ts_iso, sig_v, symbol,
+            )
     else:
-        ev_sig = _event_sig(ev)
-        if state.last_event_sig == ev_sig:
-            return state
         ts = pd.Timestamp(ev["ts"])
         ts_iso = ts.isoformat()
         event = str(ev["event"])
@@ -682,7 +692,8 @@ def run_once(
 
     state.last_signal_ts = ts_iso
     state.last_signal_value = sig_v
-    state.last_event_sig = ev_sig
+    if not _used_fallback:
+        state.last_event_sig = ev_sig
     state.last_action = action
     state.n_actions += 1
     return state

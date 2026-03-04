@@ -180,6 +180,51 @@ class LiveExecutorTests(unittest.TestCase):
         # 82.70 * 1.012 = 83.6924 ; stale higher ttp must be capped.
         self.assertAlmostEqual(float(out["ttp"]), 83.6924, places=4)
 
+    def test_mismatched_signal_timestamp_still_activates_trade(self) -> None:
+        """Reproduce the missing-trade bug: signal timestamp does not match any
+        renko bar timestamp (two independent renko computations), so
+        align_impulses_exact drops the signal.  The executor must fall through
+        to the direct-signal fallback and still enter."""
+        # Renko bars at :00, :01, :02 – matching signal at :00 produces old events.
+        broker = _DummyBroker(pos=0.0, bid=84.9, ask=85.1)
+        oms = _DummyOms()
+
+        # First run: process the matching signal (entry at :00, tp_exit at :02).
+        st = run_once(
+            broker=broker,
+            oms=oms,
+            symbol="SOL-USDT",
+            signals_root=self.signals_root,
+            state=ExecutorState(),
+            live_enabled=True,
+            dry_run=False,
+            max_eur=1000.0,
+            leverage=1.0,
+        )
+
+        # Now append a NEW short signal whose timestamp does NOT match any renko bar.
+        new_rec = {"ts": "2026-02-25T10:05:00Z", "signal": -1}
+        with (self.symbol_dir / "20260225.jsonl").open("a", encoding="utf-8") as f:
+            f.write(json.dumps(new_rec) + "\n")
+
+        oms2 = _DummyOms()
+        st = run_once(
+            broker=broker,
+            oms=oms2,
+            symbol="SOL-USDT",
+            signals_root=self.signals_root,
+            state=st,
+            live_enabled=True,
+            dry_run=False,
+            max_eur=1000.0,
+            leverage=1.0,
+        )
+
+        self.assertEqual(st.last_action, "enter_short",
+                         "New short signal with mismatched timestamp must still activate a trade")
+        self.assertEqual(len(oms2.enter_calls), 1)
+        self.assertEqual(oms2.enter_calls[0][1], "short")
+
     def test_apply_live_ttp_guard_short_does_not_loosen(self) -> None:
         terminal = {"side": "short", "mode": "TTP", "ttp": 83.50}
         out = _apply_live_ttp_guard(
