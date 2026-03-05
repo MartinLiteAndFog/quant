@@ -108,7 +108,8 @@ def _append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
     line = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=str)
     with open(path, "a", encoding="utf-8") as f:
         f.write(line + "\n")
-
+        f.flush()
+        os.fsync(f.fileno())
 
 def _symbol_from_payload(payload: Dict[str, Any]) -> str:
     for k in ("symbol", "ticker", "pair"):
@@ -302,8 +303,8 @@ def _start_live_signal_worker_if_enabled() -> None:
 
     def _loop() -> None:
         from quant.execution.live_signal_worker import run_once as sw_run_once, WorkerState, _read_state, _write_state
-        from quant.brokers.kucoin_futures import KucoinFuturesBroker
-        from quant.regime.store import RegimeStore
+        from quant.execution.kucoin_futures import KucoinFuturesBroker
+        from quant.regime import RegimeStore
 
         broker = KucoinFuturesBroker()
         regime_store = RegimeStore()

@@ -698,6 +698,20 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
+
+
+# ---- executor singleton lock ----
+import os
+LOCKFILE = "/tmp/quant_live_executor.lock"
+
+if os.path.exists(LOCKFILE):
+    raise RuntimeError("Live executor already running")
+
+with open(LOCKFILE, "w") as f:
+    f.write(str(os.getpid()))
+# ---------------------------------
+
+
 def main() -> None:
     args = parse_args()
     symbol = str(args.symbol).upper()

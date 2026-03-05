@@ -302,7 +302,7 @@ def run_once(
     state: WorkerState,
 ) -> WorkerState:
     bars = _fetch_recent_1m_ohlcv(broker, symbol=symbol, limit=candles_limit)
-    if len(bars) < max(lookback, 20):
+    if len(bars) < 20:
         log_throttled(
             log,
             logging.INFO,
