@@ -536,9 +536,11 @@ def run_once(
     renko_path = Path(os.getenv("LIVE_EXECUTOR_RENKO_PARQUET", os.getenv("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet")))
     renko_bars = _load_renko_bars(renko_path, limit=int(os.getenv("LIVE_EXECUTOR_RENKO_LIMIT", "4000")))
     signals_df = _load_signals_df(signals_root=signals_root, symbol=symbol)
-    ev, terminal_state = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
-
-    # ---- Determine desired position from terminal state ----
+    ev, terminal_state = _latest_backtest_event(
+    renko_bars=renko_bars,
+    signals_df=signals_df,
+)
+# ---- Determine desired position from terminal state ----
     # The flip engine replays ALL history.  Using the terminal state (the
     # final position after all events) prevents acting on stale intermediate
     # events that would immediately undo a just-placed trade.
@@ -656,7 +658,9 @@ def run_once(
     # Dedup: skip if terminal state unchanged AND broker position already
     # matches the desired direction.  When they mismatch (e.g. order not yet
     # filled) we must retry.
-    if terminal_sig == state.last_terminal_sig and action == "hold":
+    event_sig = _event_sig(ev) if ev is not None else None
+
+    if event_sig is not None and event_sig == state.last_event_sig and action == "hold":
         return state
 
     ts_iso = pd.Timestamp.now("UTC").isoformat()
@@ -763,6 +767,8 @@ def run_once(
 
     state.last_signal_ts = ts_iso
     state.last_signal_value = sig_v
+    if ev is not None:
+        state.last_event_sig = _event_sig(ev)
     state.last_terminal_sig = terminal_sig
     state.last_action = action
     state.n_actions += 1

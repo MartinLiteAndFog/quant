@@ -129,6 +129,113 @@ def build_regime(bars, chop_on=58, chop_off=52, adx_on=18, adx_off=25,
     return regime
 
 
+# ---- PC 2-of-3 Gate (Drift / Elasticity / Instability) ----
+def _rank01(a):
+    """Rank-normalize to [0,1]."""
+    a = np.asarray(a, dtype=float).copy()
+    m = np.isfinite(a)
+    out = np.full_like(a, np.nan, dtype=float)
+    vals = a[m]
+    if len(vals) == 0:
+        return out
+    order = np.argsort(vals)
+    ranks = np.empty_like(order, dtype=float)
+    ranks[order] = np.arange(len(vals), dtype=float)
+    out[m] = ranks / max(1.0, (len(vals) - 1))
+    return out
+
+
+def _rolling_slope_r2(x, win):
+    """Rolling OLS slope and R^2 on array x with window win."""
+    n = len(x)
+    slope = np.full(n, np.nan)
+    r2 = np.full(n, np.nan)
+    if n < win or win < 2:
+        return slope, r2
+    t = np.arange(win, dtype=float)
+    t_mean = t.mean()
+    t_var = ((t - t_mean) ** 2).sum()
+    for i in range(win - 1, n):
+        y = x[i - win + 1 : i + 1]
+        if not np.all(np.isfinite(y)):
+            continue
+        y_mean = y.mean()
+        cov = ((t - t_mean) * (y - y_mean)).sum()
+        b = cov / t_var if t_var > 0 else 0.0
+        a = y_mean - b * t_mean
+        yhat = a + b * t
+        ss_res = ((y - yhat) ** 2).sum()
+        ss_tot = ((y - y_mean) ** 2).sum()
+        slope[i] = b
+        r2[i] = 1.0 - (ss_res / ss_tot) if ss_tot > 0 else 0.0
+    return slope, r2
+
+
+def build_regime_pc_2of3(bars, drift_win=240, elas_h=15, train_frac=0.70,
+                          q_drift=0.60, q_elas=0.30, q_instab=0.40):
+    """
+    PC 2-of-3 gate using Drift, Elasticity, and Instability axes.
+
+    g1: |drift_eff| <= quantile(q_drift) from training period  (low drift = not trending)
+    g2: elasticity >= quantile(q_elas) from training period     (mean-reverting)
+    g3: instability <= quantile(q_instab) from training period  (stable regime)
+    gate_on = (g1 + g2 + g3) >= 2
+
+    Parameters:
+        drift_win: window for rolling slope of log(close)
+        elas_h: horizon for elasticity (lookback for past returns)
+        train_frac: fraction of data used to set quantile thresholds
+        q_drift: quantile for drift threshold (higher = more permissive)
+        q_elas: quantile for elasticity threshold (lower = more permissive)
+        q_instab: quantile for instability threshold (higher = more permissive)
+    """
+    df = bars.copy().reset_index(drop=True)
+    close = df["close"].astype(float).to_numpy()
+    n = len(close)
+    cut = max(1, min(n, int(n * train_frac)))
+    train = slice(0, cut)
+
+    # Instability: rank of true range as volatility proxy (no v_temporal on Renko)
+    tr = _true_range(df).to_numpy()
+    tr_ma = pd.Series(tr).rolling(14, min_periods=1).mean().to_numpy()
+    instab = _rank01(tr_ma)
+
+    # Drift: rolling slope of log(close) * R^2, z-scored, dampened by instability
+    logp = np.log(np.where(close > 0, close, np.nan))
+    slope, r2 = _rolling_slope_r2(logp, drift_win)
+    drift_raw = slope * np.clip(r2, 0.0, 1.0)
+    tr_drift = drift_raw[train]
+    m = np.isfinite(tr_drift)
+    mu = float(np.nanmean(tr_drift[m])) if m.any() else 0.0
+    sd = float(np.nanstd(tr_drift[m]) + 1e-12) if m.any() else 1.0
+    drift_z = (drift_raw - mu) / sd
+    drift_eff = drift_z * (1.0 - np.nan_to_num(instab, nan=0.0))
+
+    # Elasticity: rank of |past returns| over horizon h
+    r_past = np.full(n, np.nan)
+    if n > elas_h:
+        r_past[elas_h:] = np.log(close[elas_h:] / close[:-elas_h])
+    elas = _rank01(np.abs(r_past))
+
+    # Thresholds from training quantiles
+    def _q(arr, sl, q):
+        x = np.asarray(arr, dtype=float)[sl]
+        x = x[np.isfinite(x)]
+        return float(np.quantile(x, q)) if len(x) else float("nan")
+
+    t_drift = _q(np.abs(drift_eff), train, q_drift)
+    t_elas = _q(elas, train, q_elas)
+    t_instab = _q(instab, train, q_instab)
+
+    g1 = (np.abs(drift_eff) <= t_drift).astype(int)
+    g2 = (elas >= t_elas).astype(int)
+    g3 = (instab <= t_instab).astype(int)
+    g2of3 = ((g1 + g2 + g3) >= 2).astype(int)
+
+    regime = pd.Series(g2of3.astype(bool), index=pd.DatetimeIndex(pd.to_datetime(bars["ts"], utc=True)))
+    return regime
+
+
 def equity_stats(pnls):
     if len(pnls) == 0:
         return {"total_return_pct": 0, "max_dd_pct": 0, "trades": 0, "win_rate": 0, "mean_pnl_pct": 0}
@@ -162,13 +269,22 @@ def run_backtest(
     tp2_max_sl_pct: float = 0.08,
     tp2_swing_lookback: int = 50,
     flip_on_opposite: bool = True,
-    # Regime params
+    # Regime params (chop/adx/er mode)
     chop_on: float = 58.0,
     chop_off: float = 52.0,
     adx_on: float = 18.0,
     adx_off: float = 25.0,
     er_on: float = 0.30,
     er_off: float = 0.40,
+    # Regime mode: "chop_adx_er" (default) or "pc_2of3"
+    regime_mode: str = "chop_adx_er",
+    # PC 2-of-3 params
+    drift_win: int = 240,
+    elas_h: int = 15,
+    train_frac: float = 0.70,
+    q_drift: float = 0.60,
+    q_elas: float = 0.30,
+    q_instab: float = 0.40,
     # IMBA params
     imba_lookback: int = 240,
     imba_sl_abs: float = None,  # auto-set based on box
@@ -201,10 +317,16 @@ def run_backtest(
         print(f"[{pair}] IMBA signals: {len(signals_df)}")
 
     # Build regime on bricks
-    regime_on = build_regime(
-        bricks, chop_on=chop_on, chop_off=chop_off,
-        adx_on=adx_on, adx_off=adx_off, er_on=er_on, er_off=er_off,
-    )
+    if regime_mode == "pc_2of3":
+        regime_on = build_regime_pc_2of3(
+            bricks, drift_win=drift_win, elas_h=elas_h,
+            train_frac=train_frac, q_drift=q_drift, q_elas=q_elas, q_instab=q_instab,
+        )
+    else:
+        regime_on = build_regime(
+            bricks, chop_on=chop_on, chop_off=chop_off,
+            adx_on=adx_on, adx_off=adx_off, er_on=er_on, er_off=er_off,
+        )
     gate_on_rate = float(regime_on.mean()) * 100
     gate_off = ~regime_on  # Gate OFF = inverse
     gate_off_rate = float(gate_off.mean()) * 100
