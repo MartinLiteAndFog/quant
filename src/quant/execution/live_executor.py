@@ -135,6 +135,7 @@ class ExecutorState:
     last_event_sig: Optional[str] = None
     last_action: Optional[str] = None
     n_actions: int = 0
+    last_terminal_sig: Optional[str] = None
 
 
 def _read_state(path: Path) -> ExecutorState:
@@ -148,6 +149,7 @@ def _read_state(path: Path) -> ExecutorState:
             last_event_sig=d.get("last_event_sig"),
             last_action=d.get("last_action"),
             n_actions=int(d.get("n_actions", 0)),
+            last_terminal_sig=d.get("last_terminal_sig"),
         )
     except Exception:
         return ExecutorState()
@@ -535,16 +537,32 @@ def run_once(
     renko_bars = _load_renko_bars(renko_path, limit=int(os.getenv("LIVE_EXECUTOR_RENKO_LIMIT", "4000")))
     signals_df = _load_signals_df(signals_root=signals_root, symbol=symbol)
     ev, terminal_state = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
-    _used_fallback = False
-    use_fallback_signal = (ev is None)
-    if ev is not None:
-        ev_sig = _event_sig(ev)
-        if state.last_event_sig == ev_sig:
-            use_fallback_signal = True
 
-    if use_fallback_signal:
+    # ---- Determine desired position from terminal state ----
+    # The flip engine replays ALL history.  Using the terminal state (the
+    # final position after all events) prevents acting on stale intermediate
+    # events that would immediately undo a just-placed trade.
+    terminal_pos = int(terminal_state.get("pos", 0)) if terminal_state else 0
+    terminal_entry_ts = terminal_state.get("entry_bar_ts") if terminal_state else None
+    terminal_sig = f"{terminal_pos}|{terminal_entry_ts}"
+
+    # Fallback: if flip engine produced nothing, use latest signal directly.
+    if terminal_pos == 0 and (ev is None or (terminal_state and terminal_state.get("pos", 0) == 0)):
         sig = _latest_signal(signals_root=signals_root, symbol=symbol)
-        if sig is None:
+        if sig is not None:
+            sig_v = int(sig["signal"])
+            sig_ts_iso = sig["ts"].isoformat()
+            if not (state.last_signal_ts == sig_ts_iso and state.last_signal_value == sig_v):
+                terminal_pos = sig_v
+                terminal_sig = f"{sig_v}|fallback|{sig_ts_iso}"
+                log.info(
+                    "executor fallback: using direct signal ts=%s sig=%s symbol=%s",
+                    sig_ts_iso, sig_v, symbol,
+                )
+
+    if terminal_pos == 0 and ev is None:
+        sig_check = _latest_signal(signals_root=signals_root, symbol=symbol)
+        if sig_check is None:
             log_throttled(
                 log,
                 logging.INFO,
@@ -554,26 +572,6 @@ def run_once(
                 symbol,
             )
             return state
-        ts = sig["ts"]
-        sig_v = int(sig["signal"])
-        ts_iso = ts.isoformat()
-        if state.last_signal_ts == ts_iso and state.last_signal_value == sig_v:
-            return state
-        event = "fallback_signal"
-        event_side = sig_v
-        ev_sig = f"{ts_iso}|0|fallback_signal|{sig_v}"
-        _used_fallback = True
-        if ev is not None:
-            log.info(
-                "executor fallback: flip-engine event stale, using direct signal ts=%s sig=%s symbol=%s",
-                ts_iso, sig_v, symbol,
-            )
-    else:
-        ts = pd.Timestamp(ev["ts"])
-        ts_iso = ts.isoformat()
-        event = str(ev["event"])
-        event_side = int(ev["side"])
-        sig_v = 1 if event_side > 0 else -1
 
     bid, ask = broker.get_best_bid_ask(symbol)
     mid = (bid + ask) / 2.0 if (bid and ask) else (ask or bid or 0.0)
@@ -613,8 +611,7 @@ def run_once(
             contract_multiplier,
             use_full_equity,
         )
-        state.last_signal_ts = ts_iso
-        state.last_signal_value = sig_v
+        state.last_terminal_sig = terminal_sig
         state.last_action = "skip_qty_0"
         return state
 
@@ -626,25 +623,44 @@ def run_once(
         ttp_trail_pct=_resolve_ttp_trail_pct(),
     )
     _write_dashboard_levels(symbol, terminal_state, live_pos=pos)
-    target_side = (-event_side if event in ("signal_flip_exit", "tp_exit") else event_side)
-    want_side = "long" if target_side > 0 else "short"
+
+    # ---- Derive action from terminal state vs actual broker position ----
     current_side = "long" if pos > 0 else ("short" if pos < 0 else "flat")
+    want_side = "long" if terminal_pos > 0 else "short"
+    sig_v = terminal_pos if terminal_pos != 0 else 1
 
     action = None
-    if event == "entry":
-        action = f"enter_{want_side}" if abs(pos) < 1e-12 else "hold"
-    elif event in ("signal_flip_exit", "tp_exit"):
+    if terminal_pos > 0:
         if abs(pos) < 1e-12:
-            action = f"enter_{want_side}"
+            action = "enter_long"
+        elif pos < 0:
+            action = "flip_to_long"
         else:
-            action = f"flip_to_{want_side}" if ((pos > 0 and target_side < 0) or (pos < 0 and target_side > 0)) else "hold"
-    elif event in ("sl_exit", "be_exit"):
-        action = f"exit_{current_side}" if abs(pos) > 1e-12 else "hold"
+            action = "hold"
+    elif terminal_pos < 0:
+        if abs(pos) < 1e-12:
+            action = "enter_short"
+        elif pos > 0:
+            action = "flip_to_short"
+        else:
+            action = "hold"
     else:
-        action = f"enter_{want_side}" if abs(pos) < 1e-12 else (f"flip_to_{want_side}" if ((pos > 0 and sig_v < 0) or (pos < 0 and sig_v > 0)) else "hold")
-    # Keep exposure near target size while in-position.
+        if abs(pos) > 1e-12:
+            action = f"exit_{current_side}"
+        else:
+            action = "hold"
+
     if action == "hold" and current_side == want_side and abs(pos) + 1e-12 < float(qty):
         action = f"scale_{want_side}"
+
+    # Dedup: skip if terminal state unchanged AND broker position already
+    # matches the desired direction.  When they mismatch (e.g. order not yet
+    # filled) we must retry.
+    if terminal_sig == state.last_terminal_sig and action == "hold":
+        return state
+
+    ts_iso = pd.Timestamp.now("UTC").isoformat()
+    event = f"terminal_pos={terminal_pos}"
 
     # Record expected trade intents for fills-reason mapping in dashboard.
     exp_side: Optional[str] = None
@@ -747,8 +763,7 @@ def run_once(
 
     state.last_signal_ts = ts_iso
     state.last_signal_value = sig_v
-    if not _used_fallback:
-        state.last_event_sig = ev_sig
+    state.last_terminal_sig = terminal_sig
     state.last_action = action
     state.n_actions += 1
     return state

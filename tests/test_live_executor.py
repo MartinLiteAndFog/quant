@@ -92,7 +92,9 @@ class LiveExecutorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp.cleanup()
 
-    def test_tp_exit_event_flips_without_new_opposite_signal(self) -> None:
+    def test_terminal_state_short_flips_long_broker_position(self) -> None:
+        """Flip engine ends in short (pos=-1) after TTP exit.  Broker is
+        long -> executor must flip to short."""
         broker = _DummyBroker(pos=2.0, bid=106.9, ask=107.1)
         oms = _DummyOms()
         st = ExecutorState()
@@ -143,6 +145,8 @@ class LiveExecutorTests(unittest.TestCase):
         self.assertEqual(int(qty), 100)
 
     def test_last_event_is_idempotent(self) -> None:
+        """After flipping to short and the fill landing, the next poll must
+        not produce another flip (terminal state unchanged, position matches)."""
         broker = _DummyBroker(pos=2.0, bid=106.9, ask=107.1)
         oms = _DummyOms()
         st = ExecutorState()
@@ -158,6 +162,10 @@ class LiveExecutorTests(unittest.TestCase):
             max_eur=1000.0,
             leverage=1.0,
         )
+        self.assertEqual(len(oms.flip_calls), 1)
+
+        # After the flip fills, broker now reports short.
+        broker._pos = -9.0
         st = run_once(
             broker=broker,
             oms=oms,
@@ -169,7 +177,7 @@ class LiveExecutorTests(unittest.TestCase):
             max_eur=1000.0,
             leverage=1.0,
         )
-        self.assertEqual(len(oms.flip_calls), 1)
+        self.assertEqual(len(oms.flip_calls), 1, "No additional flip after fill")
 
     def test_apply_live_ttp_guard_short_caps_stale_ttp(self) -> None:
         terminal = {"side": "short", "mode": "TTP", "ttp": 83.996}
@@ -182,16 +190,12 @@ class LiveExecutorTests(unittest.TestCase):
         # 82.70 * 1.012 = 83.6924 ; stale higher ttp must be capped.
         self.assertAlmostEqual(float(out["ttp"]), 83.6924, places=4)
 
-    def test_mismatched_signal_timestamp_still_activates_trade(self) -> None:
-        """Reproduce the missing-trade bug: signal timestamp does not match any
-        renko bar timestamp (two independent renko computations), so
-        align_impulses_exact drops the signal.  The executor must fall through
-        to the direct-signal fallback and still enter."""
-        # Renko bars at :00, :01, :02 – matching signal at :00 produces old events.
+    def test_terminal_state_drives_entry_when_flat(self) -> None:
+        """Flip engine ends in short position.  Broker is flat.
+        Executor must enter short based on terminal state."""
         broker = _DummyBroker(pos=0.0, bid=84.9, ask=85.1)
         oms = _DummyOms()
 
-        # First run: process the matching signal (entry at :00, tp_exit at :02).
         st = run_once(
             broker=broker,
             oms=oms,
@@ -204,28 +208,10 @@ class LiveExecutorTests(unittest.TestCase):
             leverage=1.0,
         )
 
-        # Now append a NEW short signal whose timestamp does NOT match any renko bar.
-        new_rec = {"ts": "2026-02-25T10:05:00Z", "signal": -1}
-        with (self.symbol_dir / "20260225.jsonl").open("a", encoding="utf-8") as f:
-            f.write(json.dumps(new_rec) + "\n")
-
-        oms2 = _DummyOms()
-        st = run_once(
-            broker=broker,
-            oms=oms2,
-            symbol="SOL-USDT",
-            signals_root=self.signals_root,
-            state=st,
-            live_enabled=True,
-            dry_run=False,
-            max_eur=1000.0,
-            leverage=1.0,
-        )
-
         self.assertEqual(st.last_action, "enter_short",
-                         "New short signal with mismatched timestamp must still activate a trade")
-        self.assertEqual(len(oms2.enter_calls), 1)
-        self.assertEqual(oms2.enter_calls[0][1], "short")
+                         "Terminal state short + broker flat must enter short")
+        self.assertEqual(len(oms.enter_calls), 1)
+        self.assertEqual(oms.enter_calls[0][1], "short")
 
     def test_snap_signals_to_bars_exact_match_unchanged(self) -> None:
         """Signals already matching bar timestamps are not modified."""
@@ -251,9 +237,8 @@ class LiveExecutorTests(unittest.TestCase):
         out = _snap_signals_to_bars(sigs, bars, tolerance=pd.Timedelta(minutes=5))
         self.assertEqual(out.iloc[0]["ts"], pd.Timestamp("2026-02-25T11:00:00Z"))
 
-    def test_mismatched_signal_with_position_triggers_flip(self) -> None:
-        """When in a long position and a short signal arrives with mismatched
-        timestamp, the executor must flip (not just hold)."""
+    def test_terminal_short_with_long_broker_flips(self) -> None:
+        """Terminal state is short but broker is long -> must flip."""
         broker = _DummyBroker(pos=5.0, bid=84.9, ask=85.1)
         oms = _DummyOms()
 
@@ -269,27 +254,10 @@ class LiveExecutorTests(unittest.TestCase):
             leverage=1.0,
         )
 
-        new_rec = {"ts": "2026-02-25T10:05:00Z", "signal": -1}
-        with (self.symbol_dir / "20260225.jsonl").open("a", encoding="utf-8") as f:
-            f.write(json.dumps(new_rec) + "\n")
-
-        oms2 = _DummyOms()
-        st = run_once(
-            broker=broker,
-            oms=oms2,
-            symbol="SOL-USDT",
-            signals_root=self.signals_root,
-            state=st,
-            live_enabled=True,
-            dry_run=False,
-            max_eur=1000.0,
-            leverage=1.0,
-        )
-
         self.assertEqual(st.last_action, "flip_to_short",
-                         "Short signal while long must trigger a flip, not hold")
-        self.assertEqual(len(oms2.flip_calls), 1)
-        self.assertEqual(oms2.flip_calls[0][1], "long")
+                         "Terminal short + broker long must trigger flip")
+        self.assertEqual(len(oms.flip_calls), 1)
+        self.assertEqual(oms.flip_calls[0][1], "long")
 
     def test_snapped_signal_processed_by_flip_engine(self) -> None:
         """Signal with slightly off timestamp gets snapped to a bar and
@@ -331,6 +299,43 @@ class LiveExecutorTests(unittest.TestCase):
                        "Snapped signal must result in a trade action, not be ignored")
         self.assertTrue(len(oms.enter_calls) > 0 or len(oms.flip_calls) > 0,
                         "At least one OMS call must have been made")
+
+    def test_terminal_state_idempotent_no_whipsaw(self) -> None:
+        """After entering short, the same terminal state on the next poll
+        must NOT produce another action (no whipsaw sell-then-buy)."""
+        broker = _DummyBroker(pos=-20.0, bid=89.9, ask=90.1)
+        oms = _DummyOms()
+
+        # First run: terminal is short, broker is short -> hold
+        st = run_once(
+            broker=broker,
+            oms=oms,
+            symbol="SOL-USDT",
+            signals_root=self.signals_root,
+            state=ExecutorState(),
+            live_enabled=True,
+            dry_run=False,
+            max_eur=1000.0,
+            leverage=1.0,
+        )
+        self.assertEqual(st.last_action, "hold")
+
+        # Second run: same state -> no action at all
+        oms2 = _DummyOms()
+        st = run_once(
+            broker=broker,
+            oms=oms2,
+            symbol="SOL-USDT",
+            signals_root=self.signals_root,
+            state=st,
+            live_enabled=True,
+            dry_run=False,
+            max_eur=1000.0,
+            leverage=1.0,
+        )
+        self.assertEqual(len(oms2.enter_calls), 0, "No enter calls on idempotent hold")
+        self.assertEqual(len(oms2.flip_calls), 0, "No flip calls on idempotent hold")
+        self.assertEqual(len(oms2.exit_calls), 0, "No exit calls on idempotent hold")
 
     def test_apply_live_ttp_guard_short_does_not_loosen(self) -> None:
         terminal = {"side": "short", "mode": "TTP", "ttp": 83.50}
