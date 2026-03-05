@@ -1,0 +1,9 @@
+{
+  "priority_files": [
+    "docs/ARCHITECTURE.md",
+    "docs/STRATEGIES.md",
+    "docs/GLOSSARY.md"
+  ],
+  "index_code": true,
+  "index_docs": true
+}
