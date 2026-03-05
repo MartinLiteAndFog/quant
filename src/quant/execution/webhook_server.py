@@ -330,6 +330,60 @@ def _start_live_signal_worker_if_enabled() -> None:
     )
 
 
+def _start_live_executor_if_enabled() -> None:
+    """
+    Background thread that processes signals and places trades via OMS.
+    Controlled via env: ENABLE_LIVE_EXECUTOR=1 (default 0 for safety).
+    """
+    if not _truthy(os.getenv("ENABLE_LIVE_EXECUTOR", "0")):
+        return
+
+    symbol = os.getenv("LIVE_SYMBOL", "SOL-USDT")
+    signals_dir = Path(os.getenv("SIGNALS_DIR", "data/signals"))
+    state_file = Path(os.getenv("LIVE_EXECUTOR_STATE", "data/live/live_executor_state.json"))
+    poll_sec = float(os.getenv("LIVE_EXECUTOR_POLL_SEC", "5"))
+    live_enabled = _truthy(os.getenv("LIVE_TRADING_ENABLED", "0"))
+    dry_run = _truthy(os.getenv("LIVE_EXECUTOR_DRY_RUN", "1"))
+    max_eur = float(os.getenv("LIVE_EXECUTOR_MAX_EUR", "20"))
+    leverage = float(os.getenv("LIVE_EXECUTOR_LEVERAGE", "1"))
+
+    allowlist_raw = os.getenv("LIVE_EXECUTOR_SYMBOL_ALLOWLIST", "SOL-USDT")
+    allowlist = {s.strip().upper() for s in allowlist_raw.split(",") if s.strip()}
+    sym_upper = symbol.strip().upper()
+    if sym_upper not in allowlist:
+        log.warning("live executor: symbol %s not in allowlist %s – not starting", sym_upper, allowlist)
+        return
+
+    def _loop() -> None:
+        from quant.execution.live_executor import run_once as ex_run_once, ExecutorState, _read_state, _write_state
+        from quant.execution.kucoin_futures import KucoinFuturesBroker
+        from quant.execution.oms import MakerFirstOMS, OmsDefaults
+
+        broker = KucoinFuturesBroker()
+        oms = MakerFirstOMS(broker=broker, cfg=OmsDefaults())
+        st = _read_state(state_file)
+
+        while True:
+            try:
+                st = ex_run_once(
+                    broker=broker, oms=oms, symbol=symbol,
+                    signals_root=signals_dir, state=st,
+                    live_enabled=live_enabled, dry_run=dry_run,
+                    max_eur=max_eur, leverage=leverage,
+                )
+                _write_state(state_file, st)
+            except Exception as e:
+                log.warning("live executor error: %s", e)
+            time.sleep(max(1.0, poll_sec))
+
+    t = threading.Thread(target=_loop, name="live-executor", daemon=True)
+    t.start()
+    log.info(
+        "started live executor symbol=%s live_enabled=%s dry_run=%s max_eur=%s leverage=%s poll_sec=%s",
+        symbol, live_enabled, dry_run, max_eur, leverage, poll_sec,
+    )
+
+
 def _sync_gate_conf_artifacts_if_enabled() -> None:
     """
     Optional one-way sync of gate-confidence files from app workspace -> mounted volume.
@@ -1213,9 +1267,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
     const slSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, title: 'SL', lastValueVisible: true, priceLineVisible: false });
     const ttpSeries = chart.addLineSeries({
-      color: '#2ecc71',
+      color: '#e0af68',
       lineWidth: 2,
-      lineStyle: 0,
+      lineStyle: 1,
       lineType: 1,
       title: 'TTP',
       lastValueVisible: true,
@@ -1232,9 +1286,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
-    const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 2, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const fibMidSeries = chart.addLineSeries({ color: '#e0af68', lineWidth: 2, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibMidSeries = chart.addLineSeries({ color: '#ffffff', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     const priceLineSeries = chart.addLineSeries({ color: '#9aa5b1', lineWidth: 1, title: 'Last', lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     const tradeSegmentSeries = [];
 
@@ -2273,6 +2327,7 @@ def main() -> None:
     _sync_gate_conf_artifacts_if_enabled()
     _start_renko_cache_updater_if_enabled()
     _start_live_signal_worker_if_enabled()
+    _start_live_executor_if_enabled()
     # Railway/cloud set PORT; use it so the app listens on the right port
     port = int(os.environ.get("PORT", str(args.port)))
     uvicorn.run(
