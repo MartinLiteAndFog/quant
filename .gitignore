@@ -16,3 +16,9 @@ data/
 
 # Secrets
 .env
+
+# local tool state
+.claude/
+.gitnexus/*
+!.gitnexus/wiki/
+!.gitnexus/wiki/**
