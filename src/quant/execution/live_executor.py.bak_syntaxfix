@@ -9,7 +9,6 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-import numpy as np
 import pandas as pd
 
 from quant.execution.execution_state import write_execution_state
@@ -59,14 +58,6 @@ def _safe_ts(v: Any) -> Optional[pd.Timestamp]:
     if pd.isna(ts):
         return None
     return pd.Timestamp(ts)
-
-
-def _now_utc() -> pd.Timestamp:
-    return pd.Timestamp.now("UTC")
-
-
-def _now_iso() -> str:
-    return _now_utc().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def _resolve_ttp_trail_pct() -> float:
@@ -122,11 +113,9 @@ def _apply_live_ttp_guard(
     trail = float(max(1e-6, ttp_trail_pct))
     cur_ttp = _coerce_float(out.get("ttp"))
     if side == "long":
-        # Do not allow stale TTP below the live-trail floor.
         floor_ttp = float(mid * (1.0 - trail))
         out["ttp"] = floor_ttp if cur_ttp is None else float(max(cur_ttp, floor_ttp))
     else:
-        # Do not allow stale TTP above the live-trail cap.
         cap_ttp = float(mid * (1.0 + trail))
         out["ttp"] = cap_ttp if cur_ttp is None else float(min(cur_ttp, cap_ttp))
     return out
@@ -134,8 +123,6 @@ def _apply_live_ttp_guard(
 
 @dataclass
 class ExecutorState:
-    # IMPORTANT: last_signal_ts/value refer to the last *processed* signal/engine timestamp,
-    # NOT wall-clock "now". This prevents stale-signal re-triggers after restart.
     last_signal_ts: Optional[str] = None
     last_signal_value: Optional[int] = None
     last_event_sig: Optional[str] = None
@@ -167,9 +154,8 @@ def _write_state(path: Path, st: ExecutorState) -> None:
 
 
 def _latest_signal(signals_root: Path, symbol: str) -> Optional[Dict[str, Any]]:
-    # Accept both SOLUSDT and SOL-USDT style directories.
     wanted = _canon_symbol(symbol)
-    candidate_dirs = []
+    candidate_dirs: list[Path] = []
     if signals_root.exists():
         for p in signals_root.iterdir():
             if p.is_dir() and _canon_symbol(p.name) == wanted:
@@ -182,10 +168,10 @@ def _latest_signal(signals_root: Path, symbol: str) -> Optional[Dict[str, Any]]:
     if not candidate_dirs:
         return None
 
-    # Read newest files first, newest line wins.
-    all_files = []
+    all_files: list[Path] = []
     for d in candidate_dirs:
         all_files.extend(d.glob("*.jsonl"))
+
     for fp in reversed(sorted(all_files)):
         try:
             with fp.open("r", encoding="utf-8") as f:
@@ -213,7 +199,7 @@ def _latest_signal(signals_root: Path, symbol: str) -> Optional[Dict[str, Any]]:
 
 def _load_signals_df(signals_root: Path, symbol: str) -> pd.DataFrame:
     wanted = _canon_symbol(symbol)
-    candidate_dirs = []
+    candidate_dirs: list[Path] = []
     if signals_root.exists():
         for p in signals_root.iterdir():
             if p.is_dir() and _canon_symbol(p.name) == wanted:
@@ -274,7 +260,6 @@ def _snap_signals_to_bars(
     bars: pd.DataFrame,
     tolerance: pd.Timedelta = pd.Timedelta(minutes=5),
 ) -> pd.DataFrame:
-    """Snap signal timestamps to the nearest renko bar within *tolerance*."""
     if signals_df.empty or bars.empty:
         return signals_df
 
@@ -320,7 +305,6 @@ def _latest_backtest_event(
     renko_bars: pd.DataFrame,
     signals_df: pd.DataFrame,
 ) -> Tuple[Optional[pd.Series], Dict[str, Any]]:
-    """Returns (latest_event_row, terminal_state_dict)."""
     if renko_bars.empty or signals_df.empty:
         return None, {}
     signals_df = _snap_signals_to_bars(signals_df, renko_bars)
@@ -340,32 +324,32 @@ def _latest_backtest_event(
     return events.iloc[-1], terminal
 
 
-def _qty_from_max_eur(max_eur: float, leverage: float, mid_price: float, contract_multiplier: float = 1.0) -> int:
-    if max_eur <= 0 or leverage <= 0 or mid_price <= 0 or contract_multiplier <= 0:
-        return 0
-    notional = float(max_eur) * float(leverage)
-    per_contract_notional = float(mid_price) * float(contract_multiplier)
-    return int(notional // per_contract_notional)
-
-
-def _resolve_max_eur(
-    broker: KucoinFuturesBroker,
-    configured_max_eur: float,
+def _qty_from_equity_pct(
     *,
-    use_full_equity: bool,
-    equity_fraction: float,
-) -> float:
-    if not use_full_equity:
-        return float(configured_max_eur)
-    try:
-        bal = broker.get_account_balance(currency="USDT")
-        eq = float(bal.get("equity", 0.0) or 0.0)
-        if eq > 0:
-            frac = float(max(0.0, min(1.0, equity_fraction)))
-            return float(eq * frac)
-    except Exception:
-        pass
-    return float(configured_max_eur)
+    equity: float,
+    pos_pct: float,
+    leverage: float,
+    mid_price: float,
+    contract_multiplier: float = 1.0,
+) -> int:
+    """
+    Sizing rule (ONLY percentage-based):
+      notional = equity * pos_pct * leverage
+      qty = floor(notional / (mid * contract_multiplier))
+    """
+    equity = float(equity or 0.0)
+    pos_pct = float(pos_pct)
+    leverage = float(leverage)
+    mid_price = float(mid_price)
+    contract_multiplier = float(contract_multiplier)
+
+    if equity <= 0 or pos_pct <= 0 or leverage <= 0 or mid_price <= 0 or contract_multiplier <= 0:
+        return 0
+
+    pos_pct = max(0.0, min(1.0, pos_pct))
+    notional = equity * pos_pct * leverage
+    per_contract = mid_price * contract_multiplier
+    return int(notional // per_contract)
 
 
 def _verify_execution_fill_ratio(
@@ -377,7 +361,6 @@ def _verify_execution_fill_ratio(
     target_qty: float,
     min_ratio: float,
 ) -> None:
-    """warn if resulting position deviates materially from intended target."""
     try:
         pos_after = float(broker.get_position(symbol))
     except Exception as e:
@@ -453,7 +436,6 @@ def _verify_execution_fill_ratio(
 
 
 def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Optional[float] = None) -> None:
-    """Write current flip-engine state to execution_state.json for the dashboard."""
     if not terminal:
         return
 
@@ -528,60 +510,65 @@ def run_once(
     state: ExecutorState,
     live_enabled: bool,
     dry_run: bool,
-    max_eur: float,
+    pos_pct: float,
     leverage: float,
 ) -> ExecutorState:
-    now_ts = _now_utc()
-
-    renko_path = Path(os.getenv("LIVE_EXECUTOR_RENKO_PARQUET", os.getenv("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet")))
+    renko_path = Path(
+        os.getenv(
+            "LIVE_EXECUTOR_RENKO_PARQUET",
+            os.getenv("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet"),
+        )
+    )
     renko_bars = _load_renko_bars(renko_path, limit=int(os.getenv("LIVE_EXECUTOR_RENKO_LIMIT", "4000")))
     signals_df = _load_signals_df(signals_root=signals_root, symbol=symbol)
 
-    ev, terminal_state = _latest_backtest_event(
-        renko_bars=renko_bars,
-        signals_df=signals_df,
-    )
+    ev, terminal_state = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
 
-    # ---- Determine desired position from terminal state ----
+    # ============================================================
+    # STALE SIGNAL GUARD (ignore signals older than N renko bricks)
+    # ============================================================
+    MAX_BRICK_AGE = int(os.getenv("LIVE_EXECUTOR_MAX_BRICK_AGE", "5"))
+    if ev is not None and not renko_bars.empty:
+        try:
+            bar_times = (
+                pd.DatetimeIndex(pd.to_datetime(renko_bars["ts"], utc=True, errors="coerce"))
+                .dropna()
+                .sort_values()
+            )
+            ev_ts = pd.to_datetime(ev["ts"], utc=True, errors="coerce")
+            if ev_ts is not None and len(bar_times) > 0:
+                idx = int(bar_times.searchsorted(ev_ts))
+                if idx >= len(bar_times):
+                    idx = len(bar_times) - 1
+                brick_age = (len(bar_times) - 1) - idx
+                if brick_age > MAX_BRICK_AGE:
+                    log.info(
+                        "executor: ignoring stale signal ts=%s brick_age=%s (> %s)",
+                        ev_ts,
+                        brick_age,
+                        MAX_BRICK_AGE,
+                    )
+                    return state
+        except Exception as e:
+            log.warning("executor stale guard skipped err=%s", e)
+
     terminal_pos = int(terminal_state.get("pos", 0)) if terminal_state else 0
     terminal_entry_ts = terminal_state.get("entry_bar_ts") if terminal_state else None
     terminal_sig = f"{terminal_pos}|{terminal_entry_ts}"
 
-    # If terminal is flat and engine produced nothing, we MAY consider a fallback to latest signal,
-    # but only if it is fresh and strictly newer than last processed signal.
-    fallback_used = False
-    fallback_sig_ts_iso: Optional[str] = None
-    fallback_sig_v: Optional[int] = None
-
+    # Fallback: if flip engine produced nothing, use latest signal directly.
     if terminal_pos == 0 and (ev is None or (terminal_state and terminal_state.get("pos", 0) == 0)):
-        max_age = float(os.getenv("LIVE_EXECUTOR_FALLBACK_MAX_SIGNAL_AGE_SEC", "30"))
-        require_monotonic = _truthy(os.getenv("LIVE_EXECUTOR_FALLBACK_REQUIRE_MONOTONIC", "1"))
         sig = _latest_signal(signals_root=signals_root, symbol=symbol)
         if sig is not None:
             sig_v = int(sig["signal"])
-            sig_ts = pd.Timestamp(sig["ts"])
-            sig_ts_iso = sig_ts.isoformat()
-            age_sec = float((now_ts - sig_ts).total_seconds())
-            if age_sec < 0:
-                # Future timestamps: treat as invalid
-                sig = None
-            else:
-                is_newer = True
-                if require_monotonic and state.last_signal_ts:
-                    prev = _safe_ts(state.last_signal_ts)
-                    if prev is not None:
-                        is_newer = sig_ts > prev
-                is_dup = (state.last_signal_ts == sig_ts_iso and state.last_signal_value == sig_v)
-                if (age_sec <= max_age) and is_newer and (not is_dup):
-                    terminal_pos = 1 if sig_v > 0 else -1
-                    terminal_sig = f"{terminal_pos}|fallback|{sig_ts_iso}"
-                    fallback_used = True
-                    fallback_sig_ts_iso = sig_ts_iso
-                    fallback_sig_v = terminal_pos
-                    log.info(
-                        "executor fallback: using direct signal ts=%s sig=%s age_sec=%.3f symbol=%s",
-                        sig_ts_iso, terminal_pos, age_sec, symbol,
-                    )
+            sig_ts_iso = sig["ts"].isoformat()
+            if not (state.last_signal_ts == sig_ts_iso and state.last_signal_value == sig_v):
+                terminal_pos = sig_v
+                terminal_sig = f"{sig_v}|fallback|{sig_ts_iso}"
+                log.info(
+                    "executor fallback: using direct signal ts=%s sig=%s symbol=%s",
+                    sig_ts_iso, sig_v, symbol,
+                )
 
     if terminal_pos == 0 and ev is None:
         sig_check = _latest_signal(signals_root=signals_root, symbol=symbol)
@@ -598,15 +585,32 @@ def run_once(
 
     bid, ask = broker.get_best_bid_ask(symbol)
     mid = (bid + ask) / 2.0 if (bid and ask) else (ask or bid or 0.0)
+    if mid <= 0:
+        log_throttled(
+            log,
+            logging.WARNING,
+            f"executor_no_quote:{symbol}",
+            float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "30")),
+            "executor mid<=0, cannot size/execute (bid=%s ask=%s)",
+            bid,
+            ask,
+        )
+        return state
 
-    use_full_equity = _truthy(os.getenv("LIVE_EXECUTOR_USE_FULL_EQUITY", "1"))
-    equity_fraction = float(os.getenv("LIVE_EXECUTOR_EQUITY_FRACTION", "1.0"))
-    sizing_max_eur = _resolve_max_eur(
-        broker=broker,
-        configured_max_eur=max_eur,
-        use_full_equity=use_full_equity,
-        equity_fraction=equity_fraction,
-    )
+    # ---- percentage-only sizing ----
+    try:
+        bal = broker.get_account_balance(currency="USDT")
+        equity = float(bal.get("equity", 0.0) or 0.0)
+    except Exception as e:
+        log_throttled(
+            log,
+            logging.WARNING,
+            f"executor_equity_fail:{symbol}",
+            float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "30")),
+            "executor failed to fetch equity: %s",
+            e,
+        )
+        return state
 
     contract_multiplier = 1.0
     try:
@@ -617,9 +621,10 @@ def run_once(
         log.warning("executor failed to fetch contract multiplier symbol=%s err=%s", symbol, e)
         contract_multiplier = 1.0
 
-    qty = _qty_from_max_eur(
-        max_eur=sizing_max_eur,
-        leverage=leverage,
+    qty = _qty_from_equity_pct(
+        equity=equity,
+        pos_pct=float(pos_pct),
+        leverage=float(leverage),
         mid_price=float(mid),
         contract_multiplier=float(contract_multiplier),
     )
@@ -629,13 +634,12 @@ def run_once(
             logging.WARNING,
             f"executor_qty_zero:{symbol}",
             float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "60")),
-            "executor qty=0 (configured_max_eur=%s sizing_max_eur=%s leverage=%s mid=%s contract_multiplier=%s use_full_equity=%s) -> skip",
-            max_eur,
-            sizing_max_eur,
+            "executor qty=0 -> skip (equity=%s pos_pct=%s leverage=%s mid=%s contract_multiplier=%s)",
+            equity,
+            pos_pct,
             leverage,
             mid,
             contract_multiplier,
-            use_full_equity,
         )
         state.last_terminal_sig = terminal_sig
         state.last_action = "skip_qty_0"
@@ -651,13 +655,9 @@ def run_once(
     )
     _write_dashboard_levels(symbol, terminal_state, live_pos=pos)
 
-    # ---- Derive action from terminal state vs actual broker position ----
     current_side = "long" if pos > 0 else ("short" if pos < 0 else "flat")
-    want_side: Optional[str] = None
-    if terminal_pos > 0:
-        want_side = "long"
-    elif terminal_pos < 0:
-        want_side = "short"
+    want_side = "long" if terminal_pos > 0 else "short"
+    sig_v = terminal_pos if terminal_pos != 0 else 1
 
     action: str
     if terminal_pos > 0:
@@ -680,47 +680,37 @@ def run_once(
         else:
             action = "hold"
 
-    # Scale only when we actually want a side.
-    if action == "hold" and want_side is not None and current_side == want_side and abs(pos) + 1e-12 < float(qty):
+    if action == "hold" and current_side == want_side and abs(pos) + 1e-12 < float(qty):
         action = f"scale_{want_side}"
 
-    # Dedup: if exact same last event AND we are just holding, do nothing.
     event_sig = _event_sig(ev) if ev is not None else None
     if event_sig is not None and event_sig == state.last_event_sig and action == "hold":
         return state
 
-    # Use real engine event name for monitoring/expected mapping.
-    event_name = str(ev.get("event")) if isinstance(ev, (dict, pd.Series)) and ev is not None and "event" in ev else "none"
+    ts_iso = pd.Timestamp.now("UTC").isoformat()
+    event = f"terminal_pos={terminal_pos}"
 
-    ts_iso = now_ts.isoformat()
-
-    # Record expected trade intents for fills-reason mapping in dashboard.
+    # Record expected intents for dashboard fill attribution.
     exp_side: Optional[str] = None
     exp_action: Optional[str] = None
     exp_qty: Optional[float] = None
     exp_note: Optional[str] = None
-
-    if action in ("enter_long", "enter_short") and want_side is not None:
+    if action in ("enter_long", "enter_short"):
         exp_side = want_side
         exp_action = "entry"
         exp_qty = float(qty)
-        exp_note = f"executor action={action} event={event_name} current={current_side}"
-    elif action in ("flip_to_long", "flip_to_short") and want_side is not None:
+        exp_note = f"executor action={action} event={event} current={current_side}"
+    elif action in ("flip_to_long", "flip_to_short"):
         exp_side = want_side
         exp_action = "exit_flip"
         exp_qty = float(qty)
-        exp_note = f"executor action={action} event={event_name} current={current_side}"
+        exp_note = f"executor action={action} event={event} current={current_side}"
     elif action.startswith("exit_") and abs(pos) > 1e-12:
         exp_side = current_side
-        if event_name in ("sl_exit", "be_exit"):
-            exp_action = "exit_sl"
-        elif event_name in ("tp_exit",):
-            exp_action = "exit_tp"
-        else:
-            exp_action = "exit_flip"
+        exp_action = "exit_flip"
         exp_qty = abs(float(pos))
-        exp_note = f"executor action={action} event={event_name} current={current_side}"
-    elif action.startswith("scale_") and want_side is not None:
+        exp_note = f"executor action={action} event={event} current={current_side}"
+    elif action.startswith("scale_"):
         add_qty = max(0.0, float(qty) - abs(float(pos)))
         if add_qty > 0:
             exp_side = want_side
@@ -746,40 +736,15 @@ def run_once(
     elif dry_run:
         log.warning("executor DRY_RUN=1 -> simulated action=%s", action)
     else:
-        def _ok(res: Any) -> bool:
-            if isinstance(res, dict):
-                return bool(res.get("ok", False))
-            return bool(getattr(res, "ok", False))
-
-        target_qty_for_verify = float(qty)
-        target_side_for_verify: Optional[str] = want_side if action.startswith(("enter_", "flip_to_", "scale_")) else None
-
-        if action.startswith("enter_") and want_side is not None:
+        if action.startswith("enter_"):
             res = oms.enter(symbol=symbol, side=want_side, qty=float(qty))
             log.info("executor enter result=%s", res)
 
-        elif action.startswith("flip_to_") and want_side is not None:
+        elif action.startswith("flip_to_"):
             flat_res = oms.exit_tp_or_flip(symbol=symbol, side=current_side, qty=abs(float(pos)), flip_to=None)
             log.info("executor flip flatten result=%s", flat_res)
-
-            if _ok(flat_res):
-                flip_sizing = _resolve_max_eur(
-                    broker=broker,
-                    configured_max_eur=max_eur,
-                    use_full_equity=True,
-                    equity_fraction=equity_fraction,
-                )
-                flip_qty = _qty_from_max_eur(
-                    max_eur=flip_sizing,
-                    leverage=leverage,
-                    mid_price=float(mid),
-                    contract_multiplier=float(contract_multiplier),
-                )
-                if flip_qty <= 0:
-                    flip_qty = qty
-                log.info("executor flip re-size: pre=%s post=%s", qty, flip_qty)
-                target_qty_for_verify = float(flip_qty)
-                res = oms.enter(symbol=symbol, side=want_side, qty=float(flip_qty))
+            if bool(getattr(flat_res, "ok", False)):
+                res = oms.enter(symbol=symbol, side=want_side, qty=float(qty))
                 log.info("executor flip re-enter result=%s", res)
             else:
                 log.warning("executor flip aborted: flatten failed")
@@ -787,40 +752,29 @@ def run_once(
         elif action.startswith("exit_"):
             res = oms.exit_sl(symbol=symbol, side=current_side, qty=abs(float(pos)))
             log.info("executor exit result=%s", res)
-            target_side_for_verify = None
-            target_qty_for_verify = abs(float(pos))
 
-        elif action.startswith("scale_") and want_side is not None:
+        elif action.startswith("scale_"):
             add_qty = max(0.0, float(qty) - abs(float(pos)))
             if add_qty > 0:
-                target_qty_for_verify = abs(float(pos)) + float(add_qty)
                 res = oms.enter(symbol=symbol, side=want_side, qty=add_qty)
                 log.info("executor scale result=%s add_qty=%s target_qty=%s pos_before=%s", res, add_qty, qty, pos)
             else:
                 log.info("executor scale skipped add_qty=0 target_qty=%s pos_before=%s", qty, pos)
 
         else:
-            log.info("executor hold symbol=%s pos=%s terminal_pos=%s event=%s", symbol, pos, terminal_pos, event_name)
-            target_side_for_verify = None
+            log.info("executor hold symbol=%s pos=%s sig=%s event=%s", symbol, pos, sig_v, event)
 
         _verify_execution_fill_ratio(
             broker=broker,
             symbol=symbol,
-            action=action,
-            target_side=target_side_for_verify,
-            target_qty=float(target_qty_for_verify),
+            action=action or "hold",
+            target_side=want_side if action.startswith(("enter_", "flip_to_", "scale_")) else None,
+            target_qty=float(qty),
             min_ratio=float(os.getenv("LIVE_EXECUTOR_MIN_FILL_RATIO", "0.95")),
         )
 
-    # Persist last processed *signal/engine* timestamp to avoid stale re-triggers.
-    if fallback_used and fallback_sig_ts_iso is not None and fallback_sig_v is not None:
-        state.last_signal_ts = fallback_sig_ts_iso
-        state.last_signal_value = int(fallback_sig_v)
-    elif ev is not None and "ts" in ev:
-        ev_ts = pd.Timestamp(ev["ts"]).isoformat()
-        state.last_signal_ts = ev_ts
-        state.last_signal_value = int(terminal_pos) if terminal_pos != 0 else 0
-
+    state.last_signal_ts = ts_iso
+    state.last_signal_value = sig_v
     if ev is not None:
         state.last_event_sig = _event_sig(ev)
     state.last_terminal_sig = terminal_sig
@@ -847,8 +801,10 @@ def main() -> None:
 
     live_enabled = _truthy(os.getenv("LIVE_TRADING_ENABLED", "0"))
     dry_run = _truthy(os.getenv("LIVE_EXECUTOR_DRY_RUN", "1"))
-    max_eur = float(os.getenv("LIVE_EXECUTOR_MAX_EUR", "20"))
-    leverage = float(os.getenv("LIVE_EXECUTOR_LEVERAGE", "1"))
+
+    # percentage-only sizing
+    pos_pct = float(os.getenv("LIVE_EXECUTOR_POS_PCT", "0.90"))
+    leverage = float(os.getenv("LIVE_EXECUTOR_LEVERAGE", "3"))
 
     allowlist_raw = os.getenv("LIVE_EXECUTOR_SYMBOL_ALLOWLIST", "SOL-USDT")
     allowlist = {s.strip().upper() for s in allowlist_raw.split(",") if s.strip()}
@@ -860,11 +816,11 @@ def main() -> None:
     st = _read_state(state_path)
 
     log.info(
-        "executor start symbol=%s live_enabled=%s dry_run=%s max_eur=%s leverage=%s signals=%s",
+        "executor start symbol=%s live_enabled=%s dry_run=%s pos_pct=%s leverage=%s signals=%s",
         symbol,
         live_enabled,
         dry_run,
-        max_eur,
+        pos_pct,
         leverage,
         str(signals_root),
     )
@@ -879,7 +835,7 @@ def main() -> None:
                 state=st,
                 live_enabled=live_enabled,
                 dry_run=dry_run,
-                max_eur=max_eur,
+                pos_pct=pos_pct,
                 leverage=leverage,
             )
             _write_state(state_path, st)
