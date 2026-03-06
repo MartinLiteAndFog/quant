@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
+import redis
 
 from quant.execution.kucoin_futures import KucoinFuturesBroker, _symbol_to_contract
 from quant.features.renko import renko_from_close
@@ -16,6 +18,68 @@ from quant.utils.log import get_logger, log_throttled
 log = get_logger("quant.renko_cache_updater")
 KLINE_PAGE_LIMIT = 200
 SAFE_STEP_MINUTES = 180  # < 200 to avoid page truncation gaps on 1m candles
+
+
+def _redis_client() -> Optional[redis.Redis]:
+    url = os.getenv("REDIS_URL", "").strip()
+    if not url:
+        return None
+    return redis.from_url(url, decode_responses=True)
+
+
+def _redis_key_latest(symbol: str) -> str:
+    sym = str(symbol).upper().replace("-", "")
+    return f"renko:{sym}:latest"
+
+
+def _redis_stream_key(symbol: str) -> str:
+    sym = str(symbol).upper().replace("-", "")
+    return f"renko:{sym}:events"
+
+
+def _publish_renko_to_redis(symbol: str, renko: pd.DataFrame, box: float) -> Dict[str, Any]:
+    client = _redis_client()
+    if client is None:
+        return {"ok": False, "reason": "no_redis_url"}
+
+    if renko is None or renko.empty:
+        return {"ok": False, "reason": "empty_renko"}
+
+    last = renko.iloc[-1]
+    ts = pd.Timestamp(last["ts"])
+    payload = {
+        "event_id": f"renko:{str(symbol).upper().replace('-', '')}:{ts.isoformat()}:{len(renko)}",
+        "symbol": str(symbol).upper().replace("-", ""),
+        "ts": ts.isoformat(),
+        "open": float(last["open"]),
+        "high": float(last["high"]),
+        "low": float(last["low"]),
+        "close": float(last["close"]),
+        "box": float(box),
+        "n_bars": int(len(renko)),
+    }
+
+    latest_key = _redis_key_latest(symbol)
+    stream_key = _redis_stream_key(symbol)
+    dedupe_key = f"{latest_key}:event_id"
+
+    prev_event_id = client.get(dedupe_key)
+    is_new = prev_event_id != payload["event_id"]
+
+    pipe = client.pipeline()
+    pipe.set(latest_key, json.dumps(payload, separators=(",", ":")))
+    pipe.set(dedupe_key, payload["event_id"])
+    if is_new:
+        pipe.xadd(stream_key, {"json": json.dumps(payload, separators=(",", ":"))}, maxlen=10000, approximate=True)
+    pipe.execute()
+
+    return {
+        "ok": True,
+        "latest_key": latest_key,
+        "stream_key": stream_key,
+        "published_event": bool(is_new),
+        "event_id": payload["event_id"],
+    }
 
 
 def _build_renko_ohlc(bricks: pd.DataFrame) -> pd.DataFrame:
@@ -138,6 +202,8 @@ def refresh_renko_cache(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     renko.to_parquet(out_path, index=False)
 
+    redis_info = _publish_renko_to_redis(symbol=symbol, renko=renko, box=float(box))
+
     last_close = float(renko["close"].iloc[-1]) if len(renko) else None
     return {
         "ok": True,
@@ -147,9 +213,12 @@ def refresh_renko_cache(
         "box": float(box),
         "days_back": int(days_back),
         "step_hours": int(step_hours),
-        "step_effective_minutes": int(SAFE_STEP_MINUTES if int(step_hours) * 60 > SAFE_STEP_MINUTES else int(step_hours) * 60),
+        "step_effective_minutes": int(
+            SAFE_STEP_MINUTES if int(step_hours) * 60 > SAFE_STEP_MINUTES else int(step_hours) * 60
+        ),
         "last_close": last_close,
         "out": str(out_path),
+        "redis": redis_info,
     }
 
 
