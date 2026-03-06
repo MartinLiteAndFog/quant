@@ -248,9 +248,33 @@ def _append_signal_jsonl_dedupe(out_path: Path, rec: Dict[str, Any]) -> bool:
         same_mode = str(prev.get("strategy_mode", "")) == str(rec.get("strategy_mode", ""))
         if same_ts and same_sig and same_mode:
             return False
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(rec, ensure_ascii=False, separators=(",", ":"), default=str) + "\n")
+
+    try:
+        redis_url = os.getenv("REDIS_URL", "").strip()
+        if redis_url:
+            import redis as redis_lib
+
+            r = redis_lib.from_url(redis_url, decode_responses=True)
+            sym = str(rec.get("symbol", "")).upper().replace("-", "")
+            payload = {
+                "ts": str(rec.get("ts", "")),
+                "signal": int(rec.get("signal", 0) or 0),
+                "position": int(rec.get("position", rec.get("signal", 0)) or 0),
+                "symbol": sym,
+                "source": str(rec.get("source", "imba_live_worker")),
+                "strategy_mode": str(rec.get("strategy_mode", "")),
+                "gate_on": int(rec.get("gate_on", 0) or 0),
+                "lookback": int(rec.get("lookback", 0) or 0),
+                "sl": rec.get("sl"),
+            }
+            r.set(f"signal:{sym}:latest", json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+    except Exception as e:
+        log.warning("signal redis publish failed: %s", e)
+
     return True
 
 
