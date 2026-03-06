@@ -85,7 +85,7 @@ async def _lifespan(a: FastAPI):
     log.info("state space refresh thread started (interval=%ss)", os.getenv("DASHBOARD_SS_REFRESH_SEC", "300"))
     _start_renko_cache_updater_if_enabled()
     yield
-‚
+
 
 app = FastAPI(title="quant-webhook", version="0.1.0", lifespan=_lifespan)
 
