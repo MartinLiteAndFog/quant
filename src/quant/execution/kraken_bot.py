@@ -491,16 +491,48 @@ def fetch_signal(url: str) -> Dict[str, Any]:
 
 def fetch_renko(url: str, lookback: int) -> Dict[str, Any]:
     try:
+        redis_url = os.getenv("REDIS_URL", "").strip()
+        if redis_url:
+            import json
+            import redis as redis_lib
+
+            r = redis_lib.from_url(redis_url, decode_responses=True)
+            raw = r.get("renko:SOLUSDT:latest")
+            if raw:
+                obj = json.loads(raw)
+                bars = obj.get("bars", []) or []
+                lb = min(max(int(lookback), 1), len(bars) if bars else 1)
+                tail = bars[-lb:] if bars else []
+
+                if tail:
+                    swing_low = min(float(x.get("low", 0) or 0) for x in tail)
+                    swing_high = max(float(x.get("high", 0) or 0) for x in tail)
+                else:
+                    swing_low = float(obj.get("swing_low_50", 0) or 0)
+                    swing_high = float(obj.get("swing_high_50", 0) or 0)
+
+                return {
+                    "swing_low": swing_low,
+                    "swing_high": swing_high,
+                    "last_close": float(obj.get("close", 0) or 0),
+                    "source": "redis",
+                    "ts": str(obj.get("ts", "")),
+                }
+    except Exception as e:
+        log.warning("renko redis fetch failed: %s", e)
+
+    try:
         obj = _fetch_json(f"{url}?lookback={lookback}")
         return {
             "swing_low": float(obj.get("swing_low", 0) or 0),
             "swing_high": float(obj.get("swing_high", 0) or 0),
             "last_close": float(obj.get("last_close", 0) or 0),
+            "source": "api",
+            "ts": str(obj.get("ts", "")),
         }
     except Exception as e:
         log.warning("renko fetch failed: %s", e)
-        return {"swing_low": 0.0, "swing_high": 0.0, "last_close": 0.0}
-
+        return {"swing_low": 0.0, "swing_high": 0.0, "last_close": 0.0, "source": "none", "ts": ""}
 
 # ---------------------------------------------------------------------------
 # Main loop
