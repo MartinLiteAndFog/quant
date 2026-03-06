@@ -647,7 +647,7 @@ def api_dashboard_chart(
         oldest_bar_ts = int(bars[0]["time"]) if bars else None
         markers_live = []
         levels = load_active_levels()
-        expected_entry = load_latest_expected_entry() or {}
+        expected_entry ={}
 
         def _coerce_epoch_seconds(v: Any) -> Optional[int]:
             if v is None:
