@@ -755,19 +755,7 @@ def api_dashboard_chart(
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
         latest = regime.get("latest") or {}
         live_gc = None
-        live_gc_error = None
-        try:
-            live_gc = get_live_gate_confidence()
-        except Exception as e:
-            live_gc_error = str(e)
-            log_throttled(
-                log,
-                logging.WARNING,
-                "webhook_live_gate_conf_unavailable",
-                float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
-                "live gate confidence unavailable: %s",
-                e,
-            )
+        live_gc_error = "temporarily_disabled"
         selected_p_trend = (live_gc or {}).get("selected_p_trend")
         live_conf = float(max(0.0, min(1.0, selected_p_trend))) if isinstance(selected_p_trend, (float, int)) else None
         if live_conf is not None and isinstance(regime.get("latest"), dict):
