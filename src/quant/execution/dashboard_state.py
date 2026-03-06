@@ -203,7 +203,6 @@ def _refresh_renko_cache_if_needed(existing_df: pd.DataFrame) -> pd.DataFrame:
 
 def load_renko_bars(max_points: int = 5000) -> List[Dict[str, Any]]:
     df = _read_renko_df()
-    df = _refresh_renko_cache_if_needed(df)
     if df.empty:
         return []
     df = df.tail(int(max(1, max_points)))

@@ -83,8 +83,9 @@ async def _lifespan(a: FastAPI):
     t = threading.Thread(target=_state_space_refresh_loop, daemon=True, name="ss-refresh")
     t.start()
     log.info("state space refresh thread started (interval=%ss)", os.getenv("DASHBOARD_SS_REFRESH_SEC", "300"))
+    _start_renko_cache_updater_if_enabled()
     yield
-
+‚
 
 app = FastAPI(title="quant-webhook", version="0.1.0", lifespan=_lifespan)
 
@@ -989,7 +990,6 @@ def api_renko_latest_solusd(lookback: int = 50) -> Dict[str, Any]:
             df = pd.read_parquet(path)
         else:
             df = pd.DataFrame()
-        df = _refresh_renko_cache_if_needed(df)
         if df.empty or "close" not in df.columns:
             return {"ok": False, "error": "no_renko_data"}
         df = df.sort_values("ts") if "ts" in df.columns else df
