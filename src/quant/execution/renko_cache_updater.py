@@ -45,8 +45,25 @@ def _publish_renko_to_redis(symbol: str, renko: pd.DataFrame, box: float) -> Dic
     if renko is None or renko.empty:
         return {"ok": False, "reason": "empty_renko"}
 
-    last = renko.iloc[-1]
+    tail_n = 50
+    tail = renko.tail(tail_n).copy().reset_index(drop=True)
+    tail["ts"] = pd.to_datetime(tail["ts"], utc=True, errors="coerce")
+
+    last = tail.iloc[-1]
     ts = pd.Timestamp(last["ts"])
+
+    bars = []
+    for _, r in tail.iterrows():
+        bars.append(
+            {
+                "ts": pd.Timestamp(r["ts"]).isoformat(),
+                "open": float(r["open"]),
+                "high": float(r["high"]),
+                "low": float(r["low"]),
+                "close": float(r["close"]),
+            }
+        )
+
     payload = {
         "event_id": f"renko:{str(symbol).upper().replace('-', '')}:{ts.isoformat()}:{len(renko)}",
         "symbol": str(symbol).upper().replace("-", ""),
@@ -57,6 +74,10 @@ def _publish_renko_to_redis(symbol: str, renko: pd.DataFrame, box: float) -> Dic
         "close": float(last["close"]),
         "box": float(box),
         "n_bars": int(len(renko)),
+        "lookback_max": int(len(tail)),
+        "swing_low_50": float(tail["low"].min()),
+        "swing_high_50": float(tail["high"].max()),
+        "bars": bars,
     }
 
     latest_key = _redis_key_latest(symbol)
