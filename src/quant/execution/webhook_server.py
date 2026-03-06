@@ -645,7 +645,11 @@ def api_dashboard_chart(
         bars = load_renko_bars(max_points=int(max(100, max_points)))
         markers = load_trade_markers(max_points=int(max(1000, max_points * 50)))
         oldest_bar_ts = int(bars[0]["time"]) if bars else None
-        markers_live = []
+        markers_live = load_live_fill_markers(
+            symbol=symbol,
+            start_ts=oldest_bar_ts,
+            limit=int(max(200, min(int(os.getenv("DASHBOARD_FILL_MARKER_LIMIT", "1200")), max_points))),
+      )
         levels = load_active_levels()
         expected_entry ={}
 
