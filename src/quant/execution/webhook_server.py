@@ -950,6 +950,22 @@ def api_gate_solusd() -> Dict[str, Any]:
 @app.get("/api/signals/latest/solusd")
 def api_signals_latest_solusd() -> Dict[str, Any]:
     try:
+        redis_url = os.getenv("REDIS_URL", "").strip()
+        if redis_url:
+            import json
+            import redis as redis_lib
+
+            r = redis_lib.from_url(redis_url, decode_responses=True)
+            raw = r.get("signal:SOLUSDT:latest")
+            if raw:
+                obj = json.loads(raw)
+                return {
+                    "ok": True,
+                    "ts": str(obj.get("ts", _now_utc_iso())),
+                    "signal": int(obj.get("signal", 0) or 0),
+                    "source": "redis",
+                }
+
         root = _signals_root()
         sig = _latest_signal_from_jsonl(root, "SOL-USDT")
         if sig is None:
@@ -962,7 +978,6 @@ def api_signals_latest_solusd() -> Dict[str, Any]:
         }
     except Exception as e:
         return {"ok": False, "ts": _now_utc_iso(), "signal": 0, "error": str(e)}
-
 
 @app.get("/api/renko/latest/solusd")
 def api_renko_latest_solusd(lookback: int = 50) -> Dict[str, Any]:
