@@ -1118,7 +1118,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="layout">
     <div class="card">
       <div class="chart-wrap">
-        <button id="chart-refresh-btn" class="chart-refresh-btn" type="button" title="Refresh chart/data now">Refresh</button>
         <div id="chart"></div>
       </div>
     </div>
@@ -1286,7 +1285,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
     const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const fibMidSeries = chart.addLineSeries({ color: '#ffffff', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibMidSeries = chart.addLineSeries({ color: '#ffffff', lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     const priceLineSeries = chart.addLineSeries({ color: '#9aa5b1', lineWidth: 1, title: 'Last', lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     const tradeSegmentSeries = [];
@@ -2215,8 +2214,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     tick();
     loadStateSpace();
-    const chartRefreshBtn = document.getElementById('chart-refresh-btn');
-    if (chartRefreshBtn) chartRefreshBtn.addEventListener('click', () => refreshNow('button'));
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') refreshNow('visible');
     });
