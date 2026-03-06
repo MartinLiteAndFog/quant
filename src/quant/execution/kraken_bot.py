@@ -173,6 +173,126 @@ def compute_swing_sl(
 
 
 # ---------------------------------------------------------------------------
+# Venue reconciliation
+# ---------------------------------------------------------------------------
+
+def _normalize_venue_position(pos_raw: Any) -> Tuple[int, float]:
+    """
+    Normalize venue position to (side, abs_size).
+
+    Supported:
+    - float/int: signed size
+    - dict with common position fields
+    - None / empty -> flat
+    """
+    if pos_raw is None:
+        return 0, 0.0
+
+    if isinstance(pos_raw, (int, float)):
+        qty = float(pos_raw)
+        if abs(qty) < 1e-12:
+            return 0, 0.0
+        return (1 if qty > 0 else -1), abs(qty)
+
+    if isinstance(pos_raw, dict):
+        for key in ("size", "qty", "position", "currentQty", "contracts"):
+            if key in pos_raw:
+                try:
+                    qty = float(pos_raw.get(key) or 0.0)
+                    if abs(qty) < 1e-12:
+                        return 0, 0.0
+                    return (1 if qty > 0 else -1), abs(qty)
+                except Exception:
+                    pass
+
+        side_raw = str(pos_raw.get("side", "") or pos_raw.get("direction", "") or "").strip().lower()
+        size_raw = pos_raw.get("abs_size", pos_raw.get("size", pos_raw.get("qty", 0.0)))
+        try:
+            abs_size = abs(float(size_raw or 0.0))
+        except Exception:
+            abs_size = 0.0
+
+        if side_raw in ("long", "buy") and abs_size > 0:
+            return 1, abs_size
+        if side_raw in ("short", "sell") and abs_size > 0:
+            return -1, abs_size
+        return 0, 0.0
+
+    return 0, 0.0
+
+
+def reconcile_state_with_venue(
+    state: BotState,
+    venue_pos_raw: Any,
+    gate_on: int,
+    mark: float,
+) -> BotState:
+    """
+    Venue is source of truth.
+
+    Conservative behavior:
+    - Venue flat => force local flat.
+    - Venue non-flat but local disagrees => adopt venue side/size and reset mode conservatively.
+    """
+    venue_side, venue_size = _normalize_venue_position(venue_pos_raw)
+    local_side = int(state.pos_side)
+    local_size = float(state.size_rem or 0.0)
+
+    # Exact flat sync
+    if venue_side == 0:
+        if local_side != 0 or local_size > 0:
+            log.warning(
+                "state reconcile: venue flat but local state non-flat side=%s size=%.4f mode=%s entry=%.4f -> forcing FLAT",
+                local_side, local_size, state.mode, state.entry_px,
+            )
+            return BotState(
+                pos_side=0,
+                entry_px=0.0,
+                best_fav=0.0,
+                size_full=0.0,
+                size_rem=0.0,
+                mode="FLAT",
+                engine=("flip" if gate_on == 1 else "tp2"),
+                gate_on=gate_on,
+                last_signal_ts=state.last_signal_ts,
+                tp1_done=False,
+            )
+        state.gate_on = gate_on
+        state.engine = "flip" if gate_on == 1 else "tp2"
+        return state
+
+    # Venue has a position; if local disagrees, venue wins.
+    mismatch = (
+        local_side != venue_side
+        or abs(local_size - venue_size) > 1e-9
+        or local_side == 0
+    )
+    if mismatch:
+        new_mode = "FLIP_WAIT" if gate_on == 1 else "TP2_OPEN"
+        entry_px = state.entry_px if (local_side == venue_side and state.entry_px > 0) else mark
+        log.warning(
+            "state reconcile: venue side=%s size=%.4f disagrees with local side=%s size=%.4f mode=%s -> adopting venue state mode=%s entry=%.4f",
+            venue_side, venue_size, local_side, local_size, state.mode, new_mode, entry_px,
+        )
+        return BotState(
+            pos_side=venue_side,
+            entry_px=entry_px,
+            best_fav=mark,
+            size_full=venue_size,
+            size_rem=venue_size,
+            mode=new_mode,
+            engine=("flip" if gate_on == 1 else "tp2"),
+            gate_on=gate_on,
+            last_signal_ts=state.last_signal_ts,
+            tp1_done=False,
+        )
+
+    state.gate_on = gate_on
+    state.engine = "flip" if gate_on == 1 else "tp2"
+    return state
+
+
+# ---------------------------------------------------------------------------
 # Pure state machine logic
 # ---------------------------------------------------------------------------
 
@@ -226,7 +346,6 @@ def run_once_logic(
         s.mode = "FLIP_TTP" if s.engine == "flip" else "TP2_OPEN"
         return s, actions
 
-    # Update last_signal_ts for dedup even if we didn't act on it while flat
     if new_signal:
         s.last_signal_ts = signal_ts
 
@@ -240,11 +359,9 @@ def run_once_logic(
         else:
             s.best_fav = min(s.best_fav, mark)
 
-        # Opposite IMBA signal → immediate flip (before TTP check, matching backtest)
         if new_signal:
             imp = 1 if signal > 0 else -1
             if imp == -s.pos_side:
-                old_side = "sell" if s.pos_side > 0 else "buy"
                 new_side_str = "long" if imp > 0 else "short"
                 actions.append({"action": "close_all", "reason": "signal_flip"})
                 actions.append({"action": f"enter_{new_side_str}", "side": ("buy" if imp > 0 else "sell"), "size": target_size})
@@ -255,9 +372,8 @@ def run_once_logic(
                 s.size_rem = target_size
                 return s, actions
             elif imp == s.pos_side:
-                pass  # same-dir signal: TTP already armed, do nothing
+                pass
 
-        # TTP trail check
         if s.pos_side > 0:
             ttp_stop = s.best_fav * (1.0 - flip_p.ttp_trail_pct)
             triggered = mark <= ttp_stop
@@ -297,7 +413,7 @@ def run_once_logic(
 
         if new_signal:
             s.mode = "FLIP_TTP"
-            s.best_fav = mark  # re-arm TTP from current price
+            s.best_fav = mark
 
         return s, actions
 
@@ -534,6 +650,7 @@ def fetch_renko(url: str, lookback: int) -> Dict[str, Any]:
         log.warning("renko fetch failed: %s", e)
         return {"swing_low": 0.0, "swing_high": 0.0, "last_close": 0.0, "source": "none", "ts": ""}
 
+
 # ---------------------------------------------------------------------------
 # Main loop
 # ---------------------------------------------------------------------------
@@ -546,7 +663,7 @@ def compute_target_size(
 ) -> float:
     """
     Compute position size in SOL from equity percentage.
-    
+
     equity_pct=0.90 means use 90% of equity * leverage / mark_price.
     Result is floored to 1 decimal to meet Kraken's minimum tick.
     """
@@ -554,7 +671,7 @@ def compute_target_size(
         return 0.0
     notional = equity_usd * equity_pct * leverage
     size = notional / mark_price
-    return float(int(size * 10) / 10)  # floor to 0.1 SOL
+    return float(int(size * 10) / 10)
 
 
 def run_once(
@@ -578,6 +695,10 @@ def run_once(
     eq = client.get_account_equity()
     equity_usd = float(eq.get("equity_usd", 0.0) or 0.0)
 
+    # CRITICAL: venue position must override stale local state
+    venue_pos_raw = client.get_position()
+    state = reconcile_state_with_venue(state=state, venue_pos_raw=venue_pos_raw, gate_on=gate["gate_on"], mark=mark)
+
     target_size = compute_target_size(equity_usd, mark, leverage, equity_pct)
 
     active_lookback = flip_p.swing_lookback if state.engine == "flip" else tp2_p.swing_lookback
@@ -600,6 +721,8 @@ def run_once(
 
     save_state(new_state, state_path)
 
+    venue_side, venue_size = _normalize_venue_position(venue_pos_raw)
+
     ts = _now_iso()
     row = {
         "ts": ts,
@@ -619,6 +742,8 @@ def run_once(
         "tp1_done": new_state.tp1_done,
         "signal": sig["signal"],
         "signal_ts": sig["ts"],
+        "venue_pos_side": venue_side,
+        "venue_pos_size": round(venue_size, 6),
         "actions": [a.get("action", "") + ":" + a.get("reason", "") for a in actions],
         "dry_run": dry_run,
     }
@@ -626,11 +751,13 @@ def run_once(
     _append_equity(equity_path, ts=ts, equity_usd=float(row["equity_usd"]))
 
     side_str = {1: "long", -1: "short", 0: "flat"}.get(new_state.pos_side, "?")
+    venue_side_str = {1: "long", -1: "short", 0: "flat"}.get(venue_side, "?")
     action_str = ", ".join(a.get("action", "") + ":" + a.get("reason", "") for a in actions) or "hold"
     log.info(
-        "bot ts=%s gate=%s engine=%s mode=%s pos=%s/%s entry=%.2f mark=%.2f sig=%s action=[%s]",
+        "bot ts=%s gate=%s engine=%s mode=%s pos=%s/%s venue=%s/%s entry=%.2f mark=%.2f sig=%s action=[%s]",
         ts, gate["gate_on"], new_state.engine, new_state.mode,
         side_str, round(new_state.size_rem, 4),
+        venue_side_str, round(venue_size, 4),
         new_state.entry_px, mark,
         sig["signal"], action_str,
     )
