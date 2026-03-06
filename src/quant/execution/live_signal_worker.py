@@ -159,10 +159,6 @@ def _append_signal_jsonl(out_path: Path, rec: Dict[str, Any]) -> None:
 
 
 def _to_utc_ts(value: Any) -> pd.Timestamp:
-    """
-    Normalize timestamp-like values to UTC-aware pandas Timestamp.
-    Supports both naive and already tz-aware inputs.
-    """
     ts = pd.to_datetime(value, errors="coerce", utc=True)
     if pd.isna(ts):
         raise ValueError(f"invalid timestamp value: {value!r}")
@@ -369,7 +365,6 @@ def run_once(
         ),
     ).sort_values("ts").reset_index(drop=True)
     if imba_all.empty:
-        # Bootstrap once from current live position side when stream is empty.
         _maybe_emit_bootstrap_from_position(
             broker=broker,
             symbol=symbol,
@@ -471,15 +466,37 @@ def run_once(
             )
 
     latest_active = active_base.iloc[-1] if len(active_base) else None
+
+    if latest_active is not None:
+        try:
+            redis_url = os.getenv("REDIS_URL", "").strip()
+            if redis_url:
+                import redis as redis_lib
+
+                r = redis_lib.from_url(redis_url, decode_responses=True)
+                sym = str(symbol).upper().replace("-", "")
+                payload = {
+                    "ts": _to_utc_ts(latest_active["ts"]).isoformat(),
+                    "signal": int(latest_active["signal"]),
+                    "position": int(latest_active.get("position", latest_active["signal"])),
+                    "symbol": sym,
+                    "source": "imba_live_worker",
+                    "strategy_mode": active_mode,
+                    "gate_on": gate_on,
+                    "lookback": int(lookback),
+                    "sl": float(latest_active["sl"]) if not pd.isna(latest_active.get("sl")) else None,
+                }
+                r.set(f"signal:{sym}:latest", json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
+        except Exception as e:
+            log.warning("signal redis mirror failed: %s", e)
+
     # Do not overwrite executor-managed live levels while a position is open.
     # Otherwise dashboard SL/TTP can flicker to signal-only values.
     try:
         live_pos = float(broker.get_position(symbol))
     except Exception:
-        # If we cannot read live position (e.g. missing creds / transient API error),
-        # do NOT overwrite execution_state.json, otherwise we may wipe executor-written
-        # fields like entry_px/entry_bar_ts that the dashboard uses to show the latest trade.
         live_pos = None
+
     if live_pos is not None and abs(live_pos) < 1e-12:
         write_execution_state(
             {
@@ -494,6 +511,7 @@ def run_once(
                 "ts": _to_utc_ts(latest_active["ts"]).isoformat() if latest_active is not None else _now_utc_iso(),
             }
         )
+
     latest_calc = active_base.iloc[-1] if len(active_base) else None
     if latest_calc is not None:
         log_throttled(
