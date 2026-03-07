@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+from typing import Optional
+
+from quant.execution.event_ids import make_event_id
+from quant.execution.event_types import ActionEvent, ExecutionEvent, SignalEvent
+
+
+def build_signal_event(
+    *,
+    strategy: str,
+    symbol: str,
+    ts: str,
+    seq: int,
+    signal: int,
+    signal_side: str,
+    signal_family: str,
+    signal_kind: str,
+    reason_code: str,
+    venue: str = "internal",
+    source_event_id: Optional[str] = None,
+    position_before: int = 0,
+    position_after: int = 0,
+    engine_mode_before: str = "FLAT",
+    engine_mode_after: str = "FLAT",
+    blocked: bool = False,
+    block_reason: Optional[str] = None,
+) -> SignalEvent:
+    return SignalEvent(
+        event_id=make_event_id("signal", strategy, symbol, ts, seq),
+        event_family="signal_events",
+        strategy=strategy,
+        symbol=symbol,
+        venue=venue,
+        ts=ts,
+        seq=seq,
+        signal=signal,
+        signal_side=signal_side,
+        signal_family=signal_family,
+        signal_kind=signal_kind,
+        reason_code=reason_code,
+        source_event_id=source_event_id,
+        source_signal_event_id=None,
+        position_before=position_before,
+        position_after=position_after,
+        engine_mode_before=engine_mode_before,
+        engine_mode_after=engine_mode_after,
+        blocked=blocked,
+        block_reason=block_reason,
+    )
+
+
+def build_action_event(
+    *,
+    strategy: str,
+    symbol: str,
+    ts: str,
+    seq: int,
+    engine_action: str,
+    action_side: str,
+    reason_code: str,
+    venue: str = "internal",
+    source_event_id: Optional[str] = None,
+    source_signal_event_id: Optional[str] = None,
+    position_before: int = 0,
+    position_after: int = 0,
+    engine_mode_before: str = "FLAT",
+    engine_mode_after: str = "FLAT",
+    blocked: bool = False,
+    block_reason: Optional[str] = None,
+) -> ActionEvent:
+    return ActionEvent(
+        event_id=make_event_id("action", strategy, symbol, ts, seq),
+        event_family="action_events",
+        strategy=strategy,
+        symbol=symbol,
+        venue=venue,
+        ts=ts,
+        seq=seq,
+        engine_action=engine_action,
+        action_side=action_side,
+        reason_code=reason_code,
+        source_event_id=source_event_id,
+        source_signal_event_id=source_signal_event_id,
+        position_before=position_before,
+        position_after=position_after,
+        engine_mode_before=engine_mode_before,
+        engine_mode_after=engine_mode_after,
+        blocked=blocked,
+        block_reason=block_reason,
+    )
+
+
+def build_execution_event(
+    *,
+    strategy: str,
+    symbol: str,
+    ts: str,
+    seq: int,
+    execution_kind: str,
+    order_action: str,
+    reason_code: str,
+    venue: str,
+    source_event_id: Optional[str] = None,
+    source_signal_event_id: Optional[str] = None,
+    position_before: int = 0,
+    position_after: int = 0,
+    blocked: bool = False,
+    block_reason: Optional[str] = None,
+) -> ExecutionEvent:
+    return ExecutionEvent(
+        event_id=make_event_id("execution", strategy, symbol, ts, seq, venue=venue),
+        event_family="execution_events",
+        strategy=strategy,
+        symbol=symbol,
+        venue=venue,
+        ts=ts,
+        seq=seq,
+        execution_kind=execution_kind,
+        order_action=order_action,
+        reason_code=reason_code,
+        source_event_id=source_event_id,
+        source_signal_event_id=source_signal_event_id,
+        position_before=position_before,
+        position_after=position_after,
+        blocked=blocked,
+        block_reason=block_reason,
+    )
