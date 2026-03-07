@@ -21,6 +21,7 @@ We use three event families:
 3. `execution_events`
    - Venue or OMS-level execution facts.
    - Example: order submitted, order filled, order canceled, position synced, rejection, fallback execution.
+   - This includes KuCoin and Kraken order / fill / cancel / rejection / sync events.
 
 ## 3. Minimal fields
 All event families should aim to include these minimal fields where applicable:
@@ -159,6 +160,23 @@ Initial standardized `reason_code` / `block_reason` values:
   "source_signal_event_id": "signal:imba:SOLUSDT:2026-03-06T11:23:00Z:77",
   "position_before": 1,
   "position_after": -1,
+  "blocked": false,
+  "block_reason": null
+}
+{
+  "event_id": "execution:kraken:SOLUSDT:2026-03-06T11:23:02Z:992",
+  "event_family": "execution_events",
+  "strategy": "imba_countertrend",
+  "symbol": "SOLUSDT",
+  "venue": "kraken",
+  "ts": "2026-03-06T11:23:02Z",
+  "seq": 992,
+  "execution_kind": "fill",
+  "order_action": "buy",
+  "reason_code": "trailing_tp_hit",
+  "source_signal_event_id": "signal:imba:SOLUSDT:2026-03-06T11:23:00Z:77",
+  "position_before": -1,
+  "position_after": 0,
   "blocked": false,
   "block_reason": null
 }
