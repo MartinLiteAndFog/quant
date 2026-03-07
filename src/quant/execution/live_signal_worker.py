@@ -11,6 +11,9 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from quant.execution.event_builders import build_signal_event
+from quant.execution.event_log import append_event_jsonl
+from quant.execution.event_types import SignalEvent
 from quant.execution.execution_state import write_execution_state
 from quant.execution.kucoin_futures import KucoinFuturesBroker, _symbol_to_contract
 from quant.execution.strategy_router import strategy_for_gate, trend_signals_from_imba
@@ -42,6 +45,14 @@ def _today_utc() -> str:
 
 def _now_utc_iso() -> str:
     return pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _events_root() -> Path:
+    return Path(os.getenv("EVENTS_DIR", "data/events"))
+
+
+def _canon_symbol(sym: str) -> str:
+    return "".join(ch for ch in str(sym).upper() if ch.isalnum())
 
 
 def _read_state(path: Path) -> WorkerState:
@@ -165,64 +176,6 @@ def _to_utc_ts(value: Any) -> pd.Timestamp:
     return pd.Timestamp(ts)
 
 
-def _maybe_emit_bootstrap_from_position(
-    *,
-    broker: KucoinFuturesBroker,
-    symbol: str,
-    out_path: Path,
-    active_mode: str,
-    gate_on: int,
-    lookback: int,
-    state: WorkerState,
-) -> int:
-    """
-    If no signal has ever been emitted yet, bootstrap the stream from the live position side.
-    This prevents the executor from being permanently blocked by an empty signal file.
-    """
-    if state.last_signal_ts:
-        return 0
-    if _last_jsonl_record(out_path) is not None:
-        return 0
-
-    try:
-        pos = float(broker.get_position(symbol))
-    except Exception:
-        return 0
-
-    if abs(pos) < 1e-12:
-        return 0
-
-    sig = 1 if pos > 0 else -1
-    ts_iso = _now_utc_iso()
-    rec = {
-        "server_ts": ts_iso,
-        "ts": ts_iso,
-        "signal": sig,
-        "position": sig,
-        "source": "bootstrap_from_live_position",
-        "strategy_mode": str(active_mode),
-        "sl": None,
-        "symbol": symbol,
-        "gate_on": int(gate_on),
-        "lookback": int(lookback),
-    }
-    wrote = _append_signal_jsonl_dedupe(out_path, rec)
-    if not wrote:
-        return 0
-
-    state.last_signal_ts = rec["ts"]
-    state.n_emitted += 1
-    log.warning(
-        "live-signal bootstrap emitted symbol=%s strategy=%s gate_on=%s signal=%s file=%s",
-        symbol,
-        active_mode,
-        gate_on,
-        sig,
-        out_path,
-    )
-    return 1
-
-
 def _last_jsonl_record(path: Path) -> Optional[Dict[str, Any]]:
     if not path.exists():
         return None
@@ -274,6 +227,49 @@ def _append_signal_jsonl_dedupe(out_path: Path, rec: Dict[str, Any]) -> bool:
     return True
 
 
+def _append_signal_event(
+    *,
+    strategy_mode: str,
+    symbol: str,
+    ts_iso: str,
+    seq: int,
+    signal: int,
+    position: int,
+    gate_on: int,
+    lookback: int,
+    sl: Optional[float],
+) -> None:
+    sig_i = int(signal)
+    signal_side = "long" if sig_i > 0 else "short" if sig_i < 0 else "flat"
+    reason_code = "imba_long" if sig_i > 0 else "imba_short" if sig_i < 0 else "flat_signal"
+
+    event: SignalEvent = build_signal_event(
+        strategy=str(strategy_mode),
+        symbol=_canon_symbol(symbol),
+        ts=ts_iso,
+        seq=int(seq),
+        signal=sig_i,
+        signal_side=signal_side,
+        signal_family="imba",
+        signal_kind="trend_flip",
+        reason_code=reason_code,
+        venue="internal",
+        source_event_id=None,
+        position_before=int(position),
+        position_after=int(position),
+        engine_mode_before="FLAT",
+        engine_mode_after="FLAT",
+        blocked=False,
+        block_reason=None,
+    )
+    event["gate_on"] = int(gate_on)
+    event["lookback"] = int(lookback)
+    event["sl"] = float(sl) if sl is not None else None
+
+    out_path = _events_root() / "signal_events" / f"{_today_utc()}.jsonl"
+    append_event_jsonl(out_path, event)
+
+
 def _filter_after(df: pd.DataFrame, ts_iso: Optional[str]) -> pd.DataFrame:
     if df.empty or not ts_iso:
         return df
@@ -306,6 +302,75 @@ def _load_or_seed_gate(regime_store: RegimeStore, symbol: str, default_gate_on: 
         )
     )
     return regime_store.get_latest_state(symbol=symbol) or {"gate_on": gate_on, "regime_state": strategy_for_gate(gate_on)}
+
+
+def _maybe_emit_bootstrap_from_position(
+    *,
+    broker: KucoinFuturesBroker,
+    symbol: str,
+    out_path: Path,
+    active_mode: str,
+    gate_on: int,
+    lookback: int,
+    state: WorkerState,
+) -> int:
+    """
+    If no signal has ever been emitted yet, bootstrap the stream from the live position side.
+    This prevents the executor from being permanently blocked by an empty signal file.
+    """
+    if state.last_signal_ts:
+        return 0
+    if _last_jsonl_record(out_path) is not None:
+        return 0
+
+    try:
+        pos = float(broker.get_position(symbol))
+    except Exception:
+        return 0
+
+    if abs(pos) < 1e-12:
+        return 0
+
+    sig = 1 if pos > 0 else -1
+    ts_iso = _now_utc_iso()
+    rec = {
+        "server_ts": ts_iso,
+        "ts": ts_iso,
+        "signal": sig,
+        "position": sig,
+        "source": "bootstrap_from_live_position",
+        "strategy_mode": str(active_mode),
+        "sl": None,
+        "symbol": symbol,
+        "gate_on": int(gate_on),
+        "lookback": int(lookback),
+    }
+    wrote = _append_signal_jsonl_dedupe(out_path, rec)
+    if not wrote:
+        return 0
+
+    state.last_signal_ts = rec["ts"]
+    state.n_emitted += 1
+    _append_signal_event(
+        strategy_mode=str(active_mode),
+        symbol=symbol,
+        ts_iso=ts_iso,
+        seq=int(state.n_emitted),
+        signal=int(sig),
+        position=int(sig),
+        gate_on=int(gate_on),
+        lookback=int(lookback),
+        sl=None,
+    )
+    log.warning(
+        "live-signal bootstrap emitted symbol=%s strategy=%s gate_on=%s signal=%s file=%s",
+        symbol,
+        active_mode,
+        gate_on,
+        sig,
+        out_path,
+    )
+    return 1
 
 
 def run_once(
@@ -405,9 +470,10 @@ def run_once(
     active_new = _filter_after(active_base, state.last_signal_ts)
 
     for _, r in imba_new.iterrows():
+        rec_ts = _to_utc_ts(r["ts"]).isoformat()
         rec = {
             "server_ts": _now_utc_iso(),
-            "ts": _to_utc_ts(r["ts"]).isoformat(),
+            "ts": rec_ts,
             "signal": int(r["signal"]),
             "position": int(r.get("position", r["signal"])),
             "source": "imba_live_worker",
@@ -417,13 +483,27 @@ def run_once(
             "gate_on": gate_on,
             "lookback": int(lookback),
         }
-        _append_signal_jsonl_dedupe(imba_path, rec)
+        wrote = _append_signal_jsonl_dedupe(imba_path, rec)
+        if wrote:
+            state.n_emitted += 1
+            _append_signal_event(
+                strategy_mode="countertrend",
+                symbol=symbol,
+                ts_iso=rec_ts,
+                seq=int(state.n_emitted),
+                signal=int(rec["signal"]),
+                position=int(rec["position"]),
+                gate_on=int(gate_on),
+                lookback=int(lookback),
+                sl=rec["sl"],
+            )
         state.last_countertrend_ts = rec["ts"]
 
     for _, r in trend_new.iterrows():
+        rec_ts = _to_utc_ts(r["ts"]).isoformat()
         rec = {
             "server_ts": _now_utc_iso(),
-            "ts": _to_utc_ts(r["ts"]).isoformat(),
+            "ts": rec_ts,
             "signal": int(r["signal"]),
             "position": int(r.get("position", r["signal"])),
             "source": "imba_live_worker",
@@ -433,14 +513,28 @@ def run_once(
             "gate_on": gate_on,
             "lookback": int(lookback),
         }
-        _append_signal_jsonl_dedupe(trend_path, rec)
+        wrote = _append_signal_jsonl_dedupe(trend_path, rec)
+        if wrote:
+            state.n_emitted += 1
+            _append_signal_event(
+                strategy_mode="trendfollower",
+                symbol=symbol,
+                ts_iso=rec_ts,
+                seq=int(state.n_emitted),
+                signal=int(rec["signal"]),
+                position=int(rec["position"]),
+                gate_on=int(gate_on),
+                lookback=int(lookback),
+                sl=rec["sl"],
+            )
         state.last_trendfollower_ts = rec["ts"]
 
     emitted_active = 0
     for _, r in active_new.iterrows():
+        rec_ts = _to_utc_ts(r["ts"]).isoformat()
         rec = {
             "server_ts": _now_utc_iso(),
-            "ts": _to_utc_ts(r["ts"]).isoformat(),
+            "ts": rec_ts,
             "signal": int(r["signal"]),
             "position": int(r.get("position", r["signal"])),
             "source": "imba_live_worker",
@@ -455,6 +549,17 @@ def run_once(
             state.last_signal_ts = rec["ts"]
             state.n_emitted += 1
             emitted_active += 1
+            _append_signal_event(
+                strategy_mode=str(active_mode),
+                symbol=symbol,
+                ts_iso=rec_ts,
+                seq=int(state.n_emitted),
+                signal=int(rec["signal"]),
+                position=int(rec["position"]),
+                gate_on=int(gate_on),
+                lookback=int(lookback),
+                sl=rec["sl"],
+            )
             log.info(
                 "live-signal emitted symbol=%s strategy=%s gate_on=%s ts=%s signal=%s file=%s",
                 symbol,
@@ -490,8 +595,6 @@ def run_once(
         except Exception as e:
             log.warning("signal redis mirror failed: %s", e)
 
-    # Do not overwrite executor-managed live levels while a position is open.
-    # Otherwise dashboard SL/TTP can flicker to signal-only values.
     try:
         live_pos = float(broker.get_position(symbol))
     except Exception:
