@@ -1,5 +1,3 @@
-# src/quant/execution/webhook_server.py
-
 from __future__ import annotations
 
 import argparse
@@ -89,7 +87,6 @@ async def _lifespan(a: FastAPI):
 
 app = FastAPI(title="quant-webhook", version="0.1.0", lifespan=_lifespan)
 
-# Default symbol for dashboard ticker/position
 DEFAULT_SYMBOL = os.getenv("DASHBOARD_SYMBOL", "SOL-USDT")
 
 
@@ -145,7 +142,6 @@ def _safe_ts(v: Any) -> Optional[pd.Timestamp]:
 
 
 def _latest_signal_from_jsonl(root: Path, symbol: str) -> Optional[Dict[str, Any]]:
-    """Return newest non-zero signal from JSONL files (mirrors live_executor._latest_signal)."""
     wanted = _canon_symbol(symbol)
     candidate_dirs: list[Path] = []
     if root.exists():
@@ -223,11 +219,6 @@ def _cache_put(cache: Dict[str, Dict[str, Any]], key: str, value: Dict[str, Any]
 
 
 def _start_renko_cache_updater_if_enabled() -> None:
-    """
-    Optional background updater for dashboard Renko cache.
-    Controlled via env:
-      ENABLE_DASHBOARD_RENKO_UPDATER=1
-    """
     if not _truthy(os.getenv("ENABLE_DASHBOARD_RENKO_UPDATER", "1")):
         return
 
@@ -239,7 +230,6 @@ def _start_renko_cache_updater_if_enabled() -> None:
     poll_sec = float(os.getenv("DASHBOARD_RENKO_POLL_SEC", "60"))
 
     def _loop() -> None:
-        # Lazy import to avoid startup dependency when updater is disabled.
         from quant.execution.renko_cache_updater import refresh_renko_cache
 
         while True:
@@ -284,10 +274,6 @@ def _start_renko_cache_updater_if_enabled() -> None:
 
 
 def _start_live_signal_worker_if_enabled() -> None:
-    """
-    Background thread that computes IMBA signals from live renko bars.
-    Controlled via env: ENABLE_LIVE_SIGNAL_WORKER=1
-    """
     if not _truthy(os.getenv("ENABLE_LIVE_SIGNAL_WORKER", "1")):
         return
 
@@ -313,10 +299,16 @@ def _start_live_signal_worker_if_enabled() -> None:
         while True:
             try:
                 st = sw_run_once(
-                    broker, symbol=symbol, renko_box=renko_box, lookback=lookback,
-                    sl_abs=sl_abs, candles_limit=candles_limit,
-                    signals_dir=signals_dir, regime_store=regime_store,
-                    default_gate_on=default_gate_on, state=st,
+                    broker,
+                    symbol=symbol,
+                    renko_box=renko_box,
+                    lookback=lookback,
+                    sl_abs=sl_abs,
+                    candles_limit=candles_limit,
+                    signals_dir=signals_dir,
+                    regime_store=regime_store,
+                    default_gate_on=default_gate_on,
+                    state=st,
                 )
                 _write_state(state_file, st)
             except Exception as e:
@@ -327,15 +319,14 @@ def _start_live_signal_worker_if_enabled() -> None:
     t.start()
     log.info(
         "started live signal worker symbol=%s box=%s lookback=%s poll_sec=%s",
-        symbol, renko_box, lookback, poll_sec,
+        symbol,
+        renko_box,
+        lookback,
+        poll_sec,
     )
 
 
 def _start_live_executor_if_enabled() -> None:
-    """
-    Background thread that processes signals and places trades via OMS.
-    Controlled via env: ENABLE_LIVE_EXECUTOR=1 (default 0 for safety).
-    """
     if not _truthy(os.getenv("ENABLE_LIVE_EXECUTOR", "0")):
         return
 
@@ -367,10 +358,15 @@ def _start_live_executor_if_enabled() -> None:
         while True:
             try:
                 st = ex_run_once(
-                    broker=broker, oms=oms, symbol=symbol,
-                    signals_root=signals_dir, state=st,
-                    live_enabled=live_enabled, dry_run=dry_run,
-                    max_eur=max_eur, leverage=leverage,
+                    broker=broker,
+                    oms=oms,
+                    symbol=symbol,
+                    signals_root=signals_dir,
+                    state=st,
+                    live_enabled=live_enabled,
+                    dry_run=dry_run,
+                    max_eur=max_eur,
+                    leverage=leverage,
                 )
                 _write_state(state_file, st)
             except Exception as e:
@@ -381,15 +377,16 @@ def _start_live_executor_if_enabled() -> None:
     t.start()
     log.info(
         "started live executor symbol=%s live_enabled=%s dry_run=%s max_eur=%s leverage=%s poll_sec=%s",
-        symbol, live_enabled, dry_run, max_eur, leverage, poll_sec,
+        symbol,
+        live_enabled,
+        dry_run,
+        max_eur,
+        leverage,
+        poll_sec,
     )
 
 
 def _sync_gate_conf_artifacts_if_enabled() -> None:
-    """
-    Optional one-way sync of gate-confidence files from app workspace -> mounted volume.
-    This is useful when Railway volume does not yet contain required state-space artifacts.
-    """
     if not _truthy(os.getenv("GATE_CONF_SYNC_ON_START", "0")):
         return
 
@@ -451,12 +448,6 @@ def _check_token(token: Optional[str]) -> None:
 
 
 def _ensure_ts(payload: Dict[str, Any], now_iso: str) -> Dict[str, Any]:
-    """
-    Guarantee a 'ts' field exists for downstream backtests.
-    - If client sends ts/timestamp/time/t/datetime -> normalize into 'ts'
-    - Else fallback to server_ts (now)
-    Keep original fields too.
-    """
     candidate_keys = ("ts", "timestamp", "time", "t", "datetime")
     ts_val = None
     for k in candidate_keys:
@@ -469,7 +460,6 @@ def _ensure_ts(payload: Dict[str, Any], now_iso: str) -> Dict[str, Any]:
         out["ts"] = now_iso
         out["_ts_source"] = "server_ts_fallback"
     else:
-        # preserve exact value under 'ts' for signal_io
         out["ts"] = ts_val
         out["_ts_source"] = f"payload:{k}"
     return out
@@ -477,7 +467,6 @@ def _ensure_ts(payload: Dict[str, Any], now_iso: str) -> Dict[str, Any]:
 
 @app.get("/")
 def root() -> Dict[str, Any]:
-    """Root für Health-Checks (z. B. Railway); leitet auf Dashboard hin."""
     return {"ok": True, "app": "quant-webhook", "ts": _now_utc_iso(), "dashboard": "/dashboard", "health": "/health"}
 
 
@@ -487,14 +476,12 @@ def health() -> Dict[str, Any]:
 
 
 def _kucoin_broker():
-    """Lazy import so app starts even without credentials."""
     from quant.execution.kucoin_futures import KucoinFuturesBroker
     return KucoinFuturesBroker()
 
 
 @app.get("/api/status")
 def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
-    """API status: whether KuCoin credentials are set, and current ticker (bid/ask) from KuCoin."""
     cache_key = _normalize_symbol(symbol)
     cached = _cache_get(_STATUS_CACHE, cache_key)
     if cached is not None:
@@ -527,7 +514,6 @@ def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
 
 @app.get("/api/position")
 def api_position(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
-    """Current position from KuCoin Futures (signed: >0 long, <0 short)."""
     cache_key = _normalize_symbol(symbol)
     cached = _cache_get(_POSITION_CACHE, cache_key)
     if cached is not None:
@@ -561,11 +547,6 @@ async def api_manual_order(
     request: Request,
     x_webhook_token: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
-    """
-    Execute a manual order using the same KuCoin adapter as live execution.
-    Example payload:
-      {"symbol":"SOL-USDT","action":"cancel_short"}
-    """
     if _auth_required():
         _check_token(x_webhook_token)
 
@@ -638,9 +619,6 @@ def api_dashboard_chart(
     hours: int = 24 * 7,
     max_points: int = 3000,
 ) -> Dict[str, Any]:
-    """
-    Unified chart payload: renko bars, trades, regime overlays, and active levels.
-    """
     try:
         bars = load_renko_bars(max_points=int(max(100, max_points)))
         markers = load_trade_markers(max_points=int(max(1000, max_points * 50)))
@@ -649,9 +627,9 @@ def api_dashboard_chart(
             symbol=symbol,
             start_ts=oldest_bar_ts,
             limit=int(max(200, min(int(os.getenv("DASHBOARD_FILL_MARKER_LIMIT", "1200")), max_points))),
-      )
+        )
         levels = load_active_levels()
-        expected_entry ={}
+        expected_entry = {}
 
         def _coerce_epoch_seconds(v: Any) -> Optional[int]:
             if v is None:
@@ -665,12 +643,11 @@ def api_dashboard_chart(
                     return None
                 if not (x > 0):
                     return None
-                # Heuristic for ns/ms/s
                 if x > 10**15:
-                    return int(x / 1e9)   # ns -> s
+                    return int(x / 1e9)
                 if x > 10**12:
-                    return int(x / 1e3)   # ms -> s
-                return int(x)             # s
+                    return int(x / 1e3)
+                return int(x)
             s = str(v).strip()
             if not s:
                 return None
@@ -686,7 +663,6 @@ def api_dashboard_chart(
             except Exception:
                 return None
 
-        # Normalize common timestamp fields so the frontend can Number(...) them reliably.
         if isinstance(levels, dict) and levels:
             for k in ("entry_bar_ts", "ts"):
                 if k in levels:
@@ -720,7 +696,6 @@ def api_dashboard_chart(
             if side_raw is None:
                 side_raw = expected_entry.get("side")
             if (entry_t is None) and isinstance(levels, dict):
-                # Fallback: signal-only state may carry a 'ts' timestamp (ISO or epoch).
                 entry_t = levels.get("ts")
             if entry_t is None:
                 entry_t = expected_entry.get("entry_time")
@@ -753,6 +728,7 @@ def api_dashboard_chart(
         markers = sorted(markers_all, key=lambda x: int(x.get("time", 0)))
         if len(markers) > int(max(100, max_points)):
             markers = markers[-int(max(100, max_points)):]
+
         segments = load_trade_segments(max_points=int(max(100, max_points)))
         fibo = build_fibo_levels(max_points=int(max(100, max_points)))
         renko_health = load_renko_health()
@@ -778,6 +754,23 @@ def api_dashboard_chart(
             kraken_points_usd=equity_kraken.get("points", []),
         )
         diary = build_trading_diary(max_points=int(max(100, max_points)))
+
+        equity_components = [
+            {
+                "key": "kucoin",
+                "label": "KuCoin",
+                "kind": "account_equity",
+                "points": equity_real.get("points", []),
+                "source": equity_real.get("source"),
+            },
+            {
+                "key": "kraken",
+                "label": "Kraken",
+                "kind": "account_equity",
+                "points": equity_kraken.get("points", []),
+                "source": equity_kraken.get("source"),
+            },
+        ]
 
         open_position = None
         try:
@@ -819,7 +812,6 @@ def api_dashboard_chart(
                     forecast_ts = int((now_ts + pd.Timedelta(minutes=minutes)).timestamp())
                     regime_forecast.append({"time": forecast_ts, "score": score})
 
-        # #region agent log
         _newest_bar_ts = int(bars[-1]["time"]) if bars else None
         _marker_times = sorted([int(m.get("time", 0)) for m in markers])
         _debug = {
@@ -841,8 +833,8 @@ def api_dashboard_chart(
             "diary_count": len(diary.get("entries", [])),
             "diary_source": diary.get("source"),
             "equity_count": len(equity.get("trades", [])),
+            "equity_component_count": len(equity_components),
         }
-        # #endregion
 
         return {
             "ok": True,
@@ -870,10 +862,13 @@ def api_dashboard_chart(
             "equity_kraken_source": equity_kraken.get("source"),
             "equity_combined": equity_combined.get("points", []),
             "equity_combined_source": equity_combined.get("source"),
-            "equity_live": equity_kraken.get("points", []),
-            "equity_live_source": equity_kraken.get("source"),
-            "equity_realized": equity_combined.get("points", []),
-            "equity_realized_source": equity_combined.get("source"),
+            "equity_total": equity_combined.get("points", []),
+            "equity_total_source": equity_combined.get("source"),
+            "equity_components": equity_components,
+            "equity_live": [],
+            "equity_live_source": "deprecated_use_equity_components",
+            "equity_realized": [],
+            "equity_realized_source": "deprecated_use_equity_components",
             "kraken_metrics": kraken_metrics,
             "diary_entries": diary.get("entries", []),
             "diary_source": diary.get("source"),
@@ -902,6 +897,9 @@ def api_dashboard_chart(
             "equity_kraken_source": "none",
             "equity_combined": [],
             "equity_combined_source": "none",
+            "equity_total": [],
+            "equity_total_source": "none",
+            "equity_components": [],
             "equity_live": [],
             "equity_live_source": "none",
             "equity_realized": [],
@@ -949,7 +947,6 @@ def api_signals_latest_solusd() -> Dict[str, Any]:
     try:
         redis_url = os.getenv("REDIS_URL", "").strip()
         if redis_url:
-            import json
             import redis as redis_lib
 
             r = redis_lib.from_url(redis_url, decode_responses=True)
@@ -976,11 +973,10 @@ def api_signals_latest_solusd() -> Dict[str, Any]:
     except Exception as e:
         return {"ok": False, "ts": _now_utc_iso(), "signal": 0, "error": str(e)}
 
+
 @app.get("/api/renko/latest/solusd")
 def api_renko_latest_solusd(lookback: int = 50) -> Dict[str, Any]:
     try:
-        from quant.execution.dashboard_state import _refresh_renko_cache_if_needed, _read_renko_df
-
         path = Path(os.getenv("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet"))
         if path.exists():
             df = pd.read_parquet(path)
@@ -989,7 +985,7 @@ def api_renko_latest_solusd(lookback: int = 50) -> Dict[str, Any]:
         if df.empty or "close" not in df.columns:
             return {"ok": False, "error": "no_renko_data"}
         df = df.sort_values("ts") if "ts" in df.columns else df
-        lb = min(max(lookback, 1), 50)  # backtest caps swing lookback to 50
+        lb = min(max(lookback, 1), 50)
         swing_low = float(df["low"].rolling(lb, min_periods=1).min().iloc[-1])
         swing_high = float(df["high"].rolling(lb, min_periods=1).max().iloc[-1])
         return {
@@ -1024,7 +1020,6 @@ def api_dashboard_fills(symbol: str = DEFAULT_SYMBOL, max_points: int = 500) -> 
 
 
 def _load_density_bg_images() -> Dict[str, Optional[str]]:
-    """Load pre-computed density PNGs as base64 strings."""
     import base64
     density_dir = Path(os.getenv("DASHBOARD_DENSITY_DIR", "data/live/density"))
     out: Dict[str, Optional[str]] = {}
@@ -1040,7 +1035,6 @@ def _load_density_bg_images() -> Dict[str, Optional[str]]:
 
 @app.get("/api/dashboard/statespace")
 def api_dashboard_statespace(window_hours: float = 8.0) -> Dict[str, Any]:
-    """State space heatmap data: trajectory, current position, density layers."""
     try:
         traj = load_state_space_trajectory(window_hours=float(max(0.1, window_hours)))
         recent = compute_recent_density(hours=min(window_hours, 12.0))
@@ -1054,10 +1048,14 @@ def api_dashboard_statespace(window_hours: float = 8.0) -> Dict[str, Any]:
             "window_hours": window_hours,
         }
     except Exception as e:
-        return {"ok": False, "trajectory": [], "current": None,
-                "recent_density": {"xy": [], "xz": [], "yz": []},
-                "density_bg": {"xy": None, "xz": None, "yz": None},
-                "error": str(e)}
+        return {
+            "ok": False,
+            "trajectory": [],
+            "current": None,
+            "recent_density": {"xy": [], "xz": [], "yz": []},
+            "density_bg": {"xy": None, "xz": None, "yz": None},
+            "error": str(e),
+        }
 
 
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -1325,7 +1323,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .replace(/'/g, '&#39;');
     }
 
-    // ── Regime gradient helpers ──
     function scoreToColor(score, alpha) {
       alpha = alpha != null ? alpha : 1.0;
       const t = (Math.max(-1, Math.min(1, score)) + 1.0) / 2.0;
@@ -1396,7 +1393,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
-    // ── Heatmap helpers ──
     function loadBgImage(tag, dataUrl) {
       if (!dataUrl) return;
       const img = new Image();
@@ -1497,7 +1493,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       drawHeatmap('heatmap-yz', 'yz', 'y', 'z');
     }
 
-    // ── Axis status bars ──
     function drawAxisBars() {
       const canvas = document.getElementById('axis-bars');
       if (!canvas || !ssPayload) return;
@@ -1544,8 +1539,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
     }
 
-    // ── Equity curve ──
-        function drawEquityCurve() {
+    function drawEquityCurve() {
       const canvas = document.getElementById('equity-canvas');
       if (!canvas || !latestPayload) return;
       const detailEl = document.getElementById('equity-detail');
@@ -1559,68 +1553,154 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.fillStyle = '#181c24';
       ctx.fillRect(0, 0, w, h);
 
-      const liveEq = Array.isArray(latestPayload.equity_live) ? latestPayload.equity_live : [];
-      const realizedEq = Array.isArray(latestPayload.equity_realized) ? latestPayload.equity_realized : [];
-      const kucoinEq = Array.isArray(latestPayload.equity_real) ? latestPayload.equity_real : [];
-      const krakenEq = Array.isArray(latestPayload.equity_kraken) ? latestPayload.equity_kraken : [];
-      const combinedEq = Array.isArray(latestPayload.equity_combined) ? latestPayload.equity_combined : [];
+      const normalize = (arr) => (Array.isArray(arr) ? arr : [])
+        .map((p) => ({ time: Number(p.time || 0), equity: Number(p.equity || 0) }))
+        .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
 
-      const liveSource = latestPayload.equity_live_source || 'none';
-      const realizedSource = latestPayload.equity_realized_source || 'none';
+      const componentsRaw = Array.isArray(latestPayload.equity_components) ? latestPayload.equity_components : [];
+      const components = componentsRaw.map((c) => ({
+        key: String(c.key || ''),
+        label: String(c.label || c.key || ''),
+        kind: String(c.kind || ''),
+        source: String(c.source || 'none'),
+        points: normalize(c.points || []),
+      })).filter((c) => c.key);
+
+      const totalRaw = normalize(latestPayload.equity_total || latestPayload.equity_combined || []);
+
+      const palette = {
+        kucoin: { fill: 'rgba(122,162,247,0.28)', line: '#7aa2f7' },
+        kraken: { fill: 'rgba(255,158,100,0.32)', line: '#ff9e64' },
+        default: { fill: 'rgba(158,206,106,0.24)', line: '#9ece6a' },
+        total: { line: '#c0e38a' },
+      };
 
       if (metaEl) {
-        metaEl.textContent = `Equity: green=realized, orange=live (realized_source=${realizedSource}, live_source=${liveSource})`;
+        const src = components.map((c) => `${c.label}=${c.source}`).join(', ');
+        metaEl.textContent = src ? `Stacked account equity: ${src}` : 'Stacked account equity';
       }
 
-      if (realizedEq.length >= 2 || liveEq.length >= 2) {
-        const normalize = (arr) => arr.map((p) => ({ time: Number(p.time || 0), equity: Number(p.equity || 0) }))
-          .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
+      if (components.some((c) => c.points.length >= 1)) {
+        const timeSet = new Set();
+        for (const c of components) {
+          for (const p of c.points) timeSet.add(p.time);
+        }
+        if (timeSet.size === 0) {
+          for (const p of totalRaw) timeSet.add(p.time);
+        }
+        const times = Array.from(timeSet).sort((a, b) => a - b);
 
-        const pRealized = normalize(realizedEq);
-        const pLive = normalize(liveEq);
+        const valueByKey = {};
+        for (const c of components) {
+          const m = new Map(c.points.map((p) => [p.time, p.equity]));
+          let last = 0.0;
+          let seen = false;
+          valueByKey[c.key] = times.map((t) => {
+            if (m.has(t)) {
+              last = m.get(t);
+              seen = true;
+            }
+            return seen ? last : 0.0;
+          });
+        }
 
-        const allVals = [...pRealized, ...pLive].map(p => p.equity);
-        if (allVals.length >= 2) {
-          const minV = Math.min(...allVals);
-          const maxV = Math.max(...allVals);
-          const range = Math.max(1e-6, (maxV - minV) * 1.15);
-          const padL = 8, padR = 8, padT = 14, padB = 14;
-          const pw = w - padL - padR, ph = h - padT - padB;
+        const totals = times.map((_, i) => components.reduce((acc, c) => acc + Number(valueByKey[c.key]?.[i] || 0), 0));
+        const allVals = [0, ...totals];
+        const minV = Math.min(...allVals);
+        const maxV = Math.max(...allVals);
+        const range = Math.max(1e-6, (maxV - minV) * 1.12);
+        const padL = 8, padR = 8, padT = 14, padB = 14;
+        const pw = w - padL - padR, ph = h - padT - padB;
 
-          const drawLine = (pts, color) => {
-            if (!Array.isArray(pts) || pts.length < 2) return;
-            ctx.lineWidth = 2;
-            ctx.strokeStyle = color;
+        const tx = (i) => padL + (i / Math.max(1, times.length - 1)) * pw;
+        const ty = (v) => padT + (1 - (v - minV) / range) * ph;
+
+        let bottom = new Array(times.length).fill(0.0);
+
+        for (const c of components) {
+          const vals = valueByKey[c.key] || new Array(times.length).fill(0.0);
+          const top = vals.map((v, i) => bottom[i] + v);
+          const pal = palette[c.key] || palette.default;
+
+          if (times.length >= 2) {
             ctx.beginPath();
-            for (let i = 0; i < pts.length; i++) {
-              const x = padL + (i / Math.max(1, pts.length - 1)) * pw;
-              const y = padT + (1 - (pts[i].equity - minV) / range) * ph;
+            ctx.moveTo(tx(0), ty(bottom[0]));
+            for (let i = 0; i < times.length; i++) ctx.lineTo(tx(i), ty(top[i]));
+            for (let i = times.length - 1; i >= 0; i--) ctx.lineTo(tx(i), ty(bottom[i]));
+            ctx.closePath();
+            ctx.fillStyle = pal.fill;
+            ctx.fill();
+
+            ctx.beginPath();
+            for (let i = 0; i < times.length; i++) {
+              const x = tx(i);
+              const y = ty(top[i]);
               if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
             }
+            ctx.strokeStyle = pal.line;
+            ctx.lineWidth = 1.5;
             ctx.stroke();
-          };
-
-          drawLine(pRealized, '#9ece6a');
-          drawLine(pLive, '#ff9e64');
-
-          const anchor = pRealized.length ? pRealized : pLive;
-          const delta = anchor.length >= 2 ? (anchor[anchor.length - 1].equity - anchor[0].equity) : 0;
-          const pct = (anchor.length >= 1 && anchor[0].equity > 0) ? (delta / anchor[0].equity) * 100.0 : 0.0;
-
-          ctx.font = 'bold 11px system-ui';
-          ctx.textAlign = 'right';
-          ctx.fillStyle = delta >= 0 ? '#9ece6a' : '#f7768e';
-          ctx.fillText(`${delta >= 0 ? '+' : ''}${delta.toFixed(2)} USDT (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`, w - padR, padT - 2);
-
-          const latestRealized = pRealized.length ? pRealized[pRealized.length - 1].equity : null;
-          const latestLive = pLive.length ? pLive[pLive.length - 1].equity : null;
-
-          if (detailEl) {
-            detailEl.textContent = `realized:${latestRealized !== null ? latestRealized.toFixed(2) : '-'} live:${latestLive !== null ? latestLive.toFixed(2) : '-'}`;
           }
-          canvas.onmousemove = null;
-          return;
+
+          bottom = top;
         }
+
+        if (times.length >= 2) {
+          ctx.beginPath();
+          for (let i = 0; i < times.length; i++) {
+            const x = tx(i);
+            const y = ty(totals[i]);
+            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+          }
+          ctx.strokeStyle = palette.total.line;
+          ctx.lineWidth = 2.2;
+          ctx.stroke();
+        }
+
+        const latestTotal = totals.length ? totals[totals.length - 1] : null;
+        const firstTotal = totals.length ? totals[0] : null;
+        const delta = latestTotal != null && firstTotal != null ? latestTotal - firstTotal : 0;
+        const pct = latestTotal != null && firstTotal != null && firstTotal > 0 ? (delta / firstTotal) * 100.0 : 0.0;
+
+        ctx.font = 'bold 11px system-ui';
+        ctx.textAlign = 'right';
+        ctx.fillStyle = delta >= 0 ? '#9ece6a' : '#f7768e';
+        ctx.fillText(`${delta >= 0 ? '+' : ''}${delta.toFixed(2)} USDT (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`, w - padR, padT - 2);
+
+        const latestParts = {};
+        for (const c of components) {
+          const vals = valueByKey[c.key] || [];
+          latestParts[c.key] = vals.length ? vals[vals.length - 1] : 0.0;
+        }
+
+        if (detailEl) {
+          const pieces = [`total:${latestTotal !== null ? latestTotal.toFixed(2) : '-'}`];
+          for (const c of components) {
+            const v = latestParts[c.key];
+            pieces.push(`${c.key}:${Number(v || 0).toFixed(2)}`);
+          }
+          detailEl.textContent = pieces.join(' ');
+        }
+
+        canvas.onmousemove = (ev) => {
+          if (!detailEl || times.length === 0) return;
+          const r = canvas.getBoundingClientRect();
+          const x = ev.clientX - r.left;
+          let idx = Math.round(((x - padL) / Math.max(1, pw)) * Math.max(1, times.length - 1));
+          idx = Math.max(0, Math.min(times.length - 1, idx));
+
+          const d = new Date(Number(times[idx]) * 1000);
+          const hh = String(d.getUTCHours()).padStart(2, '0');
+          const mm = String(d.getUTCMinutes()).padStart(2, '0');
+
+          const parts = [`${hh}:${mm}`, `total:${totals[idx].toFixed(2)}`];
+          for (const c of components) {
+            const vals = valueByKey[c.key] || [];
+            parts.push(`${c.key}:${Number(vals[idx] || 0).toFixed(2)}`);
+          }
+          detailEl.textContent = parts.join(' ');
+        };
+        return;
       }
 
       const trades = Array.isArray(latestPayload.diary_entries) && latestPayload.diary_entries.length
@@ -1635,13 +1715,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const d = new Date(Number(op.entry_time) * 1000);
           const hh = String(d.getUTCHours()).padStart(2, '0');
           const mm = String(d.getUTCMinutes()).padStart(2, '0');
-          ctx.fillText('No closed trades (open position)', w / 2, h / 2 - 6);
+          ctx.fillText('No equity history / no closed trades', w / 2, h / 2 - 6);
           const ep = Number.isFinite(Number(op.entry_price)) ? Number(op.entry_price).toFixed(3) : '-';
           const sl = Number.isFinite(Number(op.sl)) ? Number(op.sl).toFixed(3) : '-';
           ctx.fillText(`${hh}:${mm} ${String(op.side).toUpperCase()} entry:${ep} SL:${sl}`, w / 2, h / 2 + 12);
           if (detailEl) detailEl.textContent = `open ${String(op.side).toUpperCase()} entry:${ep} SL:${sl}`;
         } else {
-          ctx.fillText('No closed trades', w / 2, h / 2);
+          ctx.fillText('No equity history', w / 2, h / 2);
           if (detailEl) detailEl.textContent = '-';
         }
         canvas.onmousemove = null;
@@ -1660,7 +1740,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           entry_price: t.entry_price,
           exit_price: t.exit_price,
           qty: t.qty,
-          source: t.source || realizedSource || latestPayload.diary_source || latestPayload.equity_source || 'none',
+          source: t.source || latestPayload.diary_source || latestPayload.equity_source || 'none',
         };
       });
 
@@ -1733,8 +1813,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
-    // ── Time cursor for heatmaps ──
-    let trajCursorIdx = -1;  // -1 = live/latest
+    let trajCursorIdx = -1;
 
     function getHeatmapCursorState() {
       if (!ssPayload || !ssPayload.trajectory || !ssPayload.trajectory.length) return null;
@@ -1744,7 +1823,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return { x: pt.x, y: pt.y, z: pt.z, conf_x: 0, conf_y: 0, conf_z: 0 };
     }
 
-    // ── Time mapping (unchanged) ──
     function buildTimeMapFromBars(bars) {
       const m = new Map();
       const arr = [];
@@ -1926,7 +2004,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return { hours: 24 * 14, max_points: 4000 };
     }
 
-    // ── Data loading ──
     async function loadMeta() {
       const [st, pos] = await Promise.all([
         fetch('/api/status').then(r => r.json()),
@@ -2101,7 +2178,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
         drawAllHeatmaps();
         drawAxisBars();
-      } catch (e) { /* state space unavailable */ }
+      } catch (e) {}
     }
 
     async function loadFills() {
@@ -2111,7 +2188,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const data = await fetch('/api/dashboard/fills?max_points=200').then(r => r.json());
         if (!data.ok) return;
         const rows = Array.isArray(data.rows) ? data.rows : [];
-        const lines = ['<div class=\"fills-row head\"><span>time (UTC)</span><span>side</span><span>qty</span><span>price</span><span>reason</span></div>'];
+        const lines = ['<div class="fills-row head"><span>time (UTC)</span><span>side</span><span>qty</span><span>price</span><span>reason</span></div>'];
         for (let i = Math.max(0, rows.length - 80); i < rows.length; i++) {
           const r = rows[i] || {};
           const ts = (typeof r.time_utc === 'string' && r.time_utc) ? r.time_utc : '-';
@@ -2123,11 +2200,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const cid = (typeof r.client_oid === 'string' && r.client_oid) ? ` [${r.client_oid}]` : '';
           const reason = reasonBase + cid;
           lines.push(
-            `<div class=\"fills-row\"><span>${escapeHtml(ts)}</span><span class=\"${cls}\">${escapeHtml(side)}</span><span>${escapeHtml(qty)}</span><span>${escapeHtml(px)}</span><span>${escapeHtml(reason)}</span></div>`
+            `<div class="fills-row"><span>${escapeHtml(ts)}</span><span class="${cls}">${escapeHtml(side)}</span><span>${escapeHtml(qty)}</span><span>${escapeHtml(px)}</span><span>${escapeHtml(reason)}</span></div>`
           );
         }
         host.innerHTML = lines.join('');
-      } catch (e) { /* fills unavailable */ }
+      } catch (e) {}
     }
 
     async function refreshNow(reason) {
@@ -2269,7 +2346,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard() -> str:
-    """Simple dashboard UI: API status, SOL ticker from KuCoin, position. Basis für spätere Desktop-App."""
     try:
         ui_ms = int(float(os.getenv("DASHBOARD_UI_REFRESH_MS", "4000")))
     except Exception:
@@ -2340,7 +2416,6 @@ def main() -> None:
     _start_renko_cache_updater_if_enabled()
     _start_live_signal_worker_if_enabled()
     _start_live_executor_if_enabled()
-    # Railway/cloud set PORT; use it so the app listens on the right port
     port = int(os.environ.get("PORT", str(args.port)))
     uvicorn.run(
         "quant.execution.webhook_server:app",
@@ -2349,3 +2424,7 @@ def main() -> None:
         reload=bool(args.reload),
         log_level="info",
     )
+
+
+if __name__ == "__main__":
+    main()
