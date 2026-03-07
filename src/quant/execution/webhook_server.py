@@ -1545,7 +1545,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
 
     // ── Equity curve ──
-    function drawEquityCurve() {
+        function drawEquityCurve() {
       const canvas = document.getElementById('equity-canvas');
       if (!canvas || !latestPayload) return;
       const detailEl = document.getElementById('equity-detail');
@@ -1559,18 +1559,27 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.fillStyle = '#181c24';
       ctx.fillRect(0, 0, w, h);
 
+      const liveEq = Array.isArray(latestPayload.equity_live) ? latestPayload.equity_live : [];
+      const realizedEq = Array.isArray(latestPayload.equity_realized) ? latestPayload.equity_realized : [];
       const kucoinEq = Array.isArray(latestPayload.equity_real) ? latestPayload.equity_real : [];
       const krakenEq = Array.isArray(latestPayload.equity_kraken) ? latestPayload.equity_kraken : [];
       const combinedEq = Array.isArray(latestPayload.equity_combined) ? latestPayload.equity_combined : [];
-      const source = latestPayload.equity_combined_source || latestPayload.equity_real_source || latestPayload.diary_source || latestPayload.equity_source || 'none';
-      if (metaEl) metaEl.textContent = 'Equity source: ' + source + ' (green=Combined, blue=KuCoin, orange=Kraken)';
-      if (combinedEq.length >= 2 || kucoinEq.length >= 2 || krakenEq.length >= 2) {
+
+      const liveSource = latestPayload.equity_live_source || 'none';
+      const realizedSource = latestPayload.equity_realized_source || 'none';
+
+      if (metaEl) {
+        metaEl.textContent = `Equity: green=realized, orange=live (realized_source=${realizedSource}, live_source=${liveSource})`;
+      }
+
+      if (realizedEq.length >= 2 || liveEq.length >= 2) {
         const normalize = (arr) => arr.map((p) => ({ time: Number(p.time || 0), equity: Number(p.equity || 0) }))
           .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
-        const pCombined = normalize(combinedEq);
-        const pKucoin = normalize(kucoinEq);
-        const pKraken = normalize(krakenEq);
-        const allVals = [...pCombined, ...pKucoin, ...pKraken].map(p => p.equity);
+
+        const pRealized = normalize(realizedEq);
+        const pLive = normalize(liveEq);
+
+        const allVals = [...pRealized, ...pLive].map(p => p.equity);
         if (allVals.length >= 2) {
           const minV = Math.min(...allVals);
           const maxV = Math.max(...allVals);
@@ -1591,23 +1600,23 @@ DASHBOARD_HTML = """<!DOCTYPE html>
             ctx.stroke();
           };
 
-          drawLine(pKucoin, '#7aa2f7');
-          drawLine(pKraken, '#ff9e64');
-          drawLine(pCombined, '#9ece6a');
+          drawLine(pRealized, '#9ece6a');
+          drawLine(pLive, '#ff9e64');
 
-          const anchor = pCombined.length ? pCombined : (pKucoin.length ? pKucoin : pKraken);
+          const anchor = pRealized.length ? pRealized : pLive;
           const delta = anchor.length >= 2 ? (anchor[anchor.length - 1].equity - anchor[0].equity) : 0;
           const pct = (anchor.length >= 1 && anchor[0].equity > 0) ? (delta / anchor[0].equity) * 100.0 : 0.0;
+
           ctx.font = 'bold 11px system-ui';
           ctx.textAlign = 'right';
           ctx.fillStyle = delta >= 0 ? '#9ece6a' : '#f7768e';
           ctx.fillText(`${delta >= 0 ? '+' : ''}${delta.toFixed(2)} USDT (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`, w - padR, padT - 2);
 
-          const latestCombined = pCombined.length ? pCombined[pCombined.length - 1].equity : null;
-          const latestKucoin = pKucoin.length ? pKucoin[pKucoin.length - 1].equity : null;
-          const latestKraken = pKraken.length ? pKraken[pKraken.length - 1].equity : null;
+          const latestRealized = pRealized.length ? pRealized[pRealized.length - 1].equity : null;
+          const latestLive = pLive.length ? pLive[pLive.length - 1].equity : null;
+
           if (detailEl) {
-            detailEl.textContent = `combined:${latestCombined !== null ? latestCombined.toFixed(2) : '-'} kucoin:${latestKucoin !== null ? latestKucoin.toFixed(2) : '-'} kraken:${latestKraken !== null ? latestKraken.toFixed(2) : '-'}`;
+            detailEl.textContent = `realized:${latestRealized !== null ? latestRealized.toFixed(2) : '-'} live:${latestLive !== null ? latestLive.toFixed(2) : '-'}`;
           }
           canvas.onmousemove = null;
           return;
@@ -1651,7 +1660,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           entry_price: t.entry_price,
           exit_price: t.exit_price,
           qty: t.qty,
-          source: t.source || source,
+          source: t.source || realizedSource || latestPayload.diary_source || latestPayload.equity_source || 'none',
         };
       });
 
@@ -1665,7 +1674,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       function tx(i) { return padL + (i / Math.max(1, points.length - 1)) * pw; }
       function ty(v) { return padT + (1 - (v - minV) / range) * ph; }
 
-      // zero line
       const y0 = ty(0);
       ctx.strokeStyle = '#3a3f52';
       ctx.lineWidth = 0.7;
@@ -1673,7 +1681,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(w - padR, y0); ctx.stroke();
       ctx.setLineDash([]);
 
-      // step line
       ctx.lineWidth = 2;
       ctx.beginPath();
       for (let i = 0; i < points.length; i++) {
@@ -1689,7 +1696,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.strokeStyle = lastCum >= 0 ? '#9ece6a' : '#f7768e';
       ctx.stroke();
 
-      // % labels at each step
       ctx.font = 'bold 9px system-ui';
       ctx.textAlign = 'center';
       for (let i = 0; i < points.length; i++) {
@@ -1701,13 +1707,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ctx.fillText(label, x, y - 5);
       }
 
-      // cumulative at the end
       ctx.font = 'bold 11px system-ui';
       ctx.textAlign = 'right';
       ctx.fillStyle = lastCum >= 0 ? '#9ece6a' : '#f7768e';
       ctx.fillText((lastCum >= 0 ? '+' : '') + lastCum.toFixed(1) + '%', w - padR, padT - 2);
 
-      // Connect diary details to the widget: hover a step to inspect trade.
       canvas.onmousemove = (ev) => {
         if (!detailEl) return;
         const r = canvas.getBoundingClientRect();
