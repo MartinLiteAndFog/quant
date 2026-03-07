@@ -1566,14 +1566,14 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         points: normalize(c.points || []),
       })).filter((c) => c.key);
 
-      const totalRaw = normalize(latestPayload.equity_curve || []);
+      const totalRaw = normalize(latestPayload.equity_total || latestPayload.equity_combined || []);
 
       if (metaEl) {
         const src = components.map((c) => `${c.label}=${c.source}`).join(', ');
-        metaEl.textContent = src ? `Equity growth view: ${src}` : 'Equity growth view';
+        metaEl.textContent = src ? `Stacked account equity: ${src}` : 'Stacked account equity';
       }
 
-      if (totalRaw.length >= 2) {
+      if (components.some((c) => c.points.length >= 1)) {
         const vals = totalRaw.map((p) => p.equity);
         const minV = Math.min(...vals);
         const maxV = Math.max(...vals);
