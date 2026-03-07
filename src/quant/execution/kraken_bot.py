@@ -8,6 +8,9 @@ import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from quant.execution.event_builders import build_execution_event
+from quant.execution.event_log import append_event_jsonl
+from quant.execution.event_types import ExecutionEvent
 
 import pandas as pd
 
@@ -68,6 +71,44 @@ def _append_equity(path: Path, ts: str, equity_usd: float) -> None:
         df = df.tail(max_rows)
     df.to_csv(path, index=False)
 
+def _events_root() -> Path:
+    if Path("/data").exists():
+        return Path("/data/events")
+    return Path("data/events")
+
+
+def _append_execution_event(
+    *,
+    strategy: str,
+    symbol: str,
+    ts_iso: str,
+    seq: int,
+    execution_kind: str,
+    order_action: str,
+    reason_code: str,
+    position_before: int,
+    position_after: int,
+    source_signal_ts: str,
+) -> None:
+    event: ExecutionEvent = build_execution_event(
+        strategy=strategy,
+        symbol="SOLUSDT",
+        ts=ts_iso,
+        seq=int(seq),
+        execution_kind=execution_kind,
+        order_action=order_action,
+        reason_code=reason_code,
+        venue="kraken",
+        source_event_id=None,
+        source_signal_event_id=(f"signal:{strategy}:SOLUSDT:{source_signal_ts}:{seq}" if source_signal_ts else None),
+        position_before=int(position_before),
+        position_after=int(position_after),
+        blocked=False,
+        block_reason=None,
+    )
+    out_path = _events_root() / "execution_events" / f"{pd.Timestamp.now('UTC').strftime('%Y%m%d')}.jsonl"
+    append_event_jsonl(out_path, event)
+
 
 # ---------------------------------------------------------------------------
 # Bot state
@@ -85,6 +126,7 @@ class BotState:
     gate_on: int = 0
     last_signal_ts: str = ""
     tp1_done: bool = False
+    event_seq: int = 0
 
 
 def save_state(state: BotState, path: Path) -> None:
@@ -718,7 +760,44 @@ def run_once(
     )
 
     action_results = execute_actions(client, actions, dry_run=dry_run, equity_pct=equity_pct, leverage=leverage)
+    
+    for res in action_results:
+        if not res.get("executed"):
+            continue
+        state.event_seq += 1
 
+        act = str(res.get("action", "") or "")
+        reason_code = str(res.get("reason", "") or "manual_action")
+
+        if act == "close_all":
+            order_action = "sell" if int(state.pos_side) > 0 else "buy" if int(state.pos_side) < 0 else "flat"
+            position_after = 0
+        elif act == "close_partial":
+            order_action = str(res.get("close_side", "") or "flat")
+            position_after = int(state.pos_side)
+        elif act == "enter_long":
+            order_action = "buy"
+            position_after = 1
+        elif act == "enter_short":
+            order_action = "sell"
+            position_after = -1
+        else:
+            order_action = act or "unknown"
+            position_after = int(new_state.pos_side)
+
+        _append_execution_event(
+            strategy=str(new_state.engine),
+            symbol="SOLUSDT",
+            ts_iso=_now_iso(),
+            seq=int(state.event_seq),
+            execution_kind="fill",
+            order_action=order_action,
+            reason_code=reason_code,
+            position_before=int(state.pos_side),
+            position_after=int(position_after),
+            source_signal_ts=str(sig.get("ts", "") or ""),
+        )
+    
     save_state(new_state, state_path)
 
     venue_side, venue_size = _normalize_venue_position(venue_pos_raw)
