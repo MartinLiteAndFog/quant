@@ -749,7 +749,19 @@ def run_once(
     }
     _publish_metrics(metrics_path, row)
     _append_equity(equity_path, ts=ts, equity_usd=float(row["equity_usd"]))
-
+    try:
+        redis_url = os.getenv("REDIS_URL", "").strip()
+        if redis_url:
+            import redis as redis_lib
+            r = redis_lib.from_url(redis_url, decode_responses=True)
+            r.set("kraken:metrics:latest", json.dumps(row, separators=(",", ":")))
+            r.set(
+                "kraken:equity:latest",
+                json.dumps({"ts": ts, "equity_usd": float(row["equity_usd"])}, separators=(",", ":")),
+            )
+    except Exception as e:
+        log.warning("kraken redis publish failed: %s", e)
+    
     side_str = {1: "long", -1: "short", 0: "flat"}.get(new_state.pos_side, "?")
     venue_side_str = {1: "long", -1: "short", 0: "flat"}.get(venue_side, "?")
     action_str = ", ".join(a.get("action", "") + ":" + a.get("reason", "") for a in actions) or "hold"
