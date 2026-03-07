@@ -1602,9 +1602,71 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ctx.textAlign = 'right';
         ctx.fillStyle = latestTotal >= 0 ? '#9ece6a' : '#f7768e';
         ctx.fillText(`${latestTotal >= 0 ? '+' : ''}${latestTotal.toFixed(2)}%`, w - padR, padT - 2);
+        const bandTop = Math.floor(h * 0.72);
+        const bandBottom = h - 10;
+        const bandH = Math.max(24, bandBottom - bandTop);
+
+        if (components.length > 0) {
+          const compTimes = totalRaw.map((p) => p.time);
+          const compValsByKey = {};
+
+          for (const c of components) {
+            const pts = Array.isArray(c.points) ? c.points : [];
+            const m = new Map(pts.map((p) => [Number(p.time || 0), Number(p.equity || 0)]));
+            let last = pts.length ? Number(pts[0].equity || 0) : 0.0;
+            compValsByKey[c.key] = compTimes.map((t) => {
+              if (m.has(t)) last = m.get(t);
+              return last;
+            });
+          }
+
+          const totals = compTimes.map((_, i) =>
+            components.reduce((acc, c) => acc + Number((compValsByKey[c.key] || [])[i] || 0), 0)
+          );
+
+          let bottoms = new Array(compTimes.length).fill(0);
+
+          const compPalette = {
+            kucoin: 'rgba(122,162,247,0.32)',
+            kraken: 'rgba(255,158,100,0.38)',
+            default: 'rgba(158,206,106,0.28)',
+          };
+
+          for (const c of components) {
+            const rawVals = compValsByKey[c.key] || new Array(compTimes.length).fill(0);
+            const shares = rawVals.map((v, i) => {
+              const tot = Number(totals[i] || 0);
+              return tot > 0 ? v / tot : 0;
+            });
+            const tops = shares.map((v, i) => bottoms[i] + v);
+
+            ctx.beginPath();
+            ctx.moveTo(tx(0), bandBottom - bottoms[0] * bandH);
+            for (let i = 0; i < compTimes.length; i++) {
+              ctx.lineTo(tx(i), bandBottom - tops[i] * bandH);
+            }
+            for (let i = compTimes.length - 1; i >= 0; i--) {
+              ctx.lineTo(tx(i), bandBottom - bottoms[i] * bandH);
+            }
+            ctx.closePath();
+            ctx.fillStyle = compPalette[c.key] || compPalette.default;
+            ctx.fill();
+
+            bottoms = tops;
+          }
+
+          ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(padL, bandTop);
+          ctx.lineTo(w - padR, bandTop);
+          ctx.stroke();
+        }
         if (detailEl) {
          detailEl.textContent = `cum:${latestTotal.toFixed(2)}%`;
         }
+
+        
 
         canvas.onmousemove = (ev) => {
           if (!detailEl) return;
