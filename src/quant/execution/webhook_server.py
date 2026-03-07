@@ -1638,15 +1638,15 @@ DASHBOARD_HTML = """<!DOCTYPE html>
               const tot = Number(totals[i] || 0);
               return tot > 0 ? v / tot : 0;
             });
-            const tops = shares.map((v, i) => bottoms[i] + v);
+            const tops = shares.map((v, i) => bottoms[i] + v * totalRaw[i].equity);
 
             ctx.beginPath();
-            ctx.moveTo(tx(0), bandBottom - bottoms[0] * bandH);
+            ctx.moveTo(tx(0), ty(bottoms[0]));
             for (let i = 0; i < compTimes.length; i++) {
-              ctx.lineTo(tx(i), bandBottom - tops[i] * bandH);
+              ctx.lineTo(tx(i), ty(tops[i]));
             }
             for (let i = compTimes.length - 1; i >= 0; i--) {
-              ctx.lineTo(tx(i), bandBottom - bottoms[i] * bandH);
+              ctx.lineTo(tx(i), ty(bottoms[i]));
             }
             ctx.closePath();
             ctx.fillStyle = compPalette[c.key] || compPalette.default;
