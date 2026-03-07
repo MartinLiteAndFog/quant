@@ -1566,7 +1566,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         points: normalize(c.points || []),
       })).filter((c) => c.key);
 
-      const totalRaw = normalize(latestPayload.equity_total || latestPayload.equity_combined || []);
+      const totalRaw = (Array.isArray(latestPayload.equity_curve) ? latestPayload.equity_curve : [])
+       .map((p) => ({ time: Number(p.time || 0), equity: Number(p.cum_pct || 0) }))
+       .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
 
       if (metaEl) {
         const src = components.map((c) => `${c.label}=${c.source}`).join(', ');
@@ -1595,17 +1597,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ctx.stroke();
 
         const latestTotal = totalRaw[totalRaw.length - 1].equity;
-        const firstTotal = totalRaw[0].equity;
-        const delta = latestTotal - firstTotal;
-        const pct = firstTotal > 0 ? (delta / firstTotal) * 100.0 : 0.0;
 
         ctx.font = 'bold 11px system-ui';
         ctx.textAlign = 'right';
-        ctx.fillStyle = delta >= 0 ? '#9ece6a' : '#f7768e';
-        ctx.fillText(`${delta >= 0 ? '+' : ''}${delta.toFixed(2)} USDT (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`, w - padR, padT - 2);
-
+        ctx.fillStyle = latestTotal >= 0 ? '#9ece6a' : '#f7768e';
+        ctx.fillText(`${latestTotal >= 0 ? '+' : ''}${latestTotal.toFixed(2)}%`, w - padR, padT - 2);
         if (detailEl) {
-          detailEl.textContent = `equity:${latestTotal.toFixed(2)}`;
+         detailEl.textContent = `cum:${latestTotal.toFixed(2)}%`;
         }
 
         canvas.onmousemove = (ev) => {
@@ -1619,7 +1617,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const d = new Date(Number(t.time) * 1000);
           const hh = String(d.getUTCHours()).padStart(2, '0');
           const mm = String(d.getUTCMinutes()).padStart(2, '0');
-          detailEl.textContent = `${hh}:${mm} equity:${Number(t.equity).toFixed(2)}`;
+          detailEl.textContent = `${hh}:${mm} cum:${Number(t.equity).toFixed(2)}`;
         };
         return;
       }
