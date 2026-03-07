@@ -1566,139 +1566,60 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         points: normalize(c.points || []),
       })).filter((c) => c.key);
 
-      const totalRaw = normalize(latestPayload.equity_total || latestPayload.equity_combined || []);
-
-      const palette = {
-        kucoin: { fill: 'rgba(122,162,247,0.28)', line: '#7aa2f7' },
-        kraken: { fill: 'rgba(255,158,100,0.32)', line: '#ff9e64' },
-        default: { fill: 'rgba(158,206,106,0.24)', line: '#9ece6a' },
-        total: { line: '#c0e38a' },
-      };
+      const totalRaw = normalize(latestPayload.equity_curve || []);
 
       if (metaEl) {
         const src = components.map((c) => `${c.label}=${c.source}`).join(', ');
-        metaEl.textContent = src ? `Stacked account equity: ${src}` : 'Stacked account equity';
+        metaEl.textContent = src ? `Equity growth view: ${src}` : 'Equity growth view';
       }
 
-      if (components.some((c) => c.points.length >= 1)) {
-        const timeSet = new Set();
-        for (const c of components) {
-          for (const p of c.points) timeSet.add(p.time);
-        }
-        if (timeSet.size === 0) {
-          for (const p of totalRaw) timeSet.add(p.time);
-        }
-        const times = Array.from(timeSet).sort((a, b) => a - b);
-
-        const valueByKey = {};
-        for (const c of components) {
-          const m = new Map(c.points.map((p) => [p.time, p.equity]));
-          let last = 0.0;
-          let seen = false;
-          valueByKey[c.key] = times.map((t) => {
-            if (m.has(t)) {
-              last = m.get(t);
-              seen = true;
-            }
-            return seen ? last : 0.0;
-          });
-        }
-
-        const totals = times.map((_, i) => components.reduce((acc, c) => acc + Number(valueByKey[c.key]?.[i] || 0), 0));
-        const allVals = [0, ...totals];
-        const minV = Math.min(...allVals);
-        const maxV = Math.max(...allVals);
+      if (totalRaw.length >= 2) {
+        const vals = totalRaw.map((p) => p.equity);
+        const minV = Math.min(...vals);
+        const maxV = Math.max(...vals);
         const range = Math.max(1e-6, (maxV - minV) * 1.12);
         const padL = 8, padR = 8, padT = 14, padB = 14;
         const pw = w - padL - padR, ph = h - padT - padB;
 
-        const tx = (i) => padL + (i / Math.max(1, times.length - 1)) * pw;
+        const tx = (i) => padL + (i / Math.max(1, totalRaw.length - 1)) * pw;
         const ty = (v) => padT + (1 - (v - minV) / range) * ph;
 
-        let bottom = new Array(times.length).fill(0.0);
-
-        for (const c of components) {
-          const vals = valueByKey[c.key] || new Array(times.length).fill(0.0);
-          const top = vals.map((v, i) => bottom[i] + v);
-          const pal = palette[c.key] || palette.default;
-
-          if (times.length >= 2) {
-            ctx.beginPath();
-            ctx.moveTo(tx(0), ty(bottom[0]));
-            for (let i = 0; i < times.length; i++) ctx.lineTo(tx(i), ty(top[i]));
-            for (let i = times.length - 1; i >= 0; i--) ctx.lineTo(tx(i), ty(bottom[i]));
-            ctx.closePath();
-            ctx.fillStyle = pal.fill;
-            ctx.fill();
-
-            ctx.beginPath();
-            for (let i = 0; i < times.length; i++) {
-              const x = tx(i);
-              const y = ty(top[i]);
-              if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-            }
-            ctx.strokeStyle = pal.line;
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-          }
-
-          bottom = top;
+        ctx.beginPath();
+        for (let i = 0; i < totalRaw.length; i++) {
+          const x = tx(i);
+          const y = ty(totalRaw[i].equity);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
         }
+        ctx.strokeStyle = '#c0e38a';
+        ctx.lineWidth = 2.2;
+        ctx.stroke();
 
-        if (times.length >= 2) {
-          ctx.beginPath();
-          for (let i = 0; i < times.length; i++) {
-            const x = tx(i);
-            const y = ty(totals[i]);
-            if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-          }
-          ctx.strokeStyle = palette.total.line;
-          ctx.lineWidth = 2.2;
-          ctx.stroke();
-        }
-
-        const latestTotal = totals.length ? totals[totals.length - 1] : null;
-        const firstTotal = totals.length ? totals[0] : null;
-        const delta = latestTotal != null && firstTotal != null ? latestTotal - firstTotal : 0;
-        const pct = latestTotal != null && firstTotal != null && firstTotal > 0 ? (delta / firstTotal) * 100.0 : 0.0;
+        const latestTotal = totalRaw[totalRaw.length - 1].equity;
+        const firstTotal = totalRaw[0].equity;
+        const delta = latestTotal - firstTotal;
+        const pct = firstTotal > 0 ? (delta / firstTotal) * 100.0 : 0.0;
 
         ctx.font = 'bold 11px system-ui';
         ctx.textAlign = 'right';
         ctx.fillStyle = delta >= 0 ? '#9ece6a' : '#f7768e';
         ctx.fillText(`${delta >= 0 ? '+' : ''}${delta.toFixed(2)} USDT (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`, w - padR, padT - 2);
 
-        const latestParts = {};
-        for (const c of components) {
-          const vals = valueByKey[c.key] || [];
-          latestParts[c.key] = vals.length ? vals[vals.length - 1] : 0.0;
-        }
-
         if (detailEl) {
-          const pieces = [`total:${latestTotal !== null ? latestTotal.toFixed(2) : '-'}`];
-          for (const c of components) {
-            const v = latestParts[c.key];
-            pieces.push(`${c.key}:${Number(v || 0).toFixed(2)}`);
-          }
-          detailEl.textContent = pieces.join(' ');
+          detailEl.textContent = `equity:${latestTotal.toFixed(2)}`;
         }
 
         canvas.onmousemove = (ev) => {
-          if (!detailEl || times.length === 0) return;
+          if (!detailEl) return;
           const r = canvas.getBoundingClientRect();
           const x = ev.clientX - r.left;
-          let idx = Math.round(((x - padL) / Math.max(1, pw)) * Math.max(1, times.length - 1));
-          idx = Math.max(0, Math.min(times.length - 1, idx));
+          let idx = Math.round(((x - padL) / Math.max(1, pw)) * Math.max(1, totalRaw.length - 1));
+          idx = Math.max(0, Math.min(totalRaw.length - 1, idx));
 
-          const d = new Date(Number(times[idx]) * 1000);
+          const t = totalRaw[idx];
+          const d = new Date(Number(t.time) * 1000);
           const hh = String(d.getUTCHours()).padStart(2, '0');
           const mm = String(d.getUTCMinutes()).padStart(2, '0');
-
-          const parts = [`${hh}:${mm}`, `total:${totals[idx].toFixed(2)}`];
-          for (const c of components) {
-            const vals = valueByKey[c.key] || [];
-            parts.push(`${c.key}:${Number(vals[idx] || 0).toFixed(2)}`);
-          }
-          detailEl.textContent = parts.join(' ');
+          detailEl.textContent = `${hh}:${mm} equity:${Number(t.equity).toFixed(2)}`;
         };
         return;
       }
