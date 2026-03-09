@@ -1566,10 +1566,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         points: normalize(c.points || []),
       })).filter((c) => c.key);
 
-      const totalRaw = (Array.isArray(latestPayload.equity_curve) ? latestPayload.equity_curve : [])
-       .map((p) => ({ time: Number(p.time || 0), equity: Number(p.cum_pct || 0) }))
-       .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
-
+      const totalRaw = normalize(latestPayload.equity_total || latestPayload.equity_combined || []);
+      
       if (metaEl) {
         const src = components.map((c) => `${c.label}=${c.source}`).join(', ');
         metaEl.textContent = src ? `Stacked account equity: ${src}` : 'Stacked account equity';
