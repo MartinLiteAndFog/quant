@@ -5,15 +5,15 @@ import json
 import os
 import time
 import urllib.request
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-from quant.execution.event_builders import build_execution_event
-from quant.execution.event_log import append_event_jsonl
-from quant.execution.event_types import ExecutionEvent
 
 import pandas as pd
 
+from quant.execution.event_builders import build_execution_event
+from quant.execution.event_log import append_event_jsonl
+from quant.execution.event_types import ExecutionEvent
 from quant.execution.kraken_futures import KrakenFuturesClient
 from quant.utils.log import get_logger
 
@@ -71,6 +71,7 @@ def _append_equity(path: Path, ts: str, equity_usd: float) -> None:
         df = df.tail(max_rows)
     df.to_csv(path, index=False)
 
+
 def _events_root() -> Path:
     if Path("/data").exists():
         return Path("/data/events")
@@ -92,7 +93,7 @@ def _append_execution_event(
 ) -> None:
     event: ExecutionEvent = build_execution_event(
         strategy=strategy,
-        symbol="SOLUSDT",
+        symbol=symbol,
         ts=ts_iso,
         seq=int(seq),
         execution_kind=execution_kind,
@@ -100,7 +101,7 @@ def _append_execution_event(
         reason_code=reason_code,
         venue="kraken",
         source_event_id=None,
-        source_signal_event_id=(f"signal:{strategy}:SOLUSDT:{source_signal_ts}:{seq}" if source_signal_ts else None),
+        source_signal_event_id=(f"signal:{strategy}:{symbol}:{source_signal_ts}:{seq}" if source_signal_ts else None),
         position_before=int(position_before),
         position_after=int(position_after),
         blocked=False,
@@ -153,7 +154,7 @@ class FlipParams:
     ttp_trail_pct: float = 0.012
     min_sl_pct: float = 0.015
     max_sl_pct: float = 0.030
-    swing_lookback: int = 50  # backtest caps to 50 (flip_engine.py:183)
+    swing_lookback: int = 50  # backtest caps to 50
 
 
 @dataclass
@@ -163,7 +164,7 @@ class TP2Params:
     tp1_frac: float = 0.5
     min_sl_pct: float = 0.030
     max_sl_pct: float = 0.080
-    swing_lookback: int = 50  # backtest caps to 50 (renko_runner_tp2.py:259)
+    swing_lookback: int = 50  # backtest caps to 50
     flip_on_opposite: bool = True
 
 
@@ -219,14 +220,6 @@ def compute_swing_sl(
 # ---------------------------------------------------------------------------
 
 def _normalize_venue_position(pos_raw: Any) -> Tuple[int, float]:
-    """
-    Normalize venue position to (side, abs_size).
-
-    Supported:
-    - float/int: signed size
-    - dict with common position fields
-    - None / empty -> flat
-    """
     if pos_raw is None:
         return 0, 0.0
 
@@ -237,7 +230,7 @@ def _normalize_venue_position(pos_raw: Any) -> Tuple[int, float]:
         return (1 if qty > 0 else -1), abs(qty)
 
     if isinstance(pos_raw, dict):
-        for key in ("size", "qty", "position", "currentQty", "contracts"):
+        for key in ("size", "qty", "position", "currentQty", "contracts", "size_signed"):
             if key in pos_raw:
                 try:
                     qty = float(pos_raw.get(key) or 0.0)
@@ -269,18 +262,10 @@ def reconcile_state_with_venue(
     gate_on: int,
     mark: float,
 ) -> BotState:
-    """
-    Venue is source of truth.
-
-    Conservative behavior:
-    - Venue flat => force local flat.
-    - Venue non-flat but local disagrees => adopt venue side/size and reset mode conservatively.
-    """
     venue_side, venue_size = _normalize_venue_position(venue_pos_raw)
     local_side = int(state.pos_side)
     local_size = float(state.size_rem or 0.0)
 
-    # Exact flat sync
     if venue_side == 0:
         if local_side != 0 or local_size > 0:
             log.warning(
@@ -298,12 +283,12 @@ def reconcile_state_with_venue(
                 gate_on=gate_on,
                 last_signal_ts=state.last_signal_ts,
                 tp1_done=False,
+                event_seq=state.event_seq,
             )
         state.gate_on = gate_on
         state.engine = "flip" if gate_on == 1 else "tp2"
         return state
 
-    # Venue has a position; if local disagrees, venue wins.
     mismatch = (
         local_side != venue_side
         or abs(local_size - venue_size) > 1e-9
@@ -327,11 +312,134 @@ def reconcile_state_with_venue(
             gate_on=gate_on,
             last_signal_ts=state.last_signal_ts,
             tp1_done=False,
+            event_seq=state.event_seq,
         )
 
     state.gate_on = gate_on
     state.engine = "flip" if gate_on == 1 else "tp2"
     return state
+
+
+# ---------------------------------------------------------------------------
+# Protective stop sync
+# ---------------------------------------------------------------------------
+
+def _desired_protective_stop_px(
+    state: BotState,
+    renko: Dict[str, Any],
+    flip_p: FlipParams,
+    tp2_p: TP2Params,
+) -> Optional[float]:
+    if int(state.pos_side) == 0 or float(state.size_rem or 0.0) <= 0 or float(state.entry_px or 0.0) <= 0:
+        return None
+
+    swing_low = float(renko.get("swing_low", 0.0) or 0.0)
+    swing_high = float(renko.get("swing_high", 0.0) or 0.0)
+
+    if state.mode in ("FLIP_TTP", "FLIP_WAIT"):
+        return compute_swing_sl(
+            int(state.pos_side),
+            float(state.entry_px),
+            swing_low,
+            swing_high,
+            flip_p.min_sl_pct,
+            flip_p.max_sl_pct,
+        )
+
+    if state.mode == "TP2_OPEN":
+        return compute_swing_sl(
+            int(state.pos_side),
+            float(state.entry_px),
+            swing_low,
+            swing_high,
+            tp2_p.min_sl_pct,
+            tp2_p.max_sl_pct,
+        )
+
+    if state.mode == "TP2_BE":
+        return float(state.entry_px)
+
+    return None
+
+
+def _sync_protective_stop(
+    client: KrakenFuturesClient,
+    state: BotState,
+    renko: Dict[str, Any],
+    flip_p: FlipParams,
+    tp2_p: TP2Params,
+    dry_run: bool,
+) -> Dict[str, Any]:
+    desired_stop = _desired_protective_stop_px(state, renko, flip_p, tp2_p)
+
+    if int(state.pos_side) == 0 or float(state.size_rem or 0.0) <= 0 or desired_stop is None:
+        if dry_run:
+            log.info("DRY_RUN: cancel all reduce-only Kraken orders (flat/no active SL)")
+            return {"ok": True, "dry_run": True, "action": "cancel_reduce_only_orders"}
+        try:
+            res = client.cancel_all_reduce_only_orders()
+            return {"ok": bool(res.get("ok", True)), "action": "cancel_reduce_only_orders", "result": res}
+        except Exception as e:
+            log.warning("protective stop cancel failed: %s", e)
+            return {"ok": False, "action": "cancel_reduce_only_orders", "error": str(e)}
+
+    stop_side = "sell" if int(state.pos_side) > 0 else "buy"
+    stop_size = float(state.size_rem)
+
+    if dry_run:
+        log.info(
+            "DRY_RUN: sync protective stop mode=%s side=%s size=%.4f stop=%.4f",
+            state.mode, stop_side, stop_size, desired_stop,
+        )
+        return {
+            "ok": True,
+            "dry_run": True,
+            "action": "sync_protective_stop",
+            "mode": state.mode,
+            "stop_side": stop_side,
+            "stop_size": stop_size,
+            "stop_price": desired_stop,
+        }
+
+    try:
+        cancel_res = client.cancel_all_reduce_only_orders()
+    except Exception as e:
+        log.warning("protective stop pre-cancel failed: %s", e)
+        cancel_res = {"ok": False, "error": str(e)}
+
+    try:
+        place_res = client.place_stop_market(
+            side=stop_side,
+            size=stop_size,
+            stop_price=float(desired_stop),
+            reduce_only=True,
+            cli_ord_id=f"quant-sl-{pd.Timestamp.now('UTC').strftime('%Y%m%d%H%M%S%f')}",
+        )
+        return {
+            "ok": True,
+            "action": "sync_protective_stop",
+            "mode": state.mode,
+            "stop_side": stop_side,
+            "stop_size": stop_size,
+            "stop_price": desired_stop,
+            "cancel_result": cancel_res,
+            "place_result": place_res,
+        }
+    except Exception as e:
+        log.warning(
+            "protective stop place failed mode=%s side=%s size=%.4f stop=%.4f err=%s",
+            state.mode, stop_side, stop_size, desired_stop, e,
+        )
+        return {
+            "ok": False,
+            "action": "sync_protective_stop",
+            "mode": state.mode,
+            "stop_side": stop_side,
+            "stop_size": stop_size,
+            "stop_price": desired_stop,
+            "cancel_result": cancel_res,
+            "error": str(e),
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -350,16 +458,11 @@ def run_once_logic(
     flip_p: FlipParams,
     tp2_p: TP2Params,
 ) -> Tuple[BotState, List[Dict[str, Any]]]:
-    """
-    Pure state machine tick. Returns (new_state, actions).
-    Actions: [{"action": "close_all"}, {"action": "enter_long", "size": ...}, ...]
-    """
     s = BotState(**asdict(state))
     actions: List[Dict[str, Any]] = []
 
     new_signal = (signal != 0 and signal_ts and signal_ts != s.last_signal_ts)
 
-    # --- 1. Gate transition: regime_exit ---
     if gate_on != s.gate_on and s.mode != "FLAT":
         actions.append({"action": "close_all", "reason": "regime_exit"})
         s.pos_side = 0
@@ -373,7 +476,6 @@ def run_once_logic(
     s.gate_on = gate_on
     s.engine = "flip" if gate_on == 1 else "tp2"
 
-    # --- 2. FLAT: new signal enters ---
     if s.mode == "FLAT" and new_signal:
         s.last_signal_ts = signal_ts
         side = 1 if signal > 0 else -1
@@ -394,7 +496,6 @@ def run_once_logic(
     if s.mode == "FLAT":
         return s, actions
 
-    # --- 3. FLIP_TTP: trailing take-profit, opposite signal flip ---
     if s.mode == "FLIP_TTP":
         if s.pos_side > 0:
             s.best_fav = max(s.best_fav, mark)
@@ -413,8 +514,6 @@ def run_once_logic(
                 s.size_full = target_size
                 s.size_rem = target_size
                 return s, actions
-            elif imp == s.pos_side:
-                pass
 
         if s.pos_side > 0:
             ttp_stop = s.best_fav * (1.0 - flip_p.ttp_trail_pct)
@@ -438,7 +537,6 @@ def run_once_logic(
 
         return s, actions
 
-    # --- 4. FLIP_WAIT: swing SL, signal re-arms TTP ---
     if s.mode == "FLIP_WAIT":
         sl_px = compute_swing_sl(s.pos_side, s.entry_px, swing_low, swing_high, flip_p.min_sl_pct, flip_p.max_sl_pct)
 
@@ -459,7 +557,6 @@ def run_once_logic(
 
         return s, actions
 
-    # --- 5. TP2_OPEN: TP1 partial, TP2 full, swing SL, opposite signal ---
     if s.mode == "TP2_OPEN":
         tp1_px = s.entry_px * (1.0 + tp2_p.tp1_pct) if s.pos_side > 0 else s.entry_px * (1.0 - tp2_p.tp1_pct)
         tp2_px = s.entry_px * (1.0 + tp2_p.tp2_pct) if s.pos_side > 0 else s.entry_px * (1.0 - tp2_p.tp2_pct)
@@ -484,7 +581,7 @@ def run_once_logic(
             partial = _clamp(tp2_p.tp1_frac, 0.0, 1.0) * s.size_full
             close_side = "sell" if s.pos_side > 0 else "buy"
             actions.append({"action": "close_partial", "close_side": close_side, "size": partial, "reason": "tp1_exit"})
-            s.size_rem = s.size_full - partial
+            s.size_rem = max(0.0, s.size_full - partial)
             s.tp1_done = True
             s.mode = "TP2_BE"
             return s, actions
@@ -524,7 +621,6 @@ def run_once_logic(
 
         return s, actions
 
-    # --- 6. TP2_BE: breakeven + TP2 remainder ---
     if s.mode == "TP2_BE":
         be_px = s.entry_px
         tp2_px = s.entry_px * (1.0 + tp2_p.tp2_pct) if s.pos_side > 0 else s.entry_px * (1.0 - tp2_p.tp2_pct)
@@ -651,7 +747,6 @@ def fetch_renko(url: str, lookback: int) -> Dict[str, Any]:
     try:
         redis_url = os.getenv("REDIS_URL", "").strip()
         if redis_url:
-            import json
             import redis as redis_lib
 
             r = redis_lib.from_url(redis_url, decode_responses=True)
@@ -737,7 +832,6 @@ def run_once(
     eq = client.get_account_equity()
     equity_usd = float(eq.get("equity_usd", 0.0) or 0.0)
 
-    # CRITICAL: venue position must override stale local state
     venue_pos_raw = client.get_position()
     state = reconcile_state_with_venue(state=state, venue_pos_raw=venue_pos_raw, gate_on=gate["gate_on"], mark=mark)
 
@@ -760,11 +854,12 @@ def run_once(
     )
 
     action_results = execute_actions(client, actions, dry_run=dry_run, equity_pct=equity_pct, leverage=leverage)
-    
+
     for res in action_results:
         if not res.get("executed"):
             continue
-        state.event_seq += 1
+
+        new_state.event_seq += 1
 
         act = str(res.get("action", "") or "")
         reason_code = str(res.get("reason", "") or "manual_action")
@@ -789,7 +884,7 @@ def run_once(
             strategy=str(new_state.engine),
             symbol="SOLUSDT",
             ts_iso=_now_iso(),
-            seq=int(state.event_seq),
+            seq=int(new_state.event_seq),
             execution_kind="fill",
             order_action=order_action,
             reason_code=reason_code,
@@ -797,10 +892,20 @@ def run_once(
             position_after=int(position_after),
             source_signal_ts=str(sig.get("ts", "") or ""),
         )
-    
+
+    stop_sync = _sync_protective_stop(
+        client=client,
+        state=new_state,
+        renko=renko,
+        flip_p=flip_p,
+        tp2_p=tp2_p,
+        dry_run=dry_run,
+    )
+
     save_state(new_state, state_path)
 
-    venue_side, venue_size = _normalize_venue_position(venue_pos_raw)
+    post_venue_pos_raw = client.get_position()
+    venue_side, venue_size = _normalize_venue_position(post_venue_pos_raw)
 
     ts = _now_iso()
     row = {
@@ -824,10 +929,13 @@ def run_once(
         "venue_pos_side": venue_side,
         "venue_pos_size": round(venue_size, 6),
         "actions": [a.get("action", "") + ":" + a.get("reason", "") for a in actions],
+        "action_results": action_results,
+        "stop_sync": stop_sync,
         "dry_run": dry_run,
     }
     _publish_metrics(metrics_path, row)
     _append_equity(equity_path, ts=ts, equity_usd=float(row["equity_usd"]))
+
     try:
         redis_url = os.getenv("REDIS_URL", "").strip()
         if redis_url:
@@ -840,7 +948,7 @@ def run_once(
             )
     except Exception as e:
         log.warning("kraken redis publish failed: %s", e)
-    
+
     side_str = {1: "long", -1: "short", 0: "flat"}.get(new_state.pos_side, "?")
     venue_side_str = {1: "long", -1: "short", 0: "flat"}.get(venue_side, "?")
     action_str = ", ".join(a.get("action", "") + ":" + a.get("reason", "") for a in actions) or "hold"
@@ -887,11 +995,19 @@ def main() -> None:
     while True:
         try:
             state = run_once(
-                client=client, state=state,
-                gate_url=gate_url, signal_url=signal_url, renko_url=renko_url,
-                equity_pct=equity_pct, leverage=leverage, dry_run=dry_run,
-                flip_p=flip_p, tp2_p=tp2_p,
-                metrics_path=metrics_path, equity_path=equity_path, state_path=state_path,
+                client=client,
+                state=state,
+                gate_url=gate_url,
+                signal_url=signal_url,
+                renko_url=renko_url,
+                equity_pct=equity_pct,
+                leverage=leverage,
+                dry_run=dry_run,
+                flip_p=flip_p,
+                tp2_p=tp2_p,
+                metrics_path=metrics_path,
+                equity_path=equity_path,
+                state_path=state_path,
             )
         except Exception as e:
             log.warning("bot loop error: %s", e)
