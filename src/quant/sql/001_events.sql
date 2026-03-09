@@ -94,11 +94,11 @@ create table if not exists equity_snapshots (
   equity numeric not null,
   currency text not null default 'USD',
   source text,
-  payload_json jsonb not null default '{}'::jsonb,
-  );
-create unique index if not exists uq_equity_snapshots_venue_account_symbol_ts
-on equity_snapshots (venue, coalesce(account, ''), coalesce(symbol, ''), ts);
-
+  payload_json jsonb not null default '{}'::jsonb
+ );
+ create unique index if not exists uq_equity_snapshots_venue_account_symbol_ts
+ on equity_snapshots (venue, coalesce(account, ''), coalesce(symbol, ''), ts);
+ 
 create index if not exists idx_equity_snapshots_ts on equity_snapshots (ts desc);
 create index if not exists idx_equity_snapshots_venue_ts on equity_snapshots (venue, ts desc);
 
