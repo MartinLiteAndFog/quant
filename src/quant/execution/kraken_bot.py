@@ -16,6 +16,8 @@ from quant.execution.event_log import append_event_jsonl
 from quant.execution.event_types import ExecutionEvent
 from quant.execution.kraken_futures import KrakenFuturesClient
 from quant.utils.log import get_logger
+from quant.execution.event_store import insert_equity_snapshot
+
 
 log = get_logger("quant.kraken_bot")
 
@@ -935,6 +937,27 @@ def run_once(
     }
     _publish_metrics(metrics_path, row)
     _append_equity(equity_path, ts=ts, equity_usd=float(row["equity_usd"]))
+    try:
+        insert_equity_snapshot(
+            {
+                "ts": pd.Timestamp(ts),
+                "venue": "kraken",
+                "account": "main",
+                "symbol": None,
+                "equity": float(row["equity_usd"]),
+                "currency": "USD",
+                "source": "kraken_bot",
+                "payload_json": {
+                    "ts": ts,
+                    "equity_usd": float(row["equity_usd"]),
+                    "mark_price": float(row.get("mark_price", 0.0) or 0.0),
+                    "pos_side": int(row.get("pos_side", 0) or 0),
+                    "venue_pos_size": float(row.get("venue_pos_size", 0.0) or 0.0),
+                },
+            }
+        )
+    except Exception as e:
+        log.warning("kraken postgres equity snapshot failed: %s", e)
 
     try:
         redis_url = os.getenv("REDIS_URL", "").strip()
