@@ -672,6 +672,44 @@ def load_kraken_metrics() -> Dict[str, Any]:
 
 
 def load_kraken_equity_history(max_points: int = 500) -> Dict[str, Any]:
+    p = _env_path("KRAKEN_EQUITY_CSV", _live_default("kraken/equity.csv"))
+
+    pts: List[Dict[str, Any]] = []
+    source = "none"
+
+    if p.exists():
+        try:
+            df = pd.read_csv(p)
+            if not df.empty:
+                df = df.copy()
+                if "ts" not in df.columns:
+                    for c in ("time", "timestamp", "datetime"):
+                        if c in df.columns:
+                            df["ts"] = df[c]
+                            break
+                if "equity_usd" not in df.columns:
+                    for c in ("equity", "portfolio_value", "portfolioValue", "value"):
+                        if c in df.columns:
+                            df["equity_usd"] = df[c]
+                            break
+                if {"ts", "equity_usd"}.issubset(set(df.columns)):
+                    df["ts"] = df["ts"].map(_epoch_seconds_from_any)
+                    df["equity_usd"] = pd.to_numeric(df["equity_usd"], errors="coerce")
+                    df = (
+                        df.dropna(subset=["ts", "equity_usd"])
+                        .sort_values("ts")
+                        .drop_duplicates(subset=["ts"], keep="last")
+                    )
+                    if not df.empty:
+                        pts = [
+                            {"time": int(r["ts"]), "equity": float(r["equity_usd"])}
+                            for _, r in df.iterrows()
+                        ]
+                        source = "kraken_equity_snapshots_usd"
+        except Exception:
+            pts = []
+            source = "none"
+
     redis_url = os.getenv("REDIS_URL", "").strip()
     if redis_url:
         try:
@@ -683,45 +721,25 @@ def load_kraken_equity_history(max_points: int = 500) -> Dict[str, Any]:
                 ts_i = _epoch_seconds_from_any(obj.get("ts"))
                 eq = pd.to_numeric(obj.get("equity_usd"), errors="coerce")
                 if ts_i is not None and pd.notna(eq):
-                    return {
-                        "points": [{"time": int(ts_i), "equity": float(eq)}],
-                        "source": "kraken_equity_redis_latest",
-                    }
+                    latest_pt = {"time": int(ts_i), "equity": float(eq)}
+                    if not pts:
+                        pts = [latest_pt]
+                        source = "kraken_equity_redis_latest"
+                    else:
+                        last_ts = int(pts[-1]["time"])
+                        if int(ts_i) > last_ts:
+                            pts.append(latest_pt)
+                            source = "kraken_equity_snapshots_usd+redis_latest"
         except Exception:
             pass
 
-    p = _env_path("KRAKEN_EQUITY_CSV", _live_default("kraken/equity.csv"))
-    if not p.exists():
-        return {"points": [], "source": "none"}
-    try:
-        df = pd.read_csv(p)
-    except Exception:
-        return {"points": [], "source": "none"}
-    if df.empty:
+    if not pts:
         return {"points": [], "source": "none"}
 
-    df = df.copy()
-    if "ts" not in df.columns:
-        for c in ("time", "timestamp", "datetime"):
-            if c in df.columns:
-                df["ts"] = df[c]
-                break
-    if "equity_usd" not in df.columns:
-        for c in ("equity", "portfolio_value", "portfolioValue", "value"):
-            if c in df.columns:
-                df["equity_usd"] = df[c]
-                break
-    if not {"ts", "equity_usd"}.issubset(set(df.columns)):
-        return {"points": [], "source": "none"}
-
-    df["ts"] = df["ts"].map(_epoch_seconds_from_any)
-    df["equity_usd"] = pd.to_numeric(df["equity_usd"], errors="coerce")
-    df = df.dropna(subset=["ts", "equity_usd"]).sort_values("ts").drop_duplicates(subset=["ts"], keep="last")
-    if df.empty:
-        return {"points": [], "source": "none"}
-    df = df.tail(int(max(1, max_points))).reset_index(drop=True)
-    pts = [{"time": int(r["ts"]), "equity": float(r["equity_usd"])} for _, r in df.iterrows()]
-    return {"points": pts, "source": "kraken_equity_snapshots_usd"}
+    pts = sorted(pts, key=lambda x: int(x["time"]))
+    if len(pts) > int(max(1, max_points)):
+        pts = pts[-int(max(1, max_points)) :]
+    return {"points": pts, "source": source}
 
 def build_combined_equity(
     kucoin_points: List[Dict[str, Any]],
