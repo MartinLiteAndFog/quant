@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from quant.execution.event_store import get_conn, insert_equity_snapshot
 
 import pandas as pd
 
@@ -593,12 +594,59 @@ def load_fills_cache_rows(max_points: int = 500, symbol: Optional[str] = None) -
         )
     return out
 
+def load_equity_history_from_postgres(
+    venue: str,
+    account: Optional[str] = None,
+    max_points: int = 500,
+) -> Dict[str, Any]:
+    try:
+        sql = """
+            select ts, equity, currency, source
+            from equity_snapshots
+            where venue = %(venue)s
+              and (%(account)s is null or account = %(account)s)
+            order by ts desc
+            limit %(limit)s
+        """
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                sql,
+                {
+                    "venue": venue,
+                    "account": account,
+                    "limit": int(max(1, max_points)),
+                },
+            )
+            rows = cur.fetchall()
+        if not rows:
+            return {"points": [], "source": "none"}
+        rows = list(reversed(rows))
+        pts = [
+            {
+                "time": int(pd.Timestamp(r[0]).timestamp()),
+                "equity": float(r[1]),
+            }
+            for r in rows
+        ]
+        src = rows[-1][3] if rows and len(rows[-1]) >= 4 else "postgres"
+        return {"points": pts, "source": f"postgres:{src}"}
+    except Exception:
+        return {"points": [], "source": "none"}
 
+\
 def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
     """
     Load/refresh realized account-equity history in USDT.
     Uses periodic snapshots from KuCoin account balance.
     """
+    pg = load_equity_history_from_postgres(
+        venue="kucoin",
+        account="futures",
+        max_points=max_points,
+    )
+    if pg.get("points"):
+        return pg
+
     p = _env_path("DASHBOARD_EQUITY_PARQUET", _live_default("equity_history.parquet"))
     refresh_sec = int(os.getenv("DASHBOARD_EQUITY_REFRESH_SEC", "60"))
     currency = os.getenv("DASHBOARD_EQUITY_CCY", "USDT")
@@ -625,7 +673,6 @@ def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
     if not df.empty:
         last_t = int(df.iloc[-1]["time"])
         stale = (now_sec - last_t) >= max(5, refresh_sec)
-
     if can_refresh and stale:
         try:
             broker = KucoinFuturesBroker(api_key=key, api_secret=sec, passphrase=pp)
@@ -666,6 +713,7 @@ def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
     df = df.sort_values("time").tail(int(max(1, max_points))).reset_index(drop=True)
     points = [{"time": int(r["time"]), "equity": float(r["equity"])} for _, r in df.iterrows()]
     return {"points": points, "source": "kucoin_equity_snapshots"}
+
 
 
 def load_kraken_metrics() -> Dict[str, Any]:
