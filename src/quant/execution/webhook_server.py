@@ -1566,10 +1566,28 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         points: normalize(c.points || []),
       })).filter((c) => c.key);
 
-      const totalRaw = (Array.isArray(latestPayload.equity_curve) ? latestPayload.equity_curve : [])
-       .map((p) => ({ time: Number(p.time || 0), equity: Number(p.cum_pct || 0) }))
-       .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
+      const allTimes = Array.from(new Set(
+  components.flatMap((c) => (Array.isArray(c.points) ? c.points : []).map((p) => Number(p.time || 0)))
+))
+  .filter((t) => Number.isFinite(t) && t > 0)
+  .sort((a, b) => a - b);
 
+const totalRaw = allTimes.map((t) => {
+  let total = 0;
+  for (const c of components) {
+    const pts = Array.isArray(c.points) ? c.points : [];
+    let lastEq = 0;
+    for (const p of pts) {
+      const pt = Number(p.time || 0);
+      const eq = Number(p.equity || 0);
+      if (!Number.isFinite(pt) || !Number.isFinite(eq)) continue;
+      if (pt <= t) lastEq = eq;
+      else break;
+    }
+    total += lastEq;
+  }
+  return { time: t, equity: total };
+  });
       if (metaEl) {
         const src = components.map((c) => `${c.label}=${c.source}`).join(', ');
         metaEl.textContent = src ? `Stacked account equity: ${src}` : 'Stacked account equity';
