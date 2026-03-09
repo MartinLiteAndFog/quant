@@ -741,6 +741,14 @@ def load_kraken_metrics() -> Dict[str, Any]:
 
 
 def load_kraken_equity_history(max_points: int = 500) -> Dict[str, Any]:
+    pg = load_equity_history_from_postgres(
+        venue="kraken",
+        account="main",
+        max_points=max_points,
+    )
+    if pg.get("points"):
+        return pg
+
     p = _env_path("KRAKEN_EQUITY_CSV", _live_default("kraken/equity.csv"))
 
     pts: List[Dict[str, Any]] = []
