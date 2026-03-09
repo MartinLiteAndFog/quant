@@ -9,6 +9,7 @@ import pandas as pd
 
 from quant.execution.kucoin_futures import KucoinFuturesBroker, list_fills
 from quant.regime import RegimeStore
+from quant.execution.event_store import insert_equity_snapshot
 
 _LAST_REFRESH_TS: Optional[pd.Timestamp] = None
 _LAST_REFRESH_ERROR: Optional[str] = None
@@ -636,6 +637,26 @@ def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
                 df = df.sort_values("time").drop_duplicates(subset=["time"], keep="last")
                 p.parent.mkdir(parents=True, exist_ok=True)
                 df.to_parquet(p, index=False)
+                try:
+                    insert_equity_snapshot(
+                        {
+                            "ts": pd.to_datetime(now_sec, unit="s", utc=True),
+                            "venue": "kucoin",
+                            "account": "futures",
+                            "symbol": None,
+                            "equity": eq,
+                            "currency": currency,
+                            "source": "dashboard_state.load_real_equity_history",
+                            "payload_json": {
+                                "time": now_sec,
+                                "equity": eq,
+                                "currency": currency,
+                            },
+                        }
+                    )
+                except Exception:
+                    pass
+
         except Exception:
             pass
 
@@ -1026,40 +1047,40 @@ def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
         pos_open_ts = t
 
 
-    try:
-        trades_path = _env_path("DASHBOARD_TRADES_PARQUET", _live_default("trades.parquet"))
-        trades_path.parent.mkdir(parents=True, exist_ok=True)
-        if events:
-            write_rows = []
-            for e in events:
-                side_i = 1 if str(e.get("side")) == "long" else -1
-                write_rows.append(
-                    {
-                        "entry_ts": pd.to_datetime(int(e["entry_time"]), unit="s", utc=True),
-                        "exit_ts": pd.to_datetime(int(e["time"]), unit="s", utc=True),
-                        "side": side_i,
-                        "qty": e.get("qty"),
-                        "entry_price": e.get("entry_price"),
-                        "exit_price": e.get("exit_price"),
-                        "pnl_pct": e.get("pnl_pct"),
-                        "exit_event": "fills_reconstructed",
-                    }
-                )
-            new_df = pd.DataFrame(write_rows)
-            if trades_path.exists():
-                try:
-                    old_df = pd.read_parquet(trades_path)
-                    all_df = pd.concat([old_df, new_df], ignore_index=True)
-                except Exception:
+        try:
+            trades_path = _env_path("DASHBOARD_TRADES_PARQUET", _live_default("trades.parquet"))
+            trades_path.parent.mkdir(parents=True, exist_ok=True)
+            if events:
+                write_rows = []
+                for e in events:
+                    side_i = 1 if str(e.get("side")) == "long" else -1
+                    write_rows.append(
+                        {
+                            "entry_ts": pd.to_datetime(int(e["entry_time"]), unit="s", utc=True),
+                            "exit_ts": pd.to_datetime(int(e["time"]), unit="s", utc=True),
+                            "side": side_i,
+                            "qty": e.get("qty"),
+                            "entry_price": e.get("entry_price"),
+                            "exit_price": e.get("exit_price"),
+                            "pnl_pct": e.get("pnl_pct"),
+                            "exit_event": "fills_reconstructed",
+                        }
+                    )
+                new_df = pd.DataFrame(write_rows)
+                if trades_path.exists():
+                    try:
+                        old_df = pd.read_parquet(trades_path)
+                        all_df = pd.concat([old_df, new_df], ignore_index=True)
+                    except Exception:
+                        all_df = new_df
+                else:
                     all_df = new_df
-            else:
-                all_df = new_df
-            dedupe_cols = [c for c in ("entry_ts", "exit_ts", "side", "qty", "entry_price", "exit_price") if c in all_df.columns]
-            all_df = all_df.drop_duplicates(subset=dedupe_cols, keep="last").sort_values("exit_ts")
-            all_df.to_parquet(trades_path, index=False)
-    except Exception:
-        pass
-    
+                dedupe_cols = [c for c in ("entry_ts", "exit_ts", "side", "qty", "entry_price", "exit_price") if c in all_df.columns]
+                all_df = all_df.drop_duplicates(subset=dedupe_cols, keep="last").sort_values("exit_ts")
+                all_df.to_parquet(trades_path, index=False)
+        except Exception:
+            pass
+
     events = sorted(events, key=lambda x: int(x["time"]))[-int(max(1, max_points)) :]
     return {"entries": events, "source": "fills_reconstructed_clustered"}
 
