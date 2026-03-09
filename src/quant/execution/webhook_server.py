@@ -1,5 +1,3 @@
-# src/quant/execution/webhook_server.py
-
 from __future__ import annotations
 
 import argparse
@@ -83,12 +81,12 @@ async def _lifespan(a: FastAPI):
     t = threading.Thread(target=_state_space_refresh_loop, daemon=True, name="ss-refresh")
     t.start()
     log.info("state space refresh thread started (interval=%ss)", os.getenv("DASHBOARD_SS_REFRESH_SEC", "300"))
+    _start_renko_cache_updater_if_enabled()
     yield
 
 
 app = FastAPI(title="quant-webhook", version="0.1.0", lifespan=_lifespan)
 
-# Default symbol for dashboard ticker/position
 DEFAULT_SYMBOL = os.getenv("DASHBOARD_SYMBOL", "SOL-USDT")
 
 
@@ -107,10 +105,9 @@ def _now_utc_iso() -> str:
 def _append_jsonl(path: Path, obj: Dict[str, Any]) -> None:
     line = json.dumps(obj, ensure_ascii=False, separators=(",", ":"), default=str)
     with open(path, "a", encoding="utf-8") as f:
-        f.write(line + "
-")
-        f.flush()
-        os.fsync(f.fileno())
+        f.write(line + "\n")
+
+
 def _symbol_from_payload(payload: Dict[str, Any]) -> str:
     for k in ("symbol", "ticker", "pair"):
         v = payload.get(k)
@@ -145,7 +142,6 @@ def _safe_ts(v: Any) -> Optional[pd.Timestamp]:
 
 
 def _latest_signal_from_jsonl(root: Path, symbol: str) -> Optional[Dict[str, Any]]:
-    """Return newest non-zero signal from JSONL files (mirrors live_executor._latest_signal)."""
     wanted = _canon_symbol(symbol)
     candidate_dirs: list[Path] = []
     if root.exists():
@@ -223,11 +219,6 @@ def _cache_put(cache: Dict[str, Dict[str, Any]], key: str, value: Dict[str, Any]
 
 
 def _start_renko_cache_updater_if_enabled() -> None:
-    """
-    Optional background updater for dashboard Renko cache.
-    Controlled via env:
-      ENABLE_DASHBOARD_RENKO_UPDATER=1
-    """
     if not _truthy(os.getenv("ENABLE_DASHBOARD_RENKO_UPDATER", "1")):
         return
 
@@ -239,7 +230,6 @@ def _start_renko_cache_updater_if_enabled() -> None:
     poll_sec = float(os.getenv("DASHBOARD_RENKO_POLL_SEC", "60"))
 
     def _loop() -> None:
-        # Lazy import to avoid startup dependency when updater is disabled.
         from quant.execution.renko_cache_updater import refresh_renko_cache
 
         while True:
@@ -284,10 +274,6 @@ def _start_renko_cache_updater_if_enabled() -> None:
 
 
 def _start_live_signal_worker_if_enabled() -> None:
-    """
-    Background thread that computes IMBA signals from live renko bars.
-    Controlled via env: ENABLE_LIVE_SIGNAL_WORKER=1
-    """
     if not _truthy(os.getenv("ENABLE_LIVE_SIGNAL_WORKER", "1")):
         return
 
@@ -303,8 +289,8 @@ def _start_live_signal_worker_if_enabled() -> None:
 
     def _loop() -> None:
         from quant.execution.live_signal_worker import run_once as sw_run_once, WorkerState, _read_state, _write_state
-        from quant.execution.kucoin_futures import KucoinFuturesBroker
-        from quant.regime import RegimeStore
+        from quant.brokers.kucoin_futures import KucoinFuturesBroker
+        from quant.regime.store import RegimeStore
 
         broker = KucoinFuturesBroker()
         regime_store = RegimeStore()
@@ -313,10 +299,16 @@ def _start_live_signal_worker_if_enabled() -> None:
         while True:
             try:
                 st = sw_run_once(
-                    broker, symbol=symbol, renko_box=renko_box, lookback=lookback,
-                    sl_abs=sl_abs, candles_limit=candles_limit,
-                    signals_dir=signals_dir, regime_store=regime_store,
-                    default_gate_on=default_gate_on, state=st,
+                    broker,
+                    symbol=symbol,
+                    renko_box=renko_box,
+                    lookback=lookback,
+                    sl_abs=sl_abs,
+                    candles_limit=candles_limit,
+                    signals_dir=signals_dir,
+                    regime_store=regime_store,
+                    default_gate_on=default_gate_on,
+                    state=st,
                 )
                 _write_state(state_file, st)
             except Exception as e:
@@ -327,15 +319,74 @@ def _start_live_signal_worker_if_enabled() -> None:
     t.start()
     log.info(
         "started live signal worker symbol=%s box=%s lookback=%s poll_sec=%s",
-        symbol, renko_box, lookback, poll_sec,
+        symbol,
+        renko_box,
+        lookback,
+        poll_sec,
+    )
+
+
+def _start_live_executor_if_enabled() -> None:
+    if not _truthy(os.getenv("ENABLE_LIVE_EXECUTOR", "0")):
+        return
+
+    symbol = os.getenv("LIVE_SYMBOL", "SOL-USDT")
+    signals_dir = Path(os.getenv("SIGNALS_DIR", "data/signals"))
+    state_file = Path(os.getenv("LIVE_EXECUTOR_STATE", "data/live/live_executor_state.json"))
+    poll_sec = float(os.getenv("LIVE_EXECUTOR_POLL_SEC", "5"))
+    live_enabled = _truthy(os.getenv("LIVE_TRADING_ENABLED", "0"))
+    dry_run = _truthy(os.getenv("LIVE_EXECUTOR_DRY_RUN", "1"))
+    max_eur = float(os.getenv("LIVE_EXECUTOR_MAX_EUR", "20"))
+    leverage = float(os.getenv("LIVE_EXECUTOR_LEVERAGE", "1"))
+
+    allowlist_raw = os.getenv("LIVE_EXECUTOR_SYMBOL_ALLOWLIST", "SOL-USDT")
+    allowlist = {s.strip().upper() for s in allowlist_raw.split(",") if s.strip()}
+    sym_upper = symbol.strip().upper()
+    if sym_upper not in allowlist:
+        log.warning("live executor: symbol %s not in allowlist %s – not starting", sym_upper, allowlist)
+        return
+
+    def _loop() -> None:
+        from quant.execution.live_executor import run_once as ex_run_once, ExecutorState, _read_state, _write_state
+        from quant.execution.kucoin_futures import KucoinFuturesBroker
+        from quant.execution.oms import MakerFirstOMS, OmsDefaults
+
+        broker = KucoinFuturesBroker()
+        oms = MakerFirstOMS(broker=broker, cfg=OmsDefaults())
+        st = _read_state(state_file)
+
+        while True:
+            try:
+                st = ex_run_once(
+                    broker=broker,
+                    oms=oms,
+                    symbol=symbol,
+                    signals_root=signals_dir,
+                    state=st,
+                    live_enabled=live_enabled,
+                    dry_run=dry_run,
+                    max_eur=max_eur,
+                    leverage=leverage,
+                )
+                _write_state(state_file, st)
+            except Exception as e:
+                log.warning("live executor error: %s", e)
+            time.sleep(max(1.0, poll_sec))
+
+    t = threading.Thread(target=_loop, name="live-executor", daemon=True)
+    t.start()
+    log.info(
+        "started live executor symbol=%s live_enabled=%s dry_run=%s max_eur=%s leverage=%s poll_sec=%s",
+        symbol,
+        live_enabled,
+        dry_run,
+        max_eur,
+        leverage,
+        poll_sec,
     )
 
 
 def _sync_gate_conf_artifacts_if_enabled() -> None:
-    """
-    Optional one-way sync of gate-confidence files from app workspace -> mounted volume.
-    This is useful when Railway volume does not yet contain required state-space artifacts.
-    """
     if not _truthy(os.getenv("GATE_CONF_SYNC_ON_START", "0")):
         return
 
@@ -397,12 +448,6 @@ def _check_token(token: Optional[str]) -> None:
 
 
 def _ensure_ts(payload: Dict[str, Any], now_iso: str) -> Dict[str, Any]:
-    """
-    Guarantee a 'ts' field exists for downstream backtests.
-    - If client sends ts/timestamp/time/t/datetime -> normalize into 'ts'
-    - Else fallback to server_ts (now)
-    Keep original fields too.
-    """
     candidate_keys = ("ts", "timestamp", "time", "t", "datetime")
     ts_val = None
     for k in candidate_keys:
@@ -415,7 +460,6 @@ def _ensure_ts(payload: Dict[str, Any], now_iso: str) -> Dict[str, Any]:
         out["ts"] = now_iso
         out["_ts_source"] = "server_ts_fallback"
     else:
-        # preserve exact value under 'ts' for signal_io
         out["ts"] = ts_val
         out["_ts_source"] = f"payload:{k}"
     return out
@@ -423,7 +467,6 @@ def _ensure_ts(payload: Dict[str, Any], now_iso: str) -> Dict[str, Any]:
 
 @app.get("/")
 def root() -> Dict[str, Any]:
-    """Root für Health-Checks (z. B. Railway); leitet auf Dashboard hin."""
     return {"ok": True, "app": "quant-webhook", "ts": _now_utc_iso(), "dashboard": "/dashboard", "health": "/health"}
 
 
@@ -433,14 +476,12 @@ def health() -> Dict[str, Any]:
 
 
 def _kucoin_broker():
-    """Lazy import so app starts even without credentials."""
     from quant.execution.kucoin_futures import KucoinFuturesBroker
     return KucoinFuturesBroker()
 
 
 @app.get("/api/status")
 def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
-    """API status: whether KuCoin credentials are set, and current ticker (bid/ask) from KuCoin."""
     cache_key = _normalize_symbol(symbol)
     cached = _cache_get(_STATUS_CACHE, cache_key)
     if cached is not None:
@@ -473,7 +514,6 @@ def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
 
 @app.get("/api/position")
 def api_position(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
-    """Current position from KuCoin Futures (signed: >0 long, <0 short)."""
     cache_key = _normalize_symbol(symbol)
     cached = _cache_get(_POSITION_CACHE, cache_key)
     if cached is not None:
@@ -507,11 +547,6 @@ async def api_manual_order(
     request: Request,
     x_webhook_token: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
-    """
-    Execute a manual order using the same KuCoin adapter as live execution.
-    Example payload:
-      {"symbol":"SOL-USDT","action":"cancel_short"}
-    """
     if _auth_required():
         _check_token(x_webhook_token)
 
@@ -584,9 +619,6 @@ def api_dashboard_chart(
     hours: int = 24 * 7,
     max_points: int = 3000,
 ) -> Dict[str, Any]:
-    """
-    Unified chart payload: renko bars, trades, regime overlays, and active levels.
-    """
     try:
         bars = load_renko_bars(max_points=int(max(100, max_points)))
         markers = load_trade_markers(max_points=int(max(1000, max_points * 50)))
@@ -597,7 +629,7 @@ def api_dashboard_chart(
             limit=int(max(200, min(int(os.getenv("DASHBOARD_FILL_MARKER_LIMIT", "1200")), max_points))),
         )
         levels = load_active_levels()
-        expected_entry = load_latest_expected_entry() or {}
+        expected_entry = {}
 
         def _coerce_epoch_seconds(v: Any) -> Optional[int]:
             if v is None:
@@ -611,12 +643,11 @@ def api_dashboard_chart(
                     return None
                 if not (x > 0):
                     return None
-                # Heuristic for ns/ms/s
                 if x > 10**15:
-                    return int(x / 1e9)   # ns -> s
+                    return int(x / 1e9)
                 if x > 10**12:
-                    return int(x / 1e3)   # ms -> s
-                return int(x)             # s
+                    return int(x / 1e3)
+                return int(x)
             s = str(v).strip()
             if not s:
                 return None
@@ -632,7 +663,6 @@ def api_dashboard_chart(
             except Exception:
                 return None
 
-        # Normalize common timestamp fields so the frontend can Number(...) them reliably.
         if isinstance(levels, dict) and levels:
             for k in ("entry_bar_ts", "ts"):
                 if k in levels:
@@ -666,7 +696,6 @@ def api_dashboard_chart(
             if side_raw is None:
                 side_raw = expected_entry.get("side")
             if (entry_t is None) and isinstance(levels, dict):
-                # Fallback: signal-only state may carry a 'ts' timestamp (ISO or epoch).
                 entry_t = levels.get("ts")
             if entry_t is None:
                 entry_t = expected_entry.get("entry_time")
@@ -699,25 +728,14 @@ def api_dashboard_chart(
         markers = sorted(markers_all, key=lambda x: int(x.get("time", 0)))
         if len(markers) > int(max(100, max_points)):
             markers = markers[-int(max(100, max_points)):]
+
         segments = load_trade_segments(max_points=int(max(100, max_points)))
         fibo = build_fibo_levels(max_points=int(max(100, max_points)))
         renko_health = load_renko_health()
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
         latest = regime.get("latest") or {}
         live_gc = None
-        live_gc_error = None
-        try:
-            live_gc = get_live_gate_confidence()
-        except Exception as e:
-            live_gc_error = str(e)
-            log_throttled(
-                log,
-                logging.WARNING,
-                "webhook_live_gate_conf_unavailable",
-                float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
-                "live gate confidence unavailable: %s",
-                e,
-            )
+        live_gc_error = "temporarily_disabled"
         selected_p_trend = (live_gc or {}).get("selected_p_trend")
         live_conf = float(max(0.0, min(1.0, selected_p_trend))) if isinstance(selected_p_trend, (float, int)) else None
         if live_conf is not None and isinstance(regime.get("latest"), dict):
@@ -736,6 +754,23 @@ def api_dashboard_chart(
             kraken_points_usd=equity_kraken.get("points", []),
         )
         diary = build_trading_diary(max_points=int(max(100, max_points)))
+
+        equity_components = [
+            {
+                "key": "kucoin",
+                "label": "KuCoin",
+                "kind": "account_equity",
+                "points": equity_real.get("points", []),
+                "source": equity_real.get("source"),
+            },
+            {
+                "key": "kraken",
+                "label": "Kraken",
+                "kind": "account_equity",
+                "points": equity_kraken.get("points", []),
+                "source": equity_kraken.get("source"),
+            },
+        ]
 
         open_position = None
         try:
@@ -777,14 +812,13 @@ def api_dashboard_chart(
                     forecast_ts = int((now_ts + pd.Timedelta(minutes=minutes)).timestamp())
                     regime_forecast.append({"time": forecast_ts, "score": score})
 
-        # #region agent log
         _newest_bar_ts = int(bars[-1]["time"]) if bars else None
         _marker_times = sorted([int(m.get("time", 0)) for m in markers])
         _debug = {
             "renko_bars_count": len(bars),
             "oldest_bar_ts": oldest_bar_ts,
             "newest_bar_ts": _newest_bar_ts,
-            "markers_from_trades_parquet": len(load_trade_markers(max_points=999999)),
+            "markers_from_trades_parquet": len(markers),
             "markers_from_live_fills": len(markers_live),
             "markers_total_after_merge": len(markers),
             "live_entry_marker": live_entry_marker,
@@ -799,8 +833,8 @@ def api_dashboard_chart(
             "diary_count": len(diary.get("entries", [])),
             "diary_source": diary.get("source"),
             "equity_count": len(equity.get("trades", [])),
+            "equity_component_count": len(equity_components),
         }
-        # #endregion
 
         return {
             "ok": True,
@@ -828,6 +862,13 @@ def api_dashboard_chart(
             "equity_kraken_source": equity_kraken.get("source"),
             "equity_combined": equity_combined.get("points", []),
             "equity_combined_source": equity_combined.get("source"),
+            "equity_total": equity_combined.get("points", []),
+            "equity_total_source": equity_combined.get("source"),
+            "equity_components": equity_components,
+            "equity_live": [],
+            "equity_live_source": "deprecated_use_equity_components",
+            "equity_realized": [],
+            "equity_realized_source": "deprecated_use_equity_components",
             "kraken_metrics": kraken_metrics,
             "diary_entries": diary.get("entries", []),
             "diary_source": diary.get("source"),
@@ -856,6 +897,13 @@ def api_dashboard_chart(
             "equity_kraken_source": "none",
             "equity_combined": [],
             "equity_combined_source": "none",
+            "equity_total": [],
+            "equity_total_source": "none",
+            "equity_components": [],
+            "equity_live": [],
+            "equity_live_source": "none",
+            "equity_realized": [],
+            "equity_realized_source": "none",
             "kraken_metrics": {},
             "diary_entries": [],
             "diary_source": "none",
@@ -897,6 +945,21 @@ def api_gate_solusd() -> Dict[str, Any]:
 @app.get("/api/signals/latest/solusd")
 def api_signals_latest_solusd() -> Dict[str, Any]:
     try:
+        redis_url = os.getenv("REDIS_URL", "").strip()
+        if redis_url:
+            import redis as redis_lib
+
+            r = redis_lib.from_url(redis_url, decode_responses=True)
+            raw = r.get("signal:SOLUSDT:latest")
+            if raw:
+                obj = json.loads(raw)
+                return {
+                    "ok": True,
+                    "ts": str(obj.get("ts", _now_utc_iso())),
+                    "signal": int(obj.get("signal", 0) or 0),
+                    "source": "redis",
+                }
+
         root = _signals_root()
         sig = _latest_signal_from_jsonl(root, "SOL-USDT")
         if sig is None:
@@ -914,18 +977,15 @@ def api_signals_latest_solusd() -> Dict[str, Any]:
 @app.get("/api/renko/latest/solusd")
 def api_renko_latest_solusd(lookback: int = 50) -> Dict[str, Any]:
     try:
-        from quant.execution.dashboard_state import _refresh_renko_cache_if_needed, _read_renko_df
-
         path = Path(os.getenv("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet"))
         if path.exists():
             df = pd.read_parquet(path)
         else:
             df = pd.DataFrame()
-        df = _refresh_renko_cache_if_needed(df)
         if df.empty or "close" not in df.columns:
             return {"ok": False, "error": "no_renko_data"}
         df = df.sort_values("ts") if "ts" in df.columns else df
-        lb = min(max(lookback, 1), 50)  # backtest caps swing lookback to 50
+        lb = min(max(lookback, 1), 50)
         swing_low = float(df["low"].rolling(lb, min_periods=1).min().iloc[-1])
         swing_high = float(df["high"].rolling(lb, min_periods=1).max().iloc[-1])
         return {
@@ -960,7 +1020,6 @@ def api_dashboard_fills(symbol: str = DEFAULT_SYMBOL, max_points: int = 500) -> 
 
 
 def _load_density_bg_images() -> Dict[str, Optional[str]]:
-    """Load pre-computed density PNGs as base64 strings."""
     import base64
     density_dir = Path(os.getenv("DASHBOARD_DENSITY_DIR", "data/live/density"))
     out: Dict[str, Optional[str]] = {}
@@ -976,7 +1035,6 @@ def _load_density_bg_images() -> Dict[str, Optional[str]]:
 
 @app.get("/api/dashboard/statespace")
 def api_dashboard_statespace(window_hours: float = 8.0) -> Dict[str, Any]:
-    """State space heatmap data: trajectory, current position, density layers."""
     try:
         traj = load_state_space_trajectory(window_hours=float(max(0.1, window_hours)))
         recent = compute_recent_density(hours=min(window_hours, 12.0))
@@ -990,10 +1048,14 @@ def api_dashboard_statespace(window_hours: float = 8.0) -> Dict[str, Any]:
             "window_hours": window_hours,
         }
     except Exception as e:
-        return {"ok": False, "trajectory": [], "current": None,
-                "recent_density": {"xy": [], "xz": [], "yz": []},
-                "density_bg": {"xy": None, "xz": None, "yz": None},
-                "error": str(e)}
+        return {
+            "ok": False,
+            "trajectory": [],
+            "current": None,
+            "recent_density": {"xy": [], "xz": [], "yz": []},
+            "density_bg": {"xy": None, "xz": None, "yz": None},
+            "error": str(e),
+        }
 
 
 DASHBOARD_HTML = """<!DOCTYPE html>
@@ -1066,7 +1128,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
   <div class="layout">
     <div class="card">
       <div class="chart-wrap">
-        <button id="chart-refresh-btn" class="chart-refresh-btn" type="button" title="Refresh chart/data now">Refresh</button>
         <div id="chart"></div>
       </div>
     </div>
@@ -1214,9 +1275,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
     const slSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, title: 'SL', lastValueVisible: true, priceLineVisible: false });
     const ttpSeries = chart.addLineSeries({
-      color: '#2ecc71',
+      color: '#e0af68',
       lineWidth: 2,
-      lineStyle: 0,
+      lineStyle: 1,
       lineType: 1,
       title: 'TTP',
       lastValueVisible: true,
@@ -1233,9 +1294,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     });
     const tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
     const tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
-    const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 2, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const fibMidSeries = chart.addLineSeries({ color: '#e0af68', lineWidth: 2, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, lineStyle: 1, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibLongSeries = chart.addLineSeries({ color: '#2ecc71', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibMidSeries = chart.addLineSeries({ color: '#ffffff', lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
+    const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     const priceLineSeries = chart.addLineSeries({ color: '#9aa5b1', lineWidth: 1, title: 'Last', lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     const tradeSegmentSeries = [];
 
@@ -1262,7 +1323,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .replace(/'/g, '&#39;');
     }
 
-    // ── Regime gradient helpers ──
     function scoreToColor(score, alpha) {
       alpha = alpha != null ? alpha : 1.0;
       const t = (Math.max(-1, Math.min(1, score)) + 1.0) / 2.0;
@@ -1333,7 +1393,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
-    // ── Heatmap helpers ──
     function loadBgImage(tag, dataUrl) {
       if (!dataUrl) return;
       const img = new Image();
@@ -1434,7 +1493,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       drawHeatmap('heatmap-yz', 'yz', 'y', 'z');
     }
 
-    // ── Axis status bars ──
     function drawAxisBars() {
       const canvas = document.getElementById('axis-bars');
       if (!canvas || !ssPayload) return;
@@ -1481,7 +1539,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       });
     }
 
-    // ── Equity curve ──
     function drawEquityCurve() {
       const canvas = document.getElementById('equity-canvas');
       if (!canvas || !latestPayload) return;
@@ -1496,59 +1553,135 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.fillStyle = '#181c24';
       ctx.fillRect(0, 0, w, h);
 
-      const kucoinEq = Array.isArray(latestPayload.equity_real) ? latestPayload.equity_real : [];
-      const krakenEq = Array.isArray(latestPayload.equity_kraken) ? latestPayload.equity_kraken : [];
-      const combinedEq = Array.isArray(latestPayload.equity_combined) ? latestPayload.equity_combined : [];
-      const source = latestPayload.equity_combined_source || latestPayload.equity_real_source || latestPayload.diary_source || latestPayload.equity_source || 'none';
-      if (metaEl) metaEl.textContent = 'Equity source: ' + source + ' (green=Combined, blue=KuCoin, orange=Kraken)';
-      if (combinedEq.length >= 2 || kucoinEq.length >= 2 || krakenEq.length >= 2) {
-        const normalize = (arr) => arr.map((p) => ({ time: Number(p.time || 0), equity: Number(p.equity || 0) }))
-          .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
-        const pCombined = normalize(combinedEq);
-        const pKucoin = normalize(kucoinEq);
-        const pKraken = normalize(krakenEq);
-        const allVals = [...pCombined, ...pKucoin, ...pKraken].map(p => p.equity);
-        if (allVals.length >= 2) {
-          const minV = Math.min(...allVals);
-          const maxV = Math.max(...allVals);
-          const range = Math.max(1e-6, (maxV - minV) * 1.15);
-          const padL = 8, padR = 8, padT = 14, padB = 14;
-          const pw = w - padL - padR, ph = h - padT - padB;
+      const normalize = (arr) => (Array.isArray(arr) ? arr : [])
+        .map((p) => ({ time: Number(p.time || 0), equity: Number(p.equity || 0) }))
+        .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
 
-          const drawLine = (pts, color) => {
-            if (!Array.isArray(pts) || pts.length < 2) return;
-            ctx.lineWidth = 2;
-            ctx.strokeStyle = color;
-            ctx.beginPath();
-            for (let i = 0; i < pts.length; i++) {
-              const x = padL + (i / Math.max(1, pts.length - 1)) * pw;
-              const y = padT + (1 - (pts[i].equity - minV) / range) * ph;
-              if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-            }
-            ctx.stroke();
+      const componentsRaw = Array.isArray(latestPayload.equity_components) ? latestPayload.equity_components : [];
+      const components = componentsRaw.map((c) => ({
+        key: String(c.key || ''),
+        label: String(c.label || c.key || ''),
+        kind: String(c.kind || ''),
+        source: String(c.source || 'none'),
+        points: normalize(c.points || []),
+      })).filter((c) => c.key);
+
+      const totalRaw = (Array.isArray(latestPayload.equity_curve) ? latestPayload.equity_curve : [])
+       .map((p) => ({ time: Number(p.time || 0), equity: Number(p.cum_pct || 0) }))
+       .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
+
+      if (metaEl) {
+        const src = components.map((c) => `${c.label}=${c.source}`).join(', ');
+        metaEl.textContent = src ? `Stacked account equity: ${src}` : 'Stacked account equity';
+      }
+
+      if (components.some((c) => c.points.length >= 1)) {
+        const vals = totalRaw.map((p) => p.equity);
+        const minV = Math.min(...vals);
+        const maxV = Math.max(...vals);
+        const range = Math.max(1e-6, (maxV - minV) * 1.12);
+        const padL = 8, padR = 8, padT = 14, padB = 14;
+        const pw = w - padL - padR, ph = h - padT - padB;
+
+        const tx = (i) => padL + (i / Math.max(1, totalRaw.length - 1)) * pw;
+        const ty = (v) => padT + (1 - (v - minV) / range) * ph;
+
+        ctx.beginPath();
+        for (let i = 0; i < totalRaw.length; i++) {
+          const x = tx(i);
+          const y = ty(totalRaw[i].equity);
+          if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+        }
+        ctx.strokeStyle = '#c0e38a';
+        ctx.lineWidth = 2.2;
+        ctx.stroke();
+
+        const latestTotal = totalRaw[totalRaw.length - 1].equity;
+
+        ctx.font = 'bold 11px system-ui';
+        ctx.textAlign = 'right';
+        ctx.fillStyle = latestTotal >= 0 ? '#9ece6a' : '#f7768e';
+        ctx.fillText(`${latestTotal >= 0 ? '+' : ''}${latestTotal.toFixed(2)}%`, w - padR, padT - 2);
+        const bandTop = Math.floor(h * 0.72);
+        const bandBottom = h - 10;
+        const bandH = Math.max(24, bandBottom - bandTop);
+
+        if (components.length > 0) {
+          const compTimes = totalRaw.map((p) => p.time);
+          const compValsByKey = {};
+
+          for (const c of components) {
+            const pts = Array.isArray(c.points) ? c.points : [];
+            const m = new Map(pts.map((p) => [Number(p.time || 0), Number(p.equity || 0)]));
+            let last = pts.length ? Number(pts[0].equity || 0) : 0.0;
+            compValsByKey[c.key] = compTimes.map((t) => {
+              if (m.has(t)) last = m.get(t);
+              return last;
+            });
+          }
+
+          const totals = compTimes.map((_, i) =>
+            components.reduce((acc, c) => acc + Number((compValsByKey[c.key] || [])[i] || 0), 0)
+          );
+
+          let bottoms = new Array(compTimes.length).fill(0);
+
+          const compPalette = {
+            kucoin: 'rgba(122,162,247,0.32)',
+            kraken: 'rgba(255,158,100,0.38)',
+            default: 'rgba(158,206,106,0.28)',
           };
 
-          drawLine(pKucoin, '#7aa2f7');
-          drawLine(pKraken, '#ff9e64');
-          drawLine(pCombined, '#9ece6a');
+          for (const c of components) {
+            const rawVals = compValsByKey[c.key] || new Array(compTimes.length).fill(0);
+            const shares = rawVals.map((v, i) => {
+              const tot = Number(totals[i] || 0);
+              return tot > 0 ? v / tot : 0;
+            });
+            const tops = shares.map((v, i) => bottoms[i] + v * totalRaw[i].equity);
 
-          const anchor = pCombined.length ? pCombined : (pKucoin.length ? pKucoin : pKraken);
-          const delta = anchor.length >= 2 ? (anchor[anchor.length - 1].equity - anchor[0].equity) : 0;
-          const pct = (anchor.length >= 1 && anchor[0].equity > 0) ? (delta / anchor[0].equity) * 100.0 : 0.0;
-          ctx.font = 'bold 11px system-ui';
-          ctx.textAlign = 'right';
-          ctx.fillStyle = delta >= 0 ? '#9ece6a' : '#f7768e';
-          ctx.fillText(`${delta >= 0 ? '+' : ''}${delta.toFixed(2)} USDT (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`, w - padR, padT - 2);
+            ctx.beginPath();
+            ctx.moveTo(tx(0), ty(bottoms[0]));
+            for (let i = 0; i < compTimes.length; i++) {
+              ctx.lineTo(tx(i), ty(tops[i]));
+            }
+            for (let i = compTimes.length - 1; i >= 0; i--) {
+              ctx.lineTo(tx(i), ty(bottoms[i]));
+            }
+            ctx.closePath();
+            ctx.fillStyle = compPalette[c.key] || compPalette.default;
+            ctx.fill();
 
-          const latestCombined = pCombined.length ? pCombined[pCombined.length - 1].equity : null;
-          const latestKucoin = pKucoin.length ? pKucoin[pKucoin.length - 1].equity : null;
-          const latestKraken = pKraken.length ? pKraken[pKraken.length - 1].equity : null;
-          if (detailEl) {
-            detailEl.textContent = `combined:${latestCombined !== null ? latestCombined.toFixed(2) : '-'} kucoin:${latestKucoin !== null ? latestKucoin.toFixed(2) : '-'} kraken:${latestKraken !== null ? latestKraken.toFixed(2) : '-'}`;
+            bottoms = tops;
           }
-          canvas.onmousemove = null;
-          return;
+
+          ctx.strokeStyle = 'rgba(255,255,255,0.10)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(padL, bandTop);
+          ctx.lineTo(w - padR, bandTop);
+          ctx.stroke();
         }
+        if (detailEl) {
+         detailEl.textContent = `cum:${latestTotal.toFixed(2)}%`;
+        }
+
+        
+
+        canvas.onmousemove = (ev) => {
+          if (!detailEl) return;
+          const r = canvas.getBoundingClientRect();
+          const x = ev.clientX - r.left;
+          let idx = Math.round(((x - padL) / Math.max(1, pw)) * Math.max(1, totalRaw.length - 1));
+          idx = Math.max(0, Math.min(totalRaw.length - 1, idx));
+
+          const t = totalRaw[idx];
+          const d = new Date(Number(t.time) * 1000);
+          const hh = String(d.getUTCHours()).padStart(2, '0');
+          const mm = String(d.getUTCMinutes()).padStart(2, '0');
+          detailEl.textContent = `${hh}:${mm} cum:${Number(t.equity).toFixed(2)}`;
+        };
+        return;
       }
 
       const trades = Array.isArray(latestPayload.diary_entries) && latestPayload.diary_entries.length
@@ -1563,13 +1696,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const d = new Date(Number(op.entry_time) * 1000);
           const hh = String(d.getUTCHours()).padStart(2, '0');
           const mm = String(d.getUTCMinutes()).padStart(2, '0');
-          ctx.fillText('No closed trades (open position)', w / 2, h / 2 - 6);
+          ctx.fillText('No equity history / no closed trades', w / 2, h / 2 - 6);
           const ep = Number.isFinite(Number(op.entry_price)) ? Number(op.entry_price).toFixed(3) : '-';
           const sl = Number.isFinite(Number(op.sl)) ? Number(op.sl).toFixed(3) : '-';
           ctx.fillText(`${hh}:${mm} ${String(op.side).toUpperCase()} entry:${ep} SL:${sl}`, w / 2, h / 2 + 12);
           if (detailEl) detailEl.textContent = `open ${String(op.side).toUpperCase()} entry:${ep} SL:${sl}`;
         } else {
-          ctx.fillText('No closed trades', w / 2, h / 2);
+          ctx.fillText('No equity history', w / 2, h / 2);
           if (detailEl) detailEl.textContent = '-';
         }
         canvas.onmousemove = null;
@@ -1588,7 +1721,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           entry_price: t.entry_price,
           exit_price: t.exit_price,
           qty: t.qty,
-          source: t.source || source,
+          source: t.source || latestPayload.diary_source || latestPayload.equity_source || 'none',
         };
       });
 
@@ -1602,7 +1735,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       function tx(i) { return padL + (i / Math.max(1, points.length - 1)) * pw; }
       function ty(v) { return padT + (1 - (v - minV) / range) * ph; }
 
-      // zero line
       const y0 = ty(0);
       ctx.strokeStyle = '#3a3f52';
       ctx.lineWidth = 0.7;
@@ -1610,7 +1742,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.beginPath(); ctx.moveTo(padL, y0); ctx.lineTo(w - padR, y0); ctx.stroke();
       ctx.setLineDash([]);
 
-      // step line
       ctx.lineWidth = 2;
       ctx.beginPath();
       for (let i = 0; i < points.length; i++) {
@@ -1626,7 +1757,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       ctx.strokeStyle = lastCum >= 0 ? '#9ece6a' : '#f7768e';
       ctx.stroke();
 
-      // % labels at each step
       ctx.font = 'bold 9px system-ui';
       ctx.textAlign = 'center';
       for (let i = 0; i < points.length; i++) {
@@ -1638,13 +1768,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ctx.fillText(label, x, y - 5);
       }
 
-      // cumulative at the end
       ctx.font = 'bold 11px system-ui';
       ctx.textAlign = 'right';
       ctx.fillStyle = lastCum >= 0 ? '#9ece6a' : '#f7768e';
       ctx.fillText((lastCum >= 0 ? '+' : '') + lastCum.toFixed(1) + '%', w - padR, padT - 2);
 
-      // Connect diary details to the widget: hover a step to inspect trade.
       canvas.onmousemove = (ev) => {
         if (!detailEl) return;
         const r = canvas.getBoundingClientRect();
@@ -1666,8 +1794,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }
     }
 
-    // ── Time cursor for heatmaps ──
-    let trajCursorIdx = -1;  // -1 = live/latest
+    let trajCursorIdx = -1;
 
     function getHeatmapCursorState() {
       if (!ssPayload || !ssPayload.trajectory || !ssPayload.trajectory.length) return null;
@@ -1677,7 +1804,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return { x: pt.x, y: pt.y, z: pt.z, conf_x: 0, conf_y: 0, conf_z: 0 };
     }
 
-    // ── Time mapping (unchanged) ──
     function buildTimeMapFromBars(bars) {
       const m = new Map();
       const arr = [];
@@ -1859,7 +1985,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       return { hours: 24 * 14, max_points: 4000 };
     }
 
-    // ── Data loading ──
     async function loadMeta() {
       const [st, pos] = await Promise.all([
         fetch('/api/status').then(r => r.json()),
@@ -2034,7 +2159,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
         drawAllHeatmaps();
         drawAxisBars();
-      } catch (e) { /* state space unavailable */ }
+      } catch (e) {}
     }
 
     async function loadFills() {
@@ -2044,7 +2169,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         const data = await fetch('/api/dashboard/fills?max_points=200').then(r => r.json());
         if (!data.ok) return;
         const rows = Array.isArray(data.rows) ? data.rows : [];
-        const lines = ['<div class=\"fills-row head\"><span>time (UTC)</span><span>side</span><span>qty</span><span>price</span><span>reason</span></div>'];
+        const lines = ['<div class="fills-row head"><span>time (UTC)</span><span>side</span><span>qty</span><span>price</span><span>reason</span></div>'];
         for (let i = Math.max(0, rows.length - 80); i < rows.length; i++) {
           const r = rows[i] || {};
           const ts = (typeof r.time_utc === 'string' && r.time_utc) ? r.time_utc : '-';
@@ -2056,11 +2181,11 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const cid = (typeof r.client_oid === 'string' && r.client_oid) ? ` [${r.client_oid}]` : '';
           const reason = reasonBase + cid;
           lines.push(
-            `<div class=\"fills-row\"><span>${escapeHtml(ts)}</span><span class=\"${cls}\">${escapeHtml(side)}</span><span>${escapeHtml(qty)}</span><span>${escapeHtml(px)}</span><span>${escapeHtml(reason)}</span></div>`
+            `<div class="fills-row"><span>${escapeHtml(ts)}</span><span class="${cls}">${escapeHtml(side)}</span><span>${escapeHtml(qty)}</span><span>${escapeHtml(px)}</span><span>${escapeHtml(reason)}</span></div>`
           );
         }
         host.innerHTML = lines.join('');
-      } catch (e) { /* fills unavailable */ }
+      } catch (e) {}
     }
 
     async function refreshNow(reason) {
@@ -2163,8 +2288,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     }
     tick();
     loadStateSpace();
-    const chartRefreshBtn = document.getElementById('chart-refresh-btn');
-    if (chartRefreshBtn) chartRefreshBtn.addEventListener('click', () => refreshNow('button'));
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') refreshNow('visible');
     });
@@ -2204,7 +2327,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard() -> str:
-    """Simple dashboard UI: API status, SOL ticker from KuCoin, position. Basis für spätere Desktop-App."""
     try:
         ui_ms = int(float(os.getenv("DASHBOARD_UI_REFRESH_MS", "4000")))
     except Exception:
@@ -2274,7 +2396,7 @@ def main() -> None:
     _sync_gate_conf_artifacts_if_enabled()
     _start_renko_cache_updater_if_enabled()
     _start_live_signal_worker_if_enabled()
-    # Railway/cloud set PORT; use it so the app listens on the right port
+    _start_live_executor_if_enabled()
     port = int(os.environ.get("PORT", str(args.port)))
     uvicorn.run(
         "quant.execution.webhook_server:app",
@@ -2283,3 +2405,7 @@ def main() -> None:
         reload=bool(args.reload),
         log_level="info",
     )
+
+
+if __name__ == "__main__":
+    main()
