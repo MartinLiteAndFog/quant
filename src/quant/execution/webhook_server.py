@@ -1567,10 +1567,19 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       })).filter((c) => c.key);
 
       const totalRaw = normalize(latestPayload.equity_total || latestPayload.equity_combined || []);
-      
+
       if (metaEl) {
-        const src = components.map((c) => `${c.label}=${c.source}`).join(', ');
-        metaEl.textContent = src ? `Stacked account equity: ${src}` : 'Stacked account equity';
+        const latestByKey = {};
+        for (const c of components) {
+          const pts = Array.isArray(c.points) ? c.points : [];
+          const last = pts.length ? pts[pts.length - 1] : null;
+          latestByKey[c.key] = last && Number.isFinite(Number(last.equity)) ? Number(last.equity) : null;
+        }
+        const ku = latestByKey.kucoin;
+        const kr = latestByKey.kraken;
+        const kuTxt = Number.isFinite(ku) ? ku.toFixed(2) : '-';
+        const krTxt = Number.isFinite(kr) ? kr.toFixed(2) : '-';
+        metaEl.textContent = `KuCoin: ${kuTxt}  Kraken: ${krTxt}`;
       }
 
       if (components.some((c) => c.points.length >= 1)) {
@@ -1595,11 +1604,13 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ctx.stroke();
 
         const latestTotal = totalRaw[totalRaw.length - 1].equity;
+        const firstTotal = totalRaw[0].equity;
+        const deltaPct = firstTotal > 0 ? ((latestTotal - firstTotal) / firstTotal) * 100 : 0;
 
         ctx.font = 'bold 11px system-ui';
         ctx.textAlign = 'right';
         ctx.fillStyle = latestTotal >= 0 ? '#9ece6a' : '#f7768e';
-        ctx.fillText(`${latestTotal >= 0 ? '+' : ''}${latestTotal.toFixed(2)}%`, w - padR, padT - 2);
+        ctx.fillText(`${deltaPct >= 0 ? '+' : ''}${deltaPct.toFixed(2)}%`, w - padR, padT - 2);
         const bandTop = Math.floor(h * 0.72);
         const bandBottom = h - 10;
         const bandH = Math.max(24, bandBottom - bandTop);
@@ -1661,7 +1672,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           ctx.stroke();
         }
         if (detailEl) {
-         detailEl.textContent = `cum:${latestTotal.toFixed(2)}%`;
+         detailEl.textContent = `cum:${deltaPct.toFixed(2)}%`;
         }
 
         
