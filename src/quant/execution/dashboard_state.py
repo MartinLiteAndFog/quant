@@ -600,26 +600,40 @@ def load_equity_history_from_postgres(
     max_points: int = 500,
 ) -> Dict[str, Any]:
     try:
-        sql = """
-            select ts, equity, currency, source
-            from equity_snapshots
-            where venue = %(venue)s
-              and (%(account)s is null or account = %(account)s)
-            order by ts desc
-            limit %(limit)s
-        """
+        if account is None:
+            sql = """
+                select ts, equity, currency, source
+                from equity_snapshots
+                where venue = %(venue)s
+                order by ts desc
+                limit %(limit)s
+            """
+            params = {
+                "venue": venue,
+                "limit": int(max(1, max_points)),
+            }
+        else:
+            sql = """
+                select ts, equity, currency, source
+                from equity_snapshots
+                where venue = %(venue)s
+                  and account = %(account)s
+                order by ts desc
+                limit %(limit)s
+            """
+            params = {
+                "venue": venue,
+                "account": account,
+                "limit": int(max(1, max_points)),
+            }
+
         with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(
-                sql,
-                {
-                    "venue": venue,
-                    "account": account,
-                    "limit": int(max(1, max_points)),
-                },
-            )
+            cur.execute(sql, params)
             rows = cur.fetchall()
+
         if not rows:
             return {"points": [], "source": "none"}
+
         rows = list(reversed(rows))
         pts = [
             {
@@ -633,7 +647,7 @@ def load_equity_history_from_postgres(
     except Exception:
         return {"points": [], "source": "none"}
 
-\
+
 def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
     """
     Load/refresh realized account-equity history in USDT.
