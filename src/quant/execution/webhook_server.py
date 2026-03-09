@@ -1565,10 +1565,9 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         source: String(c.source || 'none'),
         points: normalize(c.points || []),
       })).filter((c) => c.key);
-      const totalRaw = (Array.isArray(latestPayload.equity_curve) ? latestPayload.equity_curve : [])
-       .map((p) => ({ time: Number(p.time || 0), equity: Number(p.cum_pct || 0) }))
-       .filter((p) => Number.isFinite(p.time) && Number.isFinite(p.equity));
-    
+
+      const totalRaw = normalize(latestPayload.equity_total || latestPayload.equity_combined || []);
+
       if (metaEl) {
         const src = components.map((c) => `${c.label}=${c.source}`).join(', ');
         metaEl.textContent = src ? `Stacked account equity: ${src}` : 'Stacked account equity';
@@ -1596,76 +1595,18 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         ctx.stroke();
 
         const latestTotal = totalRaw[totalRaw.length - 1].equity;
+        const firstTotal = totalRaw[0].equity;
+        const delta = latestTotal - firstTotal;
+        const pct = firstTotal > 0 ? (delta / firstTotal) * 100.0 : 0.0;
 
         ctx.font = 'bold 11px system-ui';
         ctx.textAlign = 'right';
-        ctx.fillStyle = latestTotal >= 0 ? '#9ece6a' : '#f7768e';
-        ctx.fillText(`${latestTotal >= 0 ? '+' : ''}${latestTotal.toFixed(2)}%`, w - padR, padT - 2);
-        const bandTop = Math.floor(h * 0.72);
-        const bandBottom = h - 10;
-        const bandH = Math.max(24, bandBottom - bandTop);
+        ctx.fillStyle = delta >= 0 ? '#9ece6a' : '#f7768e';
+        ctx.fillText(`${delta >= 0 ? '+' : ''}${delta.toFixed(2)} USDT (${pct >= 0 ? '+' : ''}${pct.toFixed(2)}%)`, w - padR, padT - 2);
 
-        if (components.length > 0) {
-          const compTimes = totalRaw.map((p) => p.time);
-          const compValsByKey = {};
-
-          for (const c of components) {
-            const pts = Array.isArray(c.points) ? c.points : [];
-            const m = new Map(pts.map((p) => [Number(p.time || 0), Number(p.equity || 0)]));
-            let last = pts.length ? Number(pts[0].equity || 0) : 0.0;
-            compValsByKey[c.key] = compTimes.map((t) => {
-              if (m.has(t)) last = m.get(t);
-              return last;
-            });
-          }
-
-          const totals = compTimes.map((_, i) =>
-            components.reduce((acc, c) => acc + Number((compValsByKey[c.key] || [])[i] || 0), 0)
-          );
-
-          let bottoms = new Array(compTimes.length).fill(0);
-
-          const compPalette = {
-            kucoin: 'rgba(122,162,247,0.32)',
-            kraken: 'rgba(255,158,100,0.38)',
-            default: 'rgba(158,206,106,0.28)',
-          };
-
-          for (const c of components) {
-            const rawVals = compValsByKey[c.key] || new Array(compTimes.length).fill(0);
-            const shares = rawVals.map((v, i) => {
-              const tot = Number(totals[i] || 0);
-              return tot > 0 ? v / tot : 0;
-            });
-            const tops = shares.map((v, i) => bottoms[i] + v * totalRaw[i].equity);
-
-            ctx.beginPath();
-            ctx.moveTo(tx(0), ty(bottoms[0]));
-            for (let i = 0; i < compTimes.length; i++) {
-              ctx.lineTo(tx(i), ty(tops[i]));
-            }
-            for (let i = compTimes.length - 1; i >= 0; i--) {
-              ctx.lineTo(tx(i), ty(bottoms[i]));
-            }
-            ctx.closePath();
-            ctx.fillStyle = compPalette[c.key] || compPalette.default;
-            ctx.fill();
-
-            bottoms = tops;
-          }
-
-          ctx.strokeStyle = 'rgba(255,255,255,0.10)';
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(padL, bandTop);
-          ctx.lineTo(w - padR, bandTop);
-          ctx.stroke();
-        }
         if (detailEl) {
-         detailEl.textContent = `cum:${latestTotal.toFixed(2)}%`;
+          detailEl.textContent = `equity:${latestTotal.toFixed(2)}`;
         }
-
-        
 
         canvas.onmousemove = (ev) => {
           if (!detailEl) return;
@@ -1678,7 +1619,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           const d = new Date(Number(t.time) * 1000);
           const hh = String(d.getUTCHours()).padStart(2, '0');
           const mm = String(d.getUTCMinutes()).padStart(2, '0');
-          detailEl.textContent = `${hh}:${mm} cum:${Number(t.equity).toFixed(2)}`;
+          detailEl.textContent = `${hh}:${mm} equity:${Number(t.equity).toFixed(2)}`;
         };
         return;
       }
