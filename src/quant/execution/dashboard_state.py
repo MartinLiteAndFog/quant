@@ -471,7 +471,15 @@ def load_trade_segments(max_points: int = 2000) -> List[Dict[str, Any]]:
         if not pd.notna(epx) or not pd.notna(xpx):
             continue
 
-        side = int(r[side_col]) if side_col and pd.notna(r.get(side_col)) else 1
+        if side_col and pd.notna(r.get(side_col)):
+            side_raw = r.get(side_col)
+            if isinstance(side_raw, str):
+                s = side_raw.strip().lower()
+                side = 1 if s in ("long", "l", "buy", "1") else (-1 if s in ("short", "s", "sell", "-1") else 1)
+            else:
+                side = int(side_raw)
+        else:
+            side = 1
         if pnl_col and pd.notna(r.get(pnl_col)):
             pnl_positive = float(r[pnl_col]) >= 0.0
         else:
