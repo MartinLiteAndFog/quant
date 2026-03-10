@@ -148,12 +148,32 @@ class KrakenFuturesClient:
         ps = data.get("openPositions", []) if isinstance(data, dict) else []
         for p in ps:
             if str(p.get("symbol")) == sym:
-                size = float(p.get("size", 0) or 0)
-                side = "long" if size > 0 else ("short" if size < 0 else "flat")
+                raw_size = float(p.get("size", 0) or 0)
+                abs_size = abs(raw_size)
+
+                raw_side = str(p.get("side", "") or "").strip().lower()
+                if raw_side in ("short", "sell"):
+                    side = "short"
+                    size_signed = -abs_size
+                elif raw_side in ("long", "buy"):
+                    side = "long"
+                    size_signed = abs_size
+                else:
+                    # Fallback only if Kraken ever omits side.
+                    if raw_size > 0:
+                        side = "long"
+                        size_signed = abs_size
+                    elif raw_size < 0:
+                        side = "short"
+                        size_signed = -abs_size
+                    else:
+                        side = "flat"
+                        size_signed = 0.0
+
                 return {
                     "side": side,
-                    "size": abs(size),
-                    "size_signed": size,
+                    "size": abs_size,
+                    "size_signed": size_signed,
                     "entry_price": float(p.get("price", p.get("entryPrice", 0)) or 0),
                     "leverage": float(p.get("effectiveLeverage", p.get("leverage", 0)) or 0),
                     "raw": p,
