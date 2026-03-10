@@ -45,7 +45,6 @@ def _quantize_price(price: float, tick: float) -> str:
     p = Decimal(str(max(0.0, float(price))))
     t = Decimal(str(max(1e-9, float(tick))))
     q = (p / t).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * t
-    # normalize output decimals based on tick precision (e.g. 0.001 -> 3 dp)
     tick_str = format(float(tick), "f")
     dp = len(tick_str.split(".")[1].rstrip("0")) if "." in tick_str else 0
     return f"{float(q):.{dp}f}" if dp > 0 else str(int(q))
@@ -56,7 +55,7 @@ def _symbol_to_contract(symbol: str) -> str:
     s = symbol.strip().upper().replace("-", "").replace("_", "")
     if not s.endswith("USDT"):
         s = s + "USDT"
-    return s + "M"  # M = perpetual
+    return s + "M"
 
 
 def _sign(secret: str, timestamp: str, method: str, path: str, body: str = "") -> str:
@@ -172,7 +171,8 @@ class KucoinFuturesBroker(BrokerAPI):
 
     def _req(self, method: str, path: str, body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return _request(
-            method, path,
+            method,
+            path,
             body=body,
             api_key=self._key,
             api_secret=self._secret,
@@ -180,17 +180,14 @@ class KucoinFuturesBroker(BrokerAPI):
         )
 
     def get_best_bid_ask(self, symbol: str) -> Tuple[float, float]:
-        """Best bid, best ask from ticker."""
         contract = _symbol_to_contract(symbol)
         path = f"/api/v1/ticker?symbol={contract}"
         data = self._req("GET", path)
-        # Response: bestBid, bestAsk or similar; check KuCoin docs for exact keys
         bid = float(data.get("bestBidPrice", data.get("bestBid", 0)) or 0)
         ask = float(data.get("bestAskPrice", data.get("bestAsk", 0)) or 0)
         return (bid, ask)
 
     def get_1m_range_pct_proxy(self, symbol: str) -> Optional[float]:
-        """(high - low) / close for latest 1m candle."""
         contract = _symbol_to_contract(symbol)
         now_ms = int(time.time() * 1000)
         from_ms = now_ms - (5 * 60 * 1000)
@@ -199,7 +196,6 @@ class KucoinFuturesBroker(BrokerAPI):
             data = self._req("GET", path)
         except Exception:
             return None
-        # data may be list of [time, open, high, low, close, ...]
         if not data or not isinstance(data, list):
             return None
         arr = data[0] if data else []
@@ -216,14 +212,12 @@ class KucoinFuturesBroker(BrokerAPI):
     def get_position(self, symbol: str) -> float:
         """Signed position size (contracts): >0 long, <0 short."""
         contract = _symbol_to_contract(symbol)
-        # KuCoin Futures expects symbol for single-position lookup.
         path = f"/api/v1/position?symbol={contract}"
         data = self._req("GET", path)
 
         if not data:
             return 0.0
 
-        # Typical response is a single object for the requested symbol.
         if isinstance(data, dict):
             size = float(data.get("currentQty", data.get("size", 0)) or 0)
             side = (data.get("side") or "").lower()
@@ -231,10 +225,8 @@ class KucoinFuturesBroker(BrokerAPI):
                 return -abs(size)
             if side == "long":
                 return abs(size)
-            # Fallback: if side is missing, keep sign from size if present.
             return float(size)
 
-        # Defensive fallback if API shape changes to list.
         if isinstance(data, list):
             for p in data:
                 if p.get("symbol") == contract:
@@ -249,7 +241,6 @@ class KucoinFuturesBroker(BrokerAPI):
         return 0.0
 
     def get_position_info(self, symbol: str) -> Dict[str, Any]:
-        """Position details including size/side/leverage when provided by API."""
         contract = _symbol_to_contract(symbol)
         data = self._req("GET", f"/api/v1/position?symbol={contract}")
         if not isinstance(data, dict):
@@ -273,10 +264,6 @@ class KucoinFuturesBroker(BrokerAPI):
         }
 
     def get_contract_multiplier(self, symbol: str) -> float:
-        """
-        Contract value multiplier used to convert contracts -> quote notional.
-        KuCoin futures contract payload includes `multiplier` for this.
-        """
         contract = _symbol_to_contract(symbol)
         if contract in self._contract_multiplier_cache:
             return float(self._contract_multiplier_cache[contract])
@@ -292,7 +279,6 @@ class KucoinFuturesBroker(BrokerAPI):
         return float(mult)
 
     def get_account_balance(self, currency: str = "USDT") -> Dict[str, Any]:
-        """Account overview: equity, available balance, margin balance."""
         path = f"/api/v1/account-overview?currency={currency}"
         data = self._req("GET", path)
         if not isinstance(data, dict):
@@ -306,10 +292,6 @@ class KucoinFuturesBroker(BrokerAPI):
         }
 
     def _position_margin_mode(self, symbol: str) -> Optional[str]:
-        """
-        Try to read active margin mode from position payload.
-        Returns 'CROSS' | 'ISOLATED' | None.
-        """
         contract = _symbol_to_contract(symbol)
         try:
             data = self._req("GET", f"/api/v1/position?symbol={contract}")
@@ -363,7 +345,6 @@ class KucoinFuturesBroker(BrokerAPI):
             "postOnly": post_only,
             "leverage": str(max(1.0, float(self._order_leverage))),
         }
-        # Try detected position mode first, then configured mode, then fallbacks.
         detected_mm = self._position_margin_mode(symbol)
         configured_mm = self._margin_mode.upper() if self._margin_mode in ("isolated", "cross") else None
         candidates: List[Optional[str]] = []
@@ -405,6 +386,66 @@ class KucoinFuturesBroker(BrokerAPI):
             raise last_err
         raise RuntimeError("failed to place limit order")
 
+    def place_market(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        reduce_only: bool,
+        client_id: str,
+    ) -> str:
+        contract = _symbol_to_contract(symbol)
+        base_body = {
+            "clientOid": _sanitize_client_oid(client_id),
+            "symbol": contract,
+            "side": side.lower(),
+            "type": "market",
+            "size": int(qty),
+            "reduceOnly": reduce_only,
+            "leverage": str(max(1.0, float(self._order_leverage))),
+        }
+
+        detected_mm = self._position_margin_mode(symbol)
+        configured_mm = self._margin_mode.upper() if self._margin_mode in ("isolated", "cross") else None
+        candidates: List[Optional[str]] = []
+        if detected_mm in ("CROSS", "ISOLATED"):
+            candidates.append(detected_mm)
+        if configured_mm in ("CROSS", "ISOLATED"):
+            candidates.append(configured_mm)
+        candidates.extend(["CROSS", "ISOLATED", None])
+
+        last_err: Optional[Exception] = None
+        tried = set()
+        for mm in candidates:
+            key = mm or "<none>"
+            if key in tried:
+                continue
+            tried.add(key)
+            body = dict(base_body)
+            if mm in ("ISOLATED", "CROSS"):
+                body["marginMode"] = mm
+            try:
+                data = self._req("POST", "/api/v1/orders", body=body)
+                return str(data.get("orderId", data.get("order_id", "")))
+            except Exception as e:
+                last_err = e
+                msg = str(e).lower()
+                if "margin mode" in msg and "does not match" in msg:
+                    log_throttled(
+                        log,
+                        logging.WARNING,
+                        f"kucoin_margin_mode_mismatch_market:{contract}",
+                        float(os.getenv("KUCOIN_LOG_THROTTLE_SEC", "60")),
+                        "market marginMode=%s mismatch for %s, trying fallback",
+                        mm,
+                        contract,
+                    )
+                    continue
+                raise
+        if last_err:
+            raise last_err
+        raise RuntimeError("failed to place market order")
+
     def place_marketable_limit(
         self,
         symbol: str,
@@ -414,7 +455,6 @@ class KucoinFuturesBroker(BrokerAPI):
         reduce_only: bool,
         client_id: str,
     ) -> str:
-        """Limit that crosses spread (taker with cap). KuCoin: limit order with aggressive price."""
         return self.place_limit(
             symbol=symbol,
             side=side,
@@ -426,7 +466,6 @@ class KucoinFuturesBroker(BrokerAPI):
         )
 
     def wait_filled(self, symbol: str, order_id: str, timeout_s: int) -> bool:
-        contract = _symbol_to_contract(symbol)
         path = f"/api/v1/orders/{order_id}"
         t0 = time.time()
         while (time.time() - t0) < timeout_s:
@@ -489,4 +528,3 @@ def list_fills(
         return []
     items = data if isinstance(data, list) else (data.get("items", data.get("data", [])) or [])
     return list(items)
-
