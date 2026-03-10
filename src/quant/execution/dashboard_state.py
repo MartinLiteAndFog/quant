@@ -379,13 +379,16 @@ def load_trade_markers(max_points: int = 5000) -> List[Dict[str, Any]]:
     )
     if df.empty:
         df = _read_trades_df()
-
+    if df.empty:
+        return []
     if "entry_ts" not in df.columns and "ts" in df.columns:
         df = df.rename(columns={"ts": "entry_ts"})
     if "entry_ts" not in df.columns:
         return []
+
     df["entry_ts"] = pd.to_datetime(df["entry_ts"], utc=True, errors="coerce")
     df = df.dropna(subset=["entry_ts"]).sort_values("entry_ts").tail(int(max(1, max_points)))
+
     markers: List[Dict[str, Any]] = []
     for _, r in df.iterrows():
         side_raw = r.get("side") if "side" in df.columns else 0
@@ -396,8 +399,8 @@ def load_trade_markers(max_points: int = 5000) -> List[Dict[str, Any]]:
             side = 1 if s in ("long", "l", "buy", "1") else (-1 if s in ("short", "s", "sell", "-1") else 0)
         else:
             side = int(side_raw)
-    
-    markers.append(
+
+        markers.append(
             {
                 "time": int(pd.Timestamp(r["entry_ts"]).timestamp()),
                 "position": "belowBar" if side >= 0 else "aboveBar",
@@ -406,6 +409,7 @@ def load_trade_markers(max_points: int = 5000) -> List[Dict[str, Any]]:
                 "text": f"entry {'L' if side >= 0 else 'S'}",
             }
         )
+
         if "exit_ts" in df.columns and pd.notna(r.get("exit_ts")):
             exit_ts = pd.to_datetime(r["exit_ts"], utc=True, errors="coerce")
             if pd.notna(exit_ts):
@@ -418,6 +422,7 @@ def load_trade_markers(max_points: int = 5000) -> List[Dict[str, Any]]:
                         "text": str(r.get("exit_event", "exit")),
                     }
                 )
+
     return markers
 
 
