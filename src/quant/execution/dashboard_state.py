@@ -4,13 +4,17 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
-from quant.execution.event_store import get_conn, insert_equity_snapshot
+from quant.execution.event_store import (
+    get_conn,
+    insert_equity_snapshot,
+    upsert_closed_trade,
+)
 
 import pandas as pd
 
 from quant.execution.kucoin_futures import KucoinFuturesBroker, list_fills
 from quant.regime import RegimeStore
-from quant.execution.event_store import insert_equity_snapshot
+
 
 _LAST_REFRESH_TS: Optional[pd.Timestamp] = None
 _LAST_REFRESH_ERROR: Optional[str] = None
@@ -1136,6 +1140,29 @@ def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
                             "exit_event": "fills_reconstructed",
                         }
                     )
+                    try:
+                        upsert_closed_trade(
+                        {
+                            "trade_id": str(e["id"]),
+                            "venue": "kucoin",
+                            "symbol": os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
+                            "entry_ts": pd.to_datetime(int(e["entry_time"]), unit="s", utc=True),
+                            "exit_ts": pd.to_datetime(int(e["time"]), unit="s", utc=True),
+                            "side": str(e.get("side")),
+                            "qty": e.get("qty"),
+                            "entry_price": e.get("entry_price"),
+                            "exit_price": e.get("exit_price"),
+                            "pnl_pct": e.get("pnl_pct"),
+                            "exit_event": "fills_reconstructed",
+                            "strategy": "dashboard_fills_reconstruction",
+                            "strategy_instance": None,
+                            "config_hash": None,
+                            "source_action_event_id": None,
+                            "payload_json": dict(e),
+                        }
+                    )
+                    except Exception:
+                      pass
                 new_df = pd.DataFrame(write_rows)
                 if trades_path.exists():
                     try:
