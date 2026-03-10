@@ -681,26 +681,72 @@ def execute_actions(
     equity_pct: float = 0.9,
     leverage: float = 1.0,
 ) -> List[Dict[str, Any]]:
-    results = []
+    results: List[Dict[str, Any]] = []
     just_closed = False
+
     for a in actions:
+        act = str(a.get("action", "") or "")
+        reason_code = str(a.get("reason", "") or "bot_action_missing_reason")
+
         if dry_run:
             log.info("DRY_RUN: %s", a)
-            results.append({**a, "executed": False, "dry_run": True})
-            if a.get("action") == "close_all":
+            results.append(
+                {
+                    **a,
+                    "reason": reason_code,
+                    "executed": False,
+                    "dry_run": True,
+                    "order_action": (
+                        "sell"
+                        if act == "enter_short"
+                        else "buy"
+                        if act == "enter_long"
+                        else str(a.get("close_side", "") or "flat")
+                        if act == "close_partial"
+                        else "unknown"
+                    ),
+                    "venue_before_raw": None,
+                    "venue_after_raw": None,
+                    "venue_before_side": None,
+                    "venue_after_side": None,
+                    "venue_before_size": None,
+                    "venue_after_size": None,
+                }
+            )
+            if act == "close_all":
                 just_closed = True
             continue
+
+        venue_before_raw: Any = None
+        venue_after_raw: Any = None
+        venue_before_side = 0
+        venue_after_side = 0
+        venue_before_size = 0.0
+        venue_after_size = 0.0
+        order_action = "unknown"
+
         try:
-            act = a["action"]
+            venue_before_raw = client.get_position()
+            venue_before_side, venue_before_size = _normalize_venue_position(venue_before_raw)
+
+            payload = dict(a)
+
             if act == "close_all":
+                order_action = (
+                    "sell" if venue_before_side > 0 else
+                    "buy" if venue_before_side < 0 else
+                    "flat"
+                )
                 res = client.close_position()
-                results.append({**a, "executed": True, "result": res})
                 just_closed = True
+
             elif act == "close_partial":
-                res = client.place_market(a["close_side"], size=float(a["size"]), reduce_only=True)
-                results.append({**a, "executed": True, "result": res})
+                order_action = str(a["close_side"])
+                res = client.place_market(order_action, size=float(a["size"]), reduce_only=True)
+
             elif act.startswith("enter_"):
                 size = float(a["size"])
+
                 if just_closed:
                     try:
                         mark = client.get_mark_price()
@@ -708,18 +754,76 @@ def execute_actions(
                         fresh_eq = float(eq.get("equity_usd", 0.0) or 0.0)
                         fresh_size = compute_target_size(fresh_eq, mark, leverage, equity_pct)
                         if fresh_size > 0:
-                            log.info("flip re-size: pre=%.1f post=%.1f equity=%.2f", size, fresh_size, fresh_eq)
+                            log.info(
+                                "flip re-size: pre=%.1f post=%.1f equity=%.2f",
+                                size,
+                                fresh_size,
+                                fresh_eq,
+                            )
                             size = fresh_size
                     except Exception as e:
                         log.warning("flip re-size failed, using original: %s", e)
-                res = client.place_market(a["side"], size=size)
-                results.append({**a, "size": size, "executed": True, "result": res})
+
+                order_action = str(a["side"])
+                res = client.place_market(order_action, size=size)
+                payload["size"] = size
                 just_closed = False
+
             else:
-                results.append({**a, "executed": False, "error": "unknown_action"})
+                results.append(
+                    {
+                        **a,
+                        "reason": reason_code,
+                        "executed": False,
+                        "error": "unknown_action",
+                        "order_action": order_action,
+                        "venue_before_raw": venue_before_raw,
+                        "venue_after_raw": venue_after_raw,
+                        "venue_before_side": venue_before_side,
+                        "venue_after_side": venue_after_side,
+                        "venue_before_size": venue_before_size,
+                        "venue_after_size": venue_after_size,
+                    }
+                )
+                continue
+
+            venue_after_raw = client.get_position()
+            venue_after_side, venue_after_size = _normalize_venue_position(venue_after_raw)
+
+            results.append(
+                {
+                    **payload,
+                    "reason": reason_code,
+                    "executed": True,
+                    "result": res,
+                    "order_action": order_action,
+                    "venue_before_raw": venue_before_raw,
+                    "venue_after_raw": venue_after_raw,
+                    "venue_before_side": venue_before_side,
+                    "venue_after_side": venue_after_side,
+                    "venue_before_size": venue_before_size,
+                    "venue_after_size": venue_after_size,
+                }
+            )
+
         except Exception as e:
             log.warning("action failed: %s error=%s", a, e)
-            results.append({**a, "executed": False, "error": str(e)})
+            results.append(
+                {
+                    **a,
+                    "reason": reason_code,
+                    "executed": False,
+                    "error": str(e),
+                    "order_action": order_action,
+                    "venue_before_raw": venue_before_raw,
+                    "venue_after_raw": venue_after_raw,
+                    "venue_before_side": venue_before_side,
+                    "venue_after_side": venue_after_side,
+                    "venue_before_size": venue_before_size,
+                    "venue_after_size": venue_after_size,
+                }
+            )
+
     return results
 
 
@@ -895,6 +999,15 @@ def run_once(
             source_signal_ts=str(sig.get("ts", "") or ""),
         )
 
+    post_venue_pos_raw = client.get_position()
+    new_state = reconcile_state_with_venue(
+        state=new_state,
+        venue_pos_raw=post_venue_pos_raw,
+        gate_on=gate["gate_on"],
+        mark=mark,
+    )
+    venue_side, venue_size = _normalize_venue_position(post_venue_pos_raw)
+
     stop_sync = _sync_protective_stop(
         client=client,
         state=new_state,
@@ -905,9 +1018,6 @@ def run_once(
     )
 
     save_state(new_state, state_path)
-
-    post_venue_pos_raw = client.get_position()
-    venue_side, venue_size = _normalize_venue_position(post_venue_pos_raw)
 
     ts = _now_iso()
     row = {
