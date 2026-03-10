@@ -388,8 +388,16 @@ def load_trade_markers(max_points: int = 5000) -> List[Dict[str, Any]]:
     df = df.dropna(subset=["entry_ts"]).sort_values("entry_ts").tail(int(max(1, max_points)))
     markers: List[Dict[str, Any]] = []
     for _, r in df.iterrows():
-        side = int(r["side"]) if "side" in df.columns and pd.notna(r.get("side")) else 0
-        markers.append(
+        side_raw = r.get("side") if "side" in df.columns else 0
+        if pd.isna(side_raw):
+            side = 0
+        elif isinstance(side_raw, str):
+            s = side_raw.strip().lower()
+            side = 1 if s in ("long", "l", "buy", "1") else (-1 if s in ("short", "s", "sell", "-1") else 0)
+        else:
+            side = int(side_raw)
+    
+    markers.append(
             {
                 "time": int(pd.Timestamp(r["entry_ts"]).timestamp()),
                 "position": "belowBar" if side >= 0 else "aboveBar",
