@@ -159,7 +159,6 @@ class KrakenFuturesClient:
                     side = "long"
                     size_signed = abs_size
                 else:
-                    # Fallback only if Kraken ever omits side.
                     if raw_size > 0:
                         side = "long"
                         size_signed = abs_size
