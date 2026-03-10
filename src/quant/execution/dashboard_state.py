@@ -293,11 +293,93 @@ def build_fibo_levels(max_points: int = 5000, lookback: Optional[int] = None) ->
     }
     return {"lookback": lb, "long": out_long, "mid": out_mid, "short": out_short, "latest": latest}
 
+def load_closed_trades_from_postgres(
+    venue: Optional[str] = None,
+    symbol: Optional[str] = None,
+    max_points: int = 5000,
+) -> pd.DataFrame:
+    try:
+        if venue is None and symbol is None:
+            sql = """
+                select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
+                       entry_price, exit_price, pnl_pct, exit_event
+                from closed_trades
+                order by exit_ts desc
+                limit %(limit)s
+            """
+            params = {"limit": int(max(1, max_points))}
+        elif venue is None:
+            sql = """
+                select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
+                       entry_price, exit_price, pnl_pct, exit_event
+                from closed_trades
+                where symbol = %(symbol)s
+                order by exit_ts desc
+                limit %(limit)s
+            """
+            params = {"symbol": symbol, "limit": int(max(1, max_points))}
+        elif symbol is None:
+            sql = """
+                select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
+                       entry_price, exit_price, pnl_pct, exit_event
+                from closed_trades
+                where venue = %(venue)s
+                order by exit_ts desc
+                limit %(limit)s
+            """
+            params = {"venue": venue, "limit": int(max(1, max_points))}
+        else:
+            sql = """
+                select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
+                       entry_price, exit_price, pnl_pct, exit_event
+                from closed_trades
+                where venue = %(venue)s
+                  and symbol = %(symbol)s
+                order by exit_ts desc
+                limit %(limit)s
+            """
+            params = {
+                "venue": venue,
+                "symbol": symbol,
+                "limit": int(max(1, max_points)),
+            }
 
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+
+        if not rows:
+            return pd.DataFrame()
+
+        df = pd.DataFrame(
+            rows,
+            columns=[
+                "trade_id",
+                "venue",
+                "symbol",
+                "entry_ts",
+                "exit_ts",
+                "side",
+                "qty",
+                "entry_price",
+                "exit_price",
+                "pnl_pct",
+                "exit_event",
+            ],
+        )
+        return df
+    except Exception:
+        return pd.DataFrame()
+    
 def load_trade_markers(max_points: int = 5000) -> List[Dict[str, Any]]:
-    df = _read_trades_df()
+    df = load_closed_trades_from_postgres(
+        venue="kucoin",
+        symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
+        max_points=max_points,
+    )
     if df.empty:
-        return []
+        df = _read_trades_df()
+
     if "entry_ts" not in df.columns and "ts" in df.columns:
         df = df.rename(columns={"ts": "entry_ts"})
     if "entry_ts" not in df.columns:
