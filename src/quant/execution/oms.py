@@ -260,7 +260,27 @@ class MakerFirstOMS:
             client_id=cid,
         )
         filled = self.broker.wait_filled(symbol, oid, timeout_s=30)
-        return OmsResult(bool(filled), mode, {"symbol": symbol, "side": side, "qty": qty, "limit_px": float(limit_px), "client_id": cid, "order_id": oid, "reduce_only": reduce_only})
+
+        if not filled:
+            try:
+                self.broker.cancel_all(symbol)
+            except Exception:
+                pass
+
+        return OmsResult(
+            bool(filled),
+            mode,
+            {
+                "symbol": symbol,
+                "side": side,
+                "qty": qty,
+                "limit_px": float(limit_px),
+                "client_id": cid,
+                "order_id": oid,
+                "reduce_only": reduce_only,
+                "cancelled_after_timeout": bool(not filled),
+            },
+        )
 
     def _wait_flat(self, symbol: str, timeout_s: int = 30) -> bool:
         t0 = time.time()
