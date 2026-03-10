@@ -24,7 +24,6 @@ log = get_logger("quant.live_executor")
 try:
     from quant.execution.live_monitor import ExpectedTrade, record_expected
 except Exception:
-    # Keep executor runnable even if monitoring module is not packaged in target runtime.
     @dataclass
     class ExpectedTrade:
         ts: str
@@ -83,7 +82,7 @@ def _coerce_float(v: Any) -> Optional[float]:
         x = float(v)
     except Exception:
         return None
-    if not (x == x):  # NaN check
+    if not (x == x):
         return None
     return x
 
@@ -95,10 +94,6 @@ def _apply_live_ttp_guard(
     live_mid: float,
     ttp_trail_pct: float,
 ) -> Dict[str, Any]:
-    """
-    Keep TTP consistent with configured trail distance relative to latest live quote.
-    This prevents stale-renko drift where dashboard TTP can lag far from market.
-    """
     if not isinstance(terminal, dict):
         return {}
     out = dict(terminal)
@@ -122,11 +117,9 @@ def _apply_live_ttp_guard(
     trail = float(max(1e-6, ttp_trail_pct))
     cur_ttp = _coerce_float(out.get("ttp"))
     if side == "long":
-        # Do not allow stale TTP below the live-trail floor.
         floor_ttp = float(mid * (1.0 - trail))
         out["ttp"] = floor_ttp if cur_ttp is None else float(max(cur_ttp, floor_ttp))
     else:
-        # Do not allow stale TTP above the live-trail cap.
         cap_ttp = float(mid * (1.0 + trail))
         out["ttp"] = cap_ttp if cur_ttp is None else float(min(cur_ttp, cap_ttp))
     return out
@@ -134,8 +127,6 @@ def _apply_live_ttp_guard(
 
 @dataclass
 class ExecutorState:
-    # IMPORTANT: last_signal_ts/value refer to the last *processed* signal/engine timestamp,
-    # NOT wall-clock "now". This prevents stale-signal re-triggers after restart.
     last_signal_ts: Optional[str] = None
     last_signal_value: Optional[int] = None
     last_event_sig: Optional[str] = None
@@ -167,7 +158,6 @@ def _write_state(path: Path, st: ExecutorState) -> None:
 
 
 def _latest_signal(signals_root: Path, symbol: str) -> Optional[Dict[str, Any]]:
-    # Accept both SOLUSDT and SOL-USDT style directories.
     wanted = _canon_symbol(symbol)
     candidate_dirs = []
     if signals_root.exists():
@@ -182,7 +172,6 @@ def _latest_signal(signals_root: Path, symbol: str) -> Optional[Dict[str, Any]]:
     if not candidate_dirs:
         return None
 
-    # Read newest files first, newest line wins.
     all_files = []
     for d in candidate_dirs:
         all_files.extend(d.glob("*.jsonl"))
@@ -274,7 +263,6 @@ def _snap_signals_to_bars(
     bars: pd.DataFrame,
     tolerance: pd.Timedelta = pd.Timedelta(minutes=5),
 ) -> pd.DataFrame:
-    """Snap signal timestamps to the nearest renko bar within *tolerance*."""
     if signals_df.empty or bars.empty:
         return signals_df
 
@@ -320,7 +308,6 @@ def _latest_backtest_event(
     renko_bars: pd.DataFrame,
     signals_df: pd.DataFrame,
 ) -> Tuple[Optional[pd.Series], Dict[str, Any]]:
-    """Returns (latest_event_row, terminal_state_dict)."""
     if renko_bars.empty or signals_df.empty:
         return None, {}
     signals_df = _snap_signals_to_bars(signals_df, renko_bars)
@@ -340,32 +327,37 @@ def _latest_backtest_event(
     return events.iloc[-1], terminal
 
 
-def _qty_from_max_eur(max_eur: float, leverage: float, mid_price: float, contract_multiplier: float = 1.0) -> int:
-    if max_eur <= 0 or leverage <= 0 or mid_price <= 0 or contract_multiplier <= 0:
+def _qty_from_available_balance(
+    *,
+    available_usdt: float,
+    leverage: float,
+    mid_price: float,
+    contract_multiplier: float = 1.0,
+    available_fraction: float = 0.95,
+) -> int:
+    if available_usdt <= 0 or leverage <= 0 or mid_price <= 0 or contract_multiplier <= 0:
         return 0
-    notional = float(max_eur) * float(leverage)
+    frac = float(max(0.0, min(1.0, available_fraction)))
+    usable_margin = float(available_usdt) * frac
+    notional = usable_margin * float(leverage)
     per_contract_notional = float(mid_price) * float(contract_multiplier)
     return int(notional // per_contract_notional)
 
 
-def _resolve_max_eur(
+def _resolve_available_usdt(
     broker: KucoinFuturesBroker,
-    configured_max_eur: float,
     *,
-    use_full_equity: bool,
-    equity_fraction: float,
+    available_fraction: float,
 ) -> float:
-    if not use_full_equity:
-        return float(configured_max_eur)
     try:
         bal = broker.get_account_balance(currency="USDT")
-        eq = float(bal.get("equity", 0.0) or 0.0)
-        if eq > 0:
-            frac = float(max(0.0, min(1.0, equity_fraction)))
-            return float(eq * frac)
+        available = float(bal.get("available", 0.0) or 0.0)
+        if available > 0:
+            frac = float(max(0.0, min(1.0, available_fraction)))
+            return float(available * frac)
     except Exception:
         pass
-    return float(configured_max_eur)
+    return 0.0
 
 
 def _verify_execution_fill_ratio(
@@ -377,7 +369,6 @@ def _verify_execution_fill_ratio(
     target_qty: float,
     min_ratio: float,
 ) -> None:
-    """warn if resulting position deviates materially from intended target."""
     try:
         pos_after = float(broker.get_position(symbol))
     except Exception as e:
@@ -453,7 +444,6 @@ def _verify_execution_fill_ratio(
 
 
 def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Optional[float] = None) -> None:
-    """Write current flip-engine state to execution_state.json for the dashboard."""
     if not terminal:
         return
 
@@ -528,7 +518,6 @@ def run_once(
     state: ExecutorState,
     live_enabled: bool,
     dry_run: bool,
-    max_eur: float,
     leverage: float,
 ) -> ExecutorState:
     now_ts = _now_utc()
@@ -542,13 +531,10 @@ def run_once(
         signals_df=signals_df,
     )
 
-    # ---- Determine desired position from terminal state ----
     terminal_pos = int(terminal_state.get("pos", 0)) if terminal_state else 0
     terminal_entry_ts = terminal_state.get("entry_bar_ts") if terminal_state else None
     terminal_sig = f"{terminal_pos}|{terminal_entry_ts}"
 
-    # If terminal is flat and engine produced nothing, we MAY consider a fallback to latest signal,
-    # but only if it is fresh and strictly newer than last processed signal.
     fallback_used = False
     fallback_sig_ts_iso: Optional[str] = None
     fallback_sig_v: Optional[int] = None
@@ -563,7 +549,6 @@ def run_once(
             sig_ts_iso = sig_ts.isoformat()
             age_sec = float((now_ts - sig_ts).total_seconds())
             if age_sec < 0:
-                # Future timestamps: treat as invalid
                 sig = None
             else:
                 is_newer = True
@@ -599,13 +584,10 @@ def run_once(
     bid, ask = broker.get_best_bid_ask(symbol)
     mid = (bid + ask) / 2.0 if (bid and ask) else (ask or bid or 0.0)
 
-    use_full_equity = _truthy(os.getenv("LIVE_EXECUTOR_USE_FULL_EQUITY", "1"))
-    equity_fraction = float(os.getenv("LIVE_EXECUTOR_EQUITY_FRACTION", "1.0"))
-    sizing_max_eur = _resolve_max_eur(
+    available_fraction = float(os.getenv("LIVE_EXECUTOR_AVAILABLE_FRACTION", "0.95"))
+    available_usdt = _resolve_available_usdt(
         broker=broker,
-        configured_max_eur=max_eur,
-        use_full_equity=use_full_equity,
-        equity_fraction=equity_fraction,
+        available_fraction=available_fraction,
     )
 
     contract_multiplier = 1.0
@@ -617,11 +599,12 @@ def run_once(
         log.warning("executor failed to fetch contract multiplier symbol=%s err=%s", symbol, e)
         contract_multiplier = 1.0
 
-    qty = _qty_from_max_eur(
-        max_eur=sizing_max_eur,
+    qty = _qty_from_available_balance(
+        available_usdt=available_usdt,
         leverage=leverage,
         mid_price=float(mid),
         contract_multiplier=float(contract_multiplier),
+        available_fraction=1.0,
     )
     if qty <= 0:
         log_throttled(
@@ -629,13 +612,12 @@ def run_once(
             logging.WARNING,
             f"executor_qty_zero:{symbol}",
             float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "60")),
-            "executor qty=0 (configured_max_eur=%s sizing_max_eur=%s leverage=%s mid=%s contract_multiplier=%s use_full_equity=%s) -> skip",
-            max_eur,
-            sizing_max_eur,
+            "executor qty=0 (available_usdt=%s leverage=%s mid=%s contract_multiplier=%s available_fraction=%s) -> skip",
+            available_usdt,
             leverage,
             mid,
             contract_multiplier,
-            use_full_equity,
+            available_fraction,
         )
         state.last_terminal_sig = terminal_sig
         state.last_action = "skip_qty_0"
@@ -651,7 +633,6 @@ def run_once(
     )
     _write_dashboard_levels(symbol, terminal_state, live_pos=pos)
 
-    # ---- Derive action from terminal state vs actual broker position ----
     current_side = "long" if pos > 0 else ("short" if pos < 0 else "flat")
     want_side: Optional[str] = None
     if terminal_pos > 0:
@@ -680,21 +661,17 @@ def run_once(
         else:
             action = "hold"
 
-    # Scale only when we actually want a side.
     if action == "hold" and want_side is not None and current_side == want_side and abs(pos) + 1e-12 < float(qty):
         action = f"scale_{want_side}"
 
-    # Dedup: if exact same last event AND we are just holding, do nothing.
     event_sig = _event_sig(ev) if ev is not None else None
     if event_sig is not None and event_sig == state.last_event_sig and action == "hold":
         return state
 
-    # Use real engine event name for monitoring/expected mapping.
     event_name = str(ev.get("event")) if isinstance(ev, (dict, pd.Series)) and ev is not None and "event" in ev else "none"
 
     ts_iso = now_ts.isoformat()
 
-    # Record expected trade intents for fills-reason mapping in dashboard.
     exp_side: Optional[str] = None
     exp_action: Optional[str] = None
     exp_qty: Optional[float] = None
@@ -763,24 +740,36 @@ def run_once(
             log.info("executor flip flatten result=%s", flat_res)
 
             if _ok(flat_res):
-                flip_sizing = _resolve_max_eur(
-                    broker=broker,
-                    configured_max_eur=max_eur,
-                    use_full_equity=True,
-                    equity_fraction=equity_fraction,
-                )
-                flip_qty = _qty_from_max_eur(
-                    max_eur=flip_sizing,
-                    leverage=leverage,
-                    mid_price=float(mid),
-                    contract_multiplier=float(contract_multiplier),
-                )
-                if flip_qty <= 0:
-                    flip_qty = qty
-                log.info("executor flip re-size: pre=%s post=%s", qty, flip_qty)
-                target_qty_for_verify = float(flip_qty)
-                res = oms.enter(symbol=symbol, side=want_side, qty=float(flip_qty))
-                log.info("executor flip re-enter result=%s", res)
+                pos_after_flat = float(broker.get_position(symbol))
+                if abs(pos_after_flat) > 1e-12:
+                    log.warning("executor flip aborted: not flat after flatten pos_after=%s", pos_after_flat)
+                else:
+                    fresh_bid, fresh_ask = broker.get_best_bid_ask(symbol)
+                    fresh_mid = (fresh_bid + fresh_ask) / 2.0 if (fresh_bid and fresh_ask) else (fresh_ask or fresh_bid or mid or 0.0)
+                    fresh_available_usdt = _resolve_available_usdt(
+                        broker=broker,
+                        available_fraction=available_fraction,
+                    )
+                    flip_qty = _qty_from_available_balance(
+                        available_usdt=fresh_available_usdt,
+                        leverage=leverage,
+                        mid_price=float(fresh_mid),
+                        contract_multiplier=float(contract_multiplier),
+                        available_fraction=1.0,
+                    )
+                    if flip_qty <= 0:
+                        log.warning(
+                            "executor flip aborted: qty=0 after flatten available_usdt=%s leverage=%s mid=%s contract_multiplier=%s",
+                            fresh_available_usdt,
+                            leverage,
+                            fresh_mid,
+                            contract_multiplier,
+                        )
+                    else:
+                        log.info("executor flip re-size: pre=%s post=%s available_usdt=%s", qty, flip_qty, fresh_available_usdt)
+                        target_qty_for_verify = float(flip_qty)
+                        res = oms.enter(symbol=symbol, side=want_side, qty=float(flip_qty))
+                        log.info("executor flip re-enter result=%s", res)
             else:
                 log.warning("executor flip aborted: flatten failed")
 
@@ -812,7 +801,6 @@ def run_once(
             min_ratio=float(os.getenv("LIVE_EXECUTOR_MIN_FILL_RATIO", "0.95")),
         )
 
-    # Persist last processed *signal/engine* timestamp to avoid stale re-triggers.
     if fallback_used and fallback_sig_ts_iso is not None and fallback_sig_v is not None:
         state.last_signal_ts = fallback_sig_ts_iso
         state.last_signal_value = int(fallback_sig_v)
@@ -847,7 +835,6 @@ def main() -> None:
 
     live_enabled = _truthy(os.getenv("LIVE_TRADING_ENABLED", "0"))
     dry_run = _truthy(os.getenv("LIVE_EXECUTOR_DRY_RUN", "1"))
-    max_eur = float(os.getenv("LIVE_EXECUTOR_MAX_EUR", "20"))
     leverage = float(os.getenv("LIVE_EXECUTOR_LEVERAGE", "1"))
 
     allowlist_raw = os.getenv("LIVE_EXECUTOR_SYMBOL_ALLOWLIST", "SOL-USDT")
@@ -860,13 +847,13 @@ def main() -> None:
     st = _read_state(state_path)
 
     log.info(
-        "executor start symbol=%s live_enabled=%s dry_run=%s max_eur=%s leverage=%s signals=%s",
+        "executor start symbol=%s live_enabled=%s dry_run=%s leverage=%s signals=%s available_fraction=%s",
         symbol,
         live_enabled,
         dry_run,
-        max_eur,
         leverage,
         str(signals_root),
+        os.getenv("LIVE_EXECUTOR_AVAILABLE_FRACTION", "0.95"),
     )
 
     while True:
@@ -879,7 +866,6 @@ def main() -> None:
                 state=st,
                 live_enabled=live_enabled,
                 dry_run=dry_run,
-                max_eur=max_eur,
                 leverage=leverage,
             )
             _write_state(state_path, st)
