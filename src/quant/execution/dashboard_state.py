@@ -1115,7 +1115,7 @@ def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
     )
     if df.empty:
         df = _read_trades_df()
-        
+
     if not df.empty:
         if "entry_ts" not in df.columns and "ts" in df.columns:
             df = df.rename(columns={"ts": "entry_ts"})
@@ -1134,7 +1134,16 @@ def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
             for _, r in df.iterrows():
                 epx = float(r[entry_col]) if entry_col and pd.notna(r.get(entry_col)) else None
                 xpx = float(r[exit_col]) if exit_col and pd.notna(r.get(exit_col)) else None
-                side = int(r[side_col]) if side_col and pd.notna(r.get(side_col)) else 1
+                if side_col and pd.notna(r.get(side_col)):
+                    side_raw = r.get(side_col)
+                    if isinstance(side_raw, str):
+                        s = side_raw.strip().lower()
+                        side = 1 if s in ("long", "l", "buy", "1") else (-1 if s in ("short", "s", "sell", "-1") else 1)
+                    else:
+                        side = int(side_raw)
+                else:
+                    side = 1
+                    
                 qty = float(r[qty_col]) if qty_col and pd.notna(r.get(qty_col)) else None
                 pnl_pct = None
                 if pnl_col and pd.notna(r.get(pnl_col)):
