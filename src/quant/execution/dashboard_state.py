@@ -1113,6 +1113,16 @@ def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
         symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
         max_points=max_points,
     )
+    df_source = "postgres:closed_trades"
+    if df.empty:
+        df = _read_trades_df()
+        df_source = "trades_parquet"
+
+    df = load_closed_trades_from_postgres(
+        venue="kucoin",
+        symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
+        max_points=max_points,
+    )
     if df.empty:
         df = _read_trades_df()
 
@@ -1143,7 +1153,7 @@ def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
                         side = int(side_raw)
                 else:
                     side = 1
-                    
+
                 qty = float(r[qty_col]) if qty_col and pd.notna(r.get(qty_col)) else None
                 pnl_pct = None
                 if pnl_col and pd.notna(r.get(pnl_col)):
@@ -1164,13 +1174,13 @@ def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
                         "entry_price": epx,
                         "exit_price": xpx,
                         "pnl_pct": round(float(pnl_pct), 4),
-                        "source": "trades_parquet",
+                        "source": df_source,
                     }
                 )
             if out:
                 out = sorted(out, key=lambda x: int(x["time"]))[-int(max(1, max_points)) :]
-                return {"entries": out, "source": "trades_parquet"}
-
+                return {"entries": out, "source": df_source}
+            
     fills = _read_fills_df()
     if fills.empty:
         return {"entries": [], "source": "none"}
