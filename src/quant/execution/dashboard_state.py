@@ -431,7 +431,13 @@ def load_trade_segments(max_points: int = 2000) -> List[Dict[str, Any]]:
     Return entry->exit line segments for closed trades.
     Color is green for positive PnL, red for negative PnL.
     """
-    df = _read_trades_df()
+    df = load_closed_trades_from_postgres(
+    venue="kucoin",
+    symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
+    max_points=max_points,
+    )
+    if df.empty:
+        df = _read_trades_df()
     if df.empty:
         return []
 
