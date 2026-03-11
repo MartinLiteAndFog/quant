@@ -1291,8 +1291,10 @@ def main() -> None:
                 equity_path=equity_path,
                 state_path=state_path,
             )
-        except Exception as e:
-            log.warning("bot loop error: %s", e)
+        except Exception:
+            log.exception("bot loop error")
+            if args.once:
+                raise
         if args.once:
             break
         time.sleep(max(1.0, float(args.poll_sec)))
