@@ -1,50 +1,150 @@
 # quant
 
-## Operations docs
+Quant is the working repository for live trading, research, execution, dashboarding, and forensic event persistence.
 
-- Railway runbook: `docs/RAILWAY_RUNBOOK.md`
-- Deployment notes: `docs/RAILWAY.md`
-- Live deployment notes: `docs/LIVE_DEPLOY.md`
+The current architecture direction is:
 
-## Session handoff (2026-02-24)
+**Postgres-first for forensic truth**, with JSONL and runtime files kept as transitional operational traces.
 
-- Live Futures execution path is functional (confirmed KuCoin fills on `SOLUSDTM`).
-- Dashboard and worker feature set was expanded (gate routing, fib overlays, trade markers, SL/TTP status).
-- Remaining high-priority issue for next session: unify shared state storage between `quant` and `Signal` services so dashboard always reads the same live execution state written by worker.
-- See `docs/RAILWAY_RUNBOOK.md` sections:
-  - "Current status snapshot (2026-02-24)"
-  - "Next tasks for tomorrow"
+The intended chain is:
+
+**Signal → Action → Execution → Closed Trade → Equity**
+
+---
+
+## Core areas
+
+### Live execution
+Live trading and venue execution components for:
+- KuCoin Futures
+- Kraken Futures
+
+Main files:
+- `src/quant/execution/live_executor.py`
+- `src/quant/execution/kraken_bot.py`
+- `src/quant/execution/oms.py`
+- `src/quant/execution/kucoin_futures.py`
+- `src/quant/execution/kraken_futures.py`
+
+### Strategy logic
+Main live/backtest strategy logic includes:
+- countertrend flip strategy
+- ImbaTrend / trend-following regime
+- IMBA-based signal generation
+- Renko-based state and execution logic
+
+Main files:
+- `src/quant/strategies/flip_engine.py`
+- `src/quant/backtest/renko_runner.py`
+
+### Dashboard / API
+Dashboard, state views, fills, markers, and runtime APIs.
+
+Main files:
+- `src/quant/execution/webhook_server.py`
+- `src/quant/execution/dashboard_state.py`
+
+### Event persistence
+Durable event and forensic persistence.
+
+Main files:
+- `src/quant/execution/event_builders.py`
+- `src/quant/execution/event_store.py`
+- `src/quant/execution/event_types.py`
+
+---
+
+## Main documents
+
+### Architecture and event model
+- `docs/ARCHITECTURE.md`
+- `docs/event_schema_v1.md`
+
+### Deployment and operations
+- `docs/LIVE_DEPLOY.md`
+- `docs/RAILWAY.md`
+- `docs/RAILWAY_RUNBOOK.md`
+
+### Debugging and terminology
+- `docs/DEBUGGING.md`
+- `docs/GLOSSARY.md`
+
+---
+
+## Current persistence direction
+
+The system is in an incremental migration phase.
+
+### Already important in Postgres
+- `action_events`
+- `execution_events`
+- `closed_trades`
+- `equity_snapshots`
+
+### Not yet fully live-wired end-to-end
+- `signal_events`
+
+### Practical rule
+Use this source priority when debugging:
+
+1. Postgres
+2. current deployed code behavior
+3. JSONL/runtime traces
+4. logs
+
+---
 
 ## Setup
+
+Create and activate a virtual environment:
+
 ```bash
-python -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt  # (we'll add later)
-```
 
-## State Space v0.1
-Run the 3-axis market state space pipeline (`X_raw`, `Y_res`, `Z_res`) on OHLCV parquet/csv.
+Install dependencies using the project’s current dependency method in the repo.
+If package/import issues appear, prefer running commands with:
 
-### Input contract
-- Required columns: `ts`, `open`, `high`, `low`, `close`
-- Optional: `volume` (used for rolling VWAP-based equilibrium)
+PYTHONPATH=src
 
-### CLI usage
-```bash
-PYTHONPATH=src python3 scripts/run_state_space_v01.py \
-  --input /absolute/path/to/SOL-USDT_1m.parquet \
-  --output data/state_space/solusdt_state_space_v01.parquet
-```
+Example:
 
-### Outputs
-- Main output parquet: axis raw/residualized values, axis diagnostics, and debug sensor columns.
-- Sidecar basin file: `<output_stem>_basins.csv` with top densest voxel centers from `(X_raw, Y_res, Z_res)`.
+PYTHONPATH=src python3 -m quant.execution.live_executor --once
+Typical workflows
+Local compile check
+PYTHONPATH=src python3 -m py_compile src/quant/execution/live_executor.py
+Run one live-executor cycle
+PYTHONPATH=src python3 -m quant.execution.live_executor --once
+Run one Kraken bot cycle
+PYTHONPATH=src python3 -m quant.execution.kraken_bot --once
+Working rules for live changes
 
-### Programmatic usage
-```python
-from quant.state_space.config import StateSpaceConfig
-from quant.state_space.pipeline import compute_state_space
+Preferred workflow:
 
-out = compute_state_space(df, StateSpaceConfig())
-# out.attrs["basins"] -> list of top voxel basins
-```
+fix in repo
+
+compile/check locally
+
+commit
+
+push
+
+deploy
+
+verify live
+
+verify Postgres persistence
+
+Avoid hotpatching running containers unless absolutely necessary.
+
+State space
+
+The repository also contains state-space / predictive-coding related research components.
+
+For that area, see the corresponding scripts and docs under:
+
+docs/plans/
+
+docs/visual/
+
+Older state-space work remains relevant, but the repo now also includes substantial live execution and forensic infrastructure beyond that earlier scope.
