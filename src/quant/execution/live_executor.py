@@ -15,6 +15,9 @@ import pandas as pd
 from quant.execution.execution_state import write_execution_state
 from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
+from quant.execution.event_builders import build_action_event
+from quant.execution.event_log import append_event_jsonl
+from quant.execution.event_store import insert_action_event
 from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
 from quant.strategies.signal_io import read_signals_jsonl
 from quant.utils.log import get_logger, log_throttled
@@ -67,6 +70,88 @@ def _now_utc() -> pd.Timestamp:
 def _now_iso() -> str:
     return _now_utc().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
+def _events_root() -> Path:
+    if Path("/data").exists():
+        return Path("/data/events")
+    return Path("data/events")
+
+
+def _append_action_event(
+    *,
+    strategy: str,
+    symbol: str,
+    ts_iso: str,
+    seq: int,
+    engine_action: str,
+    action_side: str,
+    reason_code: str,
+    position_before: int,
+    position_after: int,
+    engine_mode_before: str,
+    engine_mode_after: str,
+    blocked: bool = False,
+    block_reason: Optional[str] = None,
+    payload_json: Optional[Dict[str, Any]] = None,
+) -> None:
+    event = build_action_event(
+        strategy=strategy,
+        symbol=symbol.replace("-", ""),
+        ts=ts_iso,
+        seq=int(seq),
+        engine_action=engine_action,
+        action_side=action_side,
+        reason_code=reason_code,
+        venue="kucoin",
+        source_event_id=None,
+        source_signal_event_id=None,
+        position_before=int(position_before),
+        position_after=int(position_after),
+        engine_mode_before=engine_mode_before,
+        engine_mode_after=engine_mode_after,
+        blocked=bool(blocked),
+        block_reason=block_reason,
+    )
+    event["strategy_instance"] = "live_executor"
+    event["config_hash"] = "live_executor_v1"
+
+    if payload_json:
+        event["payload_json"] = dict(payload_json)
+
+    out_path = _events_root() / "action_events" / f"{pd.Timestamp.now('UTC').strftime('%Y%m%d')}.jsonl"
+    append_event_jsonl(out_path, event)
+
+    try:
+        insert_action_event(
+            {
+                "event_id": event["event_id"],
+                "ts": event["ts"],
+                "seq": event["seq"],
+                "strategy": event["strategy"],
+                "strategy_instance": event.get("strategy_instance"),
+                "config_hash": event.get("config_hash"),
+                "symbol": event["symbol"],
+                "venue": event["venue"],
+                "source_signal_event_id": None,
+                "source_event_id": event.get("source_event_id"),
+                "engine_action": event["engine_action"],
+                "action_side": event.get("action_side"),
+                "position_before": event.get("position_before"),
+                "position_after": event.get("position_after"),
+                "qty_before": event.get("qty_before"),
+                "qty_after": event.get("qty_after"),
+                "engine_mode_before": event.get("engine_mode_before"),
+                "engine_mode_after": event.get("engine_mode_after"),
+                "reason_code": event["reason_code"],
+                "reason_detail": event.get("reason_detail"),
+                "blocked": bool(event.get("blocked", False)),
+                "block_reason": event.get("block_reason"),
+                "regime_state": event.get("regime_state"),
+                "gate_name": event.get("gate_name"),
+                "payload_json": dict(event),
+            }
+        )
+    except Exception as e:
+        log.warning("kucoin postgres action event failed: %s", e)
 
 def _resolve_ttp_trail_pct() -> float:
     raw = os.getenv("LIVE_FLIP_TTP_TRAIL_PCT", os.getenv("LIVE_TTP_TRAIL_PCT", "0.012"))
@@ -663,6 +748,47 @@ def run_once(
 
     if action == "hold" and want_side is not None and current_side == want_side and abs(pos) + 1e-12 < float(qty):
         action = f"scale_{want_side}"
+
+        state.n_actions += 1
+    event_seq = int(state.n_actions)
+
+    if action in ("enter_long", "flip_to_long", "scale_long"):
+        action_side = "long"
+        position_after = 1
+    elif action in ("enter_short", "flip_to_short", "scale_short"):
+        action_side = "short"
+        position_after = -1
+    elif action.startswith("exit_"):
+        action_side = "flat"
+        position_after = 0
+    else:
+        action_side = current_side
+        position_after = terminal_pos if terminal_pos != 0 else (1 if pos > 0 else -1 if pos < 0 else 0)
+
+    _append_action_event(
+        strategy="live_executor",
+        symbol=symbol,
+        ts_iso=ts_iso,
+        seq=event_seq,
+        engine_action=action,
+        action_side=action_side,
+        reason_code=event_name,
+        position_before=(1 if pos > 0 else -1 if pos < 0 else 0),
+        position_after=position_after,
+        engine_mode_before=str(terminal_state.get("mode", "UNKNOWN") if terminal_state else "UNKNOWN"),
+        engine_mode_after=str(terminal_state.get("mode", "UNKNOWN") if terminal_state else "UNKNOWN"),
+        blocked=False,
+        block_reason=None,
+        payload_json={
+            "terminal_pos": terminal_pos,
+            "current_side": current_side,
+            "want_side": want_side,
+            "qty": float(qty),
+            "mid": float(mid),
+            "event_name": event_name,
+            "fallback_used": fallback_used,
+        },
+    )
 
     event_sig = _event_sig(ev) if ev is not None else None
     if event_sig is not None and event_sig == state.last_event_sig and action == "hold":
