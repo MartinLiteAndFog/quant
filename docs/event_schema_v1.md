@@ -1,30 +1,146 @@
 # Event Schema v1
 
-## 1. Goals
+## 1. Purpose
 
-- Signals, engine decisions, and executions must be stored separately.
-- The schema must support live debugging, post-mortem analysis, attribution, and later PostgreSQL storage.
-- Dashboard equity should later be derivable from stored account/equity events, not only from ad-hoc runtime state.
-- The first version should stay minimal, explicit, and backward-compatible with current JSONL-based flows.
+This document describes the current event model for the Quant system.
 
-## 2. Event families
-We use three event families:
+The event model exists to support:
 
-1. `signal_events`
-   - Alpha or strategy statements such as long, short, flat, trend flip, re-arm.
-   - Example source: IMBA on Renko.
+- live debugging
+- post-mortem / forensic reconstruction
+- attribution from signal to realized outcome
+- migration from ad-hoc runtime traces to durable Postgres-backed analysis
 
-2. `action_events`
-   - Engine decisions derived from signals and state.
-   - Example actions: enter, flip, tp1_exit, tp2_exit, ttp_exit, sl_exit, be_exit, regime_exit, hold, ignore, blocked.
+The practical target chain is:
 
-3. `execution_events`
-   - Venue or OMS-level execution facts.
-   - Example: order submitted, order filled, order canceled, position synced, rejection, fallback execution.
-   - This includes KuCoin and Kraken order / fill / cancel / rejection / sync events.
+**Signal → Action → Execution → Closed Trade → Equity**
 
-## 3. Minimal fields
-All event families should aim to include these minimal fields where applicable:
+This schema document focuses on the event families themselves.  
+For broader system structure, see `docs/ARCHITECTURE.md`.
+
+---
+
+## 2. Current status
+
+The event model is no longer only aspirational.
+
+### Already active in practice
+- `action_events`
+- `execution_events`
+- `closed_trades`
+- `equity_snapshots`
+
+### Partially active / not yet fully live-wired
+- `signal_events`
+
+### Persistence model
+Current persistence is hybrid:
+
+- JSONL remains as append-only local trace
+- Postgres is becoming the durable forensic source of truth
+
+This is intentional during the migration period.
+
+---
+
+## 3. Event families
+
+## 3.1 `signal_events`
+
+Signals are strategy or alpha statements.
+
+Examples:
+- IMBA long
+- IMBA short
+- trend flip
+- re-arm
+- flat signal
+
+Typical source:
+- IMBA on Renko
+- later potentially other alpha / gating / model outputs
+
+Current status:
+- concept and schema exist
+- not yet fully live-wired end-to-end as authoritative upstream records
+
+---
+
+## 3.2 `action_events`
+
+Actions are engine decisions derived from signals plus current state.
+
+Examples:
+- `enter_long`
+- `enter_short`
+- `flip_to_long`
+- `flip_to_short`
+- `exit_long`
+- `exit_short`
+- `scale_long`
+- `scale_short`
+- `hold`
+- blocked / ignored decisions
+
+Typical producer:
+- execution engine / live executor / bot logic
+
+Current status:
+- Kraken: active
+- KuCoin/live_executor: active
+- persisted to JSONL and Postgres
+
+---
+
+## 3.3 `execution_events`
+
+Executions are OMS / venue facts.
+
+Examples:
+- order fill
+- cancel
+- rejection
+- fallback execution
+- position sync
+- submitted order
+- partial fill
+
+Current status:
+- Kraken: active
+- KuCoin/live_executor: initial writer integrated for successful OMS execution paths
+- currently still coarser than a full order lifecycle model
+
+Important:
+An `execution_event` should represent something that actually happened at the OMS / venue layer, not just an intended action.
+
+---
+
+## 3.4 Related durable objects outside the core event trio
+
+These are not part of the original minimal trio, but are already important in the current architecture.
+
+### `closed_trades`
+Represents realized trade outcomes.
+
+Used for:
+- trading diary
+- trade markers
+- trade segments
+- post-trade analysis
+
+### `equity_snapshots`
+Represents durable equity/account snapshots.
+
+Used for:
+- dashboard equity curves
+- venue/account equity history
+- later attribution from event chain to account evolution
+
+---
+
+## 4. Common minimal fields
+
+All event families should include these fields where applicable:
 
 - `event_id`
 - `event_family`
@@ -35,45 +151,94 @@ All event families should aim to include these minimal fields where applicable:
 - `seq`
 - `position_before`
 - `position_after`
-- `engine_mode_before`
-- `engine_mode_after`
 - `reason_code`
 - `source_event_id`
 - `source_signal_event_id`
 - `blocked`
 - `block_reason`
 
-### Field meanings
+Additional fields vary by event family.
 
-- `event_id`: unique id for the event.
-- `event_family`: one of `signal_events`, `action_events`, `execution_events`.
-- `strategy`: strategy name, for example `imba_countertrend`.
-- `symbol`: canonical symbol, for example `SOLUSDT`.
-- `venue`: execution or source venue, for example `kucoin`, `kraken`, `internal`.
-- `ts`: event timestamp in UTC ISO format.
-- `seq`: monotonically increasing sequence within the producing component.
-- `position_before`: signed position state before the event.
-- `position_after`: signed position state after the event.
-- `engine_mode_before`: mode before processing, for example `WAIT`, `TTP`, `FLAT`.
-- `engine_mode_after`: mode after processing.
-- `reason_code`: compact standardized reason.
-- `source_event_id`: upstream originating event id.
-- `source_signal_event_id`: upstream signal event id if applicable.
-- `blocked`: whether the intended action was blocked.
-- `block_reason`: standardized block reason if blocked.
+---
 
-## 4. Standard reason codes
+## 5. Field meanings
 
-Initial standardized `reason_code` / `block_reason` values:
+- `event_id`: unique identifier for the event
+- `event_family`: one of `signal_events`, `action_events`, `execution_events`
+- `strategy`: producing strategy or engine name
+- `symbol`: canonical symbol, for example `SOLUSDT`
+- `venue`: source or execution venue, for example `internal`, `kucoin`, `kraken`
+- `ts`: UTC timestamp in ISO format
+- `seq`: monotonically increasing sequence within the producing component
+- `position_before`: signed position state before the event
+- `position_after`: signed position state after the event
+- `reason_code`: compact normalized reason
+- `source_event_id`: upstream event if applicable
+- `source_signal_event_id`: upstream signal event id if applicable
+- `blocked`: whether the intended action was blocked
+- `block_reason`: normalized reason for blocking
 
-### Signal reasons
+### Additional action-only fields
+- `engine_action`
+- `action_side`
+- `engine_mode_before`
+- `engine_mode_after`
+
+### Additional execution-only fields
+- `execution_kind`
+- `order_action`
+- `order_id`
+- `client_oid`
+- `side`
+- `qty`
+- `price`
+- `reduce_only`
+- `status`
+- `reject_reason`
+
+---
+
+## 6. Linking rules
+
+## 6.1 Intended linkage direction
+
+The intended linkage is:
+
+- `signal_events` link upstream strategy statements
+- `action_events` link to `source_signal_event_id`
+- `execution_events` link to `source_action_event_id` and/or `source_signal_event_id`
+- `closed_trades` later link back to upstream actions/executions where useful
+- `equity_snapshots` remain time-series state, not necessarily one-to-one linked
+
+---
+
+## 6.2 Current practical rule
+
+Do **not** force foreign-key-style linkage until the upstream producer is genuinely live and reliable.
+
+That means:
+
+- `source_signal_event_id` may legitimately be `None`
+- `source_action_event_id` may legitimately be `None`
+- this is preferable to fake linkage or broken references
+
+This is a temporary but deliberate migration rule.
+
+---
+
+## 7. Standardized reason and block codes
+
+These are target-normalized values.  
+Not all current producers are fully aligned yet.
+
+## 7.1 Signal reasons
 - `imba_long`
 - `imba_short`
 - `trend_flip`
 - `rearm`
 - `flat_signal`
 
-### Action reasons
+## 7.2 Action reasons
 - `enter_signal`
 - `opposite_imba`
 - `same_dir_ignored`
@@ -87,7 +252,7 @@ Initial standardized `reason_code` / `block_reason` values:
 - `fallback_enter`
 - `position_sync`
 
-### Block reasons
+## 7.3 Block reasons
 - `cooldown_block`
 - `stale_block`
 - `duplicate_block`
@@ -98,9 +263,15 @@ Initial standardized `reason_code` / `block_reason` values:
 - `risk_block`
 - `size_block`
 
-## 5. Canonical event shapes
+Important:
+Current production data may still contain coarse or placeholder values such as `none`.  
+Reason-code standardization is still in progress.
 
-### signal_event
+---
+
+## 8. Canonical event examples
+
+## 8.1 Example `signal_event`
 
 ```json
 {
@@ -119,25 +290,26 @@ Initial standardized `reason_code` / `block_reason` values:
   "source_event_id": "renko:SOLUSDT:2026-03-06T11:23:00Z:123",
   "position_before": 1,
   "position_after": 1,
-  "engine_mode_before": "TTP",
-  "engine_mode_after": "TTP",
   "blocked": false,
   "block_reason": null
 }
 
+##8.2 example action_event
 {
-  "event_id": "action:imba_countertrend:SOLUSDT:2026-03-06T11:23:00Z:455",
+  "event_id": "action:live_executor:SOLUSDT:2026-03-06T11:23:00Z:455",
   "event_family": "action_events",
-  "strategy": "imba_countertrend",
+  "strategy": "live_executor",
+  "strategy_instance": "live_executor",
+  "config_hash": "live_executor_v1",
   "symbol": "SOLUSDT",
-  "venue": "internal",
+  "venue": "kucoin",
   "ts": "2026-03-06T11:23:00Z",
   "seq": 455,
-  "engine_action": "flip",
+  "engine_action": "flip_to_short",
   "action_side": "short",
   "reason_code": "opposite_imba",
-  "source_event_id": "renko:SOLUSDT:2026-03-06T11:23:00Z:123",
-  "source_signal_event_id": "signal:imba:SOLUSDT:2026-03-06T11:23:00Z:77",
+  "source_event_id": null,
+  "source_signal_event_id": null,
   "position_before": 1,
   "position_after": -1,
   "engine_mode_before": "TTP",
@@ -146,52 +318,110 @@ Initial standardized `reason_code` / `block_reason` values:
   "block_reason": null
 }
 
+#8.3 Example execution_event
 {
-  "event_id": "execution:kucoin:SOLUSDT:2026-03-06T11:23:01Z:991",
+  "event_id": "execution:live_executor:SOLUSDT:2026-03-06T11:23:01Z:991:kucoin",
   "event_family": "execution_events",
-  "strategy": "imba_countertrend",
+  "strategy": "live_executor",
+  "strategy_instance": "live_executor",
+  "config_hash": "live_executor_v1",
   "symbol": "SOLUSDT",
   "venue": "kucoin",
   "ts": "2026-03-06T11:23:01Z",
   "seq": 991,
   "execution_kind": "fill",
   "order_action": "sell",
-  "reason_code": "position_sync",
-  "source_signal_event_id": "signal:imba:SOLUSDT:2026-03-06T11:23:00Z:77",
+  "reason_code": "opposite_imba",
+  "source_event_id": null,
+  "source_signal_event_id": null,
   "position_before": 1,
   "position_after": -1,
   "blocked": false,
-  "block_reason": null
+  "block_reason": null,
+  "client_oid": "tp_flip:PO:1741682581000",
+  "order_id": "1234567890",
+  "side": "sell",
+  "qty": 54,
+  "price": 86.2,
+  "reduce_only": true,
+  "status": "fill",
+  "reject_reason": null,
+  "payload_json": {}
 }
-{
-  "event_id": "execution:kraken:SOLUSDT:2026-03-06T11:23:02Z:992",
-  "event_family": "execution_events",
-  "strategy": "imba_countertrend",
+ 8.4 example closed_trade
+ {
+  "trade_id": "trade:kucoin:SOLUSDT:2026-03-06T10:00:00Z:2026-03-06T11:23:01Z:1",
+  "venue": "kucoin",
   "symbol": "SOLUSDT",
-  "venue": "kraken",
-  "ts": "2026-03-06T11:23:02Z",
-  "seq": 992,
-  "execution_kind": "fill",
-  "order_action": "buy",
-  "reason_code": "trailing_tp_hit",
-  "source_signal_event_id": "signal:imba:SOLUSDT:2026-03-06T11:23:00Z:77",
-  "position_before": -1,
-  "position_after": 0,
-  "blocked": false,
-  "block_reason": null
+  "entry_ts": "2026-03-06T10:00:00Z",
+  "exit_ts": "2026-03-06T11:23:01Z",
+  "side": "long",
+  "qty": 54,
+  "entry_price": 84.7,
+  "exit_price": 86.2,
+  "pnl_pct": 0.0177,
+  "exit_event": "flip_exit",
+  "strategy": "live_executor",
+  "strategy_instance": "live_executor",
+  "config_hash": "live_executor_v1"
+}
+8.5 Example equity_snapshot
+
+{
+  "ts": "2026-03-06T11:23:01Z",
+  "venue": "kucoin",
+  "account": "main",
+  "symbol": null,
+  "equity": 176.04,
+  "currency": "USD",
+  "source": "dashboard_state.load_real_equity_history",
+  "payload_json": {}
 }
 
-## 6. Storage direction
+9. Storage direction
 
-Phase 1:
-- Keep current JSONL flow alive.
-- Emit richer events in parallel.
-- Do not break existing readers yet.
+Phase 1
 
-Phase 2:
-- Add PostgreSQL as the durable event store.
-- Store `signal_events`, `action_events`, `execution_events`, and later `equity_events`.
-- Dashboard and analytics should progressively read from durable stored events instead of ad-hoc runtime files.
+keep JSONL flow alive
 
-Phase 3:
-- Add derived views for strategy attribution, realized pnl, live equity, and multi-bot aggregation.
+emit richer events in parallel
+
+do not break existing readers
+
+Phase 2
+
+persist action_events, execution_events, closed_trades, equity_snapshots
+
+progressively move dashboard and analytics to Postgres-first reads
+
+Phase 3
+
+fully live-wire signal_events
+
+add reliable upstream linkage
+
+add derived SQL views for attribution and forensic timelines
+
+10. Practical migration rules
+
+Prefer incremental migration over big rewrites
+
+Writers first
+
+Readers second
+
+Linkage third
+
+Documentation fourth
+
+Cleanup after coverage is real
+
+And:
+
+Postgres should become the forensic truth
+
+JSONL should remain a secondary local trace
+
+placeholder linkage is better than fake linkage
+
+reason-code normalization is still an active task
