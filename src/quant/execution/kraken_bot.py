@@ -16,7 +16,7 @@ from quant.execution.event_log import append_event_jsonl
 from quant.execution.event_types import ExecutionEvent
 from quant.execution.kraken_futures import KrakenFuturesClient
 from quant.utils.log import get_logger
-from quant.execution.event_store import insert_equity_snapshot
+from quant.execution.event_store import insert_equity_snapshot, insert_execution_event
 
 
 log = get_logger("quant.kraken_bot")
@@ -111,6 +111,30 @@ def _append_execution_event(
     )
     out_path = _events_root() / "execution_events" / f"{pd.Timestamp.now('UTC').strftime('%Y%m%d')}.jsonl"
     append_event_jsonl(out_path, event)
+    try:
+        insert_execution_event(
+            {
+                "event_id": event["event_id"],
+                "ts": event["ts"],
+                "seq": event["seq"],
+                "symbol": event["symbol"],
+                "venue": event["venue"],
+                "source_action_event_id": None,
+                "execution_stage": str(event.get("execution_kind") or "fill"),
+                "order_id": event.get("order_id"),
+                "client_oid": event.get("client_oid"),
+                "side": event.get("side") or event.get("order_action"),
+                "qty": event.get("qty"),
+                "price": event.get("price"),
+                "reduce_only": event.get("reduce_only"),
+                "status": event.get("status"),
+                "reject_reason": event.get("reject_reason"),
+                "payload_json": dict(event),
+            }
+        )
+    except Exception as e:
+        log.warning("kraken postgres execution event failed: %s", e)
+
 
 
 # ---------------------------------------------------------------------------
