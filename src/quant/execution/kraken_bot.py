@@ -114,8 +114,7 @@ def _append_execution_event(
     )
     out_path = _events_root() / "execution_events" / f"{pd.Timestamp.now('UTC').strftime('%Y%m%d')}.jsonl"
     append_event_jsonl(out_path, event)
-    
-    log.warning("kraken postgres action event failed: %s", e)
+
     try:
         insert_execution_event(
             {
