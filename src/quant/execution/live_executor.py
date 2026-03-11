@@ -15,9 +15,9 @@ import pandas as pd
 from quant.execution.execution_state import write_execution_state
 from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
-from quant.execution.event_builders import build_action_event
+from quant.execution.event_builders import build_action_event, build_execution_event
 from quant.execution.event_log import append_event_jsonl
-from quant.execution.event_store import insert_action_event
+from quant.execution.event_store import insert_action_event, insert_execution_event
 from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
 from quant.strategies.signal_io import read_signals_jsonl
 from quant.utils.log import get_logger, log_throttled
@@ -155,6 +155,83 @@ def _append_action_event(
         log.warning("kucoin postgres action event failed: %s", e)
 
 
+def _append_execution_event(
+    *,
+    strategy: str,
+    symbol: str,
+    ts_iso: str,
+    seq: int,
+    execution_kind: str,
+    order_action: str,
+    reason_code: str,
+    position_before: int,
+    position_after: int,
+    order_id: Optional[str] = None,
+    client_oid: Optional[str] = None,
+    side: Optional[str] = None,
+    qty: Optional[float] = None,
+    price: Optional[float] = None,
+    reduce_only: Optional[bool] = None,
+    status: Optional[str] = None,
+    reject_reason: Optional[str] = None,
+    payload_json: Optional[Dict[str, Any]] = None,
+) -> None:
+    event = build_execution_event(
+        strategy=strategy,
+        symbol=symbol.replace("-", ""),
+        ts=ts_iso,
+        seq=int(seq),
+        execution_kind=execution_kind,
+        order_action=order_action,
+        reason_code=reason_code,
+        venue="kucoin",
+        source_event_id=None,
+        source_signal_event_id=None,
+        position_before=int(position_before),
+        position_after=int(position_after),
+        blocked=False,
+        block_reason=None,
+        client_oid=client_oid,
+        order_id=order_id,
+        side=side,
+        qty=qty,
+        price=price,
+        reduce_only=reduce_only,
+        status=status,
+        reject_reason=reject_reason,
+        strategy_instance="live_executor",
+        config_hash="live_executor_v1",
+        payload_json=payload_json or {},
+    )
+
+    out_path = _events_root() / "execution_events" / f"{pd.Timestamp.now('UTC').strftime('%Y%m%d')}.jsonl"
+    append_event_jsonl(out_path, event)
+
+    try:
+        insert_execution_event(
+            {
+                "event_id": event["event_id"],
+                "ts": event["ts"],
+                "seq": event["seq"],
+                "symbol": event["symbol"],
+                "venue": event["venue"],
+                "source_action_event_id": None,
+                "execution_stage": str(event.get("execution_kind") or "fill"),
+                "order_id": event.get("order_id"),
+                "client_oid": event.get("client_oid"),
+                "side": event.get("side") or event.get("order_action"),
+                "qty": event.get("qty"),
+                "price": event.get("price"),
+                "reduce_only": event.get("reduce_only"),
+                "status": event.get("status"),
+                "reject_reason": event.get("reject_reason"),
+                "payload_json": dict(event),
+            }
+        )
+    except Exception as e:
+        log.warning("kucoin postgres execution event failed: %s", e)
+
+
 def _resolve_ttp_trail_pct() -> float:
     raw = os.getenv("LIVE_FLIP_TTP_TRAIL_PCT", os.getenv("LIVE_TTP_TRAIL_PCT", "0.012"))
     try:
@@ -219,6 +296,7 @@ class ExecutorState:
     last_event_sig: Optional[str] = None
     last_action: Optional[str] = None
     n_actions: int = 0
+    n_executions: int = 0
     last_terminal_sig: Optional[str] = None
 
 
@@ -233,6 +311,7 @@ def _read_state(path: Path) -> ExecutorState:
             last_event_sig=d.get("last_event_sig"),
             last_action=d.get("last_action"),
             n_actions=int(d.get("n_actions", 0)),
+            n_executions=int(d.get("n_executions", 0)),
             last_terminal_sig=d.get("last_terminal_sig"),
         )
     except Exception:
@@ -754,13 +833,13 @@ def run_once(
         position_after = position_before
 
     state.n_actions += 1
-    event_seq = int(state.n_actions)
+    action_seq = int(state.n_actions)
 
     _append_action_event(
         strategy="live_executor",
         symbol=symbol,
         ts_iso=ts_iso,
-        seq=event_seq,
+        seq=action_seq,
         engine_action=action,
         action_side=action_side,
         reason_code=event_name,
@@ -837,18 +916,85 @@ def run_once(
                 return bool(res.get("ok", False))
             return bool(getattr(res, "ok", False))
 
+        def _details(res: Any) -> Dict[str, Any]:
+            if isinstance(res, dict):
+                d = res.get("details", {})
+                return d if isinstance(d, dict) else {}
+            d = getattr(res, "details", {})
+            return d if isinstance(d, dict) else {}
+
+        def _mode(res: Any) -> str:
+            if isinstance(res, dict):
+                return str(res.get("mode", ""))
+            return str(getattr(res, "mode", ""))
+
+        def _execution_side(default_side: str, details: Dict[str, Any]) -> str:
+            return str(details.get("side") or default_side)
+
+        def _execution_qty(default_qty: float, details: Dict[str, Any]) -> Optional[float]:
+            return _coerce_float(details.get("qty", default_qty))
+
+        def _execution_price(details: Dict[str, Any]) -> Optional[float]:
+            return _coerce_float(details.get("price"))
+
         target_qty_for_verify = float(qty)
         target_side_for_verify: Optional[str] = want_side if action.startswith(("enter_", "flip_to_", "scale_")) else None
 
         if action.startswith("enter_") and want_side is not None:
             res = oms.enter(symbol=symbol, side=want_side, qty=float(qty))
             log.info("executor enter result=%s", res)
+            if _ok(res):
+                details = _details(res)
+                state.n_executions += 1
+                _append_execution_event(
+                    strategy="live_executor",
+                    symbol=symbol,
+                    ts_iso=_now_iso(),
+                    seq=int(state.n_executions),
+                    execution_kind="fill",
+                    order_action=_execution_side("buy" if want_side == "long" else "sell", details),
+                    reason_code=event_name,
+                    position_before=position_before,
+                    position_after=position_after,
+                    order_id=str(details.get("order_id") or "") or None,
+                    client_oid=str(details.get("client_id") or "") or None,
+                    side=_execution_side("buy" if want_side == "long" else "sell", details),
+                    qty=_execution_qty(float(qty), details),
+                    price=_execution_price(details),
+                    reduce_only=False,
+                    status=_mode(res) or "fill",
+                    reject_reason=None,
+                    payload_json={"action": action, "result": details, "event_name": event_name},
+                )
 
         elif action.startswith("flip_to_") and want_side is not None:
             flat_res = oms.exit_tp_or_flip(symbol=symbol, side=current_side, qty=abs(float(pos)), flip_to=None)
             log.info("executor flip flatten result=%s", flat_res)
 
             if _ok(flat_res):
+                flat_details = _details(flat_res)
+                state.n_executions += 1
+                _append_execution_event(
+                    strategy="live_executor",
+                    symbol=symbol,
+                    ts_iso=_now_iso(),
+                    seq=int(state.n_executions),
+                    execution_kind="fill",
+                    order_action=_execution_side("sell" if current_side == "long" else "buy", flat_details),
+                    reason_code=event_name,
+                    position_before=position_before,
+                    position_after=0,
+                    order_id=str(flat_details.get("order_id") or "") or None,
+                    client_oid=str(flat_details.get("client_id") or "") or None,
+                    side=_execution_side("sell" if current_side == "long" else "buy", flat_details),
+                    qty=_execution_qty(abs(float(pos)), flat_details),
+                    price=_execution_price(flat_details),
+                    reduce_only=True,
+                    status=_mode(flat_res) or "fill",
+                    reject_reason=None,
+                    payload_json={"action": "flip_flatten", "result": flat_details, "event_name": event_name},
+                )
+
                 pos_after_flat = float(broker.get_position(symbol))
                 if abs(pos_after_flat) > 1e-12:
                     log.warning("executor flip aborted: not flat after flatten pos_after=%s", pos_after_flat)
@@ -879,6 +1025,29 @@ def run_once(
                         target_qty_for_verify = float(flip_qty)
                         res = oms.enter(symbol=symbol, side=want_side, qty=float(flip_qty))
                         log.info("executor flip re-enter result=%s", res)
+                        if _ok(res):
+                            details = _details(res)
+                            state.n_executions += 1
+                            _append_execution_event(
+                                strategy="live_executor",
+                                symbol=symbol,
+                                ts_iso=_now_iso(),
+                                seq=int(state.n_executions),
+                                execution_kind="fill",
+                                order_action=_execution_side("buy" if want_side == "long" else "sell", details),
+                                reason_code=event_name,
+                                position_before=0,
+                                position_after=position_after,
+                                order_id=str(details.get("order_id") or "") or None,
+                                client_oid=str(details.get("client_id") or "") or None,
+                                side=_execution_side("buy" if want_side == "long" else "sell", details),
+                                qty=_execution_qty(float(flip_qty), details),
+                                price=_execution_price(details),
+                                reduce_only=False,
+                                status=_mode(res) or "fill",
+                                reject_reason=None,
+                                payload_json={"action": action, "result": details, "event_name": event_name},
+                            )
             else:
                 log.warning("executor flip aborted: flatten failed")
 
@@ -887,6 +1056,29 @@ def run_once(
             log.info("executor exit result=%s", res)
             target_side_for_verify = None
             target_qty_for_verify = abs(float(pos))
+            if _ok(res):
+                details = _details(res)
+                state.n_executions += 1
+                _append_execution_event(
+                    strategy="live_executor",
+                    symbol=symbol,
+                    ts_iso=_now_iso(),
+                    seq=int(state.n_executions),
+                    execution_kind="fill",
+                    order_action=_execution_side("sell" if current_side == "long" else "buy", details),
+                    reason_code=event_name,
+                    position_before=position_before,
+                    position_after=0,
+                    order_id=str(details.get("order_id") or "") or None,
+                    client_oid=str(details.get("client_id") or "") or None,
+                    side=_execution_side("sell" if current_side == "long" else "buy", details),
+                    qty=_execution_qty(abs(float(pos)), details),
+                    price=_execution_price(details),
+                    reduce_only=True,
+                    status=_mode(res) or "fill",
+                    reject_reason=None,
+                    payload_json={"action": action, "result": details, "event_name": event_name},
+                )
 
         elif action.startswith("scale_") and want_side is not None:
             add_qty = max(0.0, float(qty) - abs(float(pos)))
@@ -894,6 +1086,29 @@ def run_once(
                 target_qty_for_verify = abs(float(pos)) + float(add_qty)
                 res = oms.enter(symbol=symbol, side=want_side, qty=add_qty)
                 log.info("executor scale result=%s add_qty=%s target_qty=%s pos_before=%s", res, add_qty, qty, pos)
+                if _ok(res):
+                    details = _details(res)
+                    state.n_executions += 1
+                    _append_execution_event(
+                        strategy="live_executor",
+                        symbol=symbol,
+                        ts_iso=_now_iso(),
+                        seq=int(state.n_executions),
+                        execution_kind="fill",
+                        order_action=_execution_side("buy" if want_side == "long" else "sell", details),
+                        reason_code=event_name,
+                        position_before=position_before,
+                        position_after=position_after,
+                        order_id=str(details.get("order_id") or "") or None,
+                        client_oid=str(details.get("client_id") or "") or None,
+                        side=_execution_side("buy" if want_side == "long" else "sell", details),
+                        qty=_execution_qty(float(add_qty), details),
+                        price=_execution_price(details),
+                        reduce_only=False,
+                        status=_mode(res) or "fill",
+                        reject_reason=None,
+                        payload_json={"action": action, "result": details, "event_name": event_name},
+                    )
             else:
                 log.info("executor scale skipped add_qty=0 target_qty=%s pos_before=%s", qty, pos)
 
