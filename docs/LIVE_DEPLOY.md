@@ -1,192 +1,439 @@
-# Live-Betrieb & Cloud-Deployment
+Ja — `LIVE_DEPLOY.md` ist an mehreren Stellen veraltet.
 
-## Woher kommt der SOL-Kurs (Ticker)?
+Die größten Probleme darin:
 
-Der **Kurs kommt von KuCoin**: Sobald der Live-Service läuft, holt er Bid/Ask über die **KuCoin Futures API** (Ticker-Endpoint). Es wird also dieselbe Quelle genutzt wie für die Orders – keine separate Datenquelle. Der `KucoinFuturesBroker` ruft dafür `get_best_bid_ask("SOL-USDT")` auf und erhält die aktuellen Preise von KuCoin.
+* es spricht noch von **Postgres später**, obwohl wir dafür schon mitten in der Migration sind
+* es beschreibt die Persistenz noch zu stark als `data/live`- und JSONL-/Parquet-Welt
+* die neue **Postgres-first-Forensik** fehlt
+* `live_executor`-Event-Persistenz und Dashboard-Postgres-first-Leser fehlen
+* Railway-/Service-Bild ist zu grob für den aktuellen Stand
 
-## API-Key eintragen
+Wir sollten es neu schreiben, aber **pragmatisch** und nicht als Monster-Dokument.
 
-**Nicht im Code.** Nur über Umgebungsvariablen:
+Erster Schritt: Ersetze `docs/LIVE_DEPLOY.md` komplett durch diesen Inhalt.
 
-| Variable | Beschreibung |
-|----------|--------------|
-| `KUCOIN_FUTURES_API_KEY` | API Key aus KuCoin (API Management) |
-| `KUCOIN_FUTURES_API_SECRET` | API Secret |
-| `KUCOIN_FUTURES_PASSPHRASE` | Passphrase, die du beim Anlegen des Keys gesetzt hast |
+````md
+# Live Deploy
 
-**Lokal:**
+## Purpose
 
-1. Im Projektroot `.env` anlegen (wird von git ignoriert, wenn in `.gitignore`).
-2. Inhalt an `.env.example` anlehnen und die Platzhalter durch echte Werte ersetzen.
-3. Beim Start der App werden die Werte geladen (z.B. mit `python-dotenv` in deinem Startscript).
+This document describes how the live Quant stack is currently deployed and operated.
 
-**Cloud (24/7):**
+It focuses on:
 
-- In der jeweiligen Plattform die **Environment Variables** setzen (keine `.env`-Datei committen).
-- Beispiele:
-  - **Railway:** Project → Variables → Add Variable
-  - **Fly.io:** `fly secrets set KUCOIN_FUTURES_API_KEY=...` (und Secret/Passphrase)
-  - **Render / Heroku / AWS:** jeweilige „Environment“- oder „Config Vars“-Sektion
+- live services
+- environment variables
+- runtime persistence
+- dashboard/runtime data flow
+- current deployment reality during the Postgres migration
 
-KuCoin: **API Management** → Create API → **Futures**-Berechtigung aktivieren, IP-Whitelist optional.
+For system structure, see:
 
-## 24/7 in der Cloud laufen lassen
+- `docs/ARCHITECTURE.md`
+- `docs/event_schema_v1.md`
+- `docs/RAILWAY_RUNBOOK.md`
 
-Ein möglicher Aufbau:
+---
 
-1. **Ein Service** führt aus:
-   - Webhook-Server (empfängt TradingView-Signale),
-   - optional ein Worker/Loop, der bei neuem Signal den OMS aufruft und Orders an KuCoin sendet,
-   - **Dashboard** (gleiche App, andere Pfade) für Status und Oberfläche.
+## Current deployment model
 
-2. **Deployment-Optionen:**
-   - **Railway / Render / Fly.io:** Repo verbinden, Build-Befehl (z.B. `pip install -e .`), Start: `uvicorn quant.execution.webhook_server:app --host 0.0.0.0 --port $PORT`. Env-Variablen wie oben setzen.
-   - **VPS (Ubuntu):** Systemd-Service oder Docker, gleicher uvicorn-Befehl, `0.0.0.0` damit der Server von außen erreichbar ist.
+The live stack is currently a small set of long-running services around:
 
-3. **Webhook von TradingView:** URL auf deine Cloud-URL setzen (z.B. `https://deine-app.railway.app/webhook/tradingview`). Wenn `WEBHOOK_TOKEN` gesetzt ist, im TradingView-Webhook den Header `x-webhook-token` mitschicken.
+- live signal generation
+- live execution
+- dashboard / API
+- venue adapters
+- Postgres-backed forensic persistence
 
-4. **Persistenz:** `data/signals` und `data/live` sollten auf einem Volume/verzeichnis liegen, das bei Restarts erhalten bleibt (z.B. Railway Volume, oder gebundenes Verzeichnis auf dem VPS).
+Main execution venues currently in scope:
 
-## Desktop-Oberfläche
+- KuCoin Futures
+- Kraken Futures
 
-Es gibt eine **Web-Dashboard-Grundlage** (siehe unten). Du öffnest sie im Browser (lokal oder unter der Cloud-URL). Später kann daraus eine „richtige“ Desktop-App werden (z.B. Electron/Tauri), die dieselben API-Routen nutzt.
+---
 
-- **Lokal:** Nach Start des Servers: `http://127.0.0.1:8000/dashboard`
-- **Cloud:** `https://deine-app.railway.app/dashboard`
+## Core live services
 
-Die gleichen API-Routen (`/api/status`, `/api/position`, …) können dann von einer eigenen Desktop-App angefragt werden.
+## 1. Dashboard / API service
 
-## Regime Store und Dashboard-Overlays
+Main entrypoint:
+- `quant.execution.webhook_server:app`
 
-Neue Standardpfade (optional per Env konfigurierbar):
+Responsibilities:
+- dashboard UI
+- dashboard APIs
+- regime endpoints
+- fills / trade views
+- state-space and chart endpoints
+- some runtime refresh helpers
 
-- `REGIME_DB_PATH` (Default: `data/live/regime.db`)
-- `DASHBOARD_RENKO_PARQUET` (Default: `data/live/renko_latest.parquet`)
-- `DASHBOARD_TRADES_PARQUET` (Default: `data/live/trades.parquet`)
-- `DASHBOARD_LEVELS_JSON` (Default: `data/live/execution_state.json`)
-
-Neue Dashboard-APIs:
-
-- `/api/regime/latest?symbol=SOL-USDT`
-- `/api/regime/transitions?symbol=SOL-USDT&limit=50`
-- `/api/dashboard/chart?symbol=SOL-USDT&hours=336&max_points=4000`
-
-Die Dashboard-Chart zeigt:
-
-- Renko-Chart (scroll/zoom),
-- Gate-Shading (ON=grün, OFF=blau) mit transparenzbasierter Confidence,
-- Trades (Marker),
-- aktive Level (`SL`, `TTP`, `TP1`, `TP2`) aus `DASHBOARD_LEVELS_JSON`.
-
-### Optional: Renko-Cache automatisch aktualisieren
-
-Wenn du willst, kann der Webservice selbst im Hintergrund den Dashboard-Renko-Cache aktualisieren:
-
-- `ENABLE_DASHBOARD_RENKO_UPDATER=1`
-- `DASHBOARD_RENKO_BOX=0.1`
-- `DASHBOARD_RENKO_DAYS_BACK=14`
-- `DASHBOARD_RENKO_STEP_HOURS=6`
-- `DASHBOARD_RENKO_POLL_SEC=60`
-- `DASHBOARD_RENKO_STALE_MIN=1`
-- `DASHBOARD_RENKO_REFRESH_COOLDOWN_SEC=15`
-- `DASHBOARD_UI_REFRESH_MS=4000`
-- `DASHBOARD_STATESPACE_REFRESH_MS=15000`
-- `DASHBOARD_API_CACHE_SEC=8`
-- `DASHBOARD_FILLS_REFRESH_COOLDOWN_SEC=20`
-- `DASHBOARD_FILLS_FETCH_LIMIT=200`
-- `DASHBOARD_FILL_MARKER_LIMIT=1200`
-- `DASHBOARD_FILLS_CLIENT_OID_PREFIXES=entry-,tp_flip-,TP_,SL_,manual-`
-- `DASHBOARD_FILLS_INCLUDE_EMPTY_CLIENT_OID=0`
-- `DASHBOARD_LOG_THROTTLE_SEC=60`
-- `KUCOIN_LOG_THROTTLE_SEC=30`
-- `LIVE_EXECUTOR_LOG_THROTTLE_SEC=60`
-- `LIVE_EXECUTOR_NO_SIGNAL_LOG_SEC=60`
-- `LIVE_SIGNAL_LOG_THROTTLE_SEC=60`
-- `LIVE_SIGNAL_STATUS_LOG_SEC=60`
-- `LIVE_SIGNAL_ERROR_LOG_SEC=30`
-
-Hinweis: Das aktualisiert nur die Dashboard-Renko-Datei (`DASHBOARD_RENKO_PARQUET`), nicht die Trading-Logik an sich.
-
-### Manual order command (with trade-log integration)
-
-Manual orders can be sent via CLI and are written to `expected_trades.jsonl` (with manual event tags), so fills appear in the dashboard trade/fills log with reason labels:
+Typical start command:
 
 ```bash
-PYTHONPATH=src python3 -m quant.execution.manual_orders --symbol SOL-USDT --action cancel_short
-```
+uvicorn quant.execution.webhook_server:app --host 0.0.0.0 --port $PORT
+````
 
-## Live-Ausführung (Signal + Gate-Routing + Trailing + Executor)
+---
 
-Der Live-Flow besteht aus zwei Worker-Prozessen:
+## 2. Live signal worker
 
-1. `live_signal_worker`
-   - erzeugt IMBA-Signale mit Lookback-Historie,
-   - baut parallel einen inversen Trendfolger-Stream,
-   - wählt je nach Gate den aktiven Stream:
-     - `gate_on=1` -> `countertrend` (IMBA)
-     - `gate_on=0` -> `trendfollower`
-   - schreibt aktive Signale nach `SIGNALS_DIR/<SYMBOL>/<day>.jsonl`
-   - persistiert Strategy-Streams zusätzlich unter:
-     - `.../countertrend/<day>.jsonl`
-     - `.../trendfollower/<day>.jsonl`
+Responsibilities:
 
-2. `live_executor`
-   - liest den aktiven Stream,
-   - führt OMS-Entry/Flip aus,
-   - berechnet und schreibt laufende `SL/TTP/TP1/TP2` Trailing-Level in `DASHBOARD_LEVELS_JSON`.
+* generate live strategy signals
+* write active signal stream
+* maintain strategy-specific signal streams
 
-Empfohlene Safety-Defaults:
+Typical output:
 
-- `LIVE_TRADING_ENABLED=0` (hart aus)
-- `LIVE_EXECUTOR_DRY_RUN=1` (nur simulieren)
-- `LIVE_EXECUTOR_MAX_EUR=20`
-- `LIVE_EXECUTOR_LEVERAGE=1`
-- `LIVE_EXECUTOR_SYMBOL_ALLOWLIST=SOLUSDT,SOL-USDT`
-- `LIVE_TTP_TRAIL_PCT=0.012`
-- `LIVE_WAIT_SL_PCT=0.02`
-- `LIVE_DEFAULT_GATE_ON=1`
+* `SIGNALS_DIR/<SYMBOL>/<day>.jsonl`
+* strategy substreams such as:
 
-Worker-Start (z. B. in zweitem Railway-Service):
+  * `countertrend`
+  * `trendfollower`
+
+---
+
+## 3. Live executor
+
+Main entrypoint:
+
+* `quant.execution.live_executor`
+
+Responsibilities:
+
+* read live signals
+* align signals with current Renko/backtest state
+* derive engine action
+* call OMS / venue broker
+* write `action_events`
+* write `execution_events` for successful OMS execution paths
+* write active levels for dashboard display
+
+Current practical status:
+
+* KuCoin `action_events` are live and verified in Postgres
+* KuCoin `execution_events` are wired in and deployed, awaiting confirmation on the next real execution-triggered event
+
+---
+
+## 4. Kraken bot
+
+Main entrypoint:
+
+* `quant.execution.kraken_bot`
+
+Responsibilities:
+
+* live Kraken execution path
+* event persistence
+* equity persistence
+* bot state reconciliation with venue
+
+Current note:
+
+* Kraken event/equity persistence is already integrated into the Postgres migration path
+
+---
+
+## Market data and price source
+
+## KuCoin price source
+
+For KuCoin live execution, bid/ask and live order placement come from the KuCoin Futures API through:
+
+* `KucoinFuturesBroker`
+* `get_best_bid_ask("SOL-USDT")`
+
+This means live price checks and execution use the same exchange source.
+
+---
+
+## Secrets and credentials
+
+Never place credentials in code.
+
+Use environment variables only.
+
+### KuCoin Futures
+
+* `KUCOIN_FUTURES_API_KEY`
+* `KUCOIN_FUTURES_API_SECRET`
+* `KUCOIN_FUTURES_PASSPHRASE`
+
+### Kraken
+
+Use the corresponding Kraken environment variables configured by the Kraken client/bot deployment.
+
+### Webhook / service auth
+
+Use environment variables for any webhook token or service secret.
+
+---
+
+## Local vs cloud secret handling
+
+## Local
+
+* keep secrets in a local `.env` or shell environment
+* never commit them
+
+## Cloud / Railway
+
+* set secrets in Railway Variables
+* do not rely on committed `.env` files
+
+---
+
+## Persistence model
+
+## Current practical rule
+
+The live system currently uses a hybrid persistence model:
+
+* JSONL remains as local append-only trace
+* some runtime files remain operational state
+* Postgres is becoming the durable forensic source of truth
+
+This is intentional during migration.
+
+---
+
+## Runtime files still in use
+
+Examples of runtime/local artifacts still used operationally:
+
+* signal JSONL streams
+* active level JSON / execution state files
+* Renko cache parquet files
+* metrics JSON / CSV
+* expected trade traces
+* local event JSONL files under `/data/events`
+
+These are still useful for:
+
+* operational inspection
+* fallback compatibility
+* local debugging
+
+But they are no longer the desired long-term forensic truth layer.
+
+---
+
+## Postgres-first direction
+
+The current architecture is moving toward:
+
+**Signal → Action → Execution → Closed Trade → Equity**
+
+with Postgres as the main queryable store.
+
+Already active or partly active in Postgres:
+
+* `action_events`
+* `execution_events`
+* `closed_trades`
+* `equity_snapshots`
+
+Not yet fully live-wired:
+
+* `signal_events`
+
+Important:
+JSONL is still emitted in parallel and should currently be treated as a secondary trace, not the preferred truth source.
+
+---
+
+## Dashboard data flow
+
+Main dashboard logic:
+
+* `src/quant/execution/dashboard_state.py`
+* `src/quant/execution/webhook_server.py`
+
+Current direction:
+
+* dashboard reads Postgres first where available
+* legacy files remain as fallback/compatibility inputs
+
+Already migrated toward Postgres-first:
+
+* real equity history
+* Kraken equity history
+* closed-trade backed trade markers
+* trading diary
+* trade segments
+
+---
+
+## Worker / process layout
+
+A common practical deployment layout is:
+
+### Service A: dashboard/API
+
+Runs:
+
+* `webhook_server`
+
+### Service B: signal generation
+
+Runs:
+
+* `live_signal_worker`
+
+### Service C: execution
+
+Runs:
+
+* `live_executor`
+* and/or Kraken bot, depending on deployment split
+
+This separation is preferred over one giant mixed process because it makes:
+
+* logs cleaner
+* restart behavior safer
+* debugging easier
+* resource use more understandable
+
+---
+
+## Railway deployment
+
+Railway is currently a reasonable deployment target for the live stack.
+
+Typical Railway responsibilities:
+
+* host long-running services
+* store environment variables
+* expose public dashboard/API endpoints
+* attach persistent storage where needed
+
+Environment variables should be managed in Railway, not in repo files.
+
+For Railway operational details, see:
+
+* `docs/RAILWAY.md`
+* `docs/RAILWAY_RUNBOOK.md`
+
+---
+
+## Persistence locations and volumes
+
+Any runtime state that must survive restart should live on persistent storage.
+
+Typical examples:
+
+* `/data/live/...`
+* `/data/events/...`
+
+These may include:
+
+* signals
+* event JSONL traces
+* dashboard runtime state
+* Renko cache artifacts
+
+However, durable forensic reconstruction should increasingly come from Postgres rather than these files.
+
+---
+
+## Live safety defaults
+
+Recommended safe defaults before go-live:
+
+* `LIVE_TRADING_ENABLED=0`
+* `LIVE_EXECUTOR_DRY_RUN=1`
+
+Also keep conservative values for:
+
+* leverage
+* size limits
+* allowlists
+* throttling
+* fallback behavior
+
+The practical go-live flow should be:
+
+1. dry-run only
+2. inspect logs and expected actions
+3. verify venue/account reads
+4. enable live trading
+5. disable dry-run
+
+Never flip directly into full live mode without an observed dry-run phase.
+
+---
+
+## Example execution start
+
+A typical execution command may look like:
 
 ```bash
-sh -lc "python -u -m quant.execution.live_signal_worker --symbol SOLUSDT --signals-dir /data/live/signals & python -u -m quant.execution.live_executor --symbol SOLUSDT --signals-dir /data/live/signals; wait"
+PYTHONPATH=src python3 -m quant.execution.live_executor --once
 ```
 
-Go-live Schalter:
+In deployed services, use the service-specific production command and environment.
 
-1. Dry-Run beobachten (Logs + expected_trades)
-2. Dann `LIVE_TRADING_ENABLED=1`
-3. Dann `LIVE_EXECUTOR_DRY_RUN=0`
+For signal generation + executor combinations, prefer separate services over shell background chaining unless there is a strong reason not to.
 
-Ohne diese beiden letzten Schritte werden keine echten Orders gesendet.
+---
 
-## Smoke-Check lokal (Regime + Dashboard)
+## Dashboard and runtime APIs
 
-1. Regime-Daten in SQLite schreiben:
+The dashboard exposes various operational endpoints such as:
 
-```bash
-python scripts/update_regime_store.py --input data/regimes/your_gate.csv --symbol SOL-USDT --gate-col gate_on --ts-col ts
-```
+* status
+* position
+* chart/state-space
+* signal/gate views
+* fills/trade views
 
-2. Webserver starten:
+Exact endpoint surface may evolve, but the key rule is:
 
-```bash
-uvicorn quant.execution.webhook_server:app --host 127.0.0.1 --port 8000
-```
+* operational APIs may still read mixed runtime state
+* forensic and historical views should progressively move to Postgres-backed reads
 
-3. API prüfen:
+---
 
-```bash
-curl "http://127.0.0.1:8000/api/regime/latest?symbol=SOL-USDT"
-curl "http://127.0.0.1:8000/api/dashboard/chart?symbol=SOL-USDT&hours=168"
-```
+## Current migration note
 
-4. Dashboard prüfen:
+There are still documents and codepaths that reflect the older file-first worldview.
 
-- `http://127.0.0.1:8000/dashboard`
+The current live deployment reality is already beyond that:
 
-## Migration zu Postgres (später)
+* event persistence is active
+* dashboard reads are partly Postgres-first
+* forensic truth is shifting away from logs and ad-hoc runtime files
 
-- Die Regime-Logik ist über ein Store-Interface gekapselt (`RegimeStore`).
-- Für Postgres bleibt der API-Vertrag gleich; nur die Store-Implementierung wird getauscht.
-- Empfohlener Weg: parallele Writes (SQLite + Postgres) im Übergang, dann Dashboard/Worker auf Postgres umstellen.
+So when deployment and debugging instructions conflict, prefer:
+
+1. current code behavior
+2. `ARCHITECTURE.md`
+3. event schema docs
+4. older operational notes
+
+---
+
+## Operational verification pattern
+
+For live verification, the preferred pattern is:
+
+1. verify code in repo
+2. push to Git
+3. deploy
+4. run targeted live check
+5. inspect Postgres tables
+6. inspect runtime logs only as secondary evidence
+
+This is especially important for event-chain work.
+
+---
+
+## Open deployment tasks
+
+* confirm first real KuCoin `execution_event` after deploy
+* fully wire `signal_events`
+* improve event linkage (`source_action_event_id`, `source_signal_event_id`)
+* reduce legacy runtime-file dependence
+* keep runbooks aligned with actual service topology
+
