@@ -1,86 +1,362 @@
-# Deployment auf Railway
+# Railway Deployment
 
-Nachdem du Railway mit GitHub verbunden hast:
+This document explains how to deploy the Quant stack on Railway at the current stage of the project.
 
-## 1. Projekt auswählen
+It is focused on:
 
-- Im Railway-Dashboard: **New Project** → **Deploy from GitHub repo**
-- Repo `quant` (oder dein Repo-Name) auswählen
-- Branch: `main` (oder dein Standard-Branch)
+- connecting the repo
+- using Dockerfile-based deployment
+- setting variables
+- understanding service roles
+- understanding the current persistence model
 
-## 2. Build & Start (per Dockerfile)
+For operational procedures, see:
+- `docs/RAILWAY_RUNBOOK.md`
 
-Im Repo liegt ein **Dockerfile**. Wenn Railway es erkennt, werden Build und Start daraus ausgeführt – **dasselbe Python** und dieselben Pakete (uvicorn, fastapi, quant) in Build und Laufzeit. Das behebt „No module named uvicorn“.
+For system structure, see:
+- `docs/ARCHITECTURE.md`
 
-- **Build Command / Start Command** in Railway kannst du leer lassen, sobald das Dockerfile genutzt wird.
-- Falls Railway nicht automatisch das Dockerfile nutzt: unter **Settings** prüfen, ob „Dockerfile“ als Build-Option ausgewählt ist.
+---
 
-**Root Directory:** leer lassen (Projekt-Root).
+## 1. Deployment model
 
-## 3. Umgebungsvariablen
+Railway should be treated as a host for a small set of cooperating services, not just a single web app.
 
-Im Service → **Variables** (oder **Settings** → **Variables**) hinzufügen.  
-**Nur Futures** – es werden keine Spot-Keys verwendet:
+Typical current roles are:
 
-| Name | Wert |
-|------|------|
-| `KUCOIN_FUTURES_API_KEY` | dein KuCoin **Futures** API Key |
-| `KUCOIN_FUTURES_API_SECRET` | dein KuCoin **Futures** Secret |
-| `KUCOIN_FUTURES_PASSPHRASE` | deine Passphrase (beim Anlegen des Keys gesetzt) |
+- dashboard / API service
+- signal worker
+- execution worker
+- optionally Kraken-specific execution path
 
-In KuCoin: API mit Berechtigung **Futures** (nicht Spot) erstellen.
+The exact service naming can vary, but the architectural roles should stay clear.
 
-Optional (für Webhook-Sicherheit):
+---
 
-| Name | Wert |
-|------|------|
-| `WEBHOOK_TOKEN` | ein geheimer String; diesen dann in TradingView im Webhook als Header `x-webhook-token` eintragen |
+## 2. Connect the repository
 
-Optional (Dashboard-Symbol):
+In Railway:
 
-| Name | Wert |
-|------|------|
-| `DASHBOARD_SYMBOL` | z.B. `SOL-USDT` (Standard) |
+1. **New Project**
+2. **Deploy from GitHub repo**
+3. choose the `quant` repository
+4. deploy from the desired branch, usually `main`
 
-Optional (Regime + Dashboard-Quellen):
+If the repo contains a `Dockerfile`, prefer Dockerfile-based deployment over ad-hoc build guessing.
 
-| Name | Wert |
-|------|------|
-| `REGIME_DB_PATH` | z.B. `data/live/regime.db` |
-| `DASHBOARD_RENKO_PARQUET` | z.B. `data/live/renko_latest.parquet` |
-| `DASHBOARD_TRADES_PARQUET` | z.B. `data/live/trades.parquet` |
-| `DASHBOARD_LEVELS_JSON` | z.B. `data/live/execution_state.json` |
+---
 
-Nach dem Speichern baut/startet Railway neu.
+## 3. Build and start
 
-## 4. Öffentliche URL
+## Use the Dockerfile
 
-- **Settings** → **Networking** → **Generate Domain** (oder **Public Networking**)
-- Du bekommst eine URL wie `https://quant-production-xxxx.up.railway.app`
+If Railway detects the `Dockerfile`, build and runtime use the same environment and dependency set.
 
-Dann:
+That is preferred because it avoids classically broken situations such as:
+- missing `uvicorn`
+- different Python environments between build and runtime
+- wrong package resolution
 
-- **Dashboard:** `https://deine-url.up.railway.app/dashboard`
-- **Health:** `https://deine-url.up.railway.app/health`
-- **Regime latest:** `https://deine-url.up.railway.app/api/regime/latest?symbol=SOL-USDT`
-- **Chart payload:** `https://deine-url.up.railway.app/api/dashboard/chart?symbol=SOL-USDT&hours=336`
-- **Webhook für TradingView:** `https://deine-url.up.railway.app/webhook/tradingview`  
-  (POST, Body JSON; wenn `WEBHOOK_TOKEN` gesetzt ist: Header `x-webhook-token: dein_token`)
+In Railway:
+- keep Build Command / Start Command empty if Dockerfile is used
+- verify that Dockerfile is selected as the build method
 
-## 5. Persistenz (Signale/Files)
+Root directory should normally stay at repo root.
 
-Railway-Container sind ephemer: Bei jedem Redeploy ist das Dateisystem wieder leer. Wenn du eingehende Signale (`data/signals/...`) dauerhaft brauchst:
+---
 
-- **Option A:** Einen **Railway Volume** an den Service hängen und im Code (oder über `SIGNALS_DIR`) auf einen Pfad in diesem Volume schreiben.
-- **Option B:** Signale in einer externen Datenquelle schreiben (z.B. S3, DB), statt nur lokal in Dateien.
+## 4. Service split
 
-Für den Einstieg reicht es, erst ohne Volume zu testen; die Webhook-Antwort bestätigt, dass der Request ankam. Dauerhafte Speicherung kannst du danach ergänzen.
+## A. Web / dashboard service
 
-## Kurz-Checkliste
+Typical responsibility:
+- serve `/dashboard`
+- serve `/api/*`
+- expose public endpoints
+- provide operational visibility
 
-- [ ] Repo verbunden, Branch stimmt
-- [ ] Build läuft per **Dockerfile** (kein getrenntes Nixpacks-Python mehr)
-- [ ] `KUCOIN_FUTURES_API_KEY`, `_SECRET`, `_PASSPHRASE` gesetzt
-- [ ] Domain generiert
-- [ ] `/dashboard` und `/health` im Browser getestet
-- [ ] `/api/regime/latest` und `/api/dashboard/chart` getestet
+Typical start pattern:
+
+```bash
+uvicorn quant.execution.webhook_server:app --host 0.0.0.0 --port $PORT
+
+
+B. Signal worker
+
+Typical responsibility:
+
+generate live signals
+
+write routed signal streams
+
+C. Execution worker
+
+Typical responsibility:
+
+run live_executor
+
+place venue orders through OMS/broker
+
+write events and runtime state
+
+D. Kraken bot service (if deployed separately)
+
+Typical responsibility:
+
+run kraken_bot
+
+handle Kraken-side live execution and persistence
+
+Operational preference:
+separate services are usually better than one giant mixed process because they improve:
+
+restart safety
+
+log clarity
+
+debugging
+
+operational reasoning
+
+5. Environment variables
+
+Set secrets and runtime variables in Railway Variables, not in committed files.
+
+Core KuCoin variables
+
+KUCOIN_FUTURES_API_KEY
+
+KUCOIN_FUTURES_API_SECRET
+
+KUCOIN_FUTURES_PASSPHRASE
+
+Use Futures permissions, not Spot-only credentials.
+
+Optional auth/security
+
+WEBHOOK_TOKEN
+
+Common runtime variables
+
+Examples:
+
+PYTHONUNBUFFERED=1
+
+LIVE_TRADING_ENABLED
+
+LIVE_EXECUTOR_DRY_RUN
+
+LIVE_EXECUTOR_LEVERAGE
+
+LIVE_EXECUTOR_SYMBOL_ALLOWLIST
+
+SIGNALS_DIR
+
+LIVE_EXECUTOR_STATE
+
+The exact set depends on the service.
+
+6. Public domain
+
+In Railway:
+
+go to service settings
+
+enable/generate public domain for the web-facing service
+
+Typical public endpoints may include:
+
+/dashboard
+
+/health
+
+/api/status
+
+/api/dashboard/chart
+
+/api/gate/...
+
+/api/signals/latest/...
+
+Only the web/API service should normally need public networking.
+
+7. Persistence on Railway
+
+Railway containers are ephemeral.
+
+That means local container filesystem state is not durable unless backed by:
+
+a Railway volume
+
+or an external durable store
+
+Important practical rule
+
+There are currently two persistence layers:
+
+A. Runtime / operational traces
+
+Examples:
+
+signal JSONL
+
+event JSONL
+
+active levels JSON
+
+Renko cache parquet
+
+state JSON files
+
+These may need a persistent volume if you want them to survive redeploys.
+
+B. Durable forensic truth
+
+This is increasingly moving to Postgres:
+
+action_events
+
+execution_events
+
+closed_trades
+
+equity_snapshots
+
+This is the preferred long-term truth layer.
+
+8. Current persistence direction
+
+Historically, the system relied heavily on:
+
+local files
+
+JSONL traces
+
+runtime state
+
+dashboard-specific caches
+
+Current direction is now:
+
+Postgres-first for forensic truth
+
+This means:
+
+runtime files still matter operationally
+
+but incident reconstruction should increasingly be done from Postgres
+
+JSONL is still emitted as transitional trace
+
+not every document that speaks file-first is still fully current
+
+9. Live execution safety
+
+Before enabling real orders:
+
+Recommended safe settings:
+
+LIVE_TRADING_ENABLED=0
+
+LIVE_EXECUTOR_DRY_RUN=1
+
+Go-live sequence:
+
+deploy dry-run
+
+verify logs and behavior
+
+verify venue/account reads
+
+set LIVE_TRADING_ENABLED=1
+
+set LIVE_EXECUTOR_DRY_RUN=0
+
+Rollback:
+
+set LIVE_EXECUTOR_DRY_RUN=1
+
+and/or set LIVE_TRADING_ENABLED=0
+
+Do not flip to full live execution without a dry-run validation phase.
+
+10. Railway-specific operational caveats
+
+Railway shells can be minimal.
+
+You may not always have:
+
+ps
+
+rg
+
+curl
+
+In those cases:
+
+use Python one-liners
+
+use /proc-based inspection if needed
+
+prefer explicit DB queries over shell-heavy debugging
+
+Also note:
+copy/paste of here-doc blocks in Railway SSH can render oddly in some terminals.
+If that becomes annoying, prefer Python -c one-liners.
+
+11. Verification pattern
+
+The preferred verification workflow is:
+
+fix in repo
+
+compile/check locally
+
+commit
+
+push
+
+let Railway deploy
+
+verify in live service
+
+verify Postgres persistence
+
+only then inspect logs as secondary evidence
+
+Avoid hotpatching running containers unless absolutely necessary.
+
+12. Current known state
+
+At the current stage:
+
+KuCoin action_events from live_executor are live and verified in Postgres
+
+KuCoin execution_events are wired and deployed, but still await confirmation on the next real execution-triggered event
+
+Kraken event/equity persistence is active
+
+several dashboard readers are already Postgres-first
+
+signal_events are not yet fully live-wired end-to-end
+
+13. Minimal deployment checklist
+
+ repo connected in Railway
+
+ Dockerfile used for build/runtime
+
+ required venue credentials set
+
+ web service domain generated
+
+ dashboard reachable
+
+ API endpoints reachable
+
+ dry-run execution variables set safely
+
+ persistent volume attached if runtime files must survive redeploy
+
+ Postgres connectivity confirmed where required
+
