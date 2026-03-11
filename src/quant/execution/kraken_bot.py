@@ -206,6 +206,9 @@ def _append_action_event(
         blocked=bool(blocked),
         block_reason=block_reason,
     )
+    event["strategy_instance"] = "kraken_bot"
+    event["config_hash"] = "kraken_bot_v1" 
+    
     if payload_json:
         event["payload_json"] = dict(payload_json)
 
