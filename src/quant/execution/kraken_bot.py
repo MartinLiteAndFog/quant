@@ -106,7 +106,7 @@ def _append_execution_event(
         reason_code=reason_code,
         venue="kraken",
         source_event_id=None,
-        source_signal_event_id=(f"signal:{strategy}:{symbol}:{source_signal_ts}:{seq}" if source_signal_ts else None),
+        source_signal_event_id=None,
         position_before=int(position_before),
         position_after=int(position_after),
         blocked=False,
@@ -208,7 +208,7 @@ def _append_action_event(
     )
     event["strategy_instance"] = "kraken_bot"
     event["config_hash"] = "kraken_bot_v1" 
-    
+
     if payload_json:
         event["payload_json"] = dict(payload_json)
 
