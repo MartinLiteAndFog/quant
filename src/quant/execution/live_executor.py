@@ -70,6 +70,7 @@ def _now_utc() -> pd.Timestamp:
 def _now_iso() -> str:
     return _now_utc().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
+
 def _events_root() -> Path:
     if Path("/data").exists():
         return Path("/data/events")
@@ -152,6 +153,7 @@ def _append_action_event(
         )
     except Exception as e:
         log.warning("kucoin postgres action event failed: %s", e)
+
 
 def _resolve_ttp_trail_pct() -> float:
     raw = os.getenv("LIVE_FLIP_TTP_TRAIL_PCT", os.getenv("LIVE_TTP_TRAIL_PCT", "0.012"))
@@ -547,51 +549,51 @@ def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Opt
         return None
 
     side = _norm_side(terminal.get("side"))
-    entry_px = terminal.get("entry_px")
-    entry_bar_ts = terminal.get("entry_bar_ts")
-    sl = terminal.get("sl")
-    ttp = terminal.get("ttp")
+    if side is None and live_pos is not None:
+        side = _norm_side(live_pos)
+    if side is None:
+        return
 
-    if live_pos is not None:
-        lp = float(live_pos)
-        if abs(lp) <= 1e-12:
-            side = None
-            entry_px = None
-            entry_bar_ts = None
-            sl = None
-            ttp = None
-        else:
-            live_side = "long" if lp > 0 else "short"
-            if side != live_side:
-                side = live_side
-                entry_px = None
-                entry_bar_ts = None
-                sl = None
-                ttp = None
-            elif entry_px is None:
-                log_throttled(
-                    log,
-                    logging.WARNING,
-                    f"executor_skip_state_overwrite:{symbol}",
-                    float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "120")),
-                    "executor skip dashboard-state overwrite: live_pos=%s terminal_side=%s terminal_entry_px=%s",
-                    live_pos,
-                    side,
-                    entry_px,
-                )
-                return
+    mode = str(terminal.get("mode", "")).upper() or "TTP"
+    entry_px = _coerce_float(terminal.get("entry_px"))
+    sl = _coerce_float(terminal.get("sl"))
+    ttp = _coerce_float(terminal.get("ttp"))
+    be_armed = bool(terminal.get("be_armed", False))
+    tp1_done = bool(terminal.get("tp1_done", False))
 
-    write_execution_state({
-        "symbol": symbol,
-        "side": side,
-        "mode": terminal.get("mode"),
-        "sl": sl,
-        "ttp": ttp,
-        "entry_px": entry_px,
-        "best_fav": terminal.get("best_fav"),
-        "ttp_trail_pct": _resolve_ttp_trail_pct(),
-        "entry_bar_ts": int(pd.Timestamp(entry_bar_ts).timestamp()) if entry_bar_ts is not None else None,
-    })
+    rows: List[Dict[str, Any]] = []
+    if entry_px is not None:
+        rows.append({"kind": "entry", "px": entry_px, "side": side, "mode": mode})
+    if sl is not None:
+        rows.append({"kind": "sl", "px": sl, "side": side, "mode": mode})
+    if ttp is not None:
+        rows.append({"kind": "ttp", "px": ttp, "side": side, "mode": mode})
+    rows.append({"kind": "meta", "be_armed": be_armed, "tp1_done": tp1_done, "side": side, "mode": mode})
+
+    base = Path("/data/live")
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+        out = base / f"active_levels_{symbol.replace('/', '-').replace(':', '-')}.json"
+        out.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        log_throttled(
+            log,
+            logging.WARNING,
+            f"executor_write_levels:{symbol}",
+            float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "60")),
+            "executor failed to write active levels: %s",
+            e,
+        )
+
+
+def _renko_path() -> Path:
+    env = os.getenv("LIVE_RENKO_PATH")
+    if env:
+        return Path(env)
+    p = Path("/data/renko/latest.parquet")
+    if p.exists():
+        return p
+    return Path("data/renko/latest.parquet")
 
 
 def run_once(
@@ -605,85 +607,17 @@ def run_once(
     dry_run: bool,
     leverage: float,
 ) -> ExecutorState:
-    now_ts = _now_utc()
-
-    renko_path = Path(os.getenv("LIVE_EXECUTOR_RENKO_PARQUET", os.getenv("DASHBOARD_RENKO_PARQUET", "data/live/renko_latest.parquet")))
-    renko_bars = _load_renko_bars(renko_path, limit=int(os.getenv("LIVE_EXECUTOR_RENKO_LIMIT", "4000")))
-    signals_df = _load_signals_df(signals_root=signals_root, symbol=symbol)
-
-    ev, terminal_state = _latest_backtest_event(
-        renko_bars=renko_bars,
-        signals_df=signals_df,
-    )
-
-    terminal_pos = int(terminal_state.get("pos", 0)) if terminal_state else 0
-    terminal_entry_ts = terminal_state.get("entry_bar_ts") if terminal_state else None
-    terminal_sig = f"{terminal_pos}|{terminal_entry_ts}"
-
-    fallback_used = False
-    fallback_sig_ts_iso: Optional[str] = None
-    fallback_sig_v: Optional[int] = None
-
-    if terminal_pos == 0 and (ev is None or (terminal_state and terminal_state.get("pos", 0) == 0)):
-        max_age = float(os.getenv("LIVE_EXECUTOR_FALLBACK_MAX_SIGNAL_AGE_SEC", "30"))
-        require_monotonic = _truthy(os.getenv("LIVE_EXECUTOR_FALLBACK_REQUIRE_MONOTONIC", "1"))
-        sig = _latest_signal(signals_root=signals_root, symbol=symbol)
-        if sig is not None:
-            sig_v = int(sig["signal"])
-            sig_ts = pd.Timestamp(sig["ts"])
-            sig_ts_iso = sig_ts.isoformat()
-            age_sec = float((now_ts - sig_ts).total_seconds())
-            if age_sec < 0:
-                sig = None
-            else:
-                is_newer = True
-                if require_monotonic and state.last_signal_ts:
-                    prev = _safe_ts(state.last_signal_ts)
-                    if prev is not None:
-                        is_newer = sig_ts > prev
-                is_dup = (state.last_signal_ts == sig_ts_iso and state.last_signal_value == sig_v)
-                if (age_sec <= max_age) and is_newer and (not is_dup):
-                    terminal_pos = 1 if sig_v > 0 else -1
-                    terminal_sig = f"{terminal_pos}|fallback|{sig_ts_iso}"
-                    fallback_used = True
-                    fallback_sig_ts_iso = sig_ts_iso
-                    fallback_sig_v = terminal_pos
-                    log.info(
-                        "executor fallback: using direct signal ts=%s sig=%s age_sec=%.3f symbol=%s",
-                        sig_ts_iso, terminal_pos, age_sec, symbol,
-                    )
-
-    if terminal_pos == 0 and ev is None:
-        sig_check = _latest_signal(signals_root=signals_root, symbol=symbol)
-        if sig_check is None:
-            log_throttled(
-                log,
-                logging.INFO,
-                f"executor_no_signal:{symbol}",
-                float(os.getenv("LIVE_EXECUTOR_NO_SIGNAL_LOG_SEC", "60")),
-                "executor no signal yet symbol=%s",
-                symbol,
-            )
-            return state
-
     bid, ask = broker.get_best_bid_ask(symbol)
     mid = (bid + ask) / 2.0 if (bid and ask) else (ask or bid or 0.0)
+    pos = float(broker.get_position(symbol))
+    current_side = "long" if pos > 0 else ("short" if pos < 0 else "flat")
 
     available_fraction = float(os.getenv("LIVE_EXECUTOR_AVAILABLE_FRACTION", "0.95"))
     available_usdt = _resolve_available_usdt(
         broker=broker,
         available_fraction=available_fraction,
     )
-
-    contract_multiplier = 1.0
-    try:
-        multiplier_getter = getattr(broker, "get_contract_multiplier", None)
-        if callable(multiplier_getter):
-            contract_multiplier = float(multiplier_getter(symbol))
-    except Exception as e:
-        log.warning("executor failed to fetch contract multiplier symbol=%s err=%s", symbol, e)
-        contract_multiplier = 1.0
-
+    contract_multiplier = float(os.getenv("LIVE_EXECUTOR_CONTRACT_MULTIPLIER", "1.0"))
     qty = _qty_from_available_balance(
         available_usdt=available_usdt,
         leverage=leverage,
@@ -691,79 +625,136 @@ def run_once(
         contract_multiplier=float(contract_multiplier),
         available_fraction=1.0,
     )
-    if qty <= 0:
-        log_throttled(
-            log,
-            logging.WARNING,
-            f"executor_qty_zero:{symbol}",
-            float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "60")),
-            "executor qty=0 (available_usdt=%s leverage=%s mid=%s contract_multiplier=%s available_fraction=%s) -> skip",
-            available_usdt,
-            leverage,
-            mid,
-            contract_multiplier,
-            available_fraction,
-        )
-        state.last_terminal_sig = terminal_sig
-        state.last_action = "skip_qty_0"
-        return state
 
-    pos = float(broker.get_position(symbol))
+    renko_bars = _load_renko_bars(_renko_path(), limit=int(os.getenv("LIVE_RENKO_LIMIT", "4000")))
+    signals_df = _load_signals_df(signals_root, symbol)
+    ev, terminal = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
 
-    terminal_state = _apply_live_ttp_guard(
-        terminal_state,
+    fallback_used = False
+    fallback_sig_ts_iso: Optional[str] = None
+    fallback_sig_v: Optional[int] = None
+
+    terminal_pos = int(terminal.get("pos", 0)) if terminal else 0
+    terminal_sig = f"{terminal_pos}|{terminal.get('mode', '')}|{terminal.get('entry_px', '')}|{terminal.get('ttp', '')}|{terminal.get('sl', '')}"
+
+    if terminal_pos == 0 and (ev is None or (terminal and terminal.get("pos", 0) == 0)):
+        sig = _latest_signal(signals_root=signals_root, symbol=symbol)
+        if sig is not None:
+            sig_v = int(sig["signal"])
+            sig_ts_iso = sig["ts"].isoformat()
+            if not (state.last_signal_ts == sig_ts_iso and state.last_signal_value == sig_v):
+                terminal_pos = sig_v
+                terminal_sig = f"{sig_v}|fallback|{sig_ts_iso}"
+                fallback_used = True
+                fallback_sig_ts_iso = sig_ts_iso
+                fallback_sig_v = sig_v
+                log.info(
+                    "executor fallback: using direct signal ts=%s sig=%s symbol=%s",
+                    sig_ts_iso,
+                    sig_v,
+                    symbol,
+                )
+
+    if ev is not None:
+        try:
+            state_payload = write_execution_state(
+                symbol=symbol,
+                venue="kucoin",
+                strategy="flip",
+                ts=_now_iso(),
+                position=float(pos),
+                side=current_side,
+                equity=None,
+                payload={
+                    "backtest_event": {
+                        "ts": pd.Timestamp(ev["ts"]).isoformat() if "ts" in ev else None,
+                        "event": str(ev.get("event", "")),
+                        "side": int(ev.get("side", 0)),
+                        "seq": int(ev.get("seq", 0)),
+                    },
+                    "terminal": terminal,
+                    "market": {"bid": bid, "ask": ask, "mid": mid},
+                },
+            )
+            log.debug("executor wrote state=%s", state_payload)
+        except Exception as e:
+            log_throttled(
+                log,
+                logging.WARNING,
+                f"executor_state_write:{symbol}",
+                float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "60")),
+                "executor state write failed: %s",
+                e,
+            )
+
+    terminal = _apply_live_ttp_guard(
+        terminal,
         live_pos=pos,
         live_mid=float(mid),
         ttp_trail_pct=_resolve_ttp_trail_pct(),
     )
-    _write_dashboard_levels(symbol, terminal_state, live_pos=pos)
+    _write_dashboard_levels(symbol=symbol, terminal=terminal, live_pos=pos)
 
-    current_side = "long" if pos > 0 else ("short" if pos < 0 else "flat")
-    want_side: Optional[str] = None
-    if terminal_pos > 0:
-        want_side = "long"
-    elif terminal_pos < 0:
-        want_side = "short"
+    if terminal_sig == state.last_terminal_sig:
+        log_throttled(
+            log,
+            logging.INFO,
+            f"executor_nochange:{symbol}",
+            float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "30")),
+            "executor no change: terminal unchanged pos=%s terminal_pos=%s",
+            pos,
+            terminal_pos,
+        )
+        return state
 
-    action: str
-    if terminal_pos > 0:
-        if abs(pos) < 1e-12:
-            action = "enter_long"
-        elif pos < 0:
-            action = "flip_to_long"
-        else:
-            action = "hold"
-    elif terminal_pos < 0:
-        if abs(pos) < 1e-12:
-            action = "enter_short"
-        elif pos > 0:
-            action = "flip_to_short"
-        else:
-            action = "hold"
-    else:
-        if abs(pos) > 1e-12:
-            action = f"exit_{current_side}"
-        else:
-            action = "hold"
+    want_side = "long" if terminal_pos > 0 else ("short" if terminal_pos < 0 else None)
 
-    if action == "hold" and want_side is not None and current_side == want_side and abs(pos) + 1e-12 < float(qty):
-        action = f"scale_{want_side}"
+    action = "hold"
+    if current_side == "flat" and want_side == "long":
+        action = "enter_long"
+    elif current_side == "flat" and want_side == "short":
+        action = "enter_short"
+    elif current_side == "long" and want_side is None:
+        action = "exit_long"
+    elif current_side == "short" and want_side is None:
+        action = "exit_short"
+    elif current_side == "long" and want_side == "short":
+        action = "flip_to_short"
+    elif current_side == "short" and want_side == "long":
+        action = "flip_to_long"
+    elif current_side == "long" and want_side == "long":
+        if abs(pos) < float(qty):
+            action = "scale_long"
+    elif current_side == "short" and want_side == "short":
+        if abs(pos) < float(qty):
+            action = "scale_short"
 
-        state.n_actions += 1
+    event_name = str(ev.get("event", "")) if ev is not None else "none"
+    ts_iso = _now_iso()
+
+    event_sig = _event_sig(ev) if ev is not None else f"none|{terminal_sig}"
+    if event_sig == state.last_event_sig and action == "hold":
+        log_throttled(
+            log,
+            logging.INFO,
+            f"executor_hold_dedup:{symbol}",
+            float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "30")),
+            "executor hold dedup symbol=%s event=%s",
+            symbol,
+            event_name,
+        )
+        state.last_terminal_sig = terminal_sig
+        return state
+
+    engine_mode = str(terminal.get("mode", ""))
+    action_side = want_side if want_side is not None else current_side
+    position_before = 1 if current_side == "long" else (-1 if current_side == "short" else 0)
+    position_after = 1 if terminal_pos > 0 else (-1 if terminal_pos < 0 else 0)
+    if action == "hold":
+        position_after = position_before
+
+    state.n_actions += 1
     event_seq = int(state.n_actions)
-
-    if action in ("enter_long", "flip_to_long", "scale_long"):
-        action_side = "long"
-        position_after = 1
-    elif action in ("enter_short", "flip_to_short", "scale_short"):
-        action_side = "short"
-        position_after = -1
-    elif action.startswith("exit_"):
-        action_side = "flat"
-        position_after = 0
-    else:
-        action_side = current_side
-        position_after = terminal_pos if terminal_pos != 0 else (1 if pos > 0 else -1 if pos < 0 else 0)
 
     _append_action_event(
         strategy="live_executor",
@@ -773,10 +764,10 @@ def run_once(
         engine_action=action,
         action_side=action_side,
         reason_code=event_name,
-        position_before=(1 if pos > 0 else -1 if pos < 0 else 0),
+        position_before=position_before,
         position_after=position_after,
-        engine_mode_before=str(terminal_state.get("mode", "UNKNOWN") if terminal_state else "UNKNOWN"),
-        engine_mode_after=str(terminal_state.get("mode", "UNKNOWN") if terminal_state else "UNKNOWN"),
+        engine_mode_before=engine_mode,
+        engine_mode_after=engine_mode,
         blocked=False,
         block_reason=None,
         payload_json={
@@ -789,14 +780,6 @@ def run_once(
             "fallback_used": fallback_used,
         },
     )
-
-    event_sig = _event_sig(ev) if ev is not None else None
-    if event_sig is not None and event_sig == state.last_event_sig and action == "hold":
-        return state
-
-    event_name = str(ev.get("event")) if isinstance(ev, (dict, pd.Series)) and ev is not None and "event" in ev else "none"
-
-    ts_iso = now_ts.isoformat()
 
     exp_side: Optional[str] = None
     exp_action: Optional[str] = None
@@ -939,7 +922,6 @@ def run_once(
         state.last_event_sig = _event_sig(ev)
     state.last_terminal_sig = terminal_sig
     state.last_action = action
-    state.n_actions += 1
     return state
 
 
