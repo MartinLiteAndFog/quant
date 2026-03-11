@@ -198,7 +198,7 @@ def _append_action_event(
         reason_code=reason_code,
         venue="kraken",
         source_event_id=None,
-        source_signal_event_id=(f"signal:{strategy}:{symbol}:{source_signal_ts}:{seq}" if source_signal_ts else None),
+        source_signal_event_id=None
         position_before=int(position_before),
         position_after=int(position_after),
         engine_mode_before=engine_mode_before,
