@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-from quant.execution.event_builders import build_execution_event
+from quant.execution.event_builders import build_action_event, build_execution_event
 from quant.execution.event_log import append_event_jsonl
 from quant.execution.event_types import ExecutionEvent
 from quant.execution.kraken_futures import KrakenFuturesClient
@@ -135,7 +135,47 @@ def _append_execution_event(
     except Exception as e:
         log.warning("kraken postgres execution event failed: %s", e)
 
+def _append_action_event(
+    *,
+    strategy: str,
+    symbol: str,
+    ts_iso: str,
+    seq: int,
+    engine_action: str,
+    action_side: str,
+    reason_code: str,
+    position_before: int,
+    position_after: int,
+    engine_mode_before: str,
+    engine_mode_after: str,
+    source_signal_ts: str,
+    blocked: bool = False,
+    block_reason: Optional[str] = None,
+    payload_json: Optional[Dict[str, Any]] = None,
+) -> None:
+    event = build_action_event(
+        strategy=strategy,
+        symbol=symbol,
+        ts=ts_iso,
+        seq=int(seq),
+        engine_action=engine_action,
+        action_side=action_side,
+        reason_code=reason_code,
+        venue="kraken",
+        source_event_id=None,
+        source_signal_event_id=(f"signal:{strategy}:{symbol}:{source_signal_ts}:{seq}" if source_signal_ts else None),
+        position_before=int(position_before),
+        position_after=int(position_after),
+        engine_mode_before=engine_mode_before,
+        engine_mode_after=engine_mode_after,
+        blocked=bool(blocked),
+        block_reason=block_reason,
+    )
+    if payload_json:
+        event["payload_json"] = dict(payload_json)
 
+    out_path = _events_root() / "action_events" / f"{pd.Timestamp.now('UTC').strftime('%Y%m%d')}.jsonl"
+    append_event_jsonl(out_path, event)
 
 # ---------------------------------------------------------------------------
 # Bot state
@@ -982,6 +1022,50 @@ def run_once(
         flip_p=flip_p,
         tp2_p=tp2_p,
     )
+    preview_pos = int(state.pos_side)
+    preview_mode_before = str(state.mode)
+    preview_mode_after = str(new_state.mode)
+
+    for idx, a in enumerate(actions, start=1):
+        new_state.event_seq += 1
+        act = str(a.get("action", "") or "unknown")
+        reason_code = str(a.get("reason", "") or "bot_action_missing_reason")
+
+        if act == "close_all":
+            action_side = "flat"
+            preview_after = 0
+        elif act == "close_partial":
+            action_side = "long" if preview_pos > 0 else "short" if preview_pos < 0 else "flat"
+            preview_after = preview_pos
+        elif act == "enter_long":
+            action_side = "long"
+            preview_after = 1
+        elif act == "enter_short":
+            action_side = "short"
+            preview_after = -1
+        else:
+            action_side = "flat"
+            preview_after = preview_pos
+
+        _append_action_event(
+            strategy=str(new_state.engine),
+            symbol="SOLUSDT",
+            ts_iso=_now_iso(),
+            seq=int(new_state.event_seq),
+            engine_action=act,
+            action_side=action_side,
+            reason_code=reason_code,
+            position_before=int(preview_pos),
+            position_after=int(preview_after),
+            engine_mode_before=preview_mode_before,
+            engine_mode_after=preview_mode_after,
+            source_signal_ts=str(sig.get("ts", "") or ""),
+            blocked=False,
+            block_reason=None,
+            payload_json=dict(a),
+        )
+
+        preview_pos = preview_after
 
     action_results = execute_actions(client, actions, dry_run=dry_run, equity_pct=equity_pct, leverage=leverage)
 
