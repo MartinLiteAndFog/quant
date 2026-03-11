@@ -16,8 +16,11 @@ from quant.execution.event_log import append_event_jsonl
 from quant.execution.event_types import ExecutionEvent
 from quant.execution.kraken_futures import KrakenFuturesClient
 from quant.utils.log import get_logger
-from quant.execution.event_store import insert_equity_snapshot, insert_execution_event
-
+from quant.execution.event_store import (
+    insert_equity_snapshot,
+    insert_execution_event,
+    insert_action_event,
+)
 
 log = get_logger("quant.kraken_bot")
 
@@ -111,6 +114,38 @@ def _append_execution_event(
     )
     out_path = _events_root() / "execution_events" / f"{pd.Timestamp.now('UTC').strftime('%Y%m%d')}.jsonl"
     append_event_jsonl(out_path, event)
+    try:
+        insert_action_event(
+            {
+                "event_id": event["event_id"],
+                "ts": event["ts"],
+                "seq": event["seq"],
+                "strategy": event["strategy"],
+                "strategy_instance": event.get("strategy_instance"),
+                "config_hash": event.get("config_hash"),
+                "symbol": event["symbol"],
+                "venue": event["venue"],
+                "source_signal_event_id": event.get("source_signal_event_id"),
+                "source_event_id": event.get("source_event_id"),
+                "engine_action": event["engine_action"],
+                "action_side": event.get("action_side"),
+                "position_before": event.get("position_before"),
+                "position_after": event.get("position_after"),
+                "qty_before": event.get("qty_before"),
+                "qty_after": event.get("qty_after"),
+                "engine_mode_before": event.get("engine_mode_before"),
+                "engine_mode_after": event.get("engine_mode_after"),
+                "reason_code": event["reason_code"],
+                "reason_detail": event.get("reason_detail"),
+                "blocked": bool(event.get("blocked", False)),
+                "block_reason": event.get("block_reason"),
+                "regime_state": event.get("regime_state"),
+                "gate_name": event.get("gate_name"),
+                "payload_json": dict(event),
+            }
+        )
+    except Exception as e:
+        log.warning("kraken postgres action event failed: %s", e)
     try:
         insert_execution_event(
             {
