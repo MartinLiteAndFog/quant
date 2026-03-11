@@ -188,7 +188,7 @@ def _append_action_event(
     block_reason: Optional[str] = None,
     payload_json: Optional[Dict[str, Any]] = None,
 ) -> None:
-    event = build_action_event(
+    event = build_action_event (
         strategy=strategy,
         symbol=symbol,
         ts=ts_iso,
@@ -198,14 +198,14 @@ def _append_action_event(
         reason_code=reason_code,
         venue="kraken",
         source_event_id=None,
-        source_signal_event_id=None
+        source_signal_event_id=None,
         position_before=int(position_before),
         position_after=int(position_after),
         engine_mode_before=engine_mode_before,
         engine_mode_after=engine_mode_after,
         blocked=bool(blocked),
         block_reason=block_reason,
-    )
+     )
     event["strategy_instance"] = "kraken_bot"
     event["config_hash"] = "kraken_bot_v1" 
 
