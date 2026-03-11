@@ -1,240 +1,385 @@
-# Railway Runbook (Current Live Setup)
+# Railway Runbook
 
-This is the canonical operations doc for the current Railway deployment.
-Use this file for maintenance, troubleshooting, and handover.
+This is the operational runbook for the current Railway deployment.
 
-## 1) Services and responsibilities
+Use it for:
 
-- `quant` (web service, has public domain)
-  - serves `/dashboard`
-  - serves `/api/*`
-  - reads dashboard files (`renko_latest.parquet`, `execution_state.json`, `regime.db`)
-- `Signal` worker service (combined worker process)
-  - runs `live_signal_worker`
-  - runs `live_executor`
-  - writes signals and execution state files
+- service overview
+- deployment/runtime checks
+- incident response
+- live debugging
+- handover
 
-## 2) Working domain
+For broader architecture, see:
 
-- Root: `https://quant-production-5533.up.railway.app/`
-- Dashboard: `https://quant-production-5533.up.railway.app/dashboard`
-- Chart API: `https://quant-production-5533.up.railway.app/api/dashboard/chart?symbol=SOLUSDT&hours=336&max_points=4000`
+- `docs/ARCHITECTURE.md`
+- `docs/event_schema_v1.md`
+- `docs/LIVE_DEPLOY.md`
 
-## 3) Start commands
+---
 
-### `quant` service
+## 1. Current operational model
 
-Use standard web start (Dockerfile/uvicorn path).
+The Railway setup currently consists of a small set of services around:
 
-### `Signal` worker service (combined)
+- dashboard / API
+- live signal generation
+- live execution
+- venue access
+- Postgres-backed forensic persistence
 
-```bash
-bash -lc "python -u -m quant.execution.live_signal_worker --symbol SOLUSDT --signals-dir /data/live/signals & python -u -m quant.execution.live_executor --symbol SOLUSDT --signals-dir /data/live/signals; wait"
-```
+The main direction is now:
 
-## 4) Required environment variables
+**Postgres-first for forensic truth**, while still keeping JSONL and runtime files as transitional operational traces.
 
-Set these in both services where applicable.
+---
 
-### Shared/API
+## 2. Main services
 
+## `quant` service
+
+Primary public-facing web/API service.
+
+Responsibilities:
+- serves `/dashboard`
+- serves `/api/*`
+- dashboard/state APIs
+- chart/state-space/fills/trade views
+- reads Postgres-first where implemented
+- may still use runtime files as fallback for some operational views
+
+Typical public endpoints:
+- root domain
+- `/dashboard`
+- `/api/status`
+- `/api/position`
+- `/api/dashboard/chart`
+- `/api/dashboard/statespace`
+- `/api/gate/*`
+- `/api/signals/latest/*`
+
+---
+
+## signal / execution worker service
+
+Current practical responsibilities:
+- `live_signal_worker`
+- `live_executor`
+
+The exact Railway service name may vary, but operationally this worker side does the following:
+
+### `live_signal_worker`
+- generates live routed signals
+- writes active signal stream
+- writes strategy-specific substreams
+
+### `live_executor`
+- reads routed live signal stream
+- derives engine action
+- calls OMS / venue adapter
+- writes `action_events`
+- writes `execution_events` on successful OMS execution paths
+- writes dashboard-active levels / runtime state
+
+---
+
+## Kraken execution path
+
+If Kraken is deployed separately in Railway or another environment, the relevant live entrypoint is:
+
+- `quant.execution.kraken_bot`
+
+Responsibilities:
+- Kraken live execution loop
+- event persistence
+- equity persistence
+- state reconciliation with venue
+
+---
+
+## 3. Current truth model
+
+When operational evidence conflicts, prefer this order:
+
+1. Postgres
+2. current deployed code behavior
+3. JSONL runtime traces
+4. local runtime files
+5. logs alone
+
+Reason:
+runtime files and logs are useful for operations, but Postgres is becoming the durable forensic source of truth.
+
+---
+
+## 4. Active durable persistence
+
+The following durable objects are already relevant in current operations:
+
+- `action_events`
+- `execution_events`
+- `closed_trades`
+- `equity_snapshots`
+
+### Verified current state
+
+#### KuCoin / live_executor
+- `action_events`: live and verified in Postgres
+- `execution_events`: writer deployed; awaiting confirmation on next real execution-triggered event
+
+#### Kraken
+- `execution_events`: active
+- `equity_snapshots`: active
+
+#### Dashboard
+Several reads are already Postgres-first, especially around:
+- equity history
+- trade markers
+- trade segments
+- trading diary
+- closed trades
+
+---
+
+## 5. Runtime files still in use
+
+These are still operationally useful and may live on persistent volume paths such as `/data/live` or `/data/events`.
+
+Examples:
+- signal JSONL streams
+- event JSONL traces
+- active levels JSON
+- Renko parquet cache
+- metrics JSON / CSV
+- local bot/executor state JSON
+
+Important:
+These are still valid operational traces, but they should no longer be treated as the preferred long-term forensic source if Postgres already contains the answer.
+
+---
+
+## 6. Environment variables
+
+Set Railway variables per service as needed.
+
+## Core venue/auth variables
 - `KUCOIN_FUTURES_API_KEY`
 - `KUCOIN_FUTURES_API_SECRET`
 - `KUCOIN_FUTURES_PASSPHRASE`
 - `PYTHONUNBUFFERED=1`
 
-### Paths (IMPORTANT: absolute, volume-backed)
+Add Kraken credentials where the Kraken bot is deployed.
 
+---
+
+## Core runtime paths
+Use persistent, absolute paths where applicable.
+
+Examples:
 - `SIGNALS_DIR=/data/live/signals`
-- `REGIME_DB_PATH=/data/live/regime.db`
-- `DASHBOARD_RENKO_PARQUET=/data/live/renko_latest.parquet`
-- `DASHBOARD_LEVELS_JSON=/data/live/execution_state.json`
-- `LIVE_SIGNAL_STATE=/data/live/live_signal_state.json`
 - `LIVE_EXECUTOR_STATE=/data/live/live_executor_state.json`
-- `LIVE_TRAILING_STATE=/data/live/live_trailing_state.json`
+- `LIVE_SIGNAL_STATE=/data/live/live_signal_state.json`
 
-### Strategy/gate
+Some historical path variables may still exist in the deployment, but operationally we should prefer the current code’s actual readers/writers over old path assumptions in legacy docs.
 
-- `LIVE_SYMBOL=SOLUSDT`
-- `LIVE_DEFAULT_GATE_ON=1`  # Gate ON -> countertrend (IMBA)
-- `LIVE_IMBA_LOOKBACK=250`
-- `LIVE_RENKO_BOX=0.1`
-- `LIVE_CANDLES_LIMIT=1500`
-- `LIVE_IMBA_SL_ABS=1.5`
+---
 
-### Executor safety
+## Live safety controls
+Recommended safety-related variables include:
 
-- `LIVE_TRADING_ENABLED=0`  # set to 1 for live
-- `LIVE_EXECUTOR_DRY_RUN=1` # set to 0 for live order placement
-- `LIVE_EXECUTOR_MAX_EUR=40`
-- `LIVE_EXECUTOR_LEVERAGE=4`
-- `LIVE_EXECUTOR_SYMBOL_ALLOWLIST=SOLUSDT,SOL-USDT`
-- `LIVE_EXECUTOR_POLL_SEC=5`
+- `LIVE_TRADING_ENABLED=0` for hard-off
+- `LIVE_EXECUTOR_DRY_RUN=1` for simulation
+- symbol allowlists
+- leverage limits
+- logging throttle controls
 
-### Trailing
+Never go live by changing multiple safety variables blindly at once.
 
-- `LIVE_TTP_TRAIL_PCT=0.012`
-- `LIVE_WAIT_SL_PCT=0.02`
+Preferred go-live order:
+1. dry-run stable
+2. check logs + expected behavior
+3. enable trading permission
+4. disable dry-run
+5. keep size conservative first
 
-### Dashboard refresh controls
+Rollback:
+- set `LIVE_EXECUTOR_DRY_RUN=1`
+- and/or set `LIVE_TRADING_ENABLED=0`
 
-- `DASHBOARD_RENKO_AUTO_REFRESH_ON_READ=1`
-- `DASHBOARD_RENKO_STALE_MIN=1`
-- `DASHBOARD_RENKO_REFRESH_COOLDOWN_SEC=15`
-- `DASHBOARD_RENKO_POLL_SEC=60`
-- `DASHBOARD_UI_REFRESH_MS=4000`
-- `DASHBOARD_STATESPACE_REFRESH_MS=15000`
-- `DASHBOARD_API_CACHE_SEC=8`
-- `DASHBOARD_FILLS_REFRESH_COOLDOWN_SEC=20`
-- `DASHBOARD_FILLS_FETCH_LIMIT=200`
-- `DASHBOARD_FILL_MARKER_LIMIT=1200`
-- `DASHBOARD_LOG_THROTTLE_SEC=60`
-- `DASHBOARD_RENKO_DAYS_BACK=14`
-- `DASHBOARD_RENKO_STEP_HOURS=6`  # code clamps effective fetch window to API-safe chunks
+---
 
-Optional isolation if the same account runs multiple systems:
+## 7. Current signal routing
 
-- `DASHBOARD_FILLS_CLIENT_OID_PREFIXES=entry-,tp_flip-,TP_,SL_,manual-`
-- `DASHBOARD_FILLS_INCLUDE_EMPTY_CLIENT_OID=0`
+Current live routing logic is regime-based.
 
-### Log-rate controls (Railway log quota)
+Typical routing idea:
+- `gate_on=1` → countertrend stream
+- `gate_on=0` → trend-following stream
 
-- `KUCOIN_LOG_THROTTLE_SEC=30`
-- `LIVE_EXECUTOR_LOG_THROTTLE_SEC=60`
-- `LIVE_EXECUTOR_NO_SIGNAL_LOG_SEC=60`
-- `LIVE_SIGNAL_LOG_THROTTLE_SEC=60`
-- `LIVE_SIGNAL_STATUS_LOG_SEC=60`
-- `LIVE_SIGNAL_ERROR_LOG_SEC=30`
+Signal files typically include:
+- active routed stream
+- strategy-specific history subdirectories
 
-## 5) Current strategy routing
+Treat signal files as operational traces; do not assume they are yet the final authoritative `signal_events` chain.
 
-- `gate_on=1` -> `countertrend` (IMBA stream)
-- `gate_on=0` -> `trendfollower` (inverse IMBA stream)
+---
 
-Signal files:
+## 8. Standard start commands
 
-- active routed stream: `/data/live/signals/SOLUSDT/YYYYMMDD.jsonl`
-- strategy history:
-  - `/data/live/signals/SOLUSDT/countertrend/YYYYMMDD.jsonl`
-  - `/data/live/signals/SOLUSDT/trendfollower/YYYYMMDD.jsonl`
+## Web/API service
 
-## 6) Expected logs
-
-- Signal worker:
-  - `live-signal emitted ...` when a new flip is emitted
-  - `live-signal status ... emitted_now=0` when no new flip occurred
-- Executor:
-  - `simulated action=...` in dry-run
-  - `enter result=...` / `flip result=...` in live mode
-
-## 7) Dashboard features currently implemented
-
-- Renko chart + live price line (ticker mid-based)
-- Gate shading overlay (strong color mode)
-- IMBA fib lines:
-  - long fib (green), mid fib (gray), short fib (red)
-- Trade entry/exit markers
-- Entry->exit connector segments with PnL coloring:
-  - green for profitable trades, red for losing trades
-- Level overlays from execution state: `SL`, `TTP`, `TP1`, `TP2`
-- `renko_health` in API payload to diagnose stale data
-
-## 8) Health and freshness checks
-
-### API check (from local machine)
+Typical form:
 
 ```bash
-python3 - <<'PY'
-import json, urllib.request
-url = "https://quant-production-5533.up.railway.app/api/dashboard/chart?symbol=SOLUSDT&hours=336&max_points=4000"
-with urllib.request.urlopen(url, timeout=20) as r:
-    d = json.loads(r.read().decode("utf-8"))
-print("renko_health:", d.get("renko_health"))
-print("bars_count:", len(d.get("bars", [])))
-print("last_3_bars:", d.get("bars", [])[-3:])
-PY
-```
+uvicorn quant.execution.webhook_server:app --host 0.0.0.0 --port $PORT
 
-### Worker signal file check (in Railway SSH)
+Signal + executor worker
 
-```bash
-tail -n 20 /data/live/signals/SOLUSDT/$(date -u +%Y%m%d).jsonl
-```
+A combined command may still be used operationally, for example:
 
-## 9) Go-live procedure
+bash -lc "python -u -m quant.execution.live_signal_worker --symbol SOLUSDT --signals-dir /data/live/signals & python -u -m quant.execution.live_executor --symbol SOLUSDT --signals-dir /data/live/signals; wait"
 
-1. Verify dry-run stability:
-   - signal status logs continue
-   - executor simulated actions make sense
-2. Enable live trading:
-   - `LIVE_TRADING_ENABLED=1`
-3. Enable real execution:
-   - `LIVE_EXECUTOR_DRY_RUN=0`
-4. Keep small risk initially (`MAX_EUR`, leverage conservative).
+Operational preference going forward:
+separate services are cleaner than one chained shell process, unless there is a strong reason to keep them combined.
 
-Rollback (instant):
+9. Health checks
+Web/API checks
 
-- `LIVE_EXECUTOR_DRY_RUN=1` and/or `LIVE_TRADING_ENABLED=0`
+Useful checks from a local machine:
 
-Manual flatten command (short -> flat), with expected-trade logging so dashboard fill reason is visible:
+dashboard loads
 
-```bash
-PYTHONPATH=src python3 -m quant.execution.manual_orders --symbol SOL-USDT --action cancel_short
-```
+chart endpoint returns data
 
-## 10) Known caveats
+state-space endpoint returns data
 
-- Railway minimal shells may not have `curl`, `rg`, `ps`.
-  Use Python snippets and `/proc` checks instead.
-- If chart looks stale, always inspect `renko_health.age_sec` and `last_ts`.
-- If no new signals appear but worker is healthy, `emitted_now=0` can be a legitimate no-flip state.
+gate endpoint responds
 
-## 11) Current status snapshot (2026-02-24)
+latest signal endpoint responds
 
-### Live execution
+Worker checks
 
-- Live order submission is working on KuCoin Futures (`SOLUSDTM`).
-- Confirmed fills seen via `list_fills(symbol="SOLUSDT")` with:
-  - `liquidity: maker`
-  - `marginMode: CROSS`
-  - successful buy fills for size `2` contracts.
+Useful checks in Railway SSH:
 
-### Dashboard
+signal JSONL for fresh writes
 
-- Implemented:
-  - gate shading, fib lines, live fill markers, explicit `SL active` / `TTP active`
-  - position label clarified as contracts
-  - notional calculation now uses contract multiplier.
-- Required env for correct notional:
-  - `CONTRACT_MULTIPLIER_SOLUSDT=0.1`
+runtime state file timestamps
 
-### Open consistency issue (important)
+latest action_events in Postgres
 
-- `Signal` service and `quant` service currently do not reliably share the same live `execution_state.json` content.
-- Symptom:
-  - Worker writes rich state (`countertrend/lookback/...`)
-  - Web service reads a stale/minimal state object.
-- Impact:
-  - Dashboard can show outdated/missing SL/TTP/TP levels.
+latest execution_events in Postgres
 
-## 12) Next tasks for tomorrow
+current venue/account position
 
-1. **Unify runtime storage (highest priority)**
-   - Run web + workers in one service with one shared volume, or
-   - move state/signals to shared DB/Redis instead of local files.
+10. Recommended live-debug flow
 
-2. **Verify level propagation end-to-end**
-   - Ensure `execution_state.json` seen by dashboard is exactly the worker-written file.
-   - Re-check `SL active` / `TTP active` and level lines under live position.
+When something looks wrong, use this order:
 
-3. **Final ops hardening**
-   - Reduce noisy non-actionable `cancel_all` warnings.
-   - Add structured `LIVE ORDER FILLED` log line (order_id, qty, price, side).
+A. Check if the system is actually acting
 
-4. **Post-trade visualization completion**
-   - Confirm entry/exit connectors and PnL colors for closed trades in live mode.
-   - Validate marker timestamps against brick mapping.
+current signal
 
-5. **Go-live guardrail cleanup**
-   - Review and freeze required env vars in Railway.
-   - Keep a one-command rollback checklist (`DRY_RUN=1` and/or `LIVE_TRADING_ENABLED=0`).
+current gate
+
+current position
+
+last action event
+
+B. Check whether the action became an execution
+
+latest execution_events
+
+venue-side position / fills
+
+OMS result logs
+
+C. Check realized outcome
+
+closed_trades
+
+equity_snapshots
+
+D. Only then use runtime files/logs for secondary evidence
+
+signal JSONL
+
+/data/events/*.jsonl
+
+active level files
+
+metrics JSON/CSV
+
+11. Practical DB checks
+
+Typical questions to ask in incidents:
+
+Latest live executor actions
+
+query action_events filtered by strategy='live_executor'
+
+Latest executions
+
+query execution_events
+
+Latest realized trades
+
+query closed_trades
+
+Latest equity
+
+query equity_snapshots
+
+The goal is to avoid reconstructing incidents from logs alone if Postgres already contains the answer.
+
+12. Known current caveats
+
+Railway shells may be minimal and lack common tools like ps, rg, or curl
+
+here-doc copy/paste into Railway SSH can sometimes render oddly
+
+not every legacy runtime file is fully authoritative anymore
+
+signal_events are not yet fully live-wired end-to-end
+
+source_signal_event_id / source_action_event_id may still legitimately be None
+
+KuCoin execution_events are deployed but still need confirmation on the next real fresh execution-triggered event
+
+13. Operational rules
+
+verify code in repo first
+
+push to Git before live verification
+
+avoid hotpatching running containers unless absolutely necessary
+
+prefer Postgres checks over log archaeology
+
+prefer minimal, verifiable fixes over speculative refactors
+
+document architectural changes after the event chain is real
+
+14. Current priority checklist
+High priority
+
+confirm first real KuCoin execution_event after deploy
+
+continue wiring signal_events
+
+improve action → execution linkage
+
+Medium priority
+
+standardize reason codes
+
+reduce dependency on legacy runtime files
+
+align runbooks with actual service topology
+
+Cleanup
+
+remove stale backup files
+
+prune old docs assumptions
+
+reduce duplicate fallback paths
