@@ -1,8 +1,17 @@
-# Regime-Aware Dashboard and Independent Gate Store Design
-
-**Date:** 2026-02-23  
-**Status:** Approved (brainstorming phase)  
+# Regime-Aware Dashboard and Independent Gate Store **Date:** 2026-02-23  
+**Status:** Historical design note (approved at the time, no longer authoritative for current production architecture)  
 **Scope:** Infra and dashboard design for regime storage, observability, and binary gate execution (single account), with forward compatibility for confidence-driven scaling.
+
+> Note:
+> This document captures an earlier design phase.
+> It is useful for historical reasoning and design intent, but it does **not** define the current production architecture.
+> For the current architecture and operational truth, use:
+> - `docs/ARCHITECTURE.md`
+> - `docs/event_schema_v1.md`
+> - `docs/LIVE_DEPLOY.md`
+> - `docs/RAILWAY_RUNBOOK.md`
+
+
 
 ---
 
