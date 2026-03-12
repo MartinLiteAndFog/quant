@@ -716,23 +716,51 @@ def run_once(
     terminal_pos = int(terminal.get("pos", 0)) if terminal else 0
     terminal_sig = f"{terminal_pos}|{terminal.get('mode', '')}|{terminal.get('entry_px', '')}|{terminal.get('ttp', '')}|{terminal.get('sl', '')}"
 
-    if terminal_pos == 0 and (ev is None or (terminal and terminal.get("pos", 0) == 0)):
-        sig = _latest_signal(signals_root=signals_root, symbol=symbol)
-        if sig is not None:
-            sig_v = int(sig["signal"])
-            sig_ts_iso = sig["ts"].isoformat()
-            if not (state.last_signal_ts == sig_ts_iso and state.last_signal_value == sig_v):
-                terminal_pos = sig_v
-                terminal_sig = f"{sig_v}|fallback|{sig_ts_iso}"
-                fallback_used = True
-                fallback_sig_ts_iso = sig_ts_iso
-                fallback_sig_v = sig_v
-                log.info(
-                    "executor fallback: using direct signal ts=%s sig=%s symbol=%s",
-                    sig_ts_iso,
-                    sig_v,
-                    symbol,
-                )
+    if terminal_pos == 0:
+        if current_side == "long" and sig_now_v > 0:
+            log.info(
+                "executor guard: suppress flat; live long and latest signal long symbol=%s sig_ts=%s",
+                symbol,
+                sig_now["ts"].isoformat() if sig_now is not None else None,
+            )
+            terminal_pos = 1
+            terminal_sig = f"guard_long|{sig_now['ts'].isoformat() if sig_now is not None else ''}"
+            terminal = dict(terminal or {})
+            terminal["pos"] = 1
+            terminal["side"] = "long"
+        elif current_side == "short" and sig_now_v < 0:
+            log.info(
+                "executor guard: suppress flat; live short and latest signal short symbol=%s sig_ts=%s",
+                symbol,
+                sig_now["ts"].isoformat() if sig_now is not None else None,
+            )
+            terminal_pos = -1
+            terminal_sig = f"guard_short|{sig_now['ts'].isoformat() if sig_now is not None else ''}"
+            terminal = dict(terminal or {})
+            terminal["pos"] = -1
+            terminal["side"] = "short"
+    
+
+    sig_now = _latest_signal(signals_root=signals_root, symbol=symbol)
+    sig_now_v = int(sig_now["signal"]) if sig_now is not None else 0
+
+    if terminal_pos == 0:
+        if current_side == "long" and sig_now_v > 0:
+            log.info(
+                "executor guard: suppress flat; live long and latest signal long symbol=%s sig_ts=%s",
+                symbol,
+                sig_now["ts"].isoformat() if sig_now is not None else None,
+            )
+            terminal_pos = 1
+            terminal_sig = f"guard_long|{sig_now['ts'].isoformat() if sig_now is not None else ''}"
+        elif current_side == "short" and sig_now_v < 0:
+            log.info(
+                "executor guard: suppress flat; live short and latest signal short symbol=%s sig_ts=%s",
+                symbol,
+                sig_now["ts"].isoformat() if sig_now is not None else None,
+            )
+            terminal_pos = -1
+            terminal_sig = f"guard_short|{sig_now['ts'].isoformat() if sig_now is not None else ''}"
 
     if ev is not None:
         try:
@@ -774,18 +802,6 @@ def run_once(
     )
     _write_dashboard_levels(symbol=symbol, terminal=terminal, live_pos=pos)
 
-    if terminal_sig == state.last_terminal_sig:
-        log_throttled(
-            log,
-            logging.INFO,
-            f"executor_nochange:{symbol}",
-            float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "30")),
-            "executor no change: terminal unchanged pos=%s terminal_pos=%s",
-            pos,
-            terminal_pos,
-        )
-        return state
-
     want_side = "long" if terminal_pos > 0 else ("short" if terminal_pos < 0 else None)
 
     action = "hold"
@@ -807,6 +823,19 @@ def run_once(
     elif current_side == "short" and want_side == "short":
         if abs(pos) < float(qty):
             action = "scale_short"
+
+    if terminal_sig == state.last_terminal_sig and action == "hold":
+        log_throttled(
+            log,
+            logging.INFO,
+            f"executor_nochange:{symbol}",
+            float(os.getenv("LIVE_EXECUTOR_LOG_THROTTLE_SEC", "30")),
+            "executor no change: terminal unchanged and already satisfied pos=%s terminal_pos=%s",
+            pos,
+            terminal_pos,
+        )
+        return state
+
 
     event_name = str(ev.get("event", "")) if ev is not None else "none"
     ts_iso = _now_iso()
@@ -857,6 +886,12 @@ def run_once(
             "mid": float(mid),
             "event_name": event_name,
             "fallback_used": fallback_used,
+            "terminal_sig": terminal_sig,
+            "last_terminal_sig": state.last_terminal_sig,
+            "event_sig": event_sig,
+            "last_event_sig": state.last_event_sig,
+            "live_pos": float(pos),
+            "ev": ev if isinstance(ev, dict) else None,
         },
     )
 
