@@ -721,6 +721,9 @@ def run_once(
 
     terminal_pos = int(terminal.get("pos", 0)) if terminal else 0
     terminal_sig = f"{terminal_pos}|{terminal.get('mode', '')}|{terminal.get('entry_px', '')}|{terminal.get('ttp', '')}|{terminal.get('sl', '')}"
+    
+    sig_now = _latest_signal(signals_root=signals_root, symbol=symbol)
+    sig_now_v = int(sig_now["signal"]) if sig_now is not None else 0
 
     if terminal_pos == 0:
         if current_side == "long" and sig_now_v > 0:
@@ -745,28 +748,6 @@ def run_once(
             terminal = dict(terminal or {})
             terminal["pos"] = -1
             terminal["side"] = "short"
-    
-
-    sig_now = _latest_signal(signals_root=signals_root, symbol=symbol)
-    sig_now_v = int(sig_now["signal"]) if sig_now is not None else 0
-
-    if terminal_pos == 0:
-        if current_side == "long" and sig_now_v > 0:
-            log.info(
-                "executor guard: suppress flat; live long and latest signal long symbol=%s sig_ts=%s",
-                symbol,
-                sig_now["ts"].isoformat() if sig_now is not None else None,
-            )
-            terminal_pos = 1
-            terminal_sig = f"guard_long|{sig_now['ts'].isoformat() if sig_now is not None else ''}"
-        elif current_side == "short" and sig_now_v < 0:
-            log.info(
-                "executor guard: suppress flat; live short and latest signal short symbol=%s sig_ts=%s",
-                symbol,
-                sig_now["ts"].isoformat() if sig_now is not None else None,
-            )
-            terminal_pos = -1
-            terminal_sig = f"guard_short|{sig_now['ts'].isoformat() if sig_now is not None else ''}"
 
     if ev is not None:
         try:
