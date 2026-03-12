@@ -150,12 +150,12 @@ def _align_regime_ffill(times: pd.DatetimeIndex, regime_on: Optional[pd.Series])
     out["x"] = out["x"].fillna(1).astype(int)
     return out["x"].astype(bool).reindex(times)
 
-
 def run_flip_state_machine(
     bars: pd.DataFrame,
     signals_df: Optional[pd.DataFrame],
     params: FlipParams,
     regime_on: Optional[pd.Series] = None,
+    regime_forces_flat: bool = True,
 ) -> Tuple[pd.Series, pd.DataFrame, Dict[str, Any]]:
     """
     bars: DataFrame with at least ['ts','close'] and optionally ['high','low'] for swing stops.
@@ -278,7 +278,8 @@ def run_flip_state_machine(
         out_pos.iloc[i] = pos
 
         # Regime off: exit remainder at close (flat)
-        if not gate and pos != 0:
+        # Regime off: optional forced flat; for live this can be disabled
+        if not gate and pos != 0 and regime_forces_flat:
             pnl = realized_pnl_pct(px)
             emit(ts, "regime_exit", pos, px, pnl, "Regime off -> flat")
             pos = 0

@@ -486,7 +486,13 @@ def _latest_backtest_event(
         be_trigger_pct=float(os.getenv("LIVE_FLIP_BE_TRIGGER_PCT", "0")),
         be_offset_pct=float(os.getenv("LIVE_FLIP_BE_OFFSET_PCT", "0")),
     )
-    _, events, terminal = run_flip_state_machine(bars=renko_bars, signals_df=signals_df, params=params, regime_on=None)
+    _, events, terminal = run_flip_state_machine(
+        bars=renko_bars,
+        signals_df=signals_df,
+        params=params,
+        regime_on=None,
+        regime_forces_flat=False,
+    )
     if events is None or events.empty:
         return None, terminal
     events = events.sort_values(["ts", "seq"]).reset_index(drop=True)
