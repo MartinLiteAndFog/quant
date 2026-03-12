@@ -14,6 +14,7 @@ import pandas as pd
 from quant.execution.event_builders import build_signal_event
 from quant.execution.event_log import append_event_jsonl
 from quant.execution.event_types import SignalEvent
+from quant.execution.event_store import insert_signal_event
 from quant.execution.execution_state import write_execution_state
 from quant.execution.kucoin_futures import KucoinFuturesBroker, _symbol_to_contract
 from quant.execution.strategy_router import strategy_for_gate, trend_signals_from_imba
@@ -268,7 +269,17 @@ def _append_signal_event(
 
     out_path = _events_root() / "signal_events" / f"{_today_utc()}.jsonl"
     append_event_jsonl(out_path, event)
-
+    try:
+        insert_signal_event(event)
+    except Exception as e:
+        log_throttled(
+            log,
+            logging.WARNING,
+            "signal_event_pg_write",
+            60.0,
+            "signal event postgres write failed: %s",
+            e,
+        )
 
 def _filter_after(df: pd.DataFrame, ts_iso: Optional[str]) -> pd.DataFrame:
     if df.empty or not ts_iso:
