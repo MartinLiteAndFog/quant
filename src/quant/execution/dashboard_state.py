@@ -761,11 +761,60 @@ def load_equity_history_from_postgres(
         return {"points": [], "source": "none"}
 
 
+def _maybe_refresh_kucoin_equity() -> None:
+    """Fetch current KuCoin equity and insert a Postgres snapshot if stale."""
+    refresh_sec = int(os.getenv("DASHBOARD_EQUITY_REFRESH_SEC", "60"))
+    currency = os.getenv("DASHBOARD_EQUITY_CCY", "USDT")
+    key = os.getenv("KUCOIN_FUTURES_API_KEY", "").strip()
+    sec = os.getenv("KUCOIN_FUTURES_API_SECRET", "").strip()
+    pp = os.getenv("KUCOIN_FUTURES_PASSPHRASE", "").strip()
+    if not (key and sec and pp):
+        return
+
+    now_sec = int(pd.Timestamp.now("UTC").timestamp())
+
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT EXTRACT(EPOCH FROM MAX(ts))::bigint FROM equity_snapshots "
+                "WHERE venue = 'kucoin' AND account = 'futures'"
+            )
+            row = cur.fetchone()
+            last_ts = int(row[0]) if row and row[0] else 0
+    except Exception:
+        last_ts = 0
+
+    if (now_sec - last_ts) < max(5, refresh_sec):
+        return
+
+    try:
+        broker = KucoinFuturesBroker(api_key=key, api_secret=sec, passphrase=pp)
+        bal = broker.get_account_balance(currency=currency)
+        eq = float(bal.get("equity", 0.0) or 0.0)
+        if eq > 0:
+            insert_equity_snapshot(
+                {
+                    "ts": pd.to_datetime(now_sec, unit="s", utc=True),
+                    "venue": "kucoin",
+                    "account": "futures",
+                    "symbol": None,
+                    "equity": eq,
+                    "currency": currency,
+                    "source": "dashboard_state.load_real_equity_history",
+                    "payload_json": {"time": now_sec, "equity": eq, "currency": currency},
+                }
+            )
+    except Exception:
+        pass
+
+
 def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
     """
     Load/refresh realized account-equity history in USDT.
     Uses periodic snapshots from KuCoin account balance.
     """
+    _maybe_refresh_kucoin_equity()
+
     pg = load_equity_history_from_postgres(
         venue="kucoin",
         account="futures",
@@ -774,72 +823,7 @@ def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
     if pg.get("points"):
         return pg
 
-    p = _env_path("DASHBOARD_EQUITY_PARQUET", _live_default("equity_history.parquet"))
-    refresh_sec = int(os.getenv("DASHBOARD_EQUITY_REFRESH_SEC", "60"))
-    currency = os.getenv("DASHBOARD_EQUITY_CCY", "USDT")
-
-    if p.exists():
-        try:
-            df = pd.read_parquet(p)
-        except Exception:
-            df = pd.DataFrame(columns=["time", "equity"])
-    else:
-        df = pd.DataFrame(columns=["time", "equity"])
-
-    if not df.empty:
-        df["time"] = pd.to_numeric(df["time"], errors="coerce")
-        df["equity"] = pd.to_numeric(df["equity"], errors="coerce")
-        df = df.dropna(subset=["time", "equity"]).sort_values("time").drop_duplicates(subset=["time"], keep="last")
-
-    key = os.getenv("KUCOIN_FUTURES_API_KEY", "").strip()
-    sec = os.getenv("KUCOIN_FUTURES_API_SECRET", "").strip()
-    pp = os.getenv("KUCOIN_FUTURES_PASSPHRASE", "").strip()
-    now_sec = int(pd.Timestamp.now("UTC").timestamp())
-    can_refresh = bool(key and sec and pp)
-    stale = True
-    if not df.empty:
-        last_t = int(df.iloc[-1]["time"])
-        stale = (now_sec - last_t) >= max(5, refresh_sec)
-    if can_refresh and stale:
-        try:
-            broker = KucoinFuturesBroker(api_key=key, api_secret=sec, passphrase=pp)
-            bal = broker.get_account_balance(currency=currency)
-            eq = float(bal.get("equity", 0.0) or 0.0)
-            if eq > 0:
-                snap = pd.DataFrame([{"time": now_sec, "equity": eq}])
-                df = pd.concat([df, snap], ignore_index=True) if not df.empty else snap
-                df = df.sort_values("time").drop_duplicates(subset=["time"], keep="last")
-                p.parent.mkdir(parents=True, exist_ok=True)
-                df.to_parquet(p, index=False)
-                try:
-                    insert_equity_snapshot(
-                        {
-                            "ts": pd.to_datetime(now_sec, unit="s", utc=True),
-                            "venue": "kucoin",
-                            "account": "futures",
-                            "symbol": None,
-                            "equity": eq,
-                            "currency": currency,
-                            "source": "dashboard_state.load_real_equity_history",
-                            "payload_json": {
-                                "time": now_sec,
-                                "equity": eq,
-                                "currency": currency,
-                            },
-                        }
-                    )
-                except Exception:
-                    pass
-
-        except Exception:
-            pass
-
-    if df.empty:
-        return {"points": [], "source": "none"}
-
-    df = df.sort_values("time").tail(int(max(1, max_points))).reset_index(drop=True)
-    points = [{"time": int(r["time"]), "equity": float(r["equity"])} for _, r in df.iterrows()]
-    return {"points": points, "source": "kucoin_equity_snapshots"}
+    return {"points": [], "source": "none"}
 
 
 
