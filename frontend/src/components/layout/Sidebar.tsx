@@ -106,14 +106,9 @@ export function Sidebar({
 }: SidebarProps) {
   const kucoinPrice = status?.ticker?.last ?? status?.ticker?.mid ?? null;
   const kucoinEquity = status?.balance?.equity ?? null;
-  const lvlPos = chartLevels?.position;
-  const lvlSide = chartLevels?.terminal?.side ?? chartLevels?.side;
-  const kucoinSide = position?.side ?? lvlSide ?? null;
-  const kucoinSize = (position?.position != null && position.position !== 0)
-    ? position.position
-    : lvlPos ?? null;
-  const kucoinHasPos =
-    kucoinSize != null && kucoinSize !== 0;
+  const kucoinSide = position?.side ?? null;
+  const kucoinSize = position?.position ?? null;
+  const kucoinHasPos = kucoinSide != null && kucoinSize != null && kucoinSize !== 0;
   const fillsList = fills?.fills ?? fills?.rows ?? [];
 
   const kr = krakenMetrics;
