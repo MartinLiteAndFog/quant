@@ -106,10 +106,14 @@ export function Sidebar({
 }: SidebarProps) {
   const kucoinPrice = status?.ticker?.last ?? status?.ticker?.mid ?? null;
   const kucoinEquity = status?.balance?.equity ?? null;
-  const kucoinSide = position?.side ?? null;
-  const kucoinSize = position?.position ?? null;
+  const lvlPos = chartLevels?.position;
+  const lvlSide = chartLevels?.terminal?.side ?? chartLevels?.side;
+  const kucoinSide = position?.side ?? lvlSide ?? null;
+  const kucoinSize = (position?.position != null && position.position !== 0)
+    ? position.position
+    : lvlPos ?? null;
   const kucoinHasPos =
-    kucoinSize != null && kucoinSize !== 0 && kucoinSide != null;
+    kucoinSize != null && kucoinSize !== 0;
   const fillsList = fills?.fills ?? fills?.rows ?? [];
 
   const kr = krakenMetrics;
@@ -245,46 +249,48 @@ export function Sidebar({
         </DualColumn>
       </SectionCard>
 
-      {/* Levels — shared, from KuCoin flip engine */}
+      {/* Levels — from flip engine terminal state */}
       <SectionCard title="Levels">
-        <div className="space-y-1 font-mono text-sm text-zinc-100">
-          {chartLevels && Object.keys(chartLevels).length > 0 ? (
-            <>
-              {chartLevels.entry_px != null && (
-                <div>
-                  Entry: {chartLevels.entry_px.toFixed(2)}
+        {(() => {
+          const t = chartLevels?.terminal;
+          const entryPx = t?.entry_px ?? chartLevels?.entry_px;
+          const sl = t?.sl ?? chartLevels?.sl;
+          const ttp = t?.ttp ?? chartLevels?.ttp;
+          const tp1 = chartLevels?.tp1;
+          const tp2 = chartLevels?.tp2;
+          const mode = t?.mode ?? chartLevels?.mode;
+          const side = t?.side ?? chartLevels?.side;
+          const hasAny = entryPx != null || sl != null || ttp != null;
+          if (!hasAny)
+            return (
+              <div className="font-mono text-sm text-zinc-500">—</div>
+            );
+          return (
+            <div className="space-y-1 font-mono text-sm text-zinc-100">
+              {side && (
+                <div className={side === "long" ? "text-emerald-400" : "text-red-400"}>
+                  {side.toUpperCase()}
                 </div>
               )}
-              {chartLevels.sl != null && (
-                <div className="text-red-400">
-                  SL: {chartLevels.sl.toFixed(2)}
-                </div>
+              {entryPx != null && <div>Entry: {entryPx.toFixed(2)}</div>}
+              {sl != null && (
+                <div className="text-red-400">SL: {Number(sl).toFixed(2)}</div>
               )}
-              {chartLevels.tp1 != null && (
-                <div className="text-blue-400">
-                  TP1: {chartLevels.tp1.toFixed(2)}
-                </div>
+              {ttp != null && (
+                <div className="text-amber-400">TTP: {ttp.toFixed(2)}</div>
               )}
-              {chartLevels.tp2 != null && (
-                <div className="text-purple-400">
-                  TP2: {chartLevels.tp2.toFixed(2)}
-                </div>
+              {tp1 != null && (
+                <div className="text-blue-400">TP1: {tp1.toFixed(2)}</div>
               )}
-              {chartLevels.ttp != null && (
-                <div className="text-amber-400">
-                  TTP: {chartLevels.ttp.toFixed(2)}
-                </div>
+              {tp2 != null && (
+                <div className="text-purple-400">TP2: {tp2.toFixed(2)}</div>
               )}
-              {chartLevels.mode && (
-                <div className="text-zinc-400">
-                  Mode: {chartLevels.mode}
-                </div>
+              {mode && (
+                <div className="text-zinc-400">Mode: {mode}</div>
               )}
-            </>
-          ) : (
-            <div className="text-zinc-500">—</div>
-          )}
-        </div>
+            </div>
+          );
+        })()}
       </SectionCard>
 
       {/* Fills */}

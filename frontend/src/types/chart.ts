@@ -22,16 +22,29 @@ export interface ChartMarker {
   text: string;
 }
 
-export interface ChartLevels {
-  entry_bar_ts?: number;
+export interface ChartLevelsTerminal {
+  pos?: number;
+  side?: string;
+  mode?: string;
   entry_px?: number;
-  side?: "long" | "short";
-  sl?: number;
+  best_fav?: number;
+  ttp?: number;
+  sl?: number | null;
+  entry_bar_ts?: string | number;
+}
+
+export interface ChartLevels {
+  entry_bar_ts?: number | string;
+  entry_px?: number;
+  side?: string;
+  sl?: number | null;
   ttp?: number;
   tp1?: number;
   tp2?: number;
   ttp_trail_pct?: number;
   mode?: string;
+  position?: number;
+  terminal?: ChartLevelsTerminal;
 }
 
 export interface RegimeSpan {
