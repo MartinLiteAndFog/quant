@@ -461,7 +461,7 @@ def _ensure_ts(payload: Dict[str, Any], now_iso: str) -> Dict[str, Any]:
     return out
 
 
-_SPA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "dist"
+_SPA_DIR = Path(os.getenv("SPA_DIR", "/app/frontend/dist"))
 
 
 @app.get("/")
