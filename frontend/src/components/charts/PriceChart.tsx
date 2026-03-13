@@ -12,6 +12,8 @@ import type {
   ChartMarker,
   ChartSegment,
   ChartLevels,
+  ChartFibo,
+  FiboLine,
 } from "../../types/chart";
 
 interface PriceChartProps {
@@ -20,6 +22,8 @@ interface PriceChartProps {
   segments?: ChartSegment[];
   levels?: ChartLevels | Record<string, never>;
   ttpTrailPct?: number;
+  fibo?: ChartFibo;
+  livePrice?: number | null;
 }
 
 const CHART_BG = "#09090b";
@@ -90,12 +94,21 @@ function levelLineFromEntry(
   ];
 }
 
+function fiboToPoints(points: FiboLine[] | undefined): LinePoint[] {
+  if (!points?.length) return [];
+  return points
+    .filter((p) => p.time != null && p.value != null && isFinite(p.value!))
+    .map((p) => ({ time: p.time as UTCTimestamp, value: p.value! }));
+}
+
 export default function PriceChart({
   bars,
   markers = [],
   segments = [],
   levels = {},
   ttpTrailPct = 0.012,
+  fibo,
+  livePrice,
 }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -168,7 +181,6 @@ export default function PriceChart({
     }));
     candlestickSeries.setMarkers(lwcMarkers);
 
-    // Remove old overlay series (levels + segments)
     for (const s of overlaySeriesRef.current) {
       chart.removeSeries(s);
     }
@@ -205,7 +217,6 @@ export default function PriceChart({
       ttp.setData(ttpData);
       overlaySeriesRef.current.push(ttp);
     } else {
-      // Fallback: static TTP level if no trail can be computed
       const ttpStatic = levelLineFromEntry(bars, lvl.ttp, entryTs);
       if (ttpStatic.length) {
         const ttp = chart.addLineSeries({
@@ -240,9 +251,8 @@ export default function PriceChart({
     const tp1Data = levelLineFromEntry(bars, lvl.tp1, entryTs);
     if (tp1Data.length) {
       const tp1 = chart.addLineSeries({
-        color: "#3b82f6",
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
+        color: "#7aa2f7",
+        lineWidth: 2,
         title: "TP1",
         lastValueVisible: true,
         priceLineVisible: false,
@@ -255,9 +265,8 @@ export default function PriceChart({
     const tp2Data = levelLineFromEntry(bars, lvl.tp2, entryTs);
     if (tp2Data.length) {
       const tp2 = chart.addLineSeries({
-        color: "#a855f7",
-        lineWidth: 1,
-        lineStyle: LineStyle.Dashed,
+        color: "#bb9af7",
+        lineWidth: 2,
         title: "TP2",
         lastValueVisible: true,
         priceLineVisible: false,
@@ -266,11 +275,72 @@ export default function PriceChart({
       overlaySeriesRef.current.push(tp2);
     }
 
+    // Fibonacci lines
+    if (fibo) {
+      const fibLongPts = fiboToPoints(fibo.long);
+      if (fibLongPts.length) {
+        const s = chart.addLineSeries({
+          color: "#2ecc71",
+          lineWidth: 2,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        s.setData(fibLongPts);
+        overlaySeriesRef.current.push(s);
+      }
+
+      const fibMidPts = fiboToPoints(fibo.mid);
+      if (fibMidPts.length) {
+        const s = chart.addLineSeries({
+          color: "#ffffff",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        s.setData(fibMidPts);
+        overlaySeriesRef.current.push(s);
+      }
+
+      const fibShortPts = fiboToPoints(fibo.short);
+      if (fibShortPts.length) {
+        const s = chart.addLineSeries({
+          color: "#f7768e",
+          lineWidth: 2,
+          lastValueVisible: false,
+          priceLineVisible: false,
+          crosshairMarkerVisible: false,
+        });
+        s.setData(fibShortPts);
+        overlaySeriesRef.current.push(s);
+      }
+    }
+
+    // Live price line
+    if (livePrice != null && isFinite(livePrice) && bars.length) {
+      const s = chart.addLineSeries({
+        color: "#9aa5b1",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        crosshairMarkerVisible: false,
+      });
+      s.setData([
+        { time: bars[0].time as UTCTimestamp, value: livePrice },
+        { time: bars[bars.length - 1].time as UTCTimestamp, value: livePrice },
+      ]);
+      overlaySeriesRef.current.push(s);
+    }
+
     // Trade segments
     for (const seg of segments) {
       const lineSeries = chart.addLineSeries({
         color: seg.color,
-        lineWidth: 1,
+        lineWidth: 2,
+        title: seg.positive ? "Trade +" : "Trade -",
         priceLineVisible: false,
         lastValueVisible: false,
       });
@@ -280,7 +350,7 @@ export default function PriceChart({
       ]);
       overlaySeriesRef.current.push(lineSeries);
     }
-  }, [bars, markers, segments, levels, ttpTrailPct]);
+  }, [bars, markers, segments, levels, ttpTrailPct, fibo, livePrice]);
 
   return <div ref={containerRef} className="h-[500px] w-full" />;
 }

@@ -108,14 +108,17 @@ export function Sidebar({
   const kucoinEquity = status?.balance?.equity ?? null;
   const kucoinSide = position?.side ?? null;
   const kucoinSize = position?.position ?? null;
+  const kucoinHasPos =
+    kucoinSize != null && kucoinSize !== 0 && kucoinSide != null;
   const fillsList = fills?.fills ?? fills?.rows ?? [];
 
   const kr = krakenMetrics;
   const krakenEquity = kr?.equity_usd ?? null;
-  const krakenSide = kr?.pos_side ?? null;
-  const krakenSize = kr?.size_rem ?? null;
+  const krakenSide = kr?.venue_pos_side ?? kr?.pos_side ?? null;
+  const krakenSize = kr?.venue_pos_size ?? kr?.size_rem ?? null;
   const krakenMode = kr?.mode ?? null;
   const krakenMark = kr?.mark_price ?? null;
+  const krakenHasPos = krakenSide != null && krakenSide !== 0;
 
   return (
     <aside className="flex w-80 flex-col gap-3 overflow-y-auto">
@@ -179,9 +182,9 @@ export function Sidebar({
           <div>
             <VenueHeader name="KuCoin" accent="bg-blue-500" />
             <div className="font-mono text-sm">
-              {kucoinSide && kucoinSize != null && kucoinSize !== 0 ? (
+              {kucoinHasPos ? (
                 <span className={sideColor(kucoinSide)}>
-                  {sideLabel(kucoinSide)} {Math.abs(kucoinSize)}
+                  {sideLabel(kucoinSide)} {Math.abs(kucoinSize!)}
                 </span>
               ) : (
                 <span className="text-zinc-500">Flat</span>
@@ -191,9 +194,10 @@ export function Sidebar({
           <div>
             <VenueHeader name="Kraken" accent="bg-amber-500" />
             <div className="font-mono text-sm">
-              {krakenSide != null && krakenSide !== 0 && krakenSize ? (
+              {krakenHasPos ? (
                 <span className={sideColor(String(krakenSide))}>
-                  {sideLabel(krakenSide)} {Math.abs(krakenSize).toFixed(4)}
+                  {sideLabel(krakenSide)}{" "}
+                  {krakenSize != null ? Math.abs(krakenSize).toFixed(4) : ""}
                 </span>
               ) : (
                 <span className="text-zinc-500">Flat</span>

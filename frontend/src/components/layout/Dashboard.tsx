@@ -46,6 +46,8 @@ export default function Dashboard() {
               segments={chartData?.segments}
               levels={chartData?.levels}
               ttpTrailPct={chartData?.ttp_trail_pct}
+              fibo={chartData?.fibo}
+              livePrice={status?.ticker?.last ?? status?.ticker?.mid}
             />
           </div>
           <EquityCurve
