@@ -424,59 +424,12 @@ def _event_sig(row: pd.Series) -> str:
     return f"{ts}|{seq}|{event}|{side}"
 
 
-def _snap_signals_to_bars(
-    signals_df: pd.DataFrame,
-    bars: pd.DataFrame,
-    tolerance: pd.Timedelta = pd.Timedelta(minutes=5),
-) -> pd.DataFrame:
-    if signals_df.empty or bars.empty:
-        return signals_df
-
-    sig = signals_df.copy()
-    sig["ts"] = pd.to_datetime(sig["ts"], utc=True, errors="coerce")
-    sig = sig.dropna(subset=["ts"])
-    if sig.empty:
-        return sig
-
-    bar_times = pd.DatetimeIndex(pd.to_datetime(bars["ts"], utc=True, errors="coerce")).dropna()
-    if len(bar_times) == 0:
-        return sig
-
-    bar_times_sorted = bar_times.sort_values()
-    snapped: list = []
-    n_snapped = 0
-    for t in sig["ts"]:
-        if t in bar_times_sorted:
-            snapped.append(t)
-            continue
-        idx = bar_times_sorted.searchsorted(t)
-        candidates = []
-        if idx > 0:
-            candidates.append(bar_times_sorted[idx - 1])
-        if idx < len(bar_times_sorted):
-            candidates.append(bar_times_sorted[idx])
-        if candidates:
-            nearest = min(candidates, key=lambda bt: abs(bt - t))
-            if abs(nearest - t) <= tolerance:
-                snapped.append(nearest)
-                n_snapped += 1
-                continue
-        snapped.append(t)
-
-    if n_snapped > 0:
-        log.info("executor snapped %d/%d signal timestamps to nearest renko bar", n_snapped, len(sig))
-
-    sig["ts"] = snapped
-    return sig.drop_duplicates("ts", keep="last").reset_index(drop=True)
-
-
 def _latest_backtest_event(
     renko_bars: pd.DataFrame,
     signals_df: pd.DataFrame,
 ) -> Tuple[Optional[pd.Series], Dict[str, Any]]:
     if renko_bars.empty or signals_df.empty:
         return None, {}
-    signals_df = _snap_signals_to_bars(signals_df, renko_bars)
     params = FlipParams(
         fee_bps=float(os.getenv("LIVE_FLIP_FEE_BPS", "0")),
         ttp_trail_pct=float(os.getenv("LIVE_FLIP_TTP_TRAIL_PCT", "0.012")),
@@ -486,6 +439,9 @@ def _latest_backtest_event(
         be_trigger_pct=float(os.getenv("LIVE_FLIP_BE_TRIGGER_PCT", "0")),
         be_offset_pct=float(os.getenv("LIVE_FLIP_BE_OFFSET_PCT", "0")),
     )
+    # regime_on=None: live executor does not use regime to force-flatten positions.
+    # Regime gate controls exit strategy selection (TTP vs TP1/2), not position lifecycle.
+    # regime_forces_flat=False: never flatten a live trade due to regime change.
     _, events, terminal = run_flip_state_machine(
         bars=renko_bars,
         signals_df=signals_df,
@@ -499,37 +455,45 @@ def _latest_backtest_event(
     return events.iloc[-1], terminal
 
 
-def _qty_from_available_balance(
+def _qty_from_equity_pct(
     *,
-    available_usdt: float,
+    equity: float,
+    pos_pct: float,
     leverage: float,
     mid_price: float,
     contract_multiplier: float = 1.0,
-    available_fraction: float = 0.95,
 ) -> int:
-    if available_usdt <= 0 or leverage <= 0 or mid_price <= 0 or contract_multiplier <= 0:
+    """
+    qty = floor(equity * pos_pct * leverage / (mid_price * contract_multiplier))
+    """
+    equity = float(equity or 0.0)
+    pos_pct = float(max(0.0, min(1.0, pos_pct)))
+    leverage = float(leverage)
+    mid_price = float(mid_price)
+    contract_multiplier = float(contract_multiplier)
+    if equity <= 0 or pos_pct <= 0 or leverage <= 0 or mid_price <= 0 or contract_multiplier <= 0:
         return 0
-    frac = float(max(0.0, min(1.0, available_fraction)))
-    usable_margin = float(available_usdt) * frac
-    notional = usable_margin * float(leverage)
-    per_contract_notional = float(mid_price) * float(contract_multiplier)
-    return int(notional // per_contract_notional)
+    notional = equity * pos_pct * leverage
+    per_contract = mid_price * contract_multiplier
+    return int(notional // per_contract)
 
 
-def _resolve_available_usdt(
-    broker: KucoinFuturesBroker,
-    *,
-    available_fraction: float,
-) -> float:
+def _resolve_equity(broker: KucoinFuturesBroker) -> float:
     try:
         bal = broker.get_account_balance(currency="USDT")
-        available = float(bal.get("available", 0.0) or 0.0)
-        if available > 0:
-            frac = float(max(0.0, min(1.0, available_fraction)))
-            return float(available * frac)
+        return float(bal.get("equity", 0.0) or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _resolve_contract_multiplier(broker: KucoinFuturesBroker, symbol: str) -> float:
+    try:
+        mult = float(broker.get_contract_multiplier(symbol))
+        if mult > 0:
+            return mult
     except Exception:
         pass
-    return 0.0
+    return float(os.getenv("LIVE_EXECUTOR_CONTRACT_MULTIPLIER", "0.1"))
 
 
 def _verify_execution_fill_ratio(
@@ -675,10 +639,10 @@ def _renko_path() -> Path:
     env = os.getenv("LIVE_RENKO_PATH")
     if env:
         return Path(env)
-    p = Path("/data/renko/latest.parquet")
+    p = Path("/data/live/renko_latest.parquet")
     if p.exists():
         return p
-    return Path("data/renko/latest.parquet")
+    return Path("data/live/renko_latest.parquet")
 
 
 def run_once(
@@ -697,18 +661,19 @@ def run_once(
     pos = float(broker.get_position(symbol))
     current_side = "long" if pos > 0 else ("short" if pos < 0 else "flat")
 
-    available_fraction = float(os.getenv("LIVE_EXECUTOR_AVAILABLE_FRACTION", "0.95"))
-    available_usdt = _resolve_available_usdt(
-        broker=broker,
-        available_fraction=available_fraction,
-    )
-    contract_multiplier = float(os.getenv("LIVE_EXECUTOR_CONTRACT_MULTIPLIER", "1.0"))
-    qty = _qty_from_available_balance(
-        available_usdt=available_usdt,
+    pos_pct = float(os.getenv("LIVE_EXECUTOR_POS_PCT", "0.90"))
+    equity = _resolve_equity(broker)
+    contract_multiplier = _resolve_contract_multiplier(broker, symbol)
+    qty = _qty_from_equity_pct(
+        equity=equity,
+        pos_pct=pos_pct,
         leverage=leverage,
         mid_price=float(mid),
-        contract_multiplier=float(contract_multiplier),
-        available_fraction=1.0,
+        contract_multiplier=contract_multiplier,
+    )
+    log.info(
+        "executor sizing: equity=%.2f pos_pct=%.2f leverage=%.1f mid=%.4f mult=%.4f -> qty=%d",
+        equity, pos_pct, leverage, mid, contract_multiplier, qty,
     )
 
     renko_bars = _load_renko_bars(_renko_path(), limit=int(os.getenv("LIVE_RENKO_LIMIT", "4000")))
@@ -727,10 +692,12 @@ def run_once(
 
     if terminal_pos == 0:
         if current_side == "long" and sig_now_v > 0:
-            log.info(
-                "executor guard: suppress flat; live long and latest signal long symbol=%s sig_ts=%s",
+            log.warning(
+                "GUARD FIRED: terminal_pos=0 but live long + latest signal long -> suppress flat symbol=%s sig_ts=%s bars=%s signals=%s",
                 symbol,
                 sig_now["ts"].isoformat() if sig_now is not None else None,
+                len(renko_bars),
+                len(signals_df),
             )
             terminal_pos = 1
             terminal_sig = f"guard_long|{sig_now['ts'].isoformat() if sig_now is not None else ''}"
@@ -738,10 +705,12 @@ def run_once(
             terminal["pos"] = 1
             terminal["side"] = "long"
         elif current_side == "short" and sig_now_v < 0:
-            log.info(
-                "executor guard: suppress flat; live short and latest signal short symbol=%s sig_ts=%s",
+            log.warning(
+                "GUARD FIRED: terminal_pos=0 but live short + latest signal short -> suppress flat symbol=%s sig_ts=%s bars=%s signals=%s",
                 symbol,
                 sig_now["ts"].isoformat() if sig_now is not None else None,
+                len(renko_bars),
+                len(signals_df),
             )
             terminal_pos = -1
             terminal_sig = f"guard_short|{sig_now['ts'].isoformat() if sig_now is not None else ''}"
@@ -751,25 +720,24 @@ def run_once(
 
     if ev is not None:
         try:
-            state_payload = write_execution_state(
-                symbol=symbol,
-                venue="kucoin",
-                strategy="flip",
-                ts=_now_iso(),
-                position=float(pos),
-                side=current_side,
-                equity=None,
-                payload={
-                    "backtest_event": {
-                        "ts": pd.Timestamp(ev["ts"]).isoformat() if "ts" in ev else None,
-                        "event": str(ev.get("event", "")),
-                        "side": int(ev.get("side", 0)),
-                        "seq": int(ev.get("seq", 0)),
-                    },
-                    "terminal": terminal,
-                    "market": {"bid": bid, "ask": ask, "mid": mid},
+            state_payload = write_execution_state({
+                "symbol": symbol,
+                "venue": "kucoin",
+                "strategy": "flip",
+                "ts": _now_iso(),
+                "position": float(pos),
+                "side": current_side,
+                "equity": float(equity),
+                "backtest_event": {
+                    "ts": pd.Timestamp(ev["ts"]).isoformat() if "ts" in ev else None,
+                    "event": str(ev.get("event", "")),
+                    "side": int(ev.get("side", 0)),
+                    "seq": int(ev.get("seq", 0)),
                 },
-            )
+                "terminal": terminal,
+                "market": {"bid": bid, "ask": ask, "mid": mid},
+                "sizing": {"equity": float(equity), "pos_pct": pos_pct, "leverage": leverage, "contract_multiplier": contract_multiplier, "qty": qty},
+            })
             log.debug("executor wrote state=%s", state_payload)
         except Exception as e:
             log_throttled(
@@ -1023,27 +991,25 @@ def run_once(
                 else:
                     fresh_bid, fresh_ask = broker.get_best_bid_ask(symbol)
                     fresh_mid = (fresh_bid + fresh_ask) / 2.0 if (fresh_bid and fresh_ask) else (fresh_ask or fresh_bid or mid or 0.0)
-                    fresh_available_usdt = _resolve_available_usdt(
-                        broker=broker,
-                        available_fraction=available_fraction,
-                    )
-                    flip_qty = _qty_from_available_balance(
-                        available_usdt=fresh_available_usdt,
+                    fresh_equity = _resolve_equity(broker)
+                    flip_qty = _qty_from_equity_pct(
+                        equity=fresh_equity,
+                        pos_pct=pos_pct,
                         leverage=leverage,
                         mid_price=float(fresh_mid),
-                        contract_multiplier=float(contract_multiplier),
-                        available_fraction=1.0,
+                        contract_multiplier=contract_multiplier,
                     )
                     if flip_qty <= 0:
                         log.warning(
-                            "executor flip aborted: qty=0 after flatten available_usdt=%s leverage=%s mid=%s contract_multiplier=%s",
-                            fresh_available_usdt,
+                            "executor flip aborted: qty=0 after flatten equity=%s pos_pct=%s leverage=%s mid=%s contract_multiplier=%s",
+                            fresh_equity,
+                            pos_pct,
                             leverage,
                             fresh_mid,
                             contract_multiplier,
                         )
                     else:
-                        log.info("executor flip re-size: pre=%s post=%s available_usdt=%s", qty, flip_qty, fresh_available_usdt)
+                        log.info("executor flip re-size: pre=%s post=%s equity=%s contract_mult=%s", qty, flip_qty, fresh_equity, contract_multiplier)
                         target_qty_for_verify = float(flip_qty)
                         res = oms.enter(symbol=symbol, side=want_side, qty=float(flip_qty))
                         log.info("executor flip re-enter result=%s", res)
@@ -1192,13 +1158,13 @@ def main() -> None:
     st = _read_state(state_path)
 
     log.info(
-        "executor start symbol=%s live_enabled=%s dry_run=%s leverage=%s signals=%s available_fraction=%s",
+        "executor start symbol=%s live_enabled=%s dry_run=%s leverage=%s pos_pct=%s signals=%s",
         symbol,
         live_enabled,
         dry_run,
         leverage,
+        os.getenv("LIVE_EXECUTOR_POS_PCT", "0.90"),
         str(signals_root),
-        os.getenv("LIVE_EXECUTOR_AVAILABLE_FRACTION", "0.95"),
     )
 
     while True:

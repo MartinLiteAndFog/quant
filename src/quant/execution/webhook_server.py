@@ -278,22 +278,21 @@ def _start_live_signal_worker_if_enabled() -> None:
         return
 
     symbol = os.getenv("LIVE_SYMBOL", "SOL-USDT")
-    renko_box = float(os.getenv("LIVE_RENKO_BOX", "0.1"))
     lookback = int(os.getenv("LIVE_IMBA_LOOKBACK", "250"))
     sl_abs = float(os.getenv("LIVE_IMBA_SL_ABS", "1.5"))
-    candles_limit = int(os.getenv("LIVE_CANDLES_LIMIT", "1500"))
     poll_sec = float(os.getenv("LIVE_SIGNAL_POLL_SEC", "15"))
     signals_dir = Path(os.getenv("SIGNALS_DIR", "data/signals"))
     state_file = Path(os.getenv("LIVE_SIGNAL_STATE", "data/live/live_signal_state.json"))
     default_gate_on = int(os.getenv("LIVE_DEFAULT_GATE_ON", "0"))
 
     def _loop() -> None:
-        from quant.execution.live_signal_worker import run_once as sw_run_once, WorkerState, _read_state, _write_state
+        from quant.execution.live_signal_worker import run_once as sw_run_once, WorkerState, _read_state, _write_state, _renko_path_default
         from quant.brokers.kucoin_futures import KucoinFuturesBroker
         from quant.regime.store import RegimeStore
 
         broker = KucoinFuturesBroker()
         regime_store = RegimeStore()
+        renko_parquet = _renko_path_default()
         st = _read_state(state_file)
 
         while True:
@@ -301,10 +300,9 @@ def _start_live_signal_worker_if_enabled() -> None:
                 st = sw_run_once(
                     broker,
                     symbol=symbol,
-                    renko_box=renko_box,
+                    renko_parquet=renko_parquet,
                     lookback=lookback,
                     sl_abs=sl_abs,
-                    candles_limit=candles_limit,
                     signals_dir=signals_dir,
                     regime_store=regime_store,
                     default_gate_on=default_gate_on,
@@ -318,9 +316,8 @@ def _start_live_signal_worker_if_enabled() -> None:
     t = threading.Thread(target=_loop, name="live-signal-worker", daemon=True)
     t.start()
     log.info(
-        "started live signal worker symbol=%s box=%s lookback=%s poll_sec=%s",
+        "started live signal worker symbol=%s lookback=%s poll_sec=%s",
         symbol,
-        renko_box,
         lookback,
         poll_sec,
     )
@@ -336,7 +333,6 @@ def _start_live_executor_if_enabled() -> None:
     poll_sec = float(os.getenv("LIVE_EXECUTOR_POLL_SEC", "5"))
     live_enabled = _truthy(os.getenv("LIVE_TRADING_ENABLED", "0"))
     dry_run = _truthy(os.getenv("LIVE_EXECUTOR_DRY_RUN", "1"))
-    max_eur = float(os.getenv("LIVE_EXECUTOR_MAX_EUR", "20"))
     leverage = float(os.getenv("LIVE_EXECUTOR_LEVERAGE", "1"))
 
     allowlist_raw = os.getenv("LIVE_EXECUTOR_SYMBOL_ALLOWLIST", "SOL-USDT")
@@ -365,7 +361,6 @@ def _start_live_executor_if_enabled() -> None:
                     state=st,
                     live_enabled=live_enabled,
                     dry_run=dry_run,
-                    max_eur=max_eur,
                     leverage=leverage,
                 )
                 _write_state(state_file, st)
@@ -376,12 +371,12 @@ def _start_live_executor_if_enabled() -> None:
     t = threading.Thread(target=_loop, name="live-executor", daemon=True)
     t.start()
     log.info(
-        "started live executor symbol=%s live_enabled=%s dry_run=%s max_eur=%s leverage=%s poll_sec=%s",
+        "started live executor symbol=%s live_enabled=%s dry_run=%s leverage=%s pos_pct=%s poll_sec=%s",
         symbol,
         live_enabled,
         dry_run,
-        max_eur,
         leverage,
+        os.getenv("LIVE_EXECUTOR_POS_PCT", "0.90"),
         poll_sec,
     )
 

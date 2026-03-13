@@ -18,7 +18,6 @@ from quant.execution.event_store import insert_signal_event
 from quant.execution.execution_state import write_execution_state
 from quant.execution.kucoin_futures import KucoinFuturesBroker, _symbol_to_contract
 from quant.execution.strategy_router import strategy_for_gate, trend_signals_from_imba
-from quant.features.renko import renko_from_close
 from quant.regime import RegimeStateRecord, RegimeStore
 from quant.strategies.imba import ImbaParams, compute_imba_signals
 from quant.utils.log import get_logger, log_throttled
@@ -384,46 +383,63 @@ def _maybe_emit_bootstrap_from_position(
     return 1
 
 
+def _load_shared_renko(path: Path, limit: int = 4000) -> pd.DataFrame:
+    """Read renko_latest.parquet written by renko_cache_updater (single Renko authority)."""
+    if not path.exists():
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close"])
+    try:
+        df = pd.read_parquet(path)
+    except Exception:
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close"])
+    need = {"ts", "open", "high", "low", "close"}
+    if not need.issubset(set(df.columns)):
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close"])
+    df = df[["ts", "open", "high", "low", "close"]].copy()
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    for c in ("open", "high", "low", "close"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.dropna(subset=["ts", "close"]).sort_values("ts")
+    if limit > 0:
+        df = df.tail(int(limit))
+    return df.reset_index(drop=True)
+
+
+def _renko_path_default() -> Path:
+    env = os.getenv("LIVE_RENKO_PATH")
+    if env:
+        return Path(env)
+    p = Path("/data/live/renko_latest.parquet")
+    if p.exists():
+        return p
+    return Path("data/live/renko_latest.parquet")
+
+
 def run_once(
     broker: KucoinFuturesBroker,
     *,
     symbol: str,
-    renko_box: float,
+    renko_parquet: Path,
     lookback: int,
     sl_abs: float,
-    candles_limit: int,
     signals_dir: Path,
     regime_store: RegimeStore,
     default_gate_on: int,
     state: WorkerState,
 ) -> WorkerState:
-    bars = _fetch_recent_1m_ohlcv(broker, symbol=symbol, limit=candles_limit)
-    if len(bars) < max(lookback, 20):
+    renko_ohlc = _load_shared_renko(renko_parquet)
+    if len(renko_ohlc) < max(lookback, 20):
         log_throttled(
             log,
             logging.INFO,
             f"live_signal_wait_bars:{symbol}",
             float(os.getenv("LIVE_SIGNAL_LOG_THROTTLE_SEC", "60")),
-            "live-signal bars=%s waiting for enough data",
-            len(bars),
+            "live-signal renko bars=%s in %s waiting for enough data (need %s)",
+            len(renko_ohlc),
+            renko_parquet,
+            max(lookback, 20),
         )
         state.last_poll_ts = _now_utc_iso()
         return state
-
-    bricks = renko_from_close(bars[["ts", "close"]], box=float(renko_box))
-    if bricks.empty:
-        log_throttled(
-            log,
-            logging.INFO,
-            f"live_signal_no_bricks:{symbol}",
-            float(os.getenv("LIVE_SIGNAL_LOG_THROTTLE_SEC", "60")),
-            "live-signal no renko bricks (box=%s)",
-            renko_box,
-        )
-        state.last_poll_ts = _now_utc_iso()
-        return state
-
-    renko_ohlc = _renko_to_ohlc(bricks)
     gate = _load_or_seed_gate(regime_store=regime_store, symbol=symbol, default_gate_on=default_gate_on)
     gate_on = int(gate.get("gate_on", default_gate_on))
     active_mode = strategy_for_gate(gate_on)
@@ -647,12 +663,10 @@ def run_once(
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Run live strategy signal worker from KuCoin Futures 1m candles")
+    p = argparse.ArgumentParser(description="Run live strategy signal worker (reads shared renko_latest.parquet)")
     p.add_argument("--symbol", default=os.getenv("LIVE_SYMBOL", "SOL-USDT"))
-    p.add_argument("--renko-box", type=float, default=float(os.getenv("LIVE_RENKO_BOX", "0.1")))
     p.add_argument("--lookback", type=int, default=int(os.getenv("LIVE_IMBA_LOOKBACK", "250")))
     p.add_argument("--sl-abs", type=float, default=float(os.getenv("LIVE_IMBA_SL_ABS", "1.5")))
-    p.add_argument("--candles-limit", type=int, default=int(os.getenv("LIVE_CANDLES_LIMIT", "1500")))
     p.add_argument("--poll-sec", type=float, default=float(os.getenv("LIVE_POLL_SEC", "15")))
     p.add_argument("--signals-dir", default=os.getenv("SIGNALS_DIR", "data/signals"))
     p.add_argument("--state-file", default=os.getenv("LIVE_SIGNAL_STATE", "data/live/live_signal_state.json"))
@@ -666,18 +680,20 @@ def main() -> None:
     broker = KucoinFuturesBroker()
     signals_dir = Path(args.signals_dir)
     state_path = Path(args.state_file)
+    renko_parquet = _renko_path_default()
     regime_store = RegimeStore()
     st = _read_state(state_path)
+
+    log.info("signal worker start symbol=%s renko_parquet=%s lookback=%s", args.symbol, renko_parquet, args.lookback)
 
     while True:
         try:
             st = run_once(
                 broker,
                 symbol=args.symbol,
-                renko_box=float(args.renko_box),
+                renko_parquet=renko_parquet,
                 lookback=int(args.lookback),
                 sl_abs=float(args.sl_abs),
-                candles_limit=int(args.candles_limit),
                 signals_dir=signals_dir,
                 regime_store=regime_store,
                 default_gate_on=int(args.default_gate_on),

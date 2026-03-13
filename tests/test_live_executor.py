@@ -9,16 +9,17 @@ from pathlib import Path
 import pandas as pd
 
 from quant.execution.live_executor import (
-    ExecutorState, run_once, _apply_live_ttp_guard, _snap_signals_to_bars,
+    ExecutorState, run_once, _apply_live_ttp_guard,
 )
 
 
 class _DummyBroker:
-    def __init__(self, pos: float, bid: float, ask: float, multiplier: float = 1.0) -> None:
+    def __init__(self, pos: float, bid: float, ask: float, multiplier: float = 1.0, equity: float = 1000.0) -> None:
         self._pos = float(pos)
         self._bid = float(bid)
         self._ask = float(ask)
         self._multiplier = float(multiplier)
+        self._equity = float(equity)
 
     def get_best_bid_ask(self, symbol: str):
         return (self._bid, self._ask)
@@ -28,6 +29,9 @@ class _DummyBroker:
 
     def get_contract_multiplier(self, symbol: str) -> float:
         return self._multiplier
+
+    def get_account_balance(self, currency: str = "USDT"):
+        return {"equity": self._equity, "available": self._equity, "margin": 0.0, "unrealised_pnl": 0.0}
 
 
 class _Res:
@@ -84,13 +88,18 @@ class LiveExecutorTests(unittest.TestCase):
         rec = {"ts": "2026-02-25T10:00:00Z", "signal": 1}
         (self.symbol_dir / "20260225.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
 
-        os.environ["LIVE_EXECUTOR_RENKO_PARQUET"] = str(self.renko_path)
+        os.environ["LIVE_RENKO_PATH"] = str(self.renko_path)
         os.environ["LIVE_FLIP_TTP_TRAIL_PCT"] = "0.10"
         os.environ["LIVE_FLIP_MIN_SL_PCT"] = "0.015"
         os.environ["LIVE_FLIP_MAX_SL_PCT"] = "0.030"
+        os.environ["LIVE_EXECUTOR_POS_PCT"] = "1.0"
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
+        for key in ("LIVE_RENKO_PATH", "LIVE_FLIP_TTP_TRAIL_PCT",
+                     "LIVE_FLIP_MIN_SL_PCT", "LIVE_FLIP_MAX_SL_PCT",
+                     "LIVE_EXECUTOR_POS_PCT"):
+            os.environ.pop(key, None)
 
     def test_terminal_state_short_flips_long_broker_position(self) -> None:
         """Flip engine ends in short (pos=-1) after TTP exit.  Broker is
@@ -107,7 +116,6 @@ class LiveExecutorTests(unittest.TestCase):
             state=st,
             live_enabled=True,
             dry_run=False,
-            max_eur=1000.0,
             leverage=1.0,
         )
 
@@ -133,7 +141,6 @@ class LiveExecutorTests(unittest.TestCase):
             state=st,
             live_enabled=True,
             dry_run=False,
-            max_eur=1000.0,
             leverage=1.0,
         )
 
@@ -159,7 +166,6 @@ class LiveExecutorTests(unittest.TestCase):
             state=st,
             live_enabled=True,
             dry_run=False,
-            max_eur=1000.0,
             leverage=1.0,
         )
         self.assertEqual(len(oms.flip_calls), 1)
@@ -174,7 +180,6 @@ class LiveExecutorTests(unittest.TestCase):
             state=st,
             live_enabled=True,
             dry_run=False,
-            max_eur=1000.0,
             leverage=1.0,
         )
         self.assertEqual(len(oms.flip_calls), 1, "No additional flip after fill")
@@ -204,7 +209,6 @@ class LiveExecutorTests(unittest.TestCase):
             state=ExecutorState(),
             live_enabled=True,
             dry_run=False,
-            max_eur=1000.0,
             leverage=1.0,
         )
 
@@ -212,30 +216,6 @@ class LiveExecutorTests(unittest.TestCase):
                          "Terminal state short + broker flat must enter short")
         self.assertEqual(len(oms.enter_calls), 1)
         self.assertEqual(oms.enter_calls[0][1], "short")
-
-    def test_snap_signals_to_bars_exact_match_unchanged(self) -> None:
-        """Signals already matching bar timestamps are not modified."""
-        bars = pd.DataFrame({"ts": pd.to_datetime(["2026-02-25T10:00:00Z", "2026-02-25T10:01:00Z"], utc=True)})
-        sigs = pd.DataFrame({"ts": pd.to_datetime(["2026-02-25T10:00:00Z"], utc=True), "signal": [1]})
-        out = _snap_signals_to_bars(sigs, bars)
-        self.assertEqual(len(out), 1)
-        self.assertEqual(out.iloc[0]["ts"], pd.Timestamp("2026-02-25T10:00:00Z"))
-
-    def test_snap_signals_to_bars_snaps_within_tolerance(self) -> None:
-        """Signal 30s off from a bar is snapped to the nearest bar."""
-        bars = pd.DataFrame({"ts": pd.to_datetime(["2026-02-25T10:00:00Z", "2026-02-25T10:02:00Z"], utc=True)})
-        sigs = pd.DataFrame({"ts": pd.to_datetime(["2026-02-25T10:00:30Z"], utc=True), "signal": [-1]})
-        out = _snap_signals_to_bars(sigs, bars)
-        self.assertEqual(len(out), 1)
-        self.assertEqual(out.iloc[0]["ts"], pd.Timestamp("2026-02-25T10:00:00Z"))
-        self.assertEqual(int(out.iloc[0]["signal"]), -1)
-
-    def test_snap_signals_to_bars_outside_tolerance_kept(self) -> None:
-        """Signal outside tolerance window keeps its original timestamp."""
-        bars = pd.DataFrame({"ts": pd.to_datetime(["2026-02-25T10:00:00Z"], utc=True)})
-        sigs = pd.DataFrame({"ts": pd.to_datetime(["2026-02-25T11:00:00Z"], utc=True), "signal": [1]})
-        out = _snap_signals_to_bars(sigs, bars, tolerance=pd.Timedelta(minutes=5))
-        self.assertEqual(out.iloc[0]["ts"], pd.Timestamp("2026-02-25T11:00:00Z"))
 
     def test_terminal_short_with_long_broker_flips(self) -> None:
         """Terminal state is short but broker is long -> must flip."""
@@ -250,7 +230,6 @@ class LiveExecutorTests(unittest.TestCase):
             state=ExecutorState(),
             live_enabled=True,
             dry_run=False,
-            max_eur=1000.0,
             leverage=1.0,
         )
 
@@ -259,9 +238,8 @@ class LiveExecutorTests(unittest.TestCase):
         self.assertEqual(len(oms.flip_calls), 1)
         self.assertEqual(oms.flip_calls[0][1], "long")
 
-    def test_snapped_signal_processed_by_flip_engine(self) -> None:
-        """Signal with slightly off timestamp gets snapped to a bar and
-        processed by the flip engine (not just fallback)."""
+    def test_exact_match_signal_processed_by_flip_engine(self) -> None:
+        """Signal with exact bar timestamp is processed by the flip engine."""
         bars = pd.DataFrame({
             "ts": pd.to_datetime([
                 "2026-02-25T10:00:00Z",
@@ -273,14 +251,14 @@ class LiveExecutorTests(unittest.TestCase):
             "low": [100.0, 100.0, 100.0],
             "close": [100.0, 100.0, 100.0],
         })
-        renko_path = self.root / "renko_snap.parquet"
+        renko_path = self.root / "renko_exact.parquet"
         bars.to_parquet(renko_path, index=False)
-        os.environ["LIVE_EXECUTOR_RENKO_PARQUET"] = str(renko_path)
+        os.environ["LIVE_RENKO_PATH"] = str(renko_path)
 
-        rec = {"ts": "2026-02-25T10:00:17Z", "signal": 1}
-        snap_dir = self.signals_root / "SOL-USDT"
-        snap_dir.mkdir(parents=True, exist_ok=True)
-        (snap_dir / "20260225_snap.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
+        rec = {"ts": "2026-02-25T10:00:00Z", "signal": 1}
+        exact_dir = self.signals_root / "SOL-USDT"
+        exact_dir.mkdir(parents=True, exist_ok=True)
+        (exact_dir / "20260225_exact.jsonl").write_text(json.dumps(rec) + "\n", encoding="utf-8")
 
         broker = _DummyBroker(pos=0.0, bid=99.9, ask=100.1)
         oms = _DummyOms()
@@ -292,11 +270,10 @@ class LiveExecutorTests(unittest.TestCase):
             state=ExecutorState(),
             live_enabled=True,
             dry_run=False,
-            max_eur=1000.0,
             leverage=1.0,
         )
         self.assertIn(st.last_action, ("enter_long", "enter_short", "flip_to_long", "flip_to_short"),
-                       "Snapped signal must result in a trade action, not be ignored")
+                       "Exact-match signal must result in a trade action")
         self.assertTrue(len(oms.enter_calls) > 0 or len(oms.flip_calls) > 0,
                         "At least one OMS call must have been made")
 
@@ -315,7 +292,6 @@ class LiveExecutorTests(unittest.TestCase):
             state=ExecutorState(),
             live_enabled=True,
             dry_run=False,
-            max_eur=1000.0,
             leverage=1.0,
         )
         self.assertEqual(st.last_action, "hold")
@@ -330,7 +306,6 @@ class LiveExecutorTests(unittest.TestCase):
             state=st,
             live_enabled=True,
             dry_run=False,
-            max_eur=1000.0,
             leverage=1.0,
         )
         self.assertEqual(len(oms2.enter_calls), 0, "No enter calls on idempotent hold")
