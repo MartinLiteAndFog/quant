@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/api/client.ts","./src/api/hooks.ts","./src/components/charts/equitycurve.tsx","./src/components/charts/pricechart.tsx","./src/components/layout/dashboard.tsx","./src/components/layout/sidebar.tsx","./src/types/chart.ts"],"version":"5.9.3"}

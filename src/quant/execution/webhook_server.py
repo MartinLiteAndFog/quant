@@ -14,7 +14,8 @@ from contextlib import asynccontextmanager
 
 import pandas as pd
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from quant.execution.dashboard_state import (
@@ -460,9 +461,18 @@ def _ensure_ts(payload: Dict[str, Any], now_iso: str) -> Dict[str, Any]:
     return out
 
 
+_SPA_DIR = Path(__file__).resolve().parent.parent.parent.parent / "frontend" / "dist"
+
+
 @app.get("/")
-def root() -> Dict[str, Any]:
-    return {"ok": True, "app": "quant-webhook", "ts": _now_utc_iso(), "dashboard": "/dashboard", "health": "/health"}
+def root() -> Response:
+    index = _SPA_DIR / "index.html"
+    if index.exists():
+        return FileResponse(index, media_type="text/html")
+    return Response(
+        content=json.dumps({"ok": True, "app": "quant-webhook", "ts": _now_utc_iso(), "dashboard": "/dashboard"}),
+        media_type="application/json",
+    )
 
 
 @app.get("/health")
@@ -1012,6 +1022,59 @@ def api_dashboard_fills(symbol: str = DEFAULT_SYMBOL, max_points: int = 500) -> 
         return {"ok": True, "rows": rows, "count": len(rows), "ts": _now_utc_iso()}
     except Exception as e:
         return {"ok": False, "rows": [], "count": 0, "error": str(e), "ts": _now_utc_iso()}
+
+
+@app.get("/api/equity/events")
+def api_equity_events(range: str = "7d", venue: str = "") -> Dict[str, Any]:
+    """Event-based equity curve from Postgres equity_snapshots + execution_events."""
+    try:
+        from quant.execution.event_store import get_conn
+
+        range_sec = {"24h": 86400, "7d": 604800, "30d": 2592000}.get(range)
+        where_time = ""
+        if range_sec:
+            where_time = f"AND e.ts >= NOW() - INTERVAL '{range_sec} seconds'"
+
+        where_venue = ""
+        if venue:
+            where_venue = f"AND e.venue = '{venue}'"
+
+        sql = f"""
+        SELECT
+            e.ts, e.venue, e.equity, x.side,
+            CASE
+                WHEN x.execution_stage IS NOT NULL THEN x.execution_stage
+                ELSE 'snapshot'
+            END AS event_type
+        FROM equity_snapshots e
+        LEFT JOIN LATERAL (
+            SELECT ex.side, ex.execution_stage
+            FROM execution_events ex
+            WHERE ex.venue = e.venue
+              AND ABS(EXTRACT(EPOCH FROM (ex.ts - e.ts))) < 30
+            ORDER BY ABS(EXTRACT(EPOCH FROM (ex.ts - e.ts)))
+            LIMIT 1
+        ) x ON TRUE
+        WHERE 1=1 {where_time} {where_venue}
+        ORDER BY e.ts
+        """
+
+        events = []
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql)
+                for row in cur.fetchall():
+                    events.append({
+                        "ts": row[0].isoformat() if hasattr(row[0], "isoformat") else str(row[0]),
+                        "venue": row[1] or "",
+                        "equity": float(row[2]) if row[2] is not None else 0.0,
+                        "side": row[3] or "",
+                        "event_type": row[4] or "snapshot",
+                    })
+        return {"ok": True, "events": events, "count": len(events), "ts": _now_utc_iso()}
+    except Exception as e:
+        log.warning("equity/events error: %s", e)
+        return {"ok": False, "events": [], "error": str(e), "ts": _now_utc_iso()}
 
 
 def _load_density_bg_images() -> Dict[str, Optional[str]]:
@@ -2380,6 +2443,19 @@ async def tradingview_webhook(
     _append_jsonl(out_path, enriched)
     log.info(f"webhook saved symbol={sym} file={out_path}")
     return {"ok": True, "saved_to": str(out_path), "symbol": sym}
+
+
+if (_SPA_DIR / "assets").is_dir():
+    app.mount("/assets", StaticFiles(directory=str(_SPA_DIR / "assets")), name="spa-assets")
+
+
+@app.get("/{full_path:path}")
+def spa_fallback(full_path: str) -> Response:
+    """Serve index.html for any non-API route (SPA client-side routing)."""
+    index = _SPA_DIR / "index.html"
+    if index.exists():
+        return FileResponse(index, media_type="text/html")
+    raise HTTPException(status_code=404, detail="not found")
 
 
 def parse_args() -> argparse.Namespace:
