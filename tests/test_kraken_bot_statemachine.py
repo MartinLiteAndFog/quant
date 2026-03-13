@@ -9,6 +9,7 @@ from quant.execution.kraken_bot import (
     BotState,
     FlipParams,
     TP2Params,
+    _bars_to_dataframe,
     _load_signals_from_postgres,
     _terminal_to_actions,
     compute_swing_sl,
@@ -226,98 +227,115 @@ class TestSwingSL(unittest.TestCase):
         self.assertAlmostEqual(sl, 98.0)  # (100-98)/100=0.020, within [0.015, 0.030]
 
 
-class TestLoadSignalsFiltersStrategy(unittest.TestCase):
-    """Verify _load_signals_from_postgres filters by strategy column."""
+class TestBarsToDataframeFloorsToMicroseconds(unittest.TestCase):
+    """Verify _bars_to_dataframe floors nanosecond offsets to µs precision."""
 
-    @patch("quant.execution.kraken_bot.get_conn")
-    def test_default_filters_countertrend(self, mock_get_conn):
-        mock_cur = MagicMock()
-        mock_cur.fetchall.return_value = [
-            (pd.Timestamp("2026-03-13T10:00Z"), -1),
+    def test_nanosecond_offset_floored(self):
+        bars = [
+            {"ts": "2026-03-13T10:15:00.000000000+00:00", "open": 100, "high": 101, "low": 99, "close": 100.5},
+            {"ts": "2026-03-13T10:15:00.000000001+00:00", "open": 100.5, "high": 102, "low": 100, "close": 101},
         ]
+        df = _bars_to_dataframe(bars)
+        for ts in df["ts"]:
+            self.assertEqual(ts.nanosecond, 0, "nanosecond component must be zero after flooring")
+
+    def test_clean_timestamps_unchanged(self):
+        bars = [
+            {"ts": "2026-03-13T10:15:00+00:00", "open": 100, "high": 101, "low": 99, "close": 100.5},
+            {"ts": "2026-03-13T10:16:00+00:00", "open": 100.5, "high": 102, "low": 100, "close": 101},
+        ]
+        df = _bars_to_dataframe(bars)
+        self.assertEqual(len(df), 2)
+        self.assertEqual(df["ts"].iloc[0], pd.Timestamp("2026-03-13T10:15:00", tz="UTC"))
+        self.assertEqual(df["ts"].iloc[1], pd.Timestamp("2026-03-13T10:16:00", tz="UTC"))
+
+
+class TestLoadSignalsReinvertsTrendfollower(unittest.TestCase):
+    """Verify _load_signals_from_postgres re-inverts trendfollower signals
+    back to raw IMBA direction so both strategies carry the same entry side."""
+
+    def _mock_conn(self, rows):
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = rows
         mock_conn = MagicMock()
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
         mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-        mock_get_conn.return_value = mock_conn
-
-        df = _load_signals_from_postgres("SOL-USDT")
-        sql_arg = mock_cur.execute.call_args[0][0]
-        params_arg = mock_cur.execute.call_args[0][1]
-
-        self.assertIn("strategy = %s", sql_arg)
-        self.assertEqual(params_arg[1], "countertrend")
+        return mock_conn
 
     @patch("quant.execution.kraken_bot.get_conn")
-    def test_explicit_strategy_passed_to_query(self, mock_get_conn):
-        mock_cur = MagicMock()
-        mock_cur.fetchall.return_value = []
-        mock_conn = MagicMock()
-        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-        mock_get_conn.return_value = mock_conn
+    def test_trendfollower_signal_reinverted(self, mock_get_conn):
+        ts = pd.Timestamp("2026-03-13T10:00Z")
+        mock_get_conn.return_value = self._mock_conn([
+            (ts, 1, "trendfollower"),
+        ])
+        df = _load_signals_from_postgres("SOL-USDT")
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]["signal"], -1, "trendfollower +1 should become IMBA -1")
 
-        _load_signals_from_postgres("SOL-USDT", strategy="trendfollower")
-        params_arg = mock_cur.execute.call_args[0][1]
-        self.assertEqual(params_arg[1], "trendfollower")
+    @patch("quant.execution.kraken_bot.get_conn")
+    def test_countertrend_signal_unchanged(self, mock_get_conn):
+        ts = pd.Timestamp("2026-03-13T10:00Z")
+        mock_get_conn.return_value = self._mock_conn([
+            (ts, -1, "countertrend"),
+        ])
+        df = _load_signals_from_postgres("SOL-USDT")
+        self.assertEqual(df.iloc[0]["signal"], -1, "countertrend signal stays as-is")
+
+    @patch("quant.execution.kraken_bot.get_conn")
+    def test_mixed_signals_agree_after_reinversion(self, mock_get_conn):
+        ts = pd.Timestamp("2026-03-13T10:00Z")
+        mock_get_conn.return_value = self._mock_conn([
+            (ts, -1, "countertrend"),
+            (ts, 1, "trendfollower"),
+            (ts, -1, "countertrend"),
+        ])
+        df = _load_signals_from_postgres("SOL-USDT")
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]["signal"], -1,
+                         "all signals at same ts should agree on sell after re-inversion")
+
+    @patch("quant.execution.kraken_bot.get_conn")
+    def test_loads_both_strategies(self, mock_get_conn):
+        mock_get_conn.return_value = self._mock_conn([
+            (pd.Timestamp("2026-03-13T10:00Z"), 1, "countertrend"),
+            (pd.Timestamp("2026-03-13T10:05Z"), -1, "trendfollower"),
+        ])
+        df = _load_signals_from_postgres("SOL-USDT")
+        self.assertEqual(len(df), 2, "signals from both strategies must be loaded")
+        self.assertEqual(df.iloc[0]["signal"], 1)
+        self.assertEqual(df.iloc[1]["signal"], 1, "trendfollower -1 re-inverted to +1")
 
 
-class TestMixedSignalsCauseMissedSell(unittest.TestCase):
-    """Demonstrate that mixing countertrend and trendfollower signals
-    into the flip engine causes missed sells, and filtering fixes it."""
+class TestNanosecondSignalAlignment(unittest.TestCase):
+    """End-to-end: signals on nanosecond-offset bars must still fire
+    in the flip engine after bar timestamps are floored to µs."""
 
-    def _make_bars(self, n=10, start_px=100.0):
-        ts = pd.date_range("2026-03-13T10:00:00Z", periods=n, freq="min", tz="UTC")
-        close = [start_px + i * 0.5 for i in range(n)]
-        return pd.DataFrame({
-            "ts": ts,
-            "open": close,
-            "high": [c + 0.3 for c in close],
-            "low": [c - 0.3 for c in close],
-            "close": close,
+    def test_signal_matches_after_floor(self):
+        ts_base = pd.Timestamp("2026-03-13T10:15:00", tz="UTC")
+        ts_ns = ts_base + pd.Timedelta(nanoseconds=1)
+        bars_raw = [
+            {"ts": ts_base.isoformat(), "open": 100, "high": 101, "low": 99, "close": 100.5},
+            {"ts": ts_ns.isoformat(), "open": 100.5, "high": 102, "low": 100, "close": 101},
+            {"ts": "2026-03-13T10:16:00+00:00", "open": 101, "high": 103, "low": 100, "close": 102},
+            {"ts": "2026-03-13T10:17:00+00:00", "open": 102, "high": 104, "low": 101, "close": 103},
+        ]
+        bars_df = _bars_to_dataframe(bars_raw)
+
+        signal_ts = ts_base
+        signals_df = pd.DataFrame({
+            "ts": [signal_ts],
+            "signal": [1],
         })
 
-    def test_sell_signal_visible_when_only_countertrend(self):
-        bars = self._make_bars(6)
-        ct_signals = pd.DataFrame({
-            "ts": [bars["ts"].iloc[1], bars["ts"].iloc[4]],
-            "signal": [1, -1],
-        })
-
-        _, events_df, terminal = run_flip_state_machine(
-            bars=bars, signals_df=ct_signals,
+        _, _, terminal = run_flip_state_machine(
+            bars=bars_df,
+            signals_df=signals_df,
             params=SharedFlipParams(ttp_trail_pct=0.10, min_sl_pct=0.015, max_sl_pct=0.030),
         )
-        self.assertEqual(terminal["pos"], -1, "flip engine should be short after sell signal")
-
-    def test_sell_signal_can_be_swallowed_by_mixed_signals(self):
-        bars = self._make_bars(6)
-        ct_sell_ts = bars["ts"].iloc[4]
-        mixed_signals = pd.DataFrame({
-            "ts": [
-                bars["ts"].iloc[1], bars["ts"].iloc[1],
-                ct_sell_ts, ct_sell_ts,
-            ],
-            "signal": [1, -1, -1, 1],
-        })
-        mixed_signals = (
-            mixed_signals.sort_values("ts")
-            .drop_duplicates("ts", keep="last")
-            .reset_index(drop=True)
-        )
-
-        _, events_df, terminal = run_flip_state_machine(
-            bars=bars, signals_df=mixed_signals,
-            params=SharedFlipParams(ttp_trail_pct=0.10, min_sl_pct=0.015, max_sl_pct=0.030),
-        )
-        self.assertEqual(
-            terminal["pos"], 1,
-            "with mixed signals (keep=last gives trendfollower), "
-            "the sell signal is swallowed and position stays long",
-        )
+        self.assertNotEqual(terminal["pos"], 0,
+                            "signal at µs-truncated ts must fire on the floored bar")
 
 
 class TestTerminalToActions(unittest.TestCase):
