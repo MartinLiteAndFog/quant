@@ -1,15 +1,22 @@
 """Tests for the Kraken bot state machine — pure logic, no API calls."""
 import unittest
 from dataclasses import asdict
+from unittest.mock import MagicMock, patch
+
+import pandas as pd
 
 from quant.execution.kraken_bot import (
     BotState,
     FlipParams,
     TP2Params,
+    _bars_to_dataframe,
+    _load_signals_from_postgres,
+    _terminal_to_actions,
     compute_swing_sl,
     compute_target_size,
     run_once_logic,
 )
+from quant.strategies.flip_engine import FlipParams as SharedFlipParams, run_flip_state_machine
 
 FLIP = FlipParams()
 TP2 = TP2Params()
@@ -218,6 +225,135 @@ class TestSwingSL(unittest.TestCase):
     def test_long_sl_within_range(self):
         sl = compute_swing_sl(1, 100.0, 98.0, 102.0, 0.015, 0.030)
         self.assertAlmostEqual(sl, 98.0)  # (100-98)/100=0.020, within [0.015, 0.030]
+
+
+class TestBarsToDataframeFloorsToMicroseconds(unittest.TestCase):
+    """Verify _bars_to_dataframe floors nanosecond offsets to µs precision."""
+
+    def test_nanosecond_offset_floored(self):
+        bars = [
+            {"ts": "2026-03-13T10:15:00.000000000+00:00", "open": 100, "high": 101, "low": 99, "close": 100.5},
+            {"ts": "2026-03-13T10:15:00.000000001+00:00", "open": 100.5, "high": 102, "low": 100, "close": 101},
+        ]
+        df = _bars_to_dataframe(bars)
+        for ts in df["ts"]:
+            self.assertEqual(ts.nanosecond, 0, "nanosecond component must be zero after flooring")
+
+    def test_clean_timestamps_unchanged(self):
+        bars = [
+            {"ts": "2026-03-13T10:15:00+00:00", "open": 100, "high": 101, "low": 99, "close": 100.5},
+            {"ts": "2026-03-13T10:16:00+00:00", "open": 100.5, "high": 102, "low": 100, "close": 101},
+        ]
+        df = _bars_to_dataframe(bars)
+        self.assertEqual(len(df), 2)
+        self.assertEqual(df["ts"].iloc[0], pd.Timestamp("2026-03-13T10:15:00", tz="UTC"))
+        self.assertEqual(df["ts"].iloc[1], pd.Timestamp("2026-03-13T10:16:00", tz="UTC"))
+
+
+class TestLoadSignalsReinvertsTrendfollower(unittest.TestCase):
+    """Verify _load_signals_from_postgres re-inverts trendfollower signals
+    back to raw IMBA direction so both strategies carry the same entry side."""
+
+    def _mock_conn(self, rows):
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = rows
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        return mock_conn
+
+    @patch("quant.execution.kraken_bot.get_conn")
+    def test_trendfollower_signal_reinverted(self, mock_get_conn):
+        ts = pd.Timestamp("2026-03-13T10:00Z")
+        mock_get_conn.return_value = self._mock_conn([
+            (ts, 1, "trendfollower"),
+        ])
+        df = _load_signals_from_postgres("SOL-USDT")
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]["signal"], -1, "trendfollower +1 should become IMBA -1")
+
+    @patch("quant.execution.kraken_bot.get_conn")
+    def test_countertrend_signal_unchanged(self, mock_get_conn):
+        ts = pd.Timestamp("2026-03-13T10:00Z")
+        mock_get_conn.return_value = self._mock_conn([
+            (ts, -1, "countertrend"),
+        ])
+        df = _load_signals_from_postgres("SOL-USDT")
+        self.assertEqual(df.iloc[0]["signal"], -1, "countertrend signal stays as-is")
+
+    @patch("quant.execution.kraken_bot.get_conn")
+    def test_mixed_signals_agree_after_reinversion(self, mock_get_conn):
+        ts = pd.Timestamp("2026-03-13T10:00Z")
+        mock_get_conn.return_value = self._mock_conn([
+            (ts, -1, "countertrend"),
+            (ts, 1, "trendfollower"),
+            (ts, -1, "countertrend"),
+        ])
+        df = _load_signals_from_postgres("SOL-USDT")
+        self.assertEqual(len(df), 1)
+        self.assertEqual(df.iloc[0]["signal"], -1,
+                         "all signals at same ts should agree on sell after re-inversion")
+
+    @patch("quant.execution.kraken_bot.get_conn")
+    def test_loads_both_strategies(self, mock_get_conn):
+        mock_get_conn.return_value = self._mock_conn([
+            (pd.Timestamp("2026-03-13T10:00Z"), 1, "countertrend"),
+            (pd.Timestamp("2026-03-13T10:05Z"), -1, "trendfollower"),
+        ])
+        df = _load_signals_from_postgres("SOL-USDT")
+        self.assertEqual(len(df), 2, "signals from both strategies must be loaded")
+        self.assertEqual(df.iloc[0]["signal"], 1)
+        self.assertEqual(df.iloc[1]["signal"], 1, "trendfollower -1 re-inverted to +1")
+
+
+class TestNanosecondSignalAlignment(unittest.TestCase):
+    """End-to-end: signals on nanosecond-offset bars must still fire
+    in the flip engine after bar timestamps are floored to µs."""
+
+    def test_signal_matches_after_floor(self):
+        ts_base = pd.Timestamp("2026-03-13T10:15:00", tz="UTC")
+        ts_ns = ts_base + pd.Timedelta(nanoseconds=1)
+        bars_raw = [
+            {"ts": ts_base.isoformat(), "open": 100, "high": 101, "low": 99, "close": 100.5},
+            {"ts": ts_ns.isoformat(), "open": 100.5, "high": 102, "low": 100, "close": 101},
+            {"ts": "2026-03-13T10:16:00+00:00", "open": 101, "high": 103, "low": 100, "close": 102},
+            {"ts": "2026-03-13T10:17:00+00:00", "open": 102, "high": 104, "low": 101, "close": 103},
+        ]
+        bars_df = _bars_to_dataframe(bars_raw)
+
+        signal_ts = ts_base
+        signals_df = pd.DataFrame({
+            "ts": [signal_ts],
+            "signal": [1],
+        })
+
+        _, _, terminal = run_flip_state_machine(
+            bars=bars_df,
+            signals_df=signals_df,
+            params=SharedFlipParams(ttp_trail_pct=0.10, min_sl_pct=0.015, max_sl_pct=0.030),
+        )
+        self.assertNotEqual(terminal["pos"], 0,
+                            "signal at µs-truncated ts must fire on the floored bar")
+
+
+class TestTerminalToActions(unittest.TestCase):
+    def test_long_to_short_generates_close_and_enter(self):
+        acts = _terminal_to_actions(terminal_pos=-1, current_pos_side=1, target_size=2.0, mark=100.0)
+        self.assertEqual(len(acts), 2)
+        self.assertEqual(acts[0]["action"], "close_all")
+        self.assertEqual(acts[1]["action"], "enter_short")
+        self.assertEqual(acts[1]["side"], "sell")
+
+    def test_same_position_no_action(self):
+        acts = _terminal_to_actions(terminal_pos=1, current_pos_side=1, target_size=2.0, mark=100.0)
+        self.assertEqual(len(acts), 0)
+
+    def test_flat_to_short(self):
+        acts = _terminal_to_actions(terminal_pos=-1, current_pos_side=0, target_size=2.0, mark=100.0)
+        self.assertEqual(len(acts), 1)
+        self.assertEqual(acts[0]["action"], "enter_short")
 
 
 if __name__ == "__main__":

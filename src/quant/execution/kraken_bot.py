@@ -1094,11 +1094,19 @@ def fetch_renko(url: str, lookback: int, symbol: str = "SOL-USDT") -> Dict[str, 
 # ---------------------------------------------------------------------------
 
 def _bars_to_dataframe(bars: List[Dict[str, Any]]) -> pd.DataFrame:
-    """Convert Redis bar dicts [{ts, open, high, low, close}, ...] to DataFrame."""
+    """Convert Redis bar dicts [{ts, open, high, low, close}, ...] to DataFrame.
+
+    Floors timestamps to microsecond precision so they align with signal
+    timestamps from Postgres (TIMESTAMPTZ has µs resolution).  The renko
+    cache updater adds nanosecond offsets to deduplicate bricks that share
+    a 1-minute candle; without flooring, align_impulses_exact silently
+    drops every signal whose bar carried a sub-µs offset.
+    """
     if not bars:
         return pd.DataFrame(columns=["ts", "open", "high", "low", "close"])
     df = pd.DataFrame(bars)
     df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    df["ts"] = df["ts"].dt.floor("us")
     for c in ("open", "high", "low", "close"):
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
@@ -1110,12 +1118,20 @@ def _canon_symbol(sym: str) -> str:
 
 
 def _load_signals_from_postgres(symbol: str, limit: int = 10000) -> pd.DataFrame:
-    """Load signal history from Postgres signal_events table."""
+    """Load signal history from Postgres signal_events table.
+
+    The live_signal_worker stores both countertrend (raw IMBA) and
+    trendfollower (inverted IMBA via trend_signals_from_imba) events.
+    Both strategies share the same IMBA entry direction; the inversion
+    only applies to the trendfollower exit substream, not to entries.
+    We re-invert trendfollower signals here so every row carries the
+    raw IMBA direction that the flip engine expects.
+    """
     sym = _canon_symbol(symbol)
     sql = """
-        SELECT ts, signal FROM signal_events
+        SELECT ts, signal, strategy FROM signal_events
         WHERE symbol = %s AND signal != 0
-        ORDER BY ts ASC
+        ORDER BY ts DESC
         LIMIT %s
     """
     try:
@@ -1129,11 +1145,21 @@ def _load_signals_from_postgres(symbol: str, limit: int = 10000) -> pd.DataFrame
     if not rows:
         return pd.DataFrame(columns=["ts", "signal"])
 
-    df = pd.DataFrame(rows, columns=["ts", "signal"])
+    df = pd.DataFrame(rows, columns=["ts", "signal", "strategy"])
     df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
     df["signal"] = pd.to_numeric(df["signal"], errors="coerce").fillna(0).astype(int).clip(-1, 1)
-    df = df[df["signal"] != 0].dropna(subset=["ts"]).sort_values("ts").drop_duplicates("ts", keep="last").reset_index(drop=True)
-    return df
+
+    tf_mask = df["strategy"] == "trendfollower"
+    df.loc[tf_mask, "signal"] = -df.loc[tf_mask, "signal"]
+
+    df = (
+        df[df["signal"] != 0]
+        .dropna(subset=["ts"])
+        .sort_values("ts")
+        .drop_duplicates("ts", keep="last")
+        .reset_index(drop=True)
+    )
+    return df[["ts", "signal"]]
 
 
 def _load_regime_series(symbol: str) -> Optional[pd.Series]:
