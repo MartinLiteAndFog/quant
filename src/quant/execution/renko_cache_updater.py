@@ -45,7 +45,7 @@ def _publish_renko_to_redis(symbol: str, renko: pd.DataFrame, box: float) -> Dic
     if renko is None or renko.empty:
         return {"ok": False, "reason": "empty_renko"}
 
-    tail_n = 50
+    tail_n = int(os.getenv("RENKO_REDIS_BARS", "500"))
     tail = renko.tail(tail_n).copy().reset_index(drop=True)
     tail["ts"] = pd.to_datetime(tail["ts"], utc=True, errors="coerce")
 

@@ -579,6 +579,66 @@ def _verify_execution_fill_ratio(
         )
 
 
+def _sync_kucoin_stop_loss(
+    *,
+    broker: KucoinFuturesBroker,
+    symbol: str,
+    terminal: Optional[Dict[str, Any]],
+    terminal_pos: int,
+    dry_run: bool,
+) -> None:
+    """Sync a native stop-market order on KuCoin based on the flip engine terminal state."""
+    if not _truthy(os.getenv("KUCOIN_NATIVE_SL_ENABLED", "0")):
+        return
+
+    if terminal_pos == 0 or terminal is None:
+        try:
+            broker.cancel_all_stop_orders(symbol)
+        except Exception as e:
+            log.warning("kucoin cancel stop orders failed (flat): %s", e)
+        return
+
+    stop_price = terminal.get("sl") or terminal.get("ttp")
+    if stop_price is None:
+        return
+
+    stop_side = "sell" if terminal_pos > 0 else "buy"
+    pos_qty = abs(float(broker.get_position(symbol)))
+    if pos_qty <= 0:
+        return
+
+    if dry_run:
+        log.info(
+            "DRY_RUN kucoin native SL: side=%s qty=%s stop=%.4f mode=%s",
+            stop_side, pos_qty, stop_price, terminal.get("mode"),
+        )
+        return
+
+    try:
+        broker.cancel_all_stop_orders(symbol)
+    except Exception as e:
+        log.warning("kucoin cancel stop orders pre-place failed: %s", e)
+
+    try:
+        order_id = broker.place_stop_market(
+            symbol=symbol,
+            side=stop_side,
+            qty=pos_qty,
+            stop_price=float(stop_price),
+            reduce_only=True,
+            client_id=f"quant-sl-{pd.Timestamp.now('UTC').strftime('%Y%m%d%H%M%S%f')}",
+        )
+        log.info(
+            "kucoin native SL placed: order_id=%s side=%s qty=%s stop=%.4f mode=%s",
+            order_id, stop_side, pos_qty, stop_price, terminal.get("mode"),
+        )
+    except Exception as e:
+        log.warning(
+            "kucoin native SL place failed: side=%s qty=%s stop=%.4f err=%s",
+            stop_side, pos_qty, stop_price, e,
+        )
+
+
 def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Optional[float] = None) -> None:
     if not terminal:
         return
@@ -1111,6 +1171,14 @@ def run_once(
             target_side=target_side_for_verify,
             target_qty=float(target_qty_for_verify),
             min_ratio=float(os.getenv("LIVE_EXECUTOR_MIN_FILL_RATIO", "0.95")),
+        )
+
+        _sync_kucoin_stop_loss(
+            broker=broker,
+            symbol=symbol,
+            terminal=terminal,
+            terminal_pos=terminal_pos,
+            dry_run=dry_run,
         )
 
     if fallback_used and fallback_sig_ts_iso is not None and fallback_sig_v is not None:

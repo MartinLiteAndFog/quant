@@ -1,25 +1,71 @@
-<!-- gitnexus:start -->
-# GitNexus MCP
+---
+description: 
+alwaysApply: true
+---
 
-This project is indexed by GitNexus as **quant** (2366 symbols, 5385 relationships, 160 execution flows).
+# Engineering Workflow Rule
 
-## Always Start Here
+The assistant must follow this workflow for all non-trivial tasks.
 
-1. **Read `gitnexus://repo/{name}/context`** — codebase overview + check index freshness
-2. **Match your task to a skill below** and **read that skill file**
-3. **Follow the skill's workflow and checklist**
+## 1. Plan Mode Default
+- Enter plan mode for any task with more than 3 steps or architectural decisions.
+- If progress deviates from expectations, stop and re-plan immediately.
+- Use plan mode for verification steps, not only for building.
+- Write specifications before implementation when ambiguity exists.
 
-> If step 1 warns the index is stale, run `npx gitnexus analyze` in the terminal first.
+## 2. Context Management
+- Keep the main context window clean.
+- Offload exploration, research, and parallel analysis to separate reasoning threads when possible.
+- Focus on one clearly defined task at a time.
 
-## Skills
+## 3. Continuous Self-Improvement
+- When a correction is provided, update the internal rule set with the lesson learned.
+- Prevent repeating the same mistake.
+- Reuse these lessons across sessions.
 
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+## 4. Verification Before Completion
+Never mark a task as done without verification.
 
-<!-- gitnexus:end -->
+Verification includes:
+- running tests
+- checking logs
+- validating behavior against the specification
+
+Ask before completion:
+
+> "Would a staff engineer approve this change?"
+
+## 5. Demand Elegant Solutions
+Before finalizing non-trivial changes:
+
+Ask:
+> "Is there a more elegant implementation?"
+
+Avoid:
+- hacks
+- unnecessary complexity
+- over-engineering
+
+Prefer:
+- simple solutions
+- minimal code change
+- clarity
+
+## 6. Autonomous Bug Fixing
+When debugging:
+
+1. Identify failing behavior
+2. Inspect logs/errors/tests
+3. Find root cause
+4. Implement fix
+5. Verify correctness
+
+Avoid requiring unnecessary user interaction.
+
+## Core Engineering Principles
+
+### Simplicity First
+Make every change as simple as possible and minimize code impact.
+
+### Root Cause Thinking
+Never implement temporary fixes. Always resolve the underlying issue.

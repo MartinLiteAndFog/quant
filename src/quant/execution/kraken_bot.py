@@ -11,12 +11,16 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+import numpy as np
+
 from quant.execution.event_builders import build_action_event, build_execution_event
 from quant.execution.event_log import append_event_jsonl
 from quant.execution.event_types import ExecutionEvent
 from quant.execution.kraken_futures import KrakenFuturesClient
+from quant.strategies.flip_engine import FlipParams as SharedFlipParams, run_flip_state_machine
 from quant.utils.log import get_logger
 from quant.execution.event_store import (
+    get_conn,
     insert_equity_snapshot,
     insert_execution_event,
     insert_action_event,
@@ -548,6 +552,66 @@ def _sync_protective_stop(
         }
 
 
+def _sync_protective_stop_from_terminal(
+    client: KrakenFuturesClient,
+    pos_side: int,
+    size_rem: float,
+    stop_price: Optional[float],
+    mode: str,
+    dry_run: bool,
+) -> Dict[str, Any]:
+    """Sync protective stop using the flip engine terminal state's stop price."""
+    if pos_side == 0 or size_rem <= 0 or stop_price is None:
+        if dry_run:
+            log.info("DRY_RUN: cancel all reduce-only Kraken orders (flat/no active SL)")
+            return {"ok": True, "dry_run": True, "action": "cancel_reduce_only_orders"}
+        try:
+            res = client.cancel_all_reduce_only_orders()
+            return {"ok": bool(res.get("ok", True)), "action": "cancel_reduce_only_orders", "result": res}
+        except Exception as e:
+            log.warning("protective stop cancel failed: %s", e)
+            return {"ok": False, "action": "cancel_reduce_only_orders", "error": str(e)}
+
+    stop_side = "sell" if pos_side > 0 else "buy"
+
+    if dry_run:
+        log.info(
+            "DRY_RUN: sync protective stop mode=%s side=%s size=%.4f stop=%.4f",
+            mode, stop_side, size_rem, stop_price,
+        )
+        return {
+            "ok": True, "dry_run": True, "action": "sync_protective_stop",
+            "mode": mode, "stop_side": stop_side, "stop_size": size_rem, "stop_price": stop_price,
+        }
+
+    try:
+        cancel_res = client.cancel_all_reduce_only_orders()
+    except Exception as e:
+        log.warning("protective stop pre-cancel failed: %s", e)
+        cancel_res = {"ok": False, "error": str(e)}
+
+    try:
+        place_res = client.place_stop_market(
+            side=stop_side,
+            size=size_rem,
+            stop_price=float(stop_price),
+            reduce_only=True,
+            cli_ord_id=f"quant-sl-{pd.Timestamp.now('UTC').strftime('%Y%m%d%H%M%S%f')}",
+        )
+        return {
+            "ok": True, "action": "sync_protective_stop",
+            "mode": mode, "stop_side": stop_side, "stop_size": size_rem,
+            "stop_price": stop_price, "cancel_result": cancel_res, "place_result": place_res,
+        }
+    except Exception as e:
+        log.warning("protective stop place failed mode=%s side=%s stop=%.4f err=%s", mode, stop_side, stop_price, e)
+        return {
+            "ok": False, "action": "sync_protective_stop",
+            "mode": mode, "stop_side": stop_side, "stop_size": size_rem,
+            "stop_price": stop_price, "cancel_result": cancel_res, "error": str(e),
+        }
+
+
 # ---------------------------------------------------------------------------
 # Pure state machine logic
 # ---------------------------------------------------------------------------
@@ -935,37 +999,62 @@ def execute_actions(
 # Data fetching
 # ---------------------------------------------------------------------------
 
-def fetch_gate(url: str) -> Dict[str, Any]:
+def fetch_gate(url: str, symbol: str = "SOL-USDT") -> Dict[str, Any]:
+    try:
+        from quant.regime.store import RegimeStore
+
+        store = RegimeStore()
+        latest = store.get_latest_state(symbol)
+        if latest and "gate_on" in latest:
+            return {"gate_on": int(latest["gate_on"]), "ts": str(latest.get("ts", "")), "source": "postgres"}
+    except Exception as e:
+        log.warning("gate postgres fetch failed, falling back to HTTP: %s", e)
+
     try:
         obj = _fetch_json(url)
-        return {"gate_on": int(obj.get("gate_on", 0) or 0), "ts": str(obj.get("ts", "")), "source": obj.get("source", "api")}
+        return {"gate_on": int(obj.get("gate_on", 0) or 0), "ts": str(obj.get("ts", "")), "source": "http"}
     except Exception as e:
         log.warning("gate fetch failed: %s", e)
         return {"gate_on": 0, "ts": "", "source": "error", "error": str(e)}
 
 
-def fetch_signal(url: str) -> Dict[str, Any]:
-    try:
-        obj = _fetch_json(url)
-        return {"signal": int(obj.get("signal", 0) or 0), "ts": str(obj.get("ts", ""))}
-    except Exception as e:
-        log.warning("signal fetch failed: %s", e)
-        return {"signal": 0, "ts": ""}
-
-
-def fetch_renko(url: str, lookback: int) -> Dict[str, Any]:
+def fetch_signal(url: str, symbol: str = "SOL-USDT") -> Dict[str, Any]:
     try:
         redis_url = os.getenv("REDIS_URL", "").strip()
         if redis_url:
             import redis as redis_lib
 
             r = redis_lib.from_url(redis_url, decode_responses=True)
-            raw = r.get("renko:SOLUSDT:latest")
+            sym = str(symbol).upper().replace("-", "")
+            raw = r.get(f"signal:{sym}:latest")
             if raw:
                 obj = json.loads(raw)
-                bars = obj.get("bars", []) or []
-                lb = min(max(int(lookback), 1), len(bars) if bars else 1)
-                tail = bars[-lb:] if bars else []
+                return {"signal": int(obj.get("signal", 0) or 0), "ts": str(obj.get("ts", "")), "source": "redis"}
+    except Exception as e:
+        log.warning("signal redis fetch failed, falling back to HTTP: %s", e)
+
+    try:
+        obj = _fetch_json(url)
+        return {"signal": int(obj.get("signal", 0) or 0), "ts": str(obj.get("ts", "")), "source": "http"}
+    except Exception as e:
+        log.warning("signal fetch failed: %s", e)
+        return {"signal": 0, "ts": "", "source": "error"}
+
+
+def fetch_renko(url: str, lookback: int, symbol: str = "SOL-USDT") -> Dict[str, Any]:
+    try:
+        redis_url = os.getenv("REDIS_URL", "").strip()
+        if redis_url:
+            import redis as redis_lib
+
+            r = redis_lib.from_url(redis_url, decode_responses=True)
+            sym = str(symbol).upper().replace("-", "")
+            raw = r.get(f"renko:{sym}:latest")
+            if raw:
+                obj = json.loads(raw)
+                all_bars = obj.get("bars", []) or []
+                lb = min(max(int(lookback), 1), len(all_bars) if all_bars else 1)
+                tail = all_bars[-lb:] if all_bars else []
 
                 if tail:
                     swing_low = min(float(x.get("low", 0) or 0) for x in tail)
@@ -978,6 +1067,7 @@ def fetch_renko(url: str, lookback: int) -> Dict[str, Any]:
                     "swing_low": swing_low,
                     "swing_high": swing_high,
                     "last_close": float(obj.get("close", 0) or 0),
+                    "bars": all_bars,
                     "source": "redis",
                     "ts": str(obj.get("ts", "")),
                 }
@@ -990,12 +1080,117 @@ def fetch_renko(url: str, lookback: int) -> Dict[str, Any]:
             "swing_low": float(obj.get("swing_low", 0) or 0),
             "swing_high": float(obj.get("swing_high", 0) or 0),
             "last_close": float(obj.get("last_close", 0) or 0),
-            "source": "api",
+            "bars": obj.get("bars", []),
+            "source": "http",
             "ts": str(obj.get("ts", "")),
         }
     except Exception as e:
         log.warning("renko fetch failed: %s", e)
-        return {"swing_low": 0.0, "swing_high": 0.0, "last_close": 0.0, "source": "none", "ts": ""}
+        return {"swing_low": 0.0, "swing_high": 0.0, "last_close": 0.0, "bars": [], "source": "none", "ts": ""}
+
+
+# ---------------------------------------------------------------------------
+# Shared flip engine data helpers
+# ---------------------------------------------------------------------------
+
+def _bars_to_dataframe(bars: List[Dict[str, Any]]) -> pd.DataFrame:
+    """Convert Redis bar dicts [{ts, open, high, low, close}, ...] to DataFrame."""
+    if not bars:
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close"])
+    df = pd.DataFrame(bars)
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    for c in ("open", "high", "low", "close"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df.dropna(subset=["ts", "close"]).sort_values("ts").reset_index(drop=True)
+
+
+def _canon_symbol(sym: str) -> str:
+    return "".join(ch for ch in str(sym).upper() if ch.isalnum())
+
+
+def _load_signals_from_postgres(symbol: str, limit: int = 10000) -> pd.DataFrame:
+    """Load signal history from Postgres signal_events table."""
+    sym = _canon_symbol(symbol)
+    sql = """
+        SELECT ts, signal FROM signal_events
+        WHERE symbol = %s AND signal != 0
+        ORDER BY ts ASC
+        LIMIT %s
+    """
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, (sym, limit))
+            rows = cur.fetchall()
+    except Exception as e:
+        log.warning("load signals from postgres failed: %s", e)
+        return pd.DataFrame(columns=["ts", "signal"])
+
+    if not rows:
+        return pd.DataFrame(columns=["ts", "signal"])
+
+    df = pd.DataFrame(rows, columns=["ts", "signal"])
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    df["signal"] = pd.to_numeric(df["signal"], errors="coerce").fillna(0).astype(int).clip(-1, 1)
+    df = df[df["signal"] != 0].dropna(subset=["ts"]).sort_values("ts").drop_duplicates("ts", keep="last").reset_index(drop=True)
+    return df
+
+
+def _load_regime_series(symbol: str) -> Optional[pd.Series]:
+    """Load regime history from Postgres as boolean Series indexed by ts."""
+    try:
+        from quant.regime.store import RegimeStore
+
+        store = RegimeStore()
+        history = store.get_history(symbol, start_ts=None, end_ts=None, limit=50000)
+    except Exception as e:
+        log.warning("load regime from postgres failed: %s", e)
+        return None
+
+    if not history:
+        return None
+
+    df = pd.DataFrame(history)
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    df = df.dropna(subset=["ts"]).sort_values("ts").drop_duplicates("ts", keep="last")
+    df["gate_on"] = pd.to_numeric(df["gate_on"], errors="coerce").fillna(0).astype(int)
+    return pd.Series(df["gate_on"].values.astype(bool), index=pd.DatetimeIndex(df["ts"]))
+
+
+def _build_shared_flip_params() -> SharedFlipParams:
+    """Build FlipParams for the shared flip engine from Kraken env vars."""
+    return SharedFlipParams(
+        fee_bps=float(os.getenv("KRAKEN_FLIP_FEE_BPS", "0")),
+        ttp_trail_pct=float(os.getenv("KRAKEN_TTP_TRAIL_PCT", "0.012")),
+        min_sl_pct=float(os.getenv("KRAKEN_FLIP_MIN_SL_PCT", "0.015")),
+        max_sl_pct=float(os.getenv("KRAKEN_FLIP_MAX_SL_PCT", "0.030")),
+        swing_lookback=min(int(os.getenv("KRAKEN_FLIP_SWING_LOOKBACK", "50")), 50),
+        be_trigger_pct=float(os.getenv("KRAKEN_BE_TRIGGER_PCT", "0")),
+        be_offset_pct=float(os.getenv("KRAKEN_BE_OFFSET_PCT", "0")),
+    )
+
+
+def _terminal_to_actions(
+    terminal_pos: int,
+    current_pos_side: int,
+    target_size: float,
+    mark: float,
+) -> List[Dict[str, Any]]:
+    """Derive action dicts by comparing flip engine terminal state with current position."""
+    actions: List[Dict[str, Any]] = []
+
+    if terminal_pos == current_pos_side:
+        return actions
+
+    if current_pos_side != 0:
+        actions.append({"action": "close_all", "reason": "engine_exit"})
+
+    if terminal_pos != 0:
+        side_str = "long" if terminal_pos > 0 else "short"
+        order_side = "buy" if terminal_pos > 0 else "sell"
+        actions.append({"action": f"enter_{side_str}", "side": order_side, "size": target_size})
+
+    return actions
 
 
 # ---------------------------------------------------------------------------
@@ -1035,34 +1230,85 @@ def run_once(
     metrics_path: Path,
     equity_path: Path,
     state_path: Path,
+    symbol: str = "SOL-USDT",
 ) -> BotState:
-    gate = fetch_gate(gate_url)
-    sig = fetch_signal(signal_url)
+    gate = fetch_gate(gate_url, symbol=symbol)
+    sig = fetch_signal(signal_url, symbol=symbol)
     mark = client.get_mark_price()
     eq = client.get_account_equity()
     equity_usd = float(eq.get("equity_usd", 0.0) or 0.0)
 
     venue_pos_raw = client.get_position()
-    state = reconcile_state_with_venue(state=state, venue_pos_raw=venue_pos_raw, gate_on=gate["gate_on"], mark=mark)
+    current_venue_side, current_venue_size = _normalize_venue_position(venue_pos_raw)
 
     target_size = compute_target_size(equity_usd, mark, leverage, equity_pct)
 
-    active_lookback = flip_p.swing_lookback if state.engine == "flip" else tp2_p.swing_lookback
-    renko = fetch_renko(renko_url, active_lookback)
+    renko = fetch_renko(renko_url, flip_p.swing_lookback, symbol=symbol)
+    bars_df = _bars_to_dataframe(renko.get("bars", []))
+    signals_df = _load_signals_from_postgres(symbol)
+    regime_series = _load_regime_series(symbol)
 
-    new_state, actions = run_once_logic(
-        state=state,
-        gate_on=gate["gate_on"],
-        signal=sig["signal"],
-        signal_ts=sig["ts"],
-        mark=mark,
-        swing_low=renko["swing_low"],
-        swing_high=renko["swing_high"],
-        target_size=target_size,
-        flip_p=flip_p,
-        tp2_p=tp2_p,
-    )
-    preview_pos = int(state.pos_side)
+    shared_params = _build_shared_flip_params()
+
+    terminal: Dict[str, Any] = {}
+    terminal_pos = 0
+    terminal_mode = None
+    terminal_entry_px = None
+    terminal_best_fav = None
+    terminal_sl = None
+    terminal_ttp = None
+
+    if not bars_df.empty and not signals_df.empty:
+        _, events_df, terminal = run_flip_state_machine(
+            bars=bars_df,
+            signals_df=signals_df,
+            params=shared_params,
+            regime_on=regime_series,
+            regime_forces_flat=True,
+        )
+        terminal_pos = int(terminal.get("pos", 0))
+        terminal_mode = terminal.get("mode")
+        terminal_entry_px = terminal.get("entry_px")
+        terminal_best_fav = terminal.get("best_fav")
+        terminal_sl = terminal.get("sl")
+        terminal_ttp = terminal.get("ttp")
+        log.info(
+            "flip_engine terminal: pos=%d mode=%s entry=%.4f sl=%s ttp=%s bars=%d signals=%d",
+            terminal_pos,
+            terminal_mode,
+            float(terminal_entry_px or 0),
+            terminal_sl,
+            terminal_ttp,
+            len(bars_df),
+            len(signals_df),
+        )
+    else:
+        log.warning(
+            "flip_engine skipped: bars=%d signals=%d — holding current position",
+            len(bars_df), len(signals_df),
+        )
+        terminal_pos = current_venue_side
+
+    actions = _terminal_to_actions(terminal_pos, current_venue_side, target_size, mark)
+
+    new_state = BotState(**asdict(state))
+    new_state.gate_on = gate["gate_on"]
+    new_state.engine = "flip"
+    new_state.pos_side = terminal_pos
+    new_state.entry_px = float(terminal_entry_px or 0.0)
+    new_state.best_fav = float(terminal_best_fav or 0.0)
+    new_state.size_full = target_size if terminal_pos != 0 else 0.0
+    new_state.size_rem = target_size if terminal_pos != 0 else 0.0
+    new_state.tp1_done = False
+
+    if terminal_mode == "TTP":
+        new_state.mode = "FLIP_TTP"
+    elif terminal_mode == "WAIT":
+        new_state.mode = "FLIP_WAIT"
+    else:
+        new_state.mode = "FLAT"
+
+    preview_pos = int(current_venue_side)
     preview_mode_before = str(state.mode)
     preview_mode_after = str(new_state.mode)
 
@@ -1074,9 +1320,6 @@ def run_once(
         if act == "close_all":
             action_side = "flat"
             preview_after = 0
-        elif act == "close_partial":
-            action_side = "long" if preview_pos > 0 else "short" if preview_pos < 0 else "flat"
-            preview_after = preview_pos
         elif act == "enter_long":
             action_side = "long"
             preview_after = 1
@@ -1089,7 +1332,7 @@ def run_once(
 
         _append_action_event(
             strategy=str(new_state.engine),
-            symbol="SOLUSDT",
+            symbol=_canon_symbol(symbol),
             ts_iso=_now_iso(),
             seq=int(new_state.event_seq),
             engine_action=act,
@@ -1119,11 +1362,8 @@ def run_once(
         reason_code = str(res.get("reason", "") or "manual_action")
 
         if act == "close_all":
-            order_action = "sell" if int(state.pos_side) > 0 else "buy" if int(state.pos_side) < 0 else "flat"
+            order_action = "sell" if current_venue_side > 0 else "buy" if current_venue_side < 0 else "flat"
             position_after = 0
-        elif act == "close_partial":
-            order_action = str(res.get("close_side", "") or "flat")
-            position_after = int(state.pos_side)
         elif act == "enter_long":
             order_action = "buy"
             position_after = 1
@@ -1136,32 +1376,27 @@ def run_once(
 
         _append_execution_event(
             strategy=str(new_state.engine),
-            symbol="SOLUSDT",
+            symbol=_canon_symbol(symbol),
             ts_iso=_now_iso(),
             seq=int(new_state.event_seq),
             execution_kind="fill",
             order_action=order_action,
             reason_code=reason_code,
-            position_before=int(state.pos_side),
+            position_before=int(current_venue_side),
             position_after=int(position_after),
             source_signal_ts=str(sig.get("ts", "") or ""),
         )
 
     post_venue_pos_raw = client.get_position()
-    new_state = reconcile_state_with_venue(
-        state=new_state,
-        venue_pos_raw=post_venue_pos_raw,
-        gate_on=gate["gate_on"],
-        mark=mark,
-    )
     venue_side, venue_size = _normalize_venue_position(post_venue_pos_raw)
 
-    stop_sync = _sync_protective_stop(
+    desired_stop = terminal_sl or terminal_ttp
+    stop_sync = _sync_protective_stop_from_terminal(
         client=client,
-        state=new_state,
-        renko=renko,
-        flip_p=flip_p,
-        tp2_p=tp2_p,
+        pos_side=terminal_pos,
+        size_rem=venue_size,
+        stop_price=desired_stop,
+        mode=new_state.mode,
         dry_run=dry_run,
     )
 
@@ -1255,9 +1490,10 @@ def main() -> None:
     args = parse_args()
     client = KrakenFuturesClient()
 
-    gate_url = os.getenv("KRAKEN_GATE_URL", "http://127.0.0.1:8000/api/gate/solusd")
-    signal_url = os.getenv("KRAKEN_SIGNAL_URL", "http://127.0.0.1:8000/api/signals/latest/solusd")
-    renko_url = os.getenv("KRAKEN_RENKO_URL", "http://127.0.0.1:8000/api/renko/latest/solusd")
+    symbol = os.getenv("KRAKEN_SYMBOL", "SOL-USDT")
+    gate_url = os.getenv("KRAKEN_GATE_URL", "http://127.0.0.1:8080/api/gate/solusd")
+    signal_url = os.getenv("KRAKEN_SIGNAL_URL", "http://127.0.0.1:8080/api/signals/latest/solusd")
+    renko_url = os.getenv("KRAKEN_RENKO_URL", "http://127.0.0.1:8080/api/renko/latest/solusd")
 
     equity_pct = float(os.getenv("KRAKEN_EQUITY_PCT", "0.90"))
     leverage = float(os.getenv("KRAKEN_LEVERAGE", "5"))
@@ -1271,7 +1507,7 @@ def main() -> None:
     tp2_p = load_tp2_params()
 
     state = load_state(state_path) or BotState()
-    log.info("bot starting state=%s dry_run=%s equity_pct=%s leverage=%s", state.mode, dry_run, equity_pct, leverage)
+    log.info("bot starting symbol=%s state=%s dry_run=%s equity_pct=%s leverage=%s", symbol, state.mode, dry_run, equity_pct, leverage)
 
     while True:
         try:
@@ -1289,6 +1525,7 @@ def main() -> None:
                 metrics_path=metrics_path,
                 equity_path=equity_path,
                 state_path=state_path,
+                symbol=symbol,
             )
         except Exception:
             log.exception("bot loop error")

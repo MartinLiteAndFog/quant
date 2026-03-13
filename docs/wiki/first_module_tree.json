@@ -1,0 +1,874 @@
+[
+  {
+    "name": "Data Ingestion & Feature Engineering",
+    "slug": "data-ingestion-feature-engineering",
+    "files": [
+      "scripts/build_daily_features.py",
+      "scripts/build_daily_gate_solusdt.py",
+      "scripts/build_renko_fixed.py",
+      "scripts/import_solusdc_csv_gz.py",
+      "scripts/ingest_ohlcv_file.py",
+      "scripts/ingest_pipe_ohlcv.py",
+      "scripts/check_parquet_anomalies.py",
+      "scripts/check_ts_integrity.py",
+      "scripts/clean_parquet_outliers.py",
+      "scripts/trim_statespace_parquet.py",
+      "src/quant/data/ccxt_fetch.py",
+      "src/quant/data/store.py",
+      "src/quant/features/__main__.py",
+      "src/quant/features/renko.py"
+    ]
+  },
+  {
+    "name": "Backtesting Engine",
+    "slug": "backtesting-engine",
+    "files": [],
+    "children": [
+      {
+        "name": "Backtesting Engine — quant",
+        "slug": "backtesting-engine-quant",
+        "files": [
+          "src/quant/backtest/__main__.py",
+          "src/quant/backtest/compare_runs.py",
+          "src/quant/backtest/engine.py",
+          "src/quant/backtest/fill_model.py",
+          "src/quant/backtest/follow_runner.py",
+          "src/quant/backtest/metrics.py",
+          "src/quant/backtest/renko_runner.py",
+          "src/quant/backtest/renko_runner_tp2.py",
+          "src/quant/backtest/signal_report.py",
+          "src/quant/backtest/sweep_confirm.py"
+        ]
+      },
+      {
+        "name": "Backtesting Engine — scripts",
+        "slug": "backtesting-engine-scripts",
+        "files": [
+          "scripts/backtest_multi_asset.py",
+          "scripts/run_pc_backtest.py",
+          "scripts/run_pc_trade.py",
+          "scripts/run_pc_trade_renko.py",
+          "scripts/eval_holdout_slice.py",
+          "scripts/walk_forward_merged.py"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Trading Strategies",
+    "slug": "trading-strategies",
+    "files": [
+      "src/quant/strategies/baseline_flip.py",
+      "src/quant/strategies/flip_engine.py",
+      "src/quant/strategies/imba.py",
+      "src/quant/strategies/make_signals_imba_from_renko.py",
+      "src/quant/strategies/renko_flip.py",
+      "src/quant/strategies/signal_io.py",
+      "scripts/make_signals_imba.py",
+      "scripts/make_signals_imba_renko.py",
+      "scripts/contrast_positive_windows.py",
+      "scripts/mark_and_analyze_windows.py"
+    ]
+  },
+  {
+    "name": "Predictive Coding System",
+    "slug": "predictive-coding-system",
+    "files": [
+      "src/quant/predictive_coding/config.py",
+      "src/quant/predictive_coding/model.py",
+      "src/quant/predictive_coding/probability.py",
+      "src/quant/predictive_coding/targets.py",
+      "src/quant/predictive_coding/trade_logic.py",
+      "scripts/pc_calibration_report.py",
+      "scripts/make_pc_3axis_gate_v2.py"
+    ]
+  },
+  {
+    "name": "Regime Detection & Gate Logic",
+    "slug": "regime-detection-gate-logic",
+    "files": [
+      "src/quant/regime/gate_confidence_live.py",
+      "src/quant/regime/service.py",
+      "src/quant/regime/store.py",
+      "scripts/build_gate_freeze.py",
+      "scripts/build_gate_walkforward.py",
+      "scripts/regime_window.py",
+      "scripts/scan_regime_indicators.py",
+      "scripts/print_regime_values_since.py",
+      "scripts/print_regime_window_stats.py",
+      "scripts/update_regime_store.py",
+      "scripts/plot_regime_diagnostics.py"
+    ]
+  },
+  {
+    "name": "State Space Analysis",
+    "slug": "state-space-analysis",
+    "files": [
+      "src/quant/state_space/__init__.py",
+      "src/quant/state_space/axes.py",
+      "src/quant/state_space/basin.py",
+      "src/quant/state_space/config.py",
+      "src/quant/state_space/features.py",
+      "src/quant/state_space/pipeline.py",
+      "src/quant/state_space/residualize.py",
+      "src/quant/state_space/sensors_x.py",
+      "src/quant/state_space/sensors_y.py",
+      "src/quant/state_space/sensors_z.py",
+      "src/quant/state_space/utils_robust.py",
+      "scripts/run_state_space_v01.py",
+      "scripts/plot_state_space_v01.py",
+      "scripts/analyze_windows_features.py"
+    ]
+  },
+  {
+    "name": "State Space Transitions",
+    "slug": "state-space-transitions",
+    "files": [
+      "src/quant/state_space_transitions/__init__.py",
+      "src/quant/state_space_transitions/basins.py",
+      "src/quant/state_space_transitions/config.py",
+      "src/quant/state_space_transitions/counts.py",
+      "src/quant/state_space_transitions/diagnostics.py",
+      "src/quant/state_space_transitions/pipeline.py",
+      "src/quant/state_space_transitions/topk.py",
+      "src/quant/state_space_transitions/voxelizer.py",
+      "scripts/run_state_space_transitions_v01.py"
+    ]
+  },
+  {
+    "name": "Live Execution & Broker Integration",
+    "slug": "live-execution-broker-integration",
+    "files": [],
+    "children": [
+      {
+        "name": "Live Execution & Broker Integration — quant",
+        "slug": "live-execution-broker-integration-quant",
+        "files": [
+          "src/quant/execution/dashboard_state.py",
+          "src/quant/execution/dashboard_statespace.py",
+          "src/quant/execution/execution_state.py",
+          "src/quant/execution/gate_provider.py",
+          "src/quant/execution/kraken_bot.py",
+          "src/quant/execution/kraken_futures.py",
+          "src/quant/execution/kucoin.py",
+          "src/quant/execution/kucoin_futures.py",
+          "src/quant/execution/live_executor.py",
+          "src/quant/execution/live_monitor.py",
+          "src/quant/execution/live_signal_worker.py",
+          "src/quant/execution/manual_orders.py",
+          "src/quant/execution/oms.py",
+          "src/quant/execution/renko_cache_updater.py",
+          "src/quant/execution/strategy_router.py",
+          "src/quant/execution/webhook_server.py"
+        ]
+      },
+      {
+        "name": "Live Execution & Broker Integration — scripts",
+        "slug": "live-execution-broker-integration-scripts",
+        "files": [
+          "scripts/run_live_monitor.py",
+          "scripts/run_live_signal_worker.py",
+          "scripts/debug_dashboard_sources.py"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Visualization & Plotting",
+    "slug": "visualization-plotting",
+    "files": [],
+    "children": [
+      {
+        "name": "Visualization & Plotting — visual",
+        "slug": "visualization-plotting-visual",
+        "files": [
+          "src/visual/__init__.py",
+          "src/visual/export/__init__.py",
+          "src/visual/export/export_assets.py",
+          "src/visual/export/export_graph.py",
+          "src/visual/figures/__init__.py",
+          "src/visual/figures/basins_view.py",
+          "src/visual/figures/slices_2d.py",
+          "src/visual/figures/state_space_3d.py",
+          "src/visual/figures/trajectory_3d.py",
+          "src/visual/figures/transitions_3d.py",
+          "src/visual/geometry.py",
+          "src/visual/io.py",
+          "src/visual/layers/__init__.py",
+          "src/visual/layers/layer_annotations.py",
+          "src/visual/layers/layer_basins.py",
+          "src/visual/layers/layer_edges.py",
+          "src/visual/layers/layer_paths.py",
+          "src/visual/layers/layer_voxels.py",
+          "src/visual/render/__init__.py",
+          "src/visual/render/mpl.py",
+          "src/visual/render/plotly.py",
+          "src/visual/scales.py",
+          "src/visual/scene.py"
+        ]
+      },
+      {
+        "name": "Visualization & Plotting — visual",
+        "slug": "visualization-plotting-visual",
+        "files": [
+          "scripts/visual/__init__.py",
+          "scripts/visual/build_all.py",
+          "scripts/visual/build_basins_v02.py",
+          "scripts/visual/build_gate_confidence.py",
+          "scripts/visual/common.py",
+          "scripts/visual/viz_basins.py",
+          "scripts/visual/viz_state_space.py",
+          "scripts/visual/viz_trajectory.py",
+          "scripts/visual/viz_transitions.py"
+        ]
+      },
+      {
+        "name": "Visualization & Plotting — scripts",
+        "slug": "visualization-plotting-scripts",
+        "files": [
+          "scripts/build_density_images.py",
+          "scripts/plot_equity_gate_price.py",
+          "scripts/plot_equity_price_vol.py",
+          "scripts/plot_last5_trades.py",
+          "scripts/plot_merged_equity_solusdt.py",
+          "scripts/plot_monte_carlo.py",
+          "scripts/plot_price_regime_equity_trades.py",
+          "scripts/plot_trades_window.py"
+        ]
+      }
+    ]
+  },
+  {
+    "name": "Parameter Sweeps & Optimization",
+    "slug": "parameter-sweeps-optimization",
+    "files": [
+      "scripts/sweep_grid.py",
+      "scripts/sweep_regime_er.py",
+      "scripts/sweep_renko_atr.py",
+      "scripts/sweep_renko_box.py",
+      "scripts/kelly_from_trades.py",
+      "scripts/leverage_sweep.py",
+      "scripts/monte_carlo_trades.py"
+    ]
+  },
+  {
+    "name": "Analysis & Reporting Scripts",
+    "slug": "analysis-reporting-scripts",
+    "files": [
+      "scripts/imba_opposite_exit_backtest.py"
+    ]
+  },
+  {
+    "name": "Other",
+    "slug": "other",
+    "files": [],
+    "children": [
+      {
+        "name": "Other — Dockerfile",
+        "slug": "other-dockerfile",
+        "files": [
+          "Dockerfile"
+        ]
+      },
+      {
+        "name": "Other — Procfile",
+        "slug": "other-procfile",
+        "files": [
+          "Procfile"
+        ]
+      },
+      {
+        "name": "Other — README.md",
+        "slug": "other-readme-md",
+        "files": [
+          "README.md"
+        ]
+      },
+      {
+        "name": "Other — Sweep of other pairs.txt",
+        "slug": "other-sweep-of-other-pairs-txt",
+        "files": [
+          "Sweep of other pairs.txt"
+        ]
+      },
+      {
+        "name": "Other — visual",
+        "slug": "other-visual",
+        "files": [
+          "artifacts/visual/v0.2/basins.html"
+        ]
+      },
+      {
+        "name": "Other — viz",
+        "slug": "other-viz",
+        "files": [
+          "configs/viz/v0.2.yaml"
+        ]
+      },
+      {
+        "name": "Other — features",
+        "slug": "other-features",
+        "files": [
+          "data/features/SOL-USDC_daily_gate_FREEZE_20250501_dw3.meta.json"
+        ]
+      },
+      {
+        "name": "Other — live",
+        "slug": "other-live",
+        "files": [
+          "data/live/expected_trades.jsonl"
+        ]
+      },
+      {
+        "name": "Other — regime_scan",
+        "slug": "other-regime-scan",
+        "files": [
+          "data/regime_scan/jan2026_target_fp.json"
+        ]
+      },
+      {
+        "name": "Other — runs",
+        "slug": "other-runs",
+        "files": [
+          "data/runs/BASE_noGATE_fee10_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/BASE_noGATE_fee10_ttp0.016_sl0.017_sw180/stats.json",
+          "data/runs/BASE_noGATE_fee20_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/BEST_TV5M_IMBA_GATE2of3_fee12_target_EQ1/stats.json",
+          "data/runs/BEST_TV5M_IMBA_GATE2of3_fee15_target_EQ1/stats.json",
+          "data/runs/BEST_TV5M_IMBA_GATE2of3_fee25_minSL0.01_maxSL0.025_ttp0.012_EQ1/stats.json",
+          "data/runs/BEST_TV5M_IMBA_GATE2of3_fee30_stress_EQ1/stats.json",
+          "data/runs/BEST_TV5M_IMBA_GATE2of3_fee8_mixedfills_EQ1/stats.json",
+          "data/runs/BEST_extGATE_fee10_ttp0.012_sl0.017_sw180__chonQ0.75_choffQ0.65_adxQ0.50_dw3_g3/stats.json",
+          "data/runs/CHOP54_48_fee10_ttp0.00775_sl0.011_sw50/stats.json",
+          "data/runs/EXTGATE_regime_full_slow_fee10_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/FEB_20260201_20260214_feeRT20_countertrend/stats.json",
+          "data/runs/FEB_20260201_20260214_feeRT20_countertrend_fliponly_cd0/stats.json",
+          "data/runs/FEB_20260201_20260214_feeRT20_countertrend_fliponly_cd3/stats.json",
+          "data/runs/FEB_20260201_20260214_feeRT20_countertrend_fliponly_cd30/stats.json",
+          "data/runs/FOLLOW_opposite_fee20/stats.json",
+          "data/runs/FULL_20200811_20260214_feeRT10_SL1p5to3_lb50_ttp0p012/stats.json",
+          "data/runs/FULL_20200811_20260214_feeRT20_REAL/stats.json",
+          "data/runs/FULL_20200811_20260214_feeRT20_SL1p5to3_lb50_ttp0p012/stats.json",
+          "data/runs/FULL_20260201_20260214_feeRT10_SL1p5to3_lb50_ttp0p012/stats.json",
+          "data/runs/Flip_NOGATE_FULL_fee12/stats.json",
+          "data/runs/Flip_NOGATE_FULL_fee12_v2/stats.json",
+          "data/runs/Flip_ONLY_PCgate_base2of3_FULL/stats.json",
+          "data/runs/Flip_ONLY_PCgate_baseElasQ30_FULL_fee12/stats.json",
+          "data/runs/Flip_ONLY_PCgate_loose2of3_FULL_fee12/stats.json",
+          "data/runs/Flip_PCgate_base2of3_FULL_fee12_v2/stats.json",
+          "data/runs/Flip_PCgate_base2of3_HYST_on5off5hold30_FULL_fee12_v2/stats.json",
+          "data/runs/Flip_PCgate_loose2of3_FULL_fee12_v2/stats.json",
+          "data/runs/HOLDOUT9M_FREEZE20250501_dw3_fee20_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/IMBA_ON_BASE_fee9_ttp12_minsl10/stats.json",
+          "data/runs/IMBA_ON_NOGATE_FULL_fee12/stats.json",
+          "data/runs/IMBA_ON_PCgateQ40_FULLRANGE_fee9/stats.json",
+          "data/runs/IMBA_ON_PCgateQ40_fee9_ttp12_minsl10/stats.json",
+          "data/runs/IMBA_ON_PCgateQ50_FULLRANGE_fee9/stats.json",
+          "data/runs/IMBA_ON_PCgate_3axis2of3_NOLOOK_fee9/stats.json",
+          "data/runs/IMBA_ON_PCgate_3axis2of3_fee9/stats.json",
+          "data/runs/IMBA_ON_PCgate_BANDq10q70_fee9/stats.json",
+          "data/runs/IMBA_ON_PCgate_base3of3_fee9/stats.json",
+          "data/runs/IMBA_ON_PCgate_loose2of3_FULL_fee12/stats.json",
+          "data/runs/IMBA_ON_PCgate_loose2of3_fee12/stats.json",
+          "data/runs/IMBA_ON_PCgate_loose2of3_fee15/stats.json",
+          "data/runs/IMBA_ON_PCgate_loose2of3_fee9/stats.json",
+          "data/runs/IMBA_OPPEXIT_fee20_gateAnalysis/stats.json",
+          "data/runs/IMBA_RENKO_TAIL500k_fee9_ttp12_minsl10/stats.json",
+          "data/runs/INVGATE_fee10_ttp0.012_sl0.017_sw180__chonQ0.75_choffQ0.65_adxQ0.50_dw3_g3/stats.json",
+          "data/runs/ImbaTrend_OFF_HYST_on5off5hold30_FULL_fee12_v2/stats.json",
+          "data/runs/ImbaTrend_OFF_PCbase2of3inv_FULL_fee12_BEoff/stats.json",
+          "data/runs/ImbaTrend_OFF_PCbase2of3inv_FULL_fee12_BEon/stats.json",
+          "data/runs/ImbaTrend_OFF_PCbase2of3inv_FULL_fee12_v2/stats.json",
+          "data/runs/OFF_SLonly_IMBAflip_fee25/stats.json",
+          "data/runs/OFF_TP2_TV5mSens200_tp1_0p04_tp2_0p08_fee13_BE0/stats.json",
+          "data/runs/OFF_TP2_tp1_0p04_tp2_0p08_fee25/stats.json",
+          "data/runs/OFF_TP2_wideSL_NOFLIP_fee25/stats.json",
+          "data/runs/OFF_TP2_wideSL_fee0/stats.json",
+          "data/runs/OFF_TP2_wideSL_fee25/stats.json",
+          "data/runs/OFF_TP2_wideSL_fee25_NET2/stats.json",
+          "data/runs/OFF_base_fee25/stats.json",
+          "data/runs/OFF_imbaOnly_fee0/stats.json",
+          "data/runs/OFF_imbaOnly_fee25/stats.json",
+          "data/runs/ON_Flip_PCbase2of3_FULL_fee12/stats.json",
+          "data/runs/PC_GATE_CHUNK_20200811_20211231/pc_v02/stats.json",
+          "data/runs/PC_GATE_CHUNK_20220101_20231231/pc_v02/stats.json",
+          "data/runs/PC_GATE_CHUNK_20240101_20260214/pc_v02/stats.json",
+          "data/runs/PC_GATE_FULLRANGE/pc_v02/stats.json",
+          "data/runs/PC_V02_AGREE/pc_v02/stats.json",
+          "data/runs/PC_V02_AGREE_KMU25/pc_v02/stats.json",
+          "data/runs/PC_V02_RENKO_TAIL500k/pc_v02_renko/stats.json",
+          "data/runs/PC_V02_SMOKE/pc_v02/stats.json",
+          "data/runs/PC_V02_TAIL500k_TENSION/pc_v02/stats.json",
+          "data/runs/PC_V02_TAIL500k_W50k/pc_v02/stats.json",
+          "data/runs/PC_V02_TIGHT1/pc_v02/stats.json",
+          "data/runs/REFIT_GATE_TV5M_IMBA/best_gate.json",
+          "data/runs/RENKO_ATR_atr_adaptive_p14_k0p5/stats.json",
+          "data/runs/RENKO_ATR_atr_adaptive_p14_k1p0/stats.json",
+          "data/runs/RENKO_ATR_atr_adaptive_p14_k1p5/stats.json",
+          "data/runs/RENKO_ATR_atr_adaptive_p21_k0p5/stats.json",
+          "data/runs/RENKO_ATR_atr_adaptive_p7_k0p5/stats.json",
+          "data/runs/RENKO_ATR_atr_adaptive_p7_k1p0/stats.json",
+          "data/runs/RENKO_ATR_atr_adaptive_p7_k1p5/stats.json",
+          "data/runs/RENKO_ATR_baseline_box0p1/stats.json",
+          "data/runs/RENKO_BOX_box0p07/stats.json",
+          "data/runs/RENKO_BOX_box0p08/stats.json",
+          "data/runs/RENKO_BOX_box0p09/stats.json",
+          "data/runs/RENKO_BOX_box0p1/stats.json",
+          "data/runs/RENKO_BOX_box0p11/stats.json",
+          "data/runs/RENKO_BOX_box0p12/stats.json",
+          "data/runs/RENKO_BOX_box0p13/stats.json",
+          "data/runs/RENKO_BOX_box0p14/stats.json",
+          "data/runs/RENKO_BOX_box0p15/stats.json",
+          "data/runs/SOL-USDT_gap180_stub/stats.json",
+          "data/runs/SOLUSDT_WFgate120_step7_dead3_g3_fee10_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/SOLUSDT_WFgate_ch75_65_adx50_atr50_fee10_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/SOLUSDT_WFgate_loose_adx40/stats.json",
+          "data/runs/SOLUSDT_WFgate_strict_ch80_70_adx60/stats.json",
+          "data/runs/SOLUSDT_statespace_transitions_LAST6M_v01/transitions/edges.json",
+          "data/runs/SWEEP_B_fee20_gate_ch75_65_adx50_ttp0.014_sl0.015/stats.json",
+          "data/runs/SWEEP_B_fee20_gate_ch75_65_adx50_ttp0.014_sl0.016/stats.json",
+          "data/runs/SWEEP_B_fee20_gate_ch75_65_adx50_ttp0.014_sl0.017/stats.json",
+          "data/runs/SWEEP_B_fee20_gate_ch75_65_adx50_ttp0.016_sl0.015/stats.json",
+          "data/runs/SWEEP_B_fee20_gate_ch75_65_adx50_ttp0.016_sl0.016/stats.json",
+          "data/runs/SWEEP_B_fee20_gate_ch75_65_adx50_ttp0.016_sl0.017/stats.json",
+          "data/runs/SWEEP_B_fee20_gate_ch75_65_adx50_ttp0.018_sl0.015/stats.json",
+          "data/runs/SWEEP_B_fee20_gate_ch75_65_adx50_ttp0.018_sl0.016/stats.json",
+          "data/runs/SWEEP_B_fee20_gate_ch75_65_adx50_ttp0.018_sl0.017/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.025_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.025_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.025_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.025_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.030_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.030_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.030_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.030_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.035_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.035_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.035_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_FAST_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.035_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_GATE_gate_base_2of3_FULL_fee12/stats.json",
+          "data/runs/SWEEP_GATE_gate_base_3of3_FULL_fee12/stats.json",
+          "data/runs/SWEEP_GATE_gate_base_drift_abs_q60_FULL_fee12/stats.json",
+          "data/runs/SWEEP_GATE_gate_base_elas_q30_FULL_fee12/stats.json",
+          "data/runs/SWEEP_GATE_gate_base_instab_q40_FULL_fee12/stats.json",
+          "data/runs/SWEEP_GATE_gate_loose_2of3_FULL_fee12/stats.json",
+          "data/runs/SWEEP_GATE_gate_loose_3of3_FULL_fee12/stats.json",
+          "data/runs/SWEEP_TP2_tp10p010_tp20p020/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw120_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw120_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw120_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw120_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw180_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw180_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw180_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw180_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw60_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw60_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw60_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.025_sw60_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw120_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw120_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw120_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw120_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw180_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw180_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw180_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw180_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw60_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw60_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw60_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.030_sw60_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw120_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw120_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw120_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw120_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw180_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw180_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw180_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw180_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw60_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw60_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw60_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.010_maxsl0.035_sw60_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw120_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw120_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw120_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw120_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw180_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw180_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw180_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw180_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw60_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw60_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw60_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.025_sw60_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw120_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw120_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw120_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw120_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw180_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw180_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw180_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw180_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw60_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw60_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw60_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.030_sw60_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw120_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw120_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw120_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw120_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw180_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw180_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw180_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw180_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw250_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw250_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw250_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw250_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw60_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw60_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw60_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.015_maxsl0.035_sw60_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.025_sw120_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.025_sw120_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.025_sw120_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.025_sw120_ttp0.014/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.025_sw60_ttp0.008/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.025_sw60_ttp0.010/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.025_sw60_ttp0.012/stats.json",
+          "data/runs/SWEEP_TV5M_IMBA_GATE2of3_fee25/minsl0.020_maxsl0.025_sw60_ttp0.014/stats.json",
+          "data/runs/SWEEP_extGATES_fee10__chonQ0.80_choffQ0.65_adxQ0.60_dw7_g3/stats.json",
+          "data/runs/SWEEP_extGATES_fee10__chonQ0.80_choffQ0.65_adxQ0.70_dw3_g3/stats.json",
+          "data/runs/SWEEP_extGATES_fee10__chonQ0.80_choffQ0.65_adxQ0.70_dw5_g3/stats.json",
+          "data/runs/SWEEP_extGATES_fee10__chonQ0.80_choffQ0.65_adxQ0.70_dw7_g3/stats.json",
+          "data/runs/TV5M_IMBA_fee0_FILLS_EQ1_EXTGATE_DIAG/stats.json",
+          "data/runs/TV5M_IMBA_fee25_FILLS_EQ1_EXTGATE/stats.json",
+          "data/runs/TV5M_IMBA_fee25_FILLS_EQ1_GATE2of3_qch0.4_qadx0.6_qer0.3/stats.json",
+          "data/runs/TV5M_IMBA_fee25_FILLS_EQ1_GATE2of3_qch0.4_qadx0.7_qer0.2/stats.json",
+          "data/runs/TV5M_IMBA_fee25_FILLS_EQ1_REFITGATE_q50q50q50/stats.json",
+          "data/runs/TV5M_IMBA_flip_only_sens200_fee10/stats.json",
+          "data/runs/TV5M_IMBA_flip_only_sens200_fee10_FILLS/stats.json",
+          "data/runs/TV5M_IMBA_flip_only_sens200_fee20_FILLS/stats.json",
+          "data/runs/TV5M_IMBA_flip_only_sens200_fee20_FILLS_EQ1/stats.json",
+          "data/runs/TV5M_IMBA_flip_only_sens200_fee25_FILLS_EQ1/stats.json",
+          "data/runs/TV_MATCH_RENKO_RESET_lb250/stats.json",
+          "data/runs/TV_MATCH_RENKO_fliponly_lb250/stats.json",
+          "data/runs/TV_MATCH_SOLUSDT_full/stats.json",
+          "data/runs/TV_MATCH_fliponly_NO_WAIT_SLcap1p5_lb50/stats.json",
+          "data/runs/TV_MATCH_fliponly_TTP_on_confirm_SL1p5to3_lb50_feeRT0/stats.json",
+          "data/runs/TV_MATCH_fullsignals_TTP_on_confirm_SL1p5to3_lb50_feeRT0/stats.json",
+          "data/runs/WFgate_120_30_fee10_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/WFgate_B_fee20_ttp0.016_sl0.016_sw180/stats.json",
+          "data/runs/WFgate_ch75_65_adx50_fee20_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/WFgate_ch75_65_adx50_fee20_ttp0.016_sl0.017_sw180/stats.json",
+          "data/runs/WFgate_ch75_65_adx50_fee20_ttp0.020_sl0.017_sw180/stats.json",
+          "data/runs/WFgate_dw1_fee10_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/WFgate_dw1_fee15_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/WFgate_dw1_fee20_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/WFgate_dw3_fee15_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/WFgate_dw3_fee20_step14_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/WFgate_dw3_fee20_step30_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/WFgate_dw3_fee20_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/WFgate_dw3_fee25_step7_ttp0.012_sl0.017_sw180/stats.json",
+          "data/runs/WFgate_fee10_ttp0.012_sl0.017_sw180__chonQ0.75_choffQ0.65_adxQ0.50_dw3/stats.json",
+          "data/runs/merged_15bps_kelly/stats.json",
+          "data/runs/merged_full_15bps/stats.json",
+          "data/runs/merged_on_off/stats.json",
+          "data/runs/pc_baseline_01/pc/stats.json",
+          "data/runs/pc_v02_last7d/pc_v02/stats.json",
+          "data/runs/visual_v02_seed/transitions/edges.json",
+          "data/runs/visual_v02_seed/visual_v02/basins.html",
+          "data/runs/visual_v02_seed/visual_v02/state_space_occupancy.html",
+          "data/runs/visual_v02_seed/visual_v02/state_space_persistence.html",
+          "data/runs/visual_v02_seed/visual_v02/trajectory.html",
+          "data/runs/visual_v02_seed/visual_v02/transitions.html",
+          "data/runs/visual_v02_seed/visual_v02_basinsv02/basins.html",
+          "data/runs/visual_v02_seed/visual_v02_basinsv02/state_space_occupancy.html",
+          "data/runs/visual_v02_seed/visual_v02_basinsv02/state_space_persistence.html",
+          "data/runs/visual_v02_seed/visual_v02_basinsv02/trajectory.html",
+          "data/runs/visual_v02_seed/visual_v02_basinsv02/transitions.html",
+          "data/runs/visual_v02_seed/visual_v02_final/basins.html",
+          "data/runs/visual_v02_seed/visual_v02_final/state_space_occupancy.html",
+          "data/runs/visual_v02_seed/visual_v02_final/state_space_persistence.html",
+          "data/runs/visual_v02_seed/visual_v02_final/trajectory.html",
+          "data/runs/visual_v02_seed/visual_v02_final/transitions.html",
+          "data/runs/visual_v02_seed/visual_v02_intel/basins.html",
+          "data/runs/visual_v02_seed/visual_v02_intel/state_space_occupancy.html",
+          "data/runs/visual_v02_seed/visual_v02_intel/state_space_persistence.html",
+          "data/runs/visual_v02_seed/visual_v02_intel/trajectory.html",
+          "data/runs/visual_v02_seed/visual_v02_intel/transitions.html",
+          "data/runs/wf_fit_f0_test/stats.json",
+          "data/runs/wf_fit_f0_tp10.01_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f0_tp10.01_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f0_tp10.02_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f0_tp10.02_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f1_test/stats.json",
+          "data/runs/wf_fit_f1_tp10.01_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f1_tp10.01_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f1_tp10.02_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f1_tp10.02_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f2_test/stats.json",
+          "data/runs/wf_fit_f2_tp10.01_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f2_tp10.01_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f2_tp10.02_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f2_tp10.02_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f3_test/stats.json",
+          "data/runs/wf_fit_f3_tp10.01_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f3_tp10.01_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f3_tp10.02_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f3_tp10.02_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f4_test/stats.json",
+          "data/runs/wf_fit_f4_tp10.01_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f4_tp10.01_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f4_tp10.02_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f4_tp10.02_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f5_test/stats.json",
+          "data/runs/wf_fit_f5_tp10.01_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f5_tp10.01_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f5_tp10.02_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f5_tp10.02_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f6_test/stats.json",
+          "data/runs/wf_fit_f6_tp10.01_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f6_tp10.01_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fit_f6_tp10.02_tp20.03_ttp0.012/stats.json",
+          "data/runs/wf_fit_f6_tp10.02_tp20.04_ttp0.012/stats.json",
+          "data/runs/wf_fold_0/stats.json",
+          "data/runs/wf_fold_1/stats.json",
+          "data/runs/wf_fold_10/stats.json",
+          "data/runs/wf_fold_11/stats.json",
+          "data/runs/wf_fold_12/stats.json",
+          "data/runs/wf_fold_2/stats.json",
+          "data/runs/wf_fold_3/stats.json",
+          "data/runs/wf_fold_4/stats.json",
+          "data/runs/wf_fold_5/stats.json",
+          "data/runs/wf_fold_6/stats.json",
+          "data/runs/wf_fold_7/stats.json",
+          "data/runs/wf_fold_8/stats.json",
+          "data/runs/wf_fold_9/stats.json"
+        ]
+      },
+      {
+        "name": "Other — signals",
+        "slug": "other-signals",
+        "files": [
+          "data/signals/SOL-USDC/imba_RENKO_box0p1_lb240_sl1p5.PREV14D.jsonl",
+          "data/signals/SOL-USDC/imba_RENKO_box0p1_lb240_sl1p5.jsonl",
+          "data/signals/SOL-USDC/imba_fib_rebuild_lb240.jsonl",
+          "data/signals/SOL-USDC/imba_lb240_tr0p3_td1p2_sl1p5.jsonl",
+          "data/signals/SOL-USDC/imba_lookback240_trail0p3_1p2.jsonl",
+          "data/signals/SOL-USDC/imba_renko_box0.1_FROM_20231228T080000Z.jsonl",
+          "data/signals/SOL-USDT/20260207.backup.jsonl",
+          "data/signals/SOL-USDT/20260207.jsonl",
+          "data/signals/SOL-USDT/20260207_bt.jsonl",
+          "data/signals/SOL-USDT/20260207_flip_test.jsonl",
+          "data/signals/SOL-USDT/imba_TV_5m_sens200_from1m.jsonl",
+          "data/signals/SOL-USDT/imba_renko_box0.1_lb240_sl1.5_FROM_20210924T100000Z_TVSTICKY.jsonl",
+          "data/signals/SOL-USDT/imba_renko_box0.1_lb250_sl1.5_FROM_20260201T000000Z.fliponly.jsonl",
+          "data/signals/SOL-USDT/imba_renko_box0.1_lb250_sl1.5_FROM_20260201T000000Z.fliponly_cd0.jsonl",
+          "data/signals/SOL-USDT/imba_renko_box0.1_lb250_sl1.5_FROM_20260201T000000Z.fliponly_cd3.jsonl",
+          "data/signals/SOL-USDT/imba_renko_box0.1_lb250_sl1.5_FROM_20260201T000000Z.fliponly_cd30.jsonl",
+          "data/signals/SOL-USDT/imba_renko_box0.1_lb250_sl1.5_FROM_20260201T000000Z.jsonl",
+          "data/signals/SOL-USDT/stub.jsonl",
+          "data/signals/test_sol.jsonl"
+        ]
+      },
+      {
+        "name": "Other — sweeps",
+        "slug": "other-sweeps",
+        "files": [
+          "data/sweeps/SOL-USDT_tf1m_box0.1_tp10_sl10_fee4.0_sweep_20260207T140437Z_summary.json",
+          "data/sweeps/SOL-USDT_tf1m_box0.1_tp10_sl10_fee4.0_sweep_20260207T140740Z_summary.json",
+          "data/sweeps/er_sweep_20260209T194415Z/meta.json",
+          "data/sweeps/er_sweep_20260209T201646Z/meta.json",
+          "data/sweeps/sweep_20260209T140850Z/meta.json",
+          "data/sweeps/sweep_20260209T153005Z/meta.json",
+          "data/sweeps/sweep_20260209T154023Z/meta.json",
+          "data/sweeps/sweep_20260209T162657Z/meta.json"
+        ]
+      },
+      {
+        "name": "Other — tools",
+        "slug": "other-tools",
+        "files": [
+          "data/tools/check_kraken_env.py",
+          "data/tools/check_kraken_manual.py"
+        ]
+      },
+      {
+        "name": "Other — docs",
+        "slug": "other-docs",
+        "files": [
+          "docs/LIVE_DEPLOY.md",
+          "docs/RAILWAY.md",
+          "docs/RAILWAY_RUNBOOK.md",
+          "docs/state_space_transitions.md"
+        ]
+      },
+      {
+        "name": "Other — plans",
+        "slug": "other-plans",
+        "files": [
+          "docs/plans/2026-02-23-regime-dashboard-design.md",
+          "docs/plans/2026-02-26-dashboard-v2-design.md",
+          "docs/plans/2026-02-26-dashboard-v2-implementation.md",
+          "docs/plans/2026-02-27-predictive-coding-engine-design.md",
+          "docs/plans/2026-02-27-predictive-coding-engine-impl.md",
+          "docs/plans/2026-03-03-kraken-bot-rewrite-design.md",
+          "docs/plans/2026-03-03-live-3axis-gate-design.md"
+        ]
+      },
+      {
+        "name": "Other — visual",
+        "slug": "other-visual",
+        "files": [
+          "docs/visual/plot_catalog.md",
+          "docs/visual/style_guide.md",
+          "docs/visual/v0.2_overview.md"
+        ]
+      },
+      {
+        "name": "Other — notebooks",
+        "slug": "other-notebooks",
+        "files": [
+          "notebooks/session note 22.2."
+        ]
+      },
+      {
+        "name": "Other — pyproject.toml",
+        "slug": "other-pyproject-toml",
+        "files": [
+          "pyproject.toml"
+        ]
+      },
+      {
+        "name": "Other — requirements.txt",
+        "slug": "other-requirements-txt",
+        "files": [
+          "requirements.txt"
+        ]
+      },
+      {
+        "name": "Other — scripts",
+        "slug": "other-scripts",
+        "files": [
+          "scripts/__init__.py",
+          "scripts/railway_entrypoint.sh"
+        ]
+      },
+      {
+        "name": "Other — src",
+        "slug": "other-src",
+        "files": [
+          "src/__init__.py"
+        ]
+      },
+      {
+        "name": "Other — quant.egg-info",
+        "slug": "other-quant-egg-info",
+        "files": [
+          "src/quant.egg-info/PKG-INFO",
+          "src/quant.egg-info/SOURCES.txt",
+          "src/quant.egg-info/dependency_links.txt",
+          "src/quant.egg-info/entry_points.txt",
+          "src/quant.egg-info/requires.txt",
+          "src/quant.egg-info/top_level.txt"
+        ]
+      },
+      {
+        "name": "Other — quant",
+        "slug": "other-quant",
+        "files": [
+          "src/quant/__init__.py",
+          "src/quant/backtest/__init__.py",
+          "src/quant/backtest/renko_runner_tp2.py.bak",
+          "src/quant/backtest/renko_runner_tp2.py.grace.bak",
+          "src/quant/backtest/renko_runner_tp2.py.regime_grace.bak",
+          "src/quant/config.py",
+          "src/quant/data/__init__.py",
+          "src/quant/execution/__init__.py",
+          "src/quant/features/__init__.py",
+          "src/quant/predictive_coding/__init__.py",
+          "src/quant/regime/__init__.py",
+          "src/quant/state_space_transitions/README.md",
+          "src/quant/strategies/__init__.py",
+          "src/quant/utils/__init__.py",
+          "src/quant/utils/log.py"
+        ]
+      },
+      {
+        "name": "Other — tests",
+        "slug": "other-tests",
+        "files": [
+          "tests/test_build_density_images.py",
+          "tests/test_dashboard_state.py",
+          "tests/test_dashboard_statespace.py",
+          "tests/test_gate_provider_live.py",
+          "tests/test_kraken_bot_statemachine.py",
+          "tests/test_kucoin_futures.py",
+          "tests/test_live_executor.py",
+          "tests/test_live_monitor_paths.py",
+          "tests/test_manual_orders.py",
+          "tests/test_predictive_coding.py",
+          "tests/test_regime_store.py",
+          "tests/test_renko_cache_updater.py",
+          "tests/test_state_space_transitions.py",
+          "tests/test_state_space_v01.py",
+          "tests/test_trim_statespace_parquet.py",
+          "tests/test_webhook_dashboard_api.py"
+        ]
+      },
+      {
+        "name": "Other — walkthrough.md",
+        "slug": "other-walkthrough-md",
+        "files": [
+          "walkthrough.md"
+        ]
+      }
+    ]
+  }
+]

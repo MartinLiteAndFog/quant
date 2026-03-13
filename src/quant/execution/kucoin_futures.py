@@ -465,6 +465,58 @@ class KucoinFuturesBroker(BrokerAPI):
             client_id=client_id,
         )
 
+    def place_stop_market(
+        self,
+        symbol: str,
+        side: str,
+        qty: float,
+        stop_price: float,
+        reduce_only: bool,
+        client_id: str,
+        stop_price_type: str = "TP",
+    ) -> str:
+        """Place a stop-market (conditional) order on KuCoin Futures.
+
+        stop_price_type: "TP" (mark price), "IP" (index price), "MP" (last traded price).
+        """
+        contract = _symbol_to_contract(symbol)
+        body = {
+            "clientOid": _sanitize_client_oid(client_id),
+            "symbol": contract,
+            "side": side.lower(),
+            "type": "market",
+            "size": int(qty),
+            "stop": "down" if side.lower() == "sell" else "up",
+            "stopPriceType": stop_price_type,
+            "stopPrice": str(stop_price),
+            "reduceOnly": reduce_only,
+            "leverage": str(max(1.0, float(self._order_leverage))),
+        }
+        detected_mm = self._position_margin_mode(symbol)
+        if detected_mm in ("CROSS", "ISOLATED"):
+            body["marginMode"] = detected_mm
+        data = self._req("POST", "/api/v1/st-orders", body=body)
+        return str(data.get("orderId", data.get("order_id", "")))
+
+    def cancel_all_stop_orders(self, symbol: str) -> Dict[str, Any]:
+        """Cancel all stop/conditional orders for a symbol."""
+        contract = _symbol_to_contract(symbol)
+        path = f"/api/v1/stopOrders?symbol={contract}"
+        try:
+            data = self._req("DELETE", path)
+            return {"ok": True, "data": data}
+        except Exception as e:
+            log_throttled(
+                log,
+                logging.WARNING,
+                f"kucoin_cancel_stop_failed:{contract}",
+                float(os.getenv("KUCOIN_LOG_THROTTLE_SEC", "30")),
+                "cancel_all_stop_orders %s failed: %s",
+                contract,
+                e,
+            )
+            return {"ok": False, "error": str(e)}
+
     def wait_filled(self, symbol: str, order_id: str, timeout_s: int) -> bool:
         path = f"/api/v1/orders/{order_id}"
         t0 = time.time()
