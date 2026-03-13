@@ -1,15 +1,21 @@
 """Tests for the Kraken bot state machine — pure logic, no API calls."""
 import unittest
 from dataclasses import asdict
+from unittest.mock import MagicMock, patch
+
+import pandas as pd
 
 from quant.execution.kraken_bot import (
     BotState,
     FlipParams,
     TP2Params,
+    _load_signals_from_postgres,
+    _terminal_to_actions,
     compute_swing_sl,
     compute_target_size,
     run_once_logic,
 )
+from quant.strategies.flip_engine import FlipParams as SharedFlipParams, run_flip_state_machine
 
 FLIP = FlipParams()
 TP2 = TP2Params()
@@ -218,6 +224,118 @@ class TestSwingSL(unittest.TestCase):
     def test_long_sl_within_range(self):
         sl = compute_swing_sl(1, 100.0, 98.0, 102.0, 0.015, 0.030)
         self.assertAlmostEqual(sl, 98.0)  # (100-98)/100=0.020, within [0.015, 0.030]
+
+
+class TestLoadSignalsFiltersStrategy(unittest.TestCase):
+    """Verify _load_signals_from_postgres filters by strategy column."""
+
+    @patch("quant.execution.kraken_bot.get_conn")
+    def test_default_filters_countertrend(self, mock_get_conn):
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = [
+            (pd.Timestamp("2026-03-13T10:00Z"), -1),
+        ]
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        mock_get_conn.return_value = mock_conn
+
+        df = _load_signals_from_postgres("SOL-USDT")
+        sql_arg = mock_cur.execute.call_args[0][0]
+        params_arg = mock_cur.execute.call_args[0][1]
+
+        self.assertIn("strategy = %s", sql_arg)
+        self.assertEqual(params_arg[1], "countertrend")
+
+    @patch("quant.execution.kraken_bot.get_conn")
+    def test_explicit_strategy_passed_to_query(self, mock_get_conn):
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = []
+        mock_conn = MagicMock()
+        mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+        mock_conn.__exit__ = MagicMock(return_value=False)
+        mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cur)
+        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        mock_get_conn.return_value = mock_conn
+
+        _load_signals_from_postgres("SOL-USDT", strategy="trendfollower")
+        params_arg = mock_cur.execute.call_args[0][1]
+        self.assertEqual(params_arg[1], "trendfollower")
+
+
+class TestMixedSignalsCauseMissedSell(unittest.TestCase):
+    """Demonstrate that mixing countertrend and trendfollower signals
+    into the flip engine causes missed sells, and filtering fixes it."""
+
+    def _make_bars(self, n=10, start_px=100.0):
+        ts = pd.date_range("2026-03-13T10:00:00Z", periods=n, freq="min", tz="UTC")
+        close = [start_px + i * 0.5 for i in range(n)]
+        return pd.DataFrame({
+            "ts": ts,
+            "open": close,
+            "high": [c + 0.3 for c in close],
+            "low": [c - 0.3 for c in close],
+            "close": close,
+        })
+
+    def test_sell_signal_visible_when_only_countertrend(self):
+        bars = self._make_bars(6)
+        ct_signals = pd.DataFrame({
+            "ts": [bars["ts"].iloc[1], bars["ts"].iloc[4]],
+            "signal": [1, -1],
+        })
+
+        _, events_df, terminal = run_flip_state_machine(
+            bars=bars, signals_df=ct_signals,
+            params=SharedFlipParams(ttp_trail_pct=0.10, min_sl_pct=0.015, max_sl_pct=0.030),
+        )
+        self.assertEqual(terminal["pos"], -1, "flip engine should be short after sell signal")
+
+    def test_sell_signal_can_be_swallowed_by_mixed_signals(self):
+        bars = self._make_bars(6)
+        ct_sell_ts = bars["ts"].iloc[4]
+        mixed_signals = pd.DataFrame({
+            "ts": [
+                bars["ts"].iloc[1], bars["ts"].iloc[1],
+                ct_sell_ts, ct_sell_ts,
+            ],
+            "signal": [1, -1, -1, 1],
+        })
+        mixed_signals = (
+            mixed_signals.sort_values("ts")
+            .drop_duplicates("ts", keep="last")
+            .reset_index(drop=True)
+        )
+
+        _, events_df, terminal = run_flip_state_machine(
+            bars=bars, signals_df=mixed_signals,
+            params=SharedFlipParams(ttp_trail_pct=0.10, min_sl_pct=0.015, max_sl_pct=0.030),
+        )
+        self.assertEqual(
+            terminal["pos"], 1,
+            "with mixed signals (keep=last gives trendfollower), "
+            "the sell signal is swallowed and position stays long",
+        )
+
+
+class TestTerminalToActions(unittest.TestCase):
+    def test_long_to_short_generates_close_and_enter(self):
+        acts = _terminal_to_actions(terminal_pos=-1, current_pos_side=1, target_size=2.0, mark=100.0)
+        self.assertEqual(len(acts), 2)
+        self.assertEqual(acts[0]["action"], "close_all")
+        self.assertEqual(acts[1]["action"], "enter_short")
+        self.assertEqual(acts[1]["side"], "sell")
+
+    def test_same_position_no_action(self):
+        acts = _terminal_to_actions(terminal_pos=1, current_pos_side=1, target_size=2.0, mark=100.0)
+        self.assertEqual(len(acts), 0)
+
+    def test_flat_to_short(self):
+        acts = _terminal_to_actions(terminal_pos=-1, current_pos_side=0, target_size=2.0, mark=100.0)
+        self.assertEqual(len(acts), 1)
+        self.assertEqual(acts[0]["action"], "enter_short")
 
 
 if __name__ == "__main__":

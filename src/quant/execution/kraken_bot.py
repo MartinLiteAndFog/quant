@@ -1109,18 +1109,27 @@ def _canon_symbol(sym: str) -> str:
     return "".join(ch for ch in str(sym).upper() if ch.isalnum())
 
 
-def _load_signals_from_postgres(symbol: str, limit: int = 10000) -> pd.DataFrame:
-    """Load signal history from Postgres signal_events table."""
+def _load_signals_from_postgres(
+    symbol: str,
+    strategy: str = "countertrend",
+    limit: int = 10000,
+) -> pd.DataFrame:
+    """Load signal history from Postgres signal_events table.
+
+    Filters by *strategy* to avoid mixing countertrend and trendfollower
+    signals — they are inverted copies of each other and the wrong one
+    would cause the flip engine to ignore valid sell/buy impulses.
+    """
     sym = _canon_symbol(symbol)
     sql = """
         SELECT ts, signal FROM signal_events
-        WHERE symbol = %s AND signal != 0
+        WHERE symbol = %s AND signal != 0 AND strategy = %s
         ORDER BY ts ASC
         LIMIT %s
     """
     try:
         with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, (sym, limit))
+            cur.execute(sql, (sym, strategy, limit))
             rows = cur.fetchall()
     except Exception as e:
         log.warning("load signals from postgres failed: %s", e)
@@ -1245,7 +1254,7 @@ def run_once(
 
     renko = fetch_renko(renko_url, flip_p.swing_lookback, symbol=symbol)
     bars_df = _bars_to_dataframe(renko.get("bars", []))
-    signals_df = _load_signals_from_postgres(symbol)
+    signals_df = _load_signals_from_postgres(symbol, strategy="countertrend")
     regime_series = _load_regime_series(symbol)
 
     shared_params = _build_shared_flip_params()
