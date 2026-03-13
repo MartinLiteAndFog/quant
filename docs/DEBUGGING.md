@@ -51,6 +51,66 @@ Check:
 
 ---
 
+## Wrong position sizing
+Typical source:
+- equity source (available vs total)
+- contract multiplier (hardcoded vs live)
+- leverage env var not set
+
+Check executor startup log:
+```
+executor sizing: equity=... pos_pct=... leverage=... mid=... mult=... -> qty=...
+```
+
+Verify env vars:
+- `LIVE_EXECUTOR_POS_PCT` (default 0.90)
+- `LIVE_EXECUTOR_LEVERAGE` (must be set explicitly, default is 1)
+- `KUCOIN_FUTURES_ORDER_LEVERAGE` (sent to exchange; falls back to `LIVE_EXECUTOR_LEVERAGE`)
+
+Formula: `qty = floor(equity × pos_pct × leverage / (mid × contract_multiplier))`
+
+The contract multiplier is fetched live from the broker — it is **not** hardcoded.
+
+---
+
+## terminal_pos oscillation (false flatten)
+Typical source:
+- Renko mismatch between signal worker and executor (now fixed)
+- signal snapping causing signals to appear/disappear (now fixed)
+- D3: full replay instability (renko_latest.parquet updated mid-poll)
+
+Check:
+- `LIVE_RENKO_PATH` env var — must point to same file `renko_cache_updater` writes
+- executor log for `GUARD FIRED` warnings — includes bar count and signal count
+- whether guard keeps firing after unified Renko is deployed
+
+---
+
+## Wrong parity between backtest and live
+Typical source:
+- Renko source mismatch (now fixed — both use `renko_latest.parquet`)
+- signal snapping (now removed — exact match only)
+- state reconstruction mismatch
+- regime gate incorrectly force-flattening
+
+Check in this order:
+1. `LIVE_RENKO_PATH` pointing to correct file
+2. loaded Renko bar count in executor log
+3. latest signal timestamp seen by executor
+4. latest reconstructed event
+5. terminal state
+6. only then compare to backtest expectation
+
+Important rule:
+- first decide whether live and backtest would choose the same action on the same bars/signals
+- only after that debug OMS / venue reality
+
+Regime gate rule:
+- gate selects exit strategy (TTP vs TP1/2) — it **never** force-flattens a live position
+- `regime_forces_flat=False` is hardcoded in the live executor path
+
+---
+
 ## Wrong equity
 Typical source:
 - backtest mapping
@@ -159,15 +219,16 @@ Check:
 3. Check latest `execution_events`
 4. Check `closed_trades`
 5. Check `equity_snapshots`
-6. Only then inspect:
+6. Check executor startup + sizing log: `executor sizing: equity=... -> qty=...`
+7. Only then inspect:
    - signal JSONL
    - local event JSONL
    - active levels JSON
-   - logs
+   - logs (look for `GUARD FIRED` as a parity signal)
 
 Current note:
-- KuCoin `action_events` are verified in Postgres
-- KuCoin `execution_events` are integrated and deployed, but still need confirmation on the next real fresh execution-triggered event
+- KuCoin `action_events` and `execution_events` are verified in Postgres
+- guard firing (`GUARD FIRED` in logs) indicates terminal_pos=0 with live position — investigate Renko/signal alignment
 
 ---
 
@@ -240,9 +301,13 @@ Avoid these unless necessary:
 
 Strategy / execution:
 - `src/quant/strategies/flip_engine.py`
+- `src/quant/strategies/imba.py`
+- `src/quant/execution/renko_cache_updater.py` — single Renko authority
+- `src/quant/execution/live_signal_worker.py`
 - `src/quant/execution/live_executor.py`
 - `src/quant/execution/kraken_bot.py`
 - `src/quant/execution/oms.py`
+- `src/quant/execution/kucoin_futures.py`
 
 Persistence / events:
 - `src/quant/execution/event_builders.py`
