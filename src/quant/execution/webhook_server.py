@@ -49,6 +49,7 @@ from ..utils.log import get_logger, log_throttled
 log = get_logger("quant.webhook")
 _STATUS_CACHE: Dict[str, Dict[str, Any]] = {}
 _POSITION_CACHE: Dict[str, Dict[str, Any]] = {}
+_CHART_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _state_space_refresh_loop() -> None:
@@ -624,6 +625,10 @@ def api_dashboard_chart(
     hours: int = 24 * 7,
     max_points: int = 3000,
 ) -> Dict[str, Any]:
+    cache_key = f"{_normalize_symbol(symbol)}:{hours}:{max_points}"
+    cached = _cache_get(_CHART_CACHE, cache_key)
+    if cached is not None:
+        return cached
     try:
         bars = load_renko_bars(max_points=int(max(100, max_points)))
         markers = load_trade_markers(max_points=int(max(1000, max_points * 50)))
@@ -841,7 +846,7 @@ def api_dashboard_chart(
             "equity_component_count": len(equity_components),
         }
 
-        return {
+        result = {
             "ok": True,
             "symbol": symbol,
             "bars": bars,
@@ -881,8 +886,10 @@ def api_dashboard_chart(
             "_debug": _debug,
             "ts": _now_utc_iso(),
         }
+        _cache_put(_CHART_CACHE, cache_key, result)
+        return result
     except Exception as e:
-        return {
+        err_result = {
             "ok": False,
             "symbol": symbol,
             "bars": [],
@@ -916,6 +923,8 @@ def api_dashboard_chart(
             "error": str(e),
             "ts": _now_utc_iso(),
         }
+        _cache_put(_CHART_CACHE, cache_key, err_result)
+        return err_result
 
 
 @app.get("/api/gate/solusd")

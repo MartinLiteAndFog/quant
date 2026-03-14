@@ -131,10 +131,12 @@ class WebhookDashboardApiTests(unittest.TestCase):
         )
         ws._STATUS_CACHE.clear()
         ws._POSITION_CACHE.clear()
+        ws._CHART_CACHE.clear()
 
     def tearDown(self) -> None:
         ws._STATUS_CACHE.clear()
         ws._POSITION_CACHE.clear()
+        ws._CHART_CACHE.clear()
         os.environ.pop("DASHBOARD_API_CACHE_SEC", None)
         os.environ.pop("KUCOIN_FUTURES_API_KEY", None)
         self.tmp.cleanup()
@@ -262,6 +264,21 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIn("id=\"chart-refresh-btn\"", html)
         self.assertIn("visibilitychange", html)
         self.assertIn("refreshNow(", html)
+
+    def test_chart_response_is_cached(self) -> None:
+        """Second call within TTL should return cached response."""
+        import time
+        os.environ["DASHBOARD_API_CACHE_SEC"] = "10"
+
+        r1 = api_dashboard_chart(symbol="SOL-USDT", hours=168, max_points=100)
+        ts1 = r1.get("ts")
+        self.assertTrue(r1["ok"])
+
+        time.sleep(0.05)
+        r2 = api_dashboard_chart(symbol="SOL-USDT", hours=168, max_points=100)
+        ts2 = r2.get("ts")
+
+        self.assertEqual(ts1, ts2, "Second call should return cached response")
 
     def test_api_status_uses_cache_within_ttl(self) -> None:
         os.environ["KUCOIN_FUTURES_API_KEY"] = "x"
