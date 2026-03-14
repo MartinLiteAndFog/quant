@@ -20,6 +20,7 @@ import uvicorn
 
 from quant.execution.dashboard_state import (
     _read_renko_df,
+    _read_trades_df,
     build_combined_equity,
     build_equity_curve,
     build_fibo_levels,
@@ -638,6 +639,8 @@ def api_dashboard_chart(
             symbol=symbol,
             max_points=int(max(100, max_points)),
         )
+        if trades_df.empty:
+            trades_df = _read_trades_df()
         bars = load_renko_bars(max_points=int(max(100, max_points)), _df=renko_df)
         markers = load_trade_markers(max_points=int(max(1000, max_points * 50)), _trades_df=trades_df)
         oldest_bar_ts = int(bars[0]["time"]) if bars else None
