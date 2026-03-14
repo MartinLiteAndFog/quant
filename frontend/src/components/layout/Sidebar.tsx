@@ -106,9 +106,19 @@ export function Sidebar({
 }: SidebarProps) {
   const kucoinPrice = status?.ticker?.last ?? status?.ticker?.mid ?? null;
   const kucoinEquity = status?.balance?.equity ?? null;
-  const kucoinSide = position?.side ?? null;
-  const kucoinSize = position?.position ?? null;
-  const kucoinHasPos = kucoinSide != null && kucoinSize != null && kucoinSize !== 0;
+
+  const venuePosSide = position?.side ?? null;
+  const venuePosSize = position?.position ?? null;
+  const venueHasPos = venuePosSide != null && venuePosSize != null && venuePosSize !== 0;
+
+  const levelsSide = chartLevels?.terminal?.side ?? chartLevels?.side ?? null;
+  const levelsEntryPx = chartLevels?.terminal?.entry_px ?? chartLevels?.entry_px ?? null;
+  const levelsHasPos = levelsSide != null && levelsEntryPx != null;
+
+  const kucoinSide = venueHasPos ? venuePosSide : (levelsHasPos ? levelsSide : null);
+  const kucoinSize = venueHasPos ? venuePosSize : null;
+  const kucoinHasPos = venueHasPos || levelsHasPos;
+
   const fillsList = fills?.fills ?? fills?.rows ?? [];
 
   const kr = krakenMetrics;
@@ -183,7 +193,11 @@ export function Sidebar({
             <div className="font-mono text-sm">
               {kucoinHasPos ? (
                 <span className={sideColor(kucoinSide)}>
-                  {sideLabel(kucoinSide)} {Math.abs(kucoinSize!)}
+                  {sideLabel(kucoinSide)}
+                  {kucoinSize != null ? ` ${Math.abs(kucoinSize)}` : ""}
+                  {!venueHasPos && levelsHasPos && levelsEntryPx != null && (
+                    <span className="text-zinc-400"> @ {levelsEntryPx.toFixed(2)}</span>
+                  )}
                 </span>
               ) : (
                 <span className="text-zinc-500">Flat</span>
