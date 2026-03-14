@@ -19,6 +19,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from quant.execution.dashboard_state import (
+    _read_renko_df,
     build_combined_equity,
     build_equity_curve,
     build_fibo_levels,
@@ -630,7 +631,8 @@ def api_dashboard_chart(
     if cached is not None:
         return cached
     try:
-        bars = load_renko_bars(max_points=int(max(100, max_points)))
+        renko_df = _read_renko_df()
+        bars = load_renko_bars(max_points=int(max(100, max_points)), _df=renko_df)
         markers = load_trade_markers(max_points=int(max(1000, max_points * 50)))
         oldest_bar_ts = int(bars[0]["time"]) if bars else None
         markers_live = load_live_fill_markers(
@@ -740,8 +742,8 @@ def api_dashboard_chart(
             markers = markers[-int(max(100, max_points)):]
 
         segments = load_trade_segments(max_points=int(max(100, max_points)))
-        fibo = build_fibo_levels(max_points=int(max(100, max_points)))
-        renko_health = load_renko_health()
+        fibo = build_fibo_levels(max_points=int(max(100, max_points)), _df=renko_df)
+        renko_health = load_renko_health(_df=renko_df)
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
         latest = regime.get("latest") or {}
         live_gc = None

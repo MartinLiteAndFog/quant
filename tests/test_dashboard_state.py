@@ -246,6 +246,26 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(int(pts[0]["time"]), 100)
         self.assertAlmostEqual(float(pts[0]["equity"]), 500.0, places=6)
 
+    def test_renko_functions_accept_preloaded_df(self) -> None:
+        """Renko functions should accept a pre-loaded DataFrame to avoid redundant reads."""
+        df = pd.DataFrame({
+            "ts": pd.date_range("2025-01-01", periods=10, freq="h", tz="UTC"),
+            "open": range(100, 110),
+            "high": range(101, 111),
+            "low": range(99, 109),
+            "close": range(100, 110),
+        })
+
+        bars = ds.load_renko_bars(max_points=100, _df=df)
+        self.assertEqual(len(bars), 10)
+
+        health = ds.load_renko_health(_df=df)
+        self.assertTrue(health["ok"])
+        self.assertEqual(health["bars"], 10)
+
+        fibo = ds.build_fibo_levels(max_points=100, _df=df)
+        self.assertIn("long", fibo)
+
     def test_build_trading_diary_queries_postgres_once(self) -> None:
         """build_trading_diary should only call load_closed_trades_from_postgres once."""
         call_count = 0

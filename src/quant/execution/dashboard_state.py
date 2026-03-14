@@ -207,8 +207,8 @@ def _refresh_renko_cache_if_needed(existing_df: pd.DataFrame) -> pd.DataFrame:
     return _read_renko_df()
 
 
-def load_renko_bars(max_points: int = 5000) -> List[Dict[str, Any]]:
-    df = _read_renko_df()
+def load_renko_bars(max_points: int = 5000, _df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
+    df = _df if _df is not None else _read_renko_df()
     if df.empty:
         return []
     df = df.tail(int(max(1, max_points)))
@@ -233,8 +233,8 @@ def load_renko_bars(max_points: int = 5000) -> List[Dict[str, Any]]:
     return out
 
 
-def load_renko_health() -> Dict[str, Any]:
-    df = _read_renko_df()
+def load_renko_health(_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+    df = _df if _df is not None else _read_renko_df()
     if df.empty:
         return {
             "ok": False,
@@ -257,10 +257,10 @@ def load_renko_health() -> Dict[str, Any]:
     }
 
 
-def build_fibo_levels(max_points: int = 5000, lookback: Optional[int] = None) -> Dict[str, Any]:
+def build_fibo_levels(max_points: int = 5000, lookback: Optional[int] = None, _df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
     lb = int(lookback or int(os.getenv("LIVE_IMBA_LOOKBACK", "250")))
     lb = max(2, lb)
-    df = _read_renko_df()
+    df = _df if _df is not None else _read_renko_df()
     if df.empty:
         return {"lookback": lb, "long": [], "mid": [], "short": [], "latest": {}}
     df = df.tail(int(max(lb + 5, max_points))).copy()
