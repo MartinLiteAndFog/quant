@@ -294,6 +294,19 @@ class DashboardStateTests(unittest.TestCase):
         equity = ds.build_equity_curve(max_points=100, _trades_df=df)
         self.assertGreater(len(equity.get("trades", [])), 0)
 
+    def test_regime_functions_accept_preloaded_rows(self) -> None:
+        """Regime functions should accept pre-loaded rows to avoid duplicate queries."""
+        rows = [
+            {"ts": "2025-01-01T00:00:00+00:00", "gate_on": 1, "confidence": 0.8, "regime_state": "trend", "regime_score": 0.6},
+            {"ts": "2025-01-01T01:00:00+00:00", "gate_on": 0, "confidence": 0.3, "regime_state": "range", "regime_score": -0.2},
+        ]
+        overlay = ds.build_regime_overlay(symbol="SOL-USDT", hours=168, _rows=rows)
+        self.assertGreater(len(overlay["spans"]), 0)
+        self.assertIsNotNone(overlay["latest"])
+
+        scores = ds.build_regime_scores(symbol="SOL-USDT", hours=168, _rows=rows)
+        self.assertGreater(len(scores["scores"]), 0)
+
     def test_build_trading_diary_queries_postgres_once(self) -> None:
         """build_trading_diary should only call load_closed_trades_from_postgres once."""
         call_count = 0

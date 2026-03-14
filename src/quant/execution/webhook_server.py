@@ -750,7 +750,16 @@ def api_dashboard_chart(
         segments = load_trade_segments(max_points=int(max(100, max_points)), _trades_df=trades_df)
         fibo = build_fibo_levels(max_points=int(max(100, max_points)), _df=renko_df)
         renko_health = load_renko_health(_df=renko_df)
-        regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
+        regime_store = RegimeStore()
+        regime_end = pd.Timestamp.now("UTC")
+        regime_start = regime_end - pd.Timedelta(hours=int(max(1, hours)))
+        regime_rows = regime_store.get_history(
+            symbol=symbol,
+            start_ts=regime_start.isoformat(),
+            end_ts=regime_end.isoformat(),
+            limit=20000,
+        )
+        regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)), _rows=regime_rows)
         latest = regime.get("latest") or {}
         live_gc = None
         live_gc_error = "temporarily_disabled"
@@ -762,7 +771,7 @@ def api_dashboard_chart(
             regime["spans"][-1]["confidence"] = live_conf
         confidence_out = live_conf if live_conf is not None else latest.get("confidence")
 
-        regime_score_data = build_regime_scores(symbol=symbol, hours=int(max(1, hours)))
+        regime_score_data = build_regime_scores(symbol=symbol, hours=int(max(1, hours)), _rows=regime_rows)
         equity = build_equity_curve(max_points=int(max(100, max_points)), _trades_df=trades_df)
         equity_real = load_real_equity_history(max_points=int(max(100, max_points)))
         equity_kraken = load_kraken_equity_history(max_points=int(max(100, max_points)))

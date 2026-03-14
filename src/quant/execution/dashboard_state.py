@@ -1303,11 +1303,14 @@ def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame
     return {"entries": events, "source": "fills_reconstructed_clustered"}
 
 
-def build_regime_overlay(symbol: str, hours: int = 24 * 14) -> Dict[str, Any]:
-    store = RegimeStore()
+def build_regime_overlay(symbol: str, hours: int = 24 * 14, _rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
     end_ts = pd.Timestamp.now("UTC")
-    start_ts = end_ts - pd.Timedelta(hours=int(max(1, hours)))
-    rows = store.get_history(symbol=symbol, start_ts=start_ts.isoformat(), end_ts=end_ts.isoformat(), limit=20000)
+    if _rows is not None:
+        rows = _rows
+    else:
+        store = RegimeStore()
+        start_ts = end_ts - pd.Timedelta(hours=int(max(1, hours)))
+        rows = store.get_history(symbol=symbol, start_ts=start_ts.isoformat(), end_ts=end_ts.isoformat(), limit=20000)
     if not rows:
         return {"spans": [], "points": [], "latest": None}
 
@@ -1387,12 +1390,15 @@ def build_equity_curve(max_points: int = 500, _trades_df: Optional[pd.DataFrame]
     return {"trades": curve, "source": diary.get("source", "none")}
 
 
-def build_regime_scores(symbol: str, hours: int = 24 * 14) -> Dict[str, List]:
+def build_regime_scores(symbol: str, hours: int = 24 * 14, _rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, List]:
     """Extract regime_score time series for the gradient band."""
-    store = RegimeStore()
-    end_ts = pd.Timestamp.now("UTC")
-    start_ts = end_ts - pd.Timedelta(hours=int(max(1, hours)))
-    rows = store.get_history(symbol=symbol, start_ts=start_ts.isoformat(), end_ts=end_ts.isoformat(), limit=20000)
+    if _rows is not None:
+        rows = _rows
+    else:
+        store = RegimeStore()
+        end_ts = pd.Timestamp.now("UTC")
+        start_ts = end_ts - pd.Timedelta(hours=int(max(1, hours)))
+        rows = store.get_history(symbol=symbol, start_ts=start_ts.isoformat(), end_ts=end_ts.isoformat(), limit=20000)
     if not rows:
         return {"scores": [], "forecast": []}
 
