@@ -19,17 +19,18 @@ def strategy_for_gate(gate_on: int) -> StrategyMode:
 
 def trend_signals_from_imba(imba_signals: pd.DataFrame) -> pd.DataFrame:
     """
-    Build a trendfollower stream by inverting IMBA impulse direction.
-    This keeps both strategies fundamentally opposed while reusing the same
-    historical context and timing.
+    Build a trendfollower signal stream from raw IMBA signals.
+
+    The trendfollower uses the **same entry direction** as countertrend.
+    Only the exit strategy differs (TP1/TP2 instead of TTP).
+    Signal direction is NOT inverted.
     """
     if imba_signals is None or len(imba_signals) == 0:
         return pd.DataFrame(columns=["ts", "signal", "position", "source", "sl"])
 
     out = imba_signals.copy()
-    out["signal"] = -pd.to_numeric(out["signal"], errors="coerce").fillna(0).astype(int)
+    out["signal"] = pd.to_numeric(out["signal"], errors="coerce").fillna(0).astype(int)
     out = out[out["signal"] != 0].copy()
     out["position"] = out["signal"]
-    out["source"] = "trend_from_imba_inverse"
-    # Keep same absolute SL hint for now; executor may override with trailing state.
+    out["source"] = "trend_from_imba"
     return out.reset_index(drop=True)

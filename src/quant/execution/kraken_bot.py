@@ -1110,11 +1110,19 @@ def _canon_symbol(sym: str) -> str:
 
 
 def _load_signals_from_postgres(symbol: str, limit: int = 10000) -> pd.DataFrame:
-    """Load signal history from Postgres signal_events table."""
+    """Load signal history from Postgres signal_events table.
+
+    Excludes rows with strategy='trendfollower' because historical
+    trendfollower rows may carry inverted signal direction from a
+    bug in trend_signals_from_imba() that has since been fixed.
+    Countertrend rows always have the correct raw IMBA direction.
+    """
     sym = _canon_symbol(symbol)
     sql = """
         SELECT ts, signal FROM signal_events
-        WHERE symbol = %s AND signal != 0
+        WHERE symbol = %s
+          AND signal != 0
+          AND (strategy IS NULL OR strategy != 'trendfollower')
         ORDER BY ts ASC
         LIMIT %s
     """
