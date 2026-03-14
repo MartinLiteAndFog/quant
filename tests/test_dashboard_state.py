@@ -246,6 +246,21 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(int(pts[0]["time"]), 100)
         self.assertAlmostEqual(float(pts[0]["equity"]), 500.0, places=6)
 
+    def test_build_trading_diary_queries_postgres_once(self) -> None:
+        """build_trading_diary should only call load_closed_trades_from_postgres once."""
+        call_count = 0
+        original_fn = ds.load_closed_trades_from_postgres
+
+        def counting_wrapper(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return original_fn(*args, **kwargs)
+
+        with patch.object(ds, "load_closed_trades_from_postgres", side_effect=counting_wrapper):
+            ds.build_trading_diary(max_points=100)
+
+        self.assertLessEqual(call_count, 1, f"Expected at most 1 Postgres call, got {call_count}")
+
 
 if __name__ == "__main__":
     unittest.main()

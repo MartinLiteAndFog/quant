@@ -1116,14 +1116,6 @@ def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
         df = _read_trades_df()
         df_source = "trades_parquet"
 
-    df = load_closed_trades_from_postgres(
-        venue="kucoin",
-        symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
-        max_points=max_points,
-    )
-    if df.empty:
-        df = _read_trades_df()
-
     if not df.empty:
         if "entry_ts" not in df.columns and "ts" in df.columns:
             df = df.rename(columns={"ts": "entry_ts"})
