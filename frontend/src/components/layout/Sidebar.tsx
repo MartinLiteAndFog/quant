@@ -113,10 +113,11 @@ export function Sidebar({
 
   const levelsSide = chartLevels?.terminal?.side ?? chartLevels?.side ?? null;
   const levelsEntryPx = chartLevels?.terminal?.entry_px ?? chartLevels?.entry_px ?? null;
+  const levelsLivePos = chartLevels?.live_pos ?? null;
   const levelsHasPos = levelsSide != null && levelsEntryPx != null;
 
   const kucoinSide = venueHasPos ? venuePosSide : (levelsHasPos ? levelsSide : null);
-  const kucoinSize = venueHasPos ? venuePosSize : null;
+  const kucoinSize = venueHasPos ? venuePosSize : (levelsLivePos != null ? levelsLivePos : null);
   const kucoinHasPos = venueHasPos || levelsHasPos;
 
   const fillsList = fills?.fills ?? fills?.rows ?? [];
@@ -195,9 +196,6 @@ export function Sidebar({
                 <span className={sideColor(kucoinSide)}>
                   {sideLabel(kucoinSide)}
                   {kucoinSize != null ? ` ${Math.abs(kucoinSize)}` : ""}
-                  {!venueHasPos && levelsHasPos && levelsEntryPx != null && (
-                    <span className="text-zinc-400"> @ {levelsEntryPx.toFixed(2)}</span>
-                  )}
                 </span>
               ) : (
                 <span className="text-zinc-500">Flat</span>

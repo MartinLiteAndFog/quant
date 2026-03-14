@@ -44,6 +44,7 @@ export interface ChartLevels {
   ttp_trail_pct?: number;
   mode?: string;
   position?: number;
+  live_pos?: number | null;
   terminal?: ChartLevelsTerminal;
 }
 
