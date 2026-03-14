@@ -665,10 +665,22 @@ def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Opt
 
     mode = str(terminal.get("mode", "")).upper() or "TTP"
     entry_px = _coerce_float(terminal.get("entry_px"))
+    entry_bar_ts = terminal.get("entry_bar_ts")
     sl = _coerce_float(terminal.get("sl"))
     ttp = _coerce_float(terminal.get("ttp"))
     be_armed = bool(terminal.get("be_armed", False))
     tp1_done = bool(terminal.get("tp1_done", False))
+
+    if live_pos is not None:
+        lp = float(live_pos)
+        if abs(lp) > 1e-12:
+            live_side = "long" if lp > 0 else "short"
+            if side != live_side:
+                side = live_side
+                entry_px = None
+                entry_bar_ts = None
+                sl = None
+                ttp = None
 
     rows: List[Dict[str, Any]] = []
     if entry_px is not None:
@@ -693,6 +705,19 @@ def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Opt
             "executor failed to write active levels: %s",
             e,
         )
+
+    write_execution_state({
+        "symbol": symbol,
+        "side": side,
+        "mode": mode,
+        "sl": sl,
+        "ttp": ttp,
+        "entry_px": entry_px,
+        "best_fav": _coerce_float(terminal.get("best_fav")),
+        "ttp_trail_pct": _resolve_ttp_trail_pct(),
+        "entry_bar_ts": int(pd.Timestamp(entry_bar_ts).timestamp()) if entry_bar_ts is not None else None,
+        "terminal": terminal,
+    })
 
 
 def _renko_path() -> Path:
