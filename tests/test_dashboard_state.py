@@ -266,6 +266,34 @@ class DashboardStateTests(unittest.TestCase):
         fibo = ds.build_fibo_levels(max_points=100, _df=df)
         self.assertIn("long", fibo)
 
+    def test_trade_functions_accept_preloaded_df(self) -> None:
+        """Trade functions should accept a pre-loaded trades DataFrame."""
+        df = pd.DataFrame({
+            "trade_id": ["t1"],
+            "venue": ["kucoin"],
+            "symbol": ["SOL-USDT"],
+            "entry_ts": [pd.Timestamp("2025-01-01", tz="UTC")],
+            "exit_ts": [pd.Timestamp("2025-01-02", tz="UTC")],
+            "side": ["long"],
+            "qty": [1.0],
+            "entry_price": [100.0],
+            "exit_price": [105.0],
+            "pnl_pct": [5.0],
+            "exit_event": ["tp1"],
+        })
+
+        markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+        self.assertGreater(len(markers), 0)
+
+        segments = ds.load_trade_segments(max_points=100, _trades_df=df)
+        self.assertGreater(len(segments), 0)
+
+        diary = ds.build_trading_diary(max_points=100, _trades_df=df)
+        self.assertGreater(len(diary.get("entries", [])), 0)
+
+        equity = ds.build_equity_curve(max_points=100, _trades_df=df)
+        self.assertGreater(len(equity.get("trades", [])), 0)
+
     def test_build_trading_diary_queries_postgres_once(self) -> None:
         """build_trading_diary should only call load_closed_trades_from_postgres once."""
         call_count = 0

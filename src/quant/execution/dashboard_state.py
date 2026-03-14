@@ -371,14 +371,17 @@ def load_closed_trades_from_postgres(
     except Exception:
         return pd.DataFrame()
     
-def load_trade_markers(max_points: int = 5000) -> List[Dict[str, Any]]:
-    df = load_closed_trades_from_postgres(
-        venue="kucoin",
-        symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
-        max_points=max_points,
-    )
-    if df.empty:
-        df = _read_trades_df()
+def load_trade_markers(max_points: int = 5000, _trades_df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
+    if _trades_df is not None:
+        df = _trades_df
+    else:
+        df = load_closed_trades_from_postgres(
+            venue="kucoin",
+            symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
+            max_points=max_points,
+        )
+        if df.empty:
+            df = _read_trades_df()
     if df.empty:
         return []
     if "entry_ts" not in df.columns and "ts" in df.columns:
@@ -426,18 +429,21 @@ def load_trade_markers(max_points: int = 5000) -> List[Dict[str, Any]]:
     return markers
 
 
-def load_trade_segments(max_points: int = 2000) -> List[Dict[str, Any]]:
+def load_trade_segments(max_points: int = 2000, _trades_df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
     """
     Return entry->exit line segments for closed trades.
     Color is green for positive PnL, red for negative PnL.
     """
-    df = load_closed_trades_from_postgres(
-    venue="kucoin",
-    symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
-    max_points=max_points,
-    )
-    if df.empty:
-        df = _read_trades_df()
+    if _trades_df is not None:
+        df = _trades_df
+    else:
+        df = load_closed_trades_from_postgres(
+            venue="kucoin",
+            symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
+            max_points=max_points,
+        )
+        if df.empty:
+            df = _read_trades_df()
     if df.empty:
         return []
 
@@ -1099,22 +1105,26 @@ def _cluster_fills_df(fills: pd.DataFrame, window_sec: int = 90) -> pd.DataFrame
     return out.sort_values("time").reset_index(drop=True)
 
 
-def build_trading_diary(max_points: int = 500) -> Dict[str, Any]:
+def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
     """
     Build a normalized trading diary online from closed trades parquet;
     fallback to reconstructed closed trades from fills cache.
     """
     out: List[Dict[str, Any]] = []
 
-    df = load_closed_trades_from_postgres(
-        venue="kucoin",
-        symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
-        max_points=max_points,
-    )
-    df_source = "postgres:closed_trades"
-    if df.empty:
-        df = _read_trades_df()
-        df_source = "trades_parquet"
+    if _trades_df is not None:
+        df = _trades_df
+        df_source = "preloaded"
+    else:
+        df = load_closed_trades_from_postgres(
+            venue="kucoin",
+            symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
+            max_points=max_points,
+        )
+        df_source = "postgres:closed_trades"
+        if df.empty:
+            df = _read_trades_df()
+            df_source = "trades_parquet"
 
     if not df.empty:
         if "entry_ts" not in df.columns and "ts" in df.columns:
@@ -1353,9 +1363,9 @@ def build_regime_overlay(symbol: str, hours: int = 24 * 14) -> Dict[str, Any]:
     return {"spans": spans, "points": points, "latest": latest}
 
 
-def build_equity_curve(max_points: int = 500) -> Dict[str, Any]:
+def build_equity_curve(max_points: int = 500, _trades_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
     """Cumulative equity curve from normalized diary entries."""
-    diary = build_trading_diary(max_points=max_points)
+    diary = build_trading_diary(max_points=max_points, _trades_df=_trades_df)
     entries = diary.get("entries", [])
     cum = 0.0
     curve: List[Dict[str, Any]] = []

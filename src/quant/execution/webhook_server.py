@@ -27,6 +27,7 @@ from quant.execution.dashboard_state import (
     build_regime_overlay,
     build_regime_scores,
     load_active_levels,
+    load_closed_trades_from_postgres,
     load_fills_cache_rows,
     load_latest_expected_entry,
     load_live_fill_markers,
@@ -632,8 +633,13 @@ def api_dashboard_chart(
         return cached
     try:
         renko_df = _read_renko_df()
+        trades_df = load_closed_trades_from_postgres(
+            venue="kucoin",
+            symbol=symbol,
+            max_points=int(max(100, max_points)),
+        )
         bars = load_renko_bars(max_points=int(max(100, max_points)), _df=renko_df)
-        markers = load_trade_markers(max_points=int(max(1000, max_points * 50)))
+        markers = load_trade_markers(max_points=int(max(1000, max_points * 50)), _trades_df=trades_df)
         oldest_bar_ts = int(bars[0]["time"]) if bars else None
         markers_live = load_live_fill_markers(
             symbol=symbol,
@@ -741,7 +747,7 @@ def api_dashboard_chart(
         if len(markers) > int(max(100, max_points)):
             markers = markers[-int(max(100, max_points)):]
 
-        segments = load_trade_segments(max_points=int(max(100, max_points)))
+        segments = load_trade_segments(max_points=int(max(100, max_points)), _trades_df=trades_df)
         fibo = build_fibo_levels(max_points=int(max(100, max_points)), _df=renko_df)
         renko_health = load_renko_health(_df=renko_df)
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)))
@@ -757,7 +763,7 @@ def api_dashboard_chart(
         confidence_out = live_conf if live_conf is not None else latest.get("confidence")
 
         regime_score_data = build_regime_scores(symbol=symbol, hours=int(max(1, hours)))
-        equity = build_equity_curve(max_points=int(max(100, max_points)))
+        equity = build_equity_curve(max_points=int(max(100, max_points)), _trades_df=trades_df)
         equity_real = load_real_equity_history(max_points=int(max(100, max_points)))
         equity_kraken = load_kraken_equity_history(max_points=int(max(100, max_points)))
         kraken_metrics = load_kraken_metrics()
@@ -765,7 +771,7 @@ def api_dashboard_chart(
             kucoin_points=equity_real.get("points", []),
             kraken_points_usd=equity_kraken.get("points", []),
         )
-        diary = build_trading_diary(max_points=int(max(100, max_points)))
+        diary = build_trading_diary(max_points=int(max(100, max_points)), _trades_df=trades_df)
 
         equity_components = [
             {
