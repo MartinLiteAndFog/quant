@@ -65,6 +65,12 @@ def insert_signal_event(row: Dict[str, Any]) -> None:
     on conflict (event_id) do nothing
     """
     data = dict(row)
+    data.setdefault("strategy_instance", None)
+    data.setdefault("config_hash", data.get("strategy") or "unknown")
+    data.setdefault("source_type", None)
+    data.setdefault("qty_before", None)
+    data.setdefault("regime_on", None)
+    data.setdefault("gate_name", None)
     data["payload_json"] = _payload(data.get("payload_json"))
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, data)

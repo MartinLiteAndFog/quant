@@ -1112,10 +1112,10 @@ def _canon_symbol(sym: str) -> str:
 def _load_signals_from_postgres(symbol: str, limit: int = 10000) -> pd.DataFrame:
     """Load signal history from Postgres signal_events table.
 
-    Excludes rows with strategy='trendfollower' because historical
-    trendfollower rows may carry inverted signal direction from a
-    bug in trend_signals_from_imba() that has since been fixed.
-    Countertrend rows always have the correct raw IMBA direction.
+    Excludes strategy='trendfollower' rows to avoid duplicates: both
+    countertrend and trendfollower share the same IMBA entry direction
+    (this is intentional — they differ only in exit management).
+    Using countertrend rows alone gives the canonical signal stream.
     """
     sym = _canon_symbol(symbol)
     sql = """

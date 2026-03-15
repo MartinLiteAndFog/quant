@@ -21,9 +21,11 @@ def trend_signals_from_imba(imba_signals: pd.DataFrame) -> pd.DataFrame:
     """
     Build a trendfollower signal stream from raw IMBA signals.
 
-    The trendfollower uses the **same entry direction** as countertrend.
-    Only the exit strategy differs (TP1/TP2 instead of TTP).
-    Signal direction is NOT inverted.
+    IMPORTANT — INTENTIONAL DESIGN (confirmed 2026-03-15):
+    Both countertrend and trendfollower use the **same entry direction**
+    produced by compute_imba_signals().  The strategies differ ONLY in
+    their exit management (TTP/flip for countertrend, TP1/TP2 for
+    trendfollower).  Signal direction is deliberately NOT inverted.
     """
     if imba_signals is None or len(imba_signals) == 0:
         return pd.DataFrame(columns=["ts", "signal", "position", "source", "sl"])
