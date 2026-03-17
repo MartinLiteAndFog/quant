@@ -88,8 +88,13 @@ class KrakenFuturesClient:
                 out = r.read().decode("utf-8")
             data = json.loads(out)
         except Exception as e:
-            raise RuntimeError(f"kraken request failed path={path} err={e}") from e
-
+            err_body = None
+            try:
+                err_body = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                err_body = None
+            raise RuntimeError(f"kraken request failed path={path} err={e} body={err_body}") from e
+            
         if isinstance(data, dict) and (data.get("result") == "error" or data.get("error")):
             raise RuntimeError(f"kraken api error path={path} data={data}")
 
