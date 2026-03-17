@@ -1180,8 +1180,9 @@ def run_once(
     gate = fetch_gate(gate_url, symbol=symbol)
     sig = fetch_signal(signal_url, symbol=symbol)
     gate_on = int(gate.get("gate_on", 0) or 0)
-    signal_value = int(sig.get("signal", 0) or 0)
+    raw_signal_value = int(sig.get("signal", 0) or 0)
     signal_ts = str(sig.get("ts", "") or "")
+
     mark = client.get_mark_price()
     eq = client.get_account_equity()
     equity_usd = float(eq.get("equity_usd", 0.0) or 0.0)
@@ -1192,37 +1193,27 @@ def run_once(
     target_size = compute_target_size(equity_usd, mark, leverage, equity_pct)
 
     renko = fetch_renko(renko_url, flip_p.swing_lookback, symbol=symbol)
-    bars_df = _bars_to_dataframe(renko.get("bars", []))
-    signals_df = pd.DataFrame(
-    [{"ts": signal_ts, "signal": signal_value}]
-    if signal_value != 0 and signal_ts
-    else [],
-    columns=["ts", "signal"],
-    )
-    if not signals_df.empty:
-        signals_df["ts"] = pd.to_datetime(signals_df["ts"], utc=True, errors="coerce")
-        signals_df["signal"] = pd.to_numeric(signals_df["signal"], errors="coerce").fillna(0).astype(int).clip(-1, 1)
-        signals_df = (
-            signals_df[signals_df["signal"] != 0]
-            .dropna(subset=["ts"])
-            .drop_duplicates("ts", keep="last")
-            .sort_values("ts")
-            .reset_index(drop=True)
-        )
-    if not bars_df.empty:
-        regime_series = pd.Series(
-            np.full(len(bars_df), bool(gate_on), dtype=bool),
-            index=pd.DatetimeIndex(bars_df["ts"]),
-            )
-    else:
-        regime_series = None
 
-    shared_params = _build_shared_flip_params()
+    signal_value = raw_signal_value
+    if signal_ts and signal_ts == state.last_signal_ts:
+        signal_value = 0
+
+    state = reconcile_state_with_venue(
+        state=state,
+        venue_pos_raw=venue_pos_raw,
+        gate_on=gate_on,
+        mark=mark,
+    )
+
+    old_state = BotState(**asdict(state))
+    new_state = BotState(**asdict(state))
+    new_state.gate_on = gate_on
+    new_state.engine = "flip"
+
+    actions: List[Dict[str, Any]] = []
+
     if gate_on != int(state.gate_on) and current_venue_side != 0:
         actions = [{"action": "close_all", "reason": "gate_change_flatten"}]
-        new_state = BotState(**asdict(state))
-        new_state.gate_on = gate_on
-        new_state.engine = "flip"
         new_state.pos_side = 0
         new_state.entry_px = 0.0
         new_state.best_fav = 0.0
@@ -1230,239 +1221,233 @@ def run_once(
         new_state.size_rem = 0.0
         new_state.tp1_done = False
         new_state.mode = "FLAT"
-
-        preview_pos = int(current_venue_side)
-        preview_mode_before = str(state.mode)
-        preview_mode_after = str(new_state.mode)
     else:
-        state.gate_on = gate_on
+        if signal_value == 0:
+            new_state.pos_side = int(current_venue_side)
+            new_state.size_full = float(current_venue_size or 0.0)
+            new_state.size_rem = float(current_venue_size or 0.0)
+            if current_venue_side == 0:
+                new_state.mode = "FLAT"
+                new_state.entry_px = 0.0
+                new_state.best_fav = 0.0
+                new_state.tp1_done = False
+            else:
+                new_state.mode = "FLIP_WAIT"
+                if float(new_state.entry_px or 0.0) <= 0:
+                    new_state.entry_px = float(mark)
+                if float(new_state.best_fav or 0.0) <= 0:
+                    new_state.best_fav = float(mark)
 
-        terminal: Dict[str, Any] = {}
-        terminal_pos = 0
-        terminal_mode = None
-        terminal_entry_px = None
-        terminal_best_fav = None
-        terminal_sl = None
-        terminal_ttp = None
+        elif signal_value > 0:
+            if current_venue_side < 0:
+                actions.append({"action": "close_all", "reason": "signal_flip_to_long"})
+            if current_venue_side <= 0 and target_size > 0:
+                actions.append({"action": "enter_long", "side": "buy", "size": target_size})
 
-        if not bars_df.empty and not signals_df.empty:
-            _, _, terminal = run_flip_state_machine(
-                bars=bars_df,
-                signals_df=signals_df,
-                params=shared_params,
-                regime_on=regime_series,
-                regime_forces_flat=True,
-            )
-            terminal_pos = int(terminal.get("pos", 0))
-            terminal_mode = terminal.get("mode")
-            terminal_entry_px = terminal.get("entry_px")
-            terminal_best_fav = terminal.get("best_fav")
-            terminal_sl = terminal.get("sl")
-            terminal_ttp = terminal.get("ttp")
-            log.info(
-                "flip_engine terminal: pos=%d mode=%s entry=%.4f sl=%s ttp=%s bars=%d signals=%d",
-                terminal_pos,
-                terminal_mode,
-                float(terminal_entry_px or 0),
-                terminal_sl,
-                terminal_ttp,
-                len(bars_df),
-                len(signals_df),
-            )
+            if current_venue_side > 0:
+                new_state.pos_side = 1
+                new_state.size_full = float(current_venue_size or 0.0)
+                new_state.size_rem = float(current_venue_size or 0.0)
+                new_state.entry_px = float(new_state.entry_px or mark)
+                new_state.best_fav = float(max(float(new_state.best_fav or mark), float(mark)))
+            elif target_size > 0:
+                new_state.pos_side = 1
+                new_state.size_full = float(target_size)
+                new_state.size_rem = float(target_size)
+                new_state.entry_px = float(mark)
+                new_state.best_fav = float(mark)
+            else:
+                new_state.pos_side = 0
+                new_state.size_full = 0.0
+                new_state.size_rem = 0.0
+                new_state.entry_px = 0.0
+                new_state.best_fav = 0.0
+
+            new_state.tp1_done = False
+            new_state.mode = "FLIP_WAIT" if new_state.pos_side != 0 else "FLAT"
+
         else:
-            log.warning(
-                "flip_engine skipped: bars=%d signals=%d — holding current position",
-                len(bars_df), len(signals_df),
-            )
-            terminal_pos = current_venue_side
+            if current_venue_side > 0:
+                actions.append({"action": "close_all", "reason": "signal_flip_to_short"})
+            if current_venue_side >= 0 and target_size > 0:
+                actions.append({"action": "enter_short", "side": "sell", "size": target_size})
 
-        actions = _terminal_to_actions(terminal_pos, current_venue_side, target_size, mark)
+            if current_venue_side < 0:
+                new_state.pos_side = -1
+                new_state.size_full = float(current_venue_size or 0.0)
+                new_state.size_rem = float(current_venue_size or 0.0)
+                new_state.entry_px = float(new_state.entry_px or mark)
+                new_state.best_fav = float(min(float(new_state.best_fav or mark), float(mark)))
+            elif target_size > 0:
+                new_state.pos_side = -1
+                new_state.size_full = float(target_size)
+                new_state.size_rem = float(target_size)
+                new_state.entry_px = float(mark)
+                new_state.best_fav = float(mark)
+            else:
+                new_state.pos_side = 0
+                new_state.size_full = 0.0
+                new_state.size_rem = 0.0
+                new_state.entry_px = 0.0
+                new_state.best_fav = 0.0
 
-        new_state = BotState(**asdict(state))
-        new_state.gate_on = gate["gate_on"]
-        new_state.engine = "flip"
-        new_state.pos_side = terminal_pos
-        new_state.entry_px = float(terminal_entry_px or 0.0)
-        new_state.best_fav = float(terminal_best_fav or 0.0)
-        new_state.size_full = target_size if terminal_pos != 0 else 0.0
-        new_state.size_rem = target_size if terminal_pos != 0 else 0.0
-        new_state.tp1_done = False
+            new_state.tp1_done = False
+            new_state.mode = "FLIP_WAIT" if new_state.pos_side != 0 else "FLAT"
 
-        if terminal_mode == "TTP":
-            new_state.mode = "FLIP_TTP"
-        elif terminal_mode == "WAIT":
-            new_state.mode = "FLIP_WAIT"
-        else:
-            new_state.mode = "FLAT"
+    preview_pos = int(current_venue_side)
+    preview_mode_before = str(old_state.mode)
+    preview_mode_after = str(new_state.mode)
 
-        preview_pos = int(current_venue_side)
-        preview_mode_before = str(state.mode)
-        preview_mode_after = str(new_state.mode)
-
-    for idx, a in enumerate(actions, start=1):
+    for a in actions:
         new_state.event_seq += 1
         act = str(a.get("action", "") or "unknown")
         reason_code = str(a.get("reason", "") or "bot_action_missing_reason")
 
         if act == "close_all":
-            action_side = "flat"
-            preview_after = 0
-        elif act == "enter_long":
-            action_side = "long"
-            preview_after = 1
-        elif act == "enter_short":
-            action_side = "short"
-            preview_after = -1
-        else:
-            action_side = "flat"
-            preview_after = preview_pos
+            pos_before = int(preview_pos)
+            pos_after = 0
+            side = "sell" if pos_before > 0 else "buy" if pos_before < 0 else ""
+            _append_action_event(
+                strategy="kraken_bot",
+                symbol=symbol,
+                ts_iso=_now_iso(),
+                seq=int(new_state.event_seq),
+                engine_action="close_all",
+                action_side=side,
+                reason_code=reason_code,
+                position_before=pos_before,
+                position_after=pos_after,
+                engine_mode_before=preview_mode_before,
+                engine_mode_after=preview_mode_after,
+                source_signal_ts=signal_ts,
+                payload_json={"signal": signal_value, "gate_on": gate_on, "mark": mark, **a},
+            )
+            preview_pos = 0
 
-        _append_action_event(
-            strategy=str(new_state.engine),
-            symbol=_canon_symbol(symbol),
-            ts_iso=_now_iso(),
-            seq=int(new_state.event_seq),
-            engine_action=act,
-            action_side=action_side,
-            reason_code=reason_code,
-            position_before=int(preview_pos),
-            position_after=int(preview_after),
-            engine_mode_before=preview_mode_before,
-            engine_mode_after=preview_mode_after,
-            source_signal_ts=str(sig.get("ts", "") or ""),
-            blocked=False,
-            block_reason=None,
-            payload_json=dict(a),
+        elif act in ("enter_long", "enter_short"):
+            pos_before = int(preview_pos)
+            pos_after = 1 if act == "enter_long" else -1
+            side = "buy" if pos_after > 0 else "sell"
+            _append_action_event(
+                strategy="kraken_bot",
+                symbol=symbol,
+                ts_iso=_now_iso(),
+                seq=int(new_state.event_seq),
+                engine_action=act,
+                action_side=side,
+                reason_code=reason_code,
+                position_before=pos_before,
+                position_after=pos_after,
+                engine_mode_before=preview_mode_before,
+                engine_mode_after=preview_mode_after,
+                source_signal_ts=signal_ts,
+                payload_json={"signal": signal_value, "gate_on": gate_on, "mark": mark, **a},
+            )
+            preview_pos = pos_after
+
+        elif act == "close_partial":
+            pos_before = int(preview_pos)
+            pos_after = int(preview_pos)
+            side = str(a.get("close_side", "") or "")
+            _append_action_event(
+                strategy="kraken_bot",
+                symbol=symbol,
+                ts_iso=_now_iso(),
+                seq=int(new_state.event_seq),
+                engine_action="close_partial",
+                action_side=side,
+                reason_code=reason_code,
+                position_before=pos_before,
+                position_after=pos_after,
+                engine_mode_before=preview_mode_before,
+                engine_mode_after=preview_mode_after,
+                source_signal_ts=signal_ts,
+                payload_json={"signal": signal_value, "gate_on": gate_on, "mark": mark, **a},
+            )
+
+    if actions:
+        exec_res = execute_actions(
+            client=client,
+            actions=actions,
+            dry_run=dry_run,
         )
+        if isinstance(exec_res, list):
+            for item in exec_res:
+                if not isinstance(item, dict):
+                    continue
+                new_state.event_seq += 1
+                _append_execution_event(
+                    strategy="kraken_bot",
+                    symbol=symbol,
+                    ts_iso=_now_iso(),
+                    seq=int(new_state.event_seq),
+                    execution_kind=str(item.get("execution_kind", "fill") or "fill"),
+                    order_action=str(item.get("order_action", "") or ""),
+                    reason_code=str(item.get("reason_code", "kraken_exec") or "kraken_exec"),
+                    position_before=int(item.get("position_before", current_venue_side) or 0),
+                    position_after=int(item.get("position_after", current_venue_side) or 0),
+                    source_signal_ts=signal_ts,
+                )
 
-        preview_pos = preview_after
-
-    action_results = execute_actions(client, actions, dry_run=dry_run, equity_pct=equity_pct, leverage=leverage)
-
-    for res in action_results:
-        if not res.get("executed"):
-            continue
-
-        new_state.event_seq += 1
-
-        act = str(res.get("action", "") or "")
-        reason_code = str(res.get("reason", "") or "manual_action")
-
-        if act == "close_all":
-            order_action = "sell" if current_venue_side > 0 else "buy" if current_venue_side < 0 else "flat"
-            position_after = 0
-        elif act == "enter_long":
-            order_action = "buy"
-            position_after = 1
-        elif act == "enter_short":
-            order_action = "sell"
-            position_after = -1
-        else:
-            order_action = act or "unknown"
-            position_after = int(new_state.pos_side)
-
-        _append_execution_event(
-            strategy=str(new_state.engine),
-            symbol=_canon_symbol(symbol),
-            ts_iso=_now_iso(),
-            seq=int(new_state.event_seq),
-            execution_kind="fill",
-            order_action=order_action,
-            reason_code=reason_code,
-            position_before=int(current_venue_side),
-            position_after=int(position_after),
-            source_signal_ts=str(sig.get("ts", "") or ""),
-        )
-
-    post_venue_pos_raw = client.get_position()
-    venue_side, venue_size = _normalize_venue_position(post_venue_pos_raw)
-
-    desired_stop = terminal_sl or terminal_ttp
-    stop_sync = _sync_protective_stop_from_terminal(
+    stop_res = _sync_protective_stop(
         client=client,
-        pos_side=terminal_pos,
-        size_rem=venue_size,
-        stop_price=desired_stop,
-        mode=new_state.mode,
+        state=new_state,
+        renko=renko,
+        flip_p=flip_p,
+        tp2_p=tp2_p,
         dry_run=dry_run,
     )
 
-    save_state(new_state, state_path)
-
-    ts = _now_iso()
-    row = {
-        "ts": ts,
-        "equity_usd": equity_usd,
-        "wallet_usd": float(eq.get("wallet_usd", 0.0) or 0.0),
-        "upnl_usd": float(eq.get("upnl_usd", 0.0) or 0.0),
-        "mark_price": round(mark, 4),
-        "target_size": target_size,
-        "gate_on": gate["gate_on"],
-        "gate_source": gate.get("source", "?"),
-        "engine": new_state.engine,
-        "mode": new_state.mode,
-        "pos_side": new_state.pos_side,
-        "entry_px": round(new_state.entry_px, 4),
-        "best_fav": round(new_state.best_fav, 4),
-        "size_rem": round(new_state.size_rem, 6),
-        "tp1_done": new_state.tp1_done,
-        "signal": sig["signal"],
-        "signal_ts": sig["ts"],
-        "venue_pos_side": venue_side,
-        "venue_pos_size": round(venue_size, 6),
-        "actions": [a.get("action", "") + ":" + a.get("reason", "") for a in actions],
-        "action_results": action_results,
-        "stop_sync": stop_sync,
-        "dry_run": dry_run,
-    }
-    _publish_metrics(metrics_path, row)
-    _append_equity(equity_path, ts=ts, equity_usd=float(row["equity_usd"]))
+    _append_equity(equity_path, ts=_now_iso(), equity_usd=equity_usd)
     try:
         insert_equity_snapshot(
             {
-                "ts": pd.Timestamp(ts),
+                "ts": _now_iso(),
+                "strategy": "kraken_bot",
+                "symbol": symbol,
                 "venue": "kraken",
-                "account": "main",
-                "symbol": None,
-                "equity": float(row["equity_usd"]),
-                "currency": "USD",
-                "source": "kraken_bot",
+                "equity": float(equity_usd),
+                "cash": None,
+                "position_qty": float(new_state.size_rem or 0.0),
+                "position_side": int(new_state.pos_side),
                 "payload_json": {
-                    "ts": ts,
-                    "equity_usd": float(row["equity_usd"]),
-                    "mark_price": float(row.get("mark_price", 0.0) or 0.0),
-                    "pos_side": int(row.get("pos_side", 0) or 0),
-                    "venue_pos_size": float(row.get("venue_pos_size", 0.0) or 0.0),
+                    "mark": float(mark),
+                    "gate_on": int(gate_on),
+                    "signal": int(signal_value),
+                    "signal_ts": signal_ts,
+                    "stop_sync": stop_res,
                 },
             }
         )
     except Exception as e:
         log.warning("kraken postgres equity snapshot failed: %s", e)
 
-    try:
-        redis_url = os.getenv("REDIS_URL", "").strip()
-        if redis_url:
-            import redis as redis_lib
-            r = redis_lib.from_url(redis_url, decode_responses=True)
-            r.set("kraken:metrics:latest", json.dumps(row, separators=(",", ":")))
-            r.set(
-                "kraken:equity:latest",
-                json.dumps({"ts": ts, "equity_usd": float(row["equity_usd"])}, separators=(",", ":")),
-            )
-    except Exception as e:
-        log.warning("kraken redis publish failed: %s", e)
-
-    side_str = {1: "long", -1: "short", 0: "flat"}.get(new_state.pos_side, "?")
-    venue_side_str = {1: "long", -1: "short", 0: "flat"}.get(venue_side, "?")
-    action_str = ", ".join(a.get("action", "") + ":" + a.get("reason", "") for a in actions) or "hold"
-    log.info(
-        "bot ts=%s gate=%s engine=%s mode=%s pos=%s/%s venue=%s/%s entry=%.2f mark=%.2f sig=%s action=[%s]",
-        ts, gate["gate_on"], new_state.engine, new_state.mode,
-        side_str, round(new_state.size_rem, 4),
-        venue_side_str, round(venue_size, 4),
-        new_state.entry_px, mark,
-        sig["signal"], action_str,
+    _publish_metrics(
+        metrics_path,
+        {
+            "ts": _now_iso(),
+            "symbol": symbol,
+            "gate_on": gate_on,
+            "signal": signal_value,
+            "signal_ts": signal_ts,
+            "mark": float(mark),
+            "equity_usd": float(equity_usd),
+            "target_size": float(target_size),
+            "venue_side": int(current_venue_side),
+            "venue_size": float(current_venue_size),
+            "state_mode_before": old_state.mode,
+            "state_mode_after": new_state.mode,
+            "state_pos_after": int(new_state.pos_side),
+            "actions": actions,
+            "stop_sync": stop_res,
+        },
     )
+
+    if signal_ts and raw_signal_value != 0:
+        new_state.last_signal_ts = signal_ts
+        new_state.last_signal_value = raw_signal_value
+
+    save_state(new_state, state_path)
     return new_state
 
 
