@@ -647,10 +647,6 @@ def run_once(
     swing_low = float(renko.get("swing_low", 0.0) or 0.0)
     swing_high = float(renko.get("swing_high", 0.0) or 0.0)
 
-    gate_on = int(gate.get("gate_on", 0) or 0)
-    signal_value = int(sig.get("signal", 0) or 0)
-    signal_ts = str(sig.get("ts", "") or "")
-
     if signal_ts and signal_ts == state.last_signal_ts:
         signal_value = 0
 
@@ -1180,6 +1176,9 @@ def run_once(
 ) -> BotState:
     gate = fetch_gate(gate_url, symbol=symbol)
     sig = fetch_signal(signal_url, symbol=symbol)
+    gate_on = int(gate.get("gate_on", 0) or 0)
+    signal_value = int(sig.get("signal", 0) or 0)
+    signal_ts = str(sig.get("ts", "") or "")
     mark = client.get_mark_price()
     eq = client.get_account_equity()
     equity_usd = float(eq.get("equity_usd", 0.0) or 0.0)
