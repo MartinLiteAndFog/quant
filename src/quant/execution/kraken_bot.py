@@ -1102,13 +1102,16 @@ def _canon_symbol(sym: str) -> str:
 
 
 
-def _build_shared_flip_params() -> FlipParams:
+def _build_shared_flip_params() -> SharedFlipParams:
     """Build FlipParams for the shared flip engine from Kraken env vars."""
-    return FlipParams(
+    return SharedFlipParams(
+        fee_bps=float(os.getenv("KRAKEN_FLIP_FEE_BPS", "0")),
         ttp_trail_pct=float(os.getenv("KRAKEN_TTP_TRAIL_PCT", "0.012")),
         min_sl_pct=float(os.getenv("KRAKEN_FLIP_MIN_SL_PCT", "0.015")),
         max_sl_pct=float(os.getenv("KRAKEN_FLIP_MAX_SL_PCT", "0.030")),
         swing_lookback=min(int(os.getenv("KRAKEN_FLIP_SWING_LOOKBACK", "50")), 50),
+        be_trigger_pct=float(os.getenv("KRAKEN_BE_TRIGGER_PCT", "0")),
+        be_offset_pct=float(os.getenv("KRAKEN_BE_OFFSET_PCT", "0")),
     )
 
 
