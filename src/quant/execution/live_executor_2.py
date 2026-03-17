@@ -748,7 +748,7 @@ def _verify_execution_fill_ratio(
             ratio,
             min_ratio,
         )
-
+        
 
 def _sync_kraken_stop_loss(
     *,
@@ -1386,6 +1386,15 @@ def run_once(
             target_side=target_side_for_verify,
             target_qty=float(target_qty_for_verify),
             min_ratio=float(os.getenv("LIVE_EXECUTOR_MIN_FILL_RATIO", "0.95")),
+        )
+
+        log.info(
+            "pre-sl-sync symbol=%s action=%s terminal_pos=%s terminal=%s dry_run=%s",
+            symbol,
+            action,
+            terminal_pos,
+            terminal,
+            dry_run,
         )
 
         _sync_kraken_stop_loss(
