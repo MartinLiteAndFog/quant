@@ -667,6 +667,50 @@ def _resolve_contract_multiplier(broker: KrakenOmsBroker, symbol: str) -> float:
         pass
     return 1.0
 
+
+def _kraken_strict_flatten_for_flip(*, broker: KrakenOmsBroker, symbol: str, current_side: str, qty: float) -> tuple[dict, float]:
+    try:
+        broker.client.cancel_all_reduce_only_orders(symbol=broker._symbol(symbol))
+    except Exception as e:
+        log.warning("executor flip cancel reduce-only failed: %s", e)
+
+    try:
+        close_raw = broker.client.close_position(symbol=broker._symbol(symbol))
+        close_data = close_raw.get("data") if isinstance(close_raw, dict) else None
+        flat_res = {
+            "ok": bool(isinstance(close_raw, dict) and close_raw.get("ok", False)),
+            "mode": "KRAKEN_CLOSE_POSITION",
+            "details": {
+                "symbol": symbol,
+                "side": "sell" if current_side == "long" else "buy",
+                "qty": abs(float(qty)),
+                "order_id": ((close_data or {}).get("sendStatus") or {}).get("order_id") if isinstance(close_data, dict) else None,
+                "client_id": ((close_data or {}).get("sendStatus") or {}).get("cliOrdId") if isinstance(close_data, dict) else None,
+                "kind": "market",
+                "raw": close_raw,
+            },
+        }
+    except Exception as e:
+        flat_res = {
+            "ok": False,
+            "mode": "KRAKEN_CLOSE_POSITION_ERR",
+            "details": {
+                "symbol": symbol,
+                "side": "sell" if current_side == "long" else "buy",
+                "qty": abs(float(qty)),
+                "error": str(e),
+            },
+        }
+        return flat_res, float(broker.get_position(symbol)) if True else 0.0
+
+    pos_after_flat = float(broker.get_position(symbol))
+    if abs(pos_after_flat) > 1e-12:
+        t0 = time.time()
+        while (time.time() - t0) < 5.0 and abs(pos_after_flat) > 1e-12:
+            time.sleep(0.25)
+            pos_after_flat = float(broker.get_position(symbol))
+    return flat_res, pos_after_flat
+
 def _verify_execution_fill_ratio(
     *,
     broker: KrakenOmsBroker,
@@ -1233,7 +1277,12 @@ def run_once(
                 )
 
         elif action.startswith("flip_to_") and want_side is not None:
-            flat_res = oms.exit_tp_or_flip(symbol=symbol, side=current_side, qty=abs(float(pos)), flip_to=None)
+            flat_res, pos_after_flat = _kraken_strict_flatten_for_flip(
+                broker=broker,
+                symbol=symbol,
+                current_side=current_side,
+                qty=abs(float(pos)),
+            )
             log.info("executor flip flatten result=%s", flat_res)
 
             if _ok(flat_res):
@@ -1260,7 +1309,6 @@ def run_once(
                     payload_json={"action": "flip_flatten", "result": flat_details, "event_name": event_name},
                 )
 
-                pos_after_flat = float(broker.get_position(symbol))
                 if abs(pos_after_flat) > 1e-12:
                     log.warning("executor flip aborted: not flat after flatten pos_after=%s", pos_after_flat)
                 else:
