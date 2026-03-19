@@ -20,15 +20,15 @@ interface PriceChartProps {
   bars: ChartBar[];
   markers?: ChartMarker[];
   segments?: ChartSegment[];
-  levels?: ChartLevels | Record<string, never>;
+  levels?: ChartLevels;
   ttpTrailPct?: number;
   fibo?: ChartFibo;
   livePrice?: number | null;
 }
 
 const CHART_BG = "#09090b";
-const CHART_TEXT = "#a1a1aa";
-const CHART_GRID = "#27272a";
+const CHART_TEXT = "#71717a";
+const CHART_GRID = "rgba(63, 63, 70, 0.18)";
 const CANDLE_UP = "#22c55e";
 const CANDLE_DOWN = "#ef4444";
 
@@ -42,11 +42,7 @@ function parseTs(v: string | number | undefined | null): number | null {
   return Math.floor(d.getTime() / 1000);
 }
 
-/**
- * Extract flat level values from the API response, which nests the
- * actual values under `levels.terminal.*`.
- */
-function resolveLevels(raw: ChartLevels | Record<string, never>): {
+function resolveLevels(raw: ChartLevels | undefined): {
   entry_px: number | undefined;
   entry_bar_ts: number | undefined;
   side: string;
@@ -56,18 +52,28 @@ function resolveLevels(raw: ChartLevels | Record<string, never>): {
   tp2: number | undefined;
   mode: string;
 } {
-  const t = (raw as ChartLevels).terminal;
-  const entry_px = t?.entry_px ?? (raw as ChartLevels).entry_px;
-  const entry_bar_ts_raw = t?.entry_bar_ts ?? (raw as ChartLevels).entry_bar_ts;
+  const t = raw?.terminal;
+  const entry_px = t?.entry_px ?? raw?.entry_px;
+  const entry_bar_ts_raw = t?.entry_bar_ts ?? raw?.entry_bar_ts;
   const entry_bar_ts = parseTs(entry_bar_ts_raw) ?? undefined;
-  const side = (t?.side ?? (raw as ChartLevels).side ?? "").toLowerCase();
-  const sl_raw = t?.sl ?? (raw as ChartLevels).sl;
+  const side = (t?.side ?? raw?.side ?? "").toLowerCase();
+  const sl_raw = t?.sl ?? raw?.sl;
   const sl = sl_raw != null ? Number(sl_raw) : undefined;
-  const ttp = t?.ttp ?? (raw as ChartLevels).ttp;
-  const tp1 = (raw as ChartLevels).tp1;
-  const tp2 = (raw as ChartLevels).tp2;
-  const mode = t?.mode ?? (raw as ChartLevels).mode ?? "";
-  return { entry_px, entry_bar_ts, side, sl: sl && isFinite(sl) ? sl : undefined, ttp, tp1, tp2, mode };
+  const ttp = t?.ttp ?? raw?.ttp;
+  const tp1 = raw?.tp1;
+  const tp2 = raw?.tp2;
+  const mode = t?.mode ?? raw?.mode ?? "";
+
+  return {
+    entry_px,
+    entry_bar_ts,
+    side,
+    sl: sl != null && isFinite(sl) ? sl : undefined,
+    ttp,
+    tp1,
+    tp2,
+    mode,
+  };
 }
 
 function buildTTPTrail(
@@ -75,7 +81,7 @@ function buildTTPTrail(
   entryPx: number,
   side: string,
   entryT: number,
-  trailPct: number,
+  trailPct: number
 ): LinePoint[] {
   const isLong = side === "long" || side === "l" || side === "1";
   const trail = trailPct > 0 ? trailPct : 0.012;
@@ -90,29 +96,40 @@ function buildTTPTrail(
 
   let bestFav = entryPx;
   const points: LinePoint[] = [];
+
   for (let i = startIdx; i < bars.length; i++) {
     const h = bars[i].high ?? bars[i].close;
     const l = bars[i].low ?? bars[i].close;
+
     if (isLong) {
       bestFav = Math.max(bestFav, h);
-      points.push({ time: bars[i].time as UTCTimestamp, value: bestFav * (1 - trail) });
+      points.push({
+        time: bars[i].time as UTCTimestamp,
+        value: bestFav * (1 - trail),
+      });
     } else {
       bestFav = Math.min(bestFav, l);
-      points.push({ time: bars[i].time as UTCTimestamp, value: bestFav * (1 + trail) });
+      points.push({
+        time: bars[i].time as UTCTimestamp,
+        value: bestFav * (1 + trail),
+      });
     }
   }
+
   return points;
 }
 
 function levelLineFromEntry(
   bars: ChartBar[],
   level: number | undefined,
-  entryTs: number | undefined,
+  entryTs: number | undefined
 ): LinePoint[] {
   if (!bars.length || level == null || !isFinite(level)) return [];
+
   let first = bars[0].time;
   if (entryTs != null) first = entryTs;
   const last = bars[bars.length - 1].time;
+
   return [
     { time: first as UTCTimestamp, value: level },
     { time: last as UTCTimestamp, value: level },
@@ -121,8 +138,10 @@ function levelLineFromEntry(
 
 function fiboToPoints(points: FiboLine[] | undefined): LinePoint[] {
   if (!points?.length) return [];
+
   const seen = new Set<number>();
   const out: LinePoint[] = [];
+
   for (const p of points) {
     if (p.time == null || p.value == null || !isFinite(p.value)) continue;
     const t = Number(p.time);
@@ -130,6 +149,7 @@ function fiboToPoints(points: FiboLine[] | undefined): LinePoint[] {
     seen.add(t);
     out.push({ time: t as UTCTimestamp, value: p.value });
   }
+
   return out;
 }
 
@@ -137,7 +157,7 @@ export default function PriceChart({
   bars,
   markers = [],
   segments = [],
-  levels = {},
+  levels,
   ttpTrailPct = 0.012,
   fibo,
   livePrice,
@@ -150,18 +170,35 @@ export default function PriceChart({
 
   useEffect(() => {
     if (!containerRef.current) return;
+
     const chart = createChart(containerRef.current, {
       layout: {
         background: { type: ColorType.Solid, color: CHART_BG },
         textColor: CHART_TEXT,
       },
       grid: {
-        vertLines: { color: CHART_GRID },
-        horzLines: { color: CHART_GRID },
+        vertLines: { color: CHART_GRID, visible: true },
+        horzLines: { color: CHART_GRID, visible: true },
       },
       autoSize: true,
-      timeScale: { timeVisible: true },
+      timeScale: {
+        timeVisible: true,
+        borderVisible: false,
+        ticksVisible: false,
+      },
+      rightPriceScale: {
+        borderVisible: false,
+        scaleMargins: { top: 0.08, bottom: 0.08 },
+      },
+      leftPriceScale: {
+        visible: false,
+      },
+      crosshair: {
+        vertLine: { visible: false },
+        horzLine: { visible: false },
+      },
     });
+
     const candlestickSeries = chart.addCandlestickSeries({
       upColor: CANDLE_UP,
       downColor: CANDLE_DOWN,
@@ -170,8 +207,10 @@ export default function PriceChart({
       wickUpColor: CANDLE_UP,
       wickDownColor: CANDLE_DOWN,
     });
+
     chartRef.current = chart;
     candlestickRef.current = candlestickSeries;
+
     return () => {
       chart.remove();
       chartRef.current = null;
@@ -186,7 +225,6 @@ export default function PriceChart({
     const candlestickSeries = candlestickRef.current;
     if (!chart || !candlestickSeries) return;
 
-    // Candles
     const candlestickData = bars.map((b) => ({
       time: b.time as UTCTimestamp,
       open: b.open,
@@ -194,6 +232,7 @@ export default function PriceChart({
       low: b.low,
       close: b.close,
     }));
+
     candlestickSeries.setData(candlestickData);
 
     if (candlestickData.length > 0 && !fittedRef.current) {
@@ -201,7 +240,6 @@ export default function PriceChart({
       fittedRef.current = true;
     }
 
-    // Markers
     candlestickSeries.setMarkers(
       markers.map((m) => ({
         time: m.time as UTCTimestamp,
@@ -209,73 +247,121 @@ export default function PriceChart({
         shape: m.shape as "arrowUp" | "arrowDown" | "circle" | "square",
         color: m.color,
         text: m.text,
-      })),
+      }))
     );
 
-    // Clear old overlays
     for (const s of overlaySeriesRef.current) {
-      try { chart.removeSeries(s); } catch { /* already removed */ }
+      try {
+        chart.removeSeries(s);
+      } catch {
+        // already removed
+      }
     }
     overlaySeriesRef.current = [];
 
     const lvl = resolveLevels(levels);
 
-    // SL
     const slData = levelLineFromEntry(bars, lvl.sl, lvl.entry_bar_ts);
     if (slData.length) {
-      const s = chart.addLineSeries({ color: "#f7768e", lineWidth: 2, title: "SL", lastValueVisible: true, priceLineVisible: false });
+      const s = chart.addLineSeries({
+        color: "#f7768e",
+        lineWidth: 2,
+        title: "SL",
+        lastValueVisible: true,
+        priceLineVisible: false,
+      });
       s.setData(slData);
       overlaySeriesRef.current.push(s);
     }
 
-    // TTP trailing line
     if (lvl.entry_px && lvl.side && lvl.entry_bar_ts) {
-      const ttpData = buildTTPTrail(bars, lvl.entry_px, lvl.side, lvl.entry_bar_ts, ttpTrailPct);
+      const ttpData = buildTTPTrail(
+        bars,
+        lvl.entry_px,
+        lvl.side,
+        lvl.entry_bar_ts,
+        ttpTrailPct
+      );
       if (ttpData.length) {
-        const s = chart.addLineSeries({ color: "#e0af68", lineWidth: 2, lineStyle: LineStyle.Dashed, title: "TTP", lastValueVisible: true, priceLineVisible: false });
+        const s = chart.addLineSeries({
+          color: "#e0af68",
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          title: "TTP",
+          lastValueVisible: true,
+          priceLineVisible: false,
+        });
         s.setData(ttpData);
         overlaySeriesRef.current.push(s);
       }
     } else if (lvl.ttp != null) {
       const ttpStatic = levelLineFromEntry(bars, lvl.ttp, lvl.entry_bar_ts);
       if (ttpStatic.length) {
-        const s = chart.addLineSeries({ color: "#e0af68", lineWidth: 2, lineStyle: LineStyle.Dashed, title: "TTP", lastValueVisible: true, priceLineVisible: false });
+        const s = chart.addLineSeries({
+          color: "#e0af68",
+          lineWidth: 2,
+          lineStyle: LineStyle.Dashed,
+          title: "TTP",
+          lastValueVisible: true,
+          priceLineVisible: false,
+        });
         s.setData(ttpStatic);
         overlaySeriesRef.current.push(s);
       }
     }
 
-    // Entry
     const entryData = levelLineFromEntry(bars, lvl.entry_px, lvl.entry_bar_ts);
     if (entryData.length) {
-      const s = chart.addLineSeries({ color: "#ffffff", lineWidth: 1, lineStyle: LineStyle.Dashed, title: "Entry", lastValueVisible: true, priceLineVisible: false });
+      const s = chart.addLineSeries({
+        color: "#ffffff",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        title: "Entry",
+        lastValueVisible: true,
+        priceLineVisible: false,
+      });
       s.setData(entryData);
       overlaySeriesRef.current.push(s);
     }
 
-    // TP1
     const tp1Data = levelLineFromEntry(bars, lvl.tp1, lvl.entry_bar_ts);
     if (tp1Data.length) {
-      const s = chart.addLineSeries({ color: "#7aa2f7", lineWidth: 2, title: "TP1", lastValueVisible: true, priceLineVisible: false });
+      const s = chart.addLineSeries({
+        color: "#7aa2f7",
+        lineWidth: 2,
+        title: "TP1",
+        lastValueVisible: true,
+        priceLineVisible: false,
+      });
       s.setData(tp1Data);
       overlaySeriesRef.current.push(s);
     }
 
-    // TP2
     const tp2Data = levelLineFromEntry(bars, lvl.tp2, lvl.entry_bar_ts);
     if (tp2Data.length) {
-      const s = chart.addLineSeries({ color: "#bb9af7", lineWidth: 2, title: "TP2", lastValueVisible: true, priceLineVisible: false });
+      const s = chart.addLineSeries({
+        color: "#bb9af7",
+        lineWidth: 2,
+        title: "TP2",
+        lastValueVisible: true,
+        priceLineVisible: false,
+      });
       s.setData(tp2Data);
       overlaySeriesRef.current.push(s);
     }
 
-    // Fibonacci lines
     if (fibo) {
-      const configs: { key: "long" | "mid" | "short"; color: string; width: number; style?: number }[] = [
+      const configs: {
+        key: "long" | "mid" | "short";
+        color: string;
+        width: number;
+        style?: number;
+      }[] = [
         { key: "long", color: "#2ecc71", width: 2 },
         { key: "mid", color: "#ffffff", width: 1, style: LineStyle.Dashed },
         { key: "short", color: "#f7768e", width: 2 },
       ];
+
       for (const cfg of configs) {
         const pts = fiboToPoints(fibo[cfg.key]);
         if (pts.length >= 2) {
@@ -293,7 +379,6 @@ export default function PriceChart({
       }
     }
 
-    // Live price line
     if (livePrice != null && isFinite(livePrice) && bars.length >= 2) {
       const s = chart.addLineSeries({
         color: "#9aa5b1",
@@ -310,7 +395,6 @@ export default function PriceChart({
       overlaySeriesRef.current.push(s);
     }
 
-    // Trade segments
     for (const seg of segments) {
       const s = chart.addLineSeries({
         color: seg.color,
@@ -327,5 +411,5 @@ export default function PriceChart({
     }
   }, [bars, markers, segments, levels, ttpTrailPct, fibo, livePrice]);
 
-  return <div ref={containerRef} className="h-[500px] w-full" />;
+  return <div ref={containerRef} className="h-full w-full" />;
 }

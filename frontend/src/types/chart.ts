@@ -1,11 +1,3 @@
-/**
- * TypeScript types for the trading dashboard API responses.
- */
-
-// ---------------------------------------------------------------------------
-// Chart API (/api/dashboard/chart)
-// ---------------------------------------------------------------------------
-
 export interface ChartBar {
   time: number;
   open: number;
@@ -16,7 +8,7 @@ export interface ChartBar {
 
 export interface ChartMarker {
   time: number;
-  position: "aboveBar" | "belowBar";
+  position: "aboveBar" | "belowBar" | "inBar";
   shape: "arrowUp" | "arrowDown" | "circle" | "square";
   color: string;
   text: string;
@@ -105,11 +97,6 @@ export interface RegimeScorePoint {
   score: number;
 }
 
-export interface EquityCurvePoint {
-  time: number;
-  pnl_pct: number;
-}
-
 export interface EquityPoint {
   time: number;
   equity: number;
@@ -122,6 +109,19 @@ export interface EquityComponent {
   points: EquityPoint[];
   source?: string;
 }
+
+export interface TradeEquityPoint {
+  time: number;
+  pnl_pct: number;
+  cum_pct: number;
+  side?: string;
+  entry_price?: number;
+  exit_price?: number;
+  qty?: number;
+  source?: string;
+}
+
+export type DashboardEquityMode = "account" | "trade";
 
 export interface DiaryEntry {
   time: number;
@@ -173,7 +173,7 @@ export interface ChartResponse {
   symbol: string;
   bars: ChartBar[];
   markers: ChartMarker[];
-  levels: ChartLevels | Record<string, never>;
+  levels?: ChartLevels;
   ttp_trail_pct?: number;
   regime: ChartRegime;
   confidence?: number;
@@ -186,7 +186,7 @@ export interface ChartResponse {
   renko_health?: RenkoHealth;
   regime_scores: RegimeScorePoint[];
   regime_forecast: RegimeScorePoint[];
-  equity_curve: EquityCurvePoint[];
+  equity_curve: TradeEquityPoint[];
   equity_source?: string;
   equity_real?: EquityPoint[];
   equity_real_source?: string;
@@ -208,10 +208,6 @@ export interface ChartResponse {
   _debug?: Record<string, unknown>;
   ts: string;
 }
-
-// ---------------------------------------------------------------------------
-// Status API (/api/status)
-// ---------------------------------------------------------------------------
 
 export interface StatusTicker {
   symbol?: string;
@@ -240,10 +236,6 @@ export interface StatusResponse {
   hint?: string;
 }
 
-// ---------------------------------------------------------------------------
-// Position API (/api/position)
-// ---------------------------------------------------------------------------
-
 export interface PositionResponse {
   ok: boolean;
   position: number | null;
@@ -254,10 +246,6 @@ export interface PositionResponse {
   error?: string;
   hint?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Fills API (/api/dashboard/fills)
-// ---------------------------------------------------------------------------
 
 export interface FillRow {
   time: number;
@@ -281,10 +269,6 @@ export interface FillsResponse {
   error?: string;
   ts?: string;
 }
-
-// ---------------------------------------------------------------------------
-// State Space API (/api/dashboard/statespace)
-// ---------------------------------------------------------------------------
 
 export interface StateSpaceTrajectoryPoint {
   ts: number;
@@ -323,10 +307,6 @@ export interface StateSpaceResponse {
   window_hours?: number;
   error?: string;
 }
-
-// ---------------------------------------------------------------------------
-// Equity Events API (to be created)
-// ---------------------------------------------------------------------------
 
 export interface EquityEvent {
   ts: string;

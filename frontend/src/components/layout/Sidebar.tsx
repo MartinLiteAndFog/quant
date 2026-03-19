@@ -1,19 +1,21 @@
+import type { ReactNode } from "react";
 import type {
   StatusResponse,
   PositionResponse,
-  FillsResponse,
   ChartLevels,
   KrakenMetrics,
-  FillRow,
 } from "../../types/chart";
+import type {
+  DashboardStrategyResponse,
+  DashboardPerformanceResponse,
+} from "../../api/hooks";
 
 export interface SidebarProps {
   status: StatusResponse | null;
   position: PositionResponse | null;
-  fills: FillsResponse | null;
-  chartLevels?: ChartLevels | Record<string, never>;
-  regimeState?: string | null;
-  gateOn?: number | null;
+  strategy: DashboardStrategyResponse | null;
+  performance: DashboardPerformanceResponse | null;
+  chartLevels?: ChartLevels;
   krakenMetrics?: KrakenMetrics;
 }
 
@@ -22,10 +24,10 @@ function SectionCard({
   children,
 }: {
   title: string;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+    <div className="rounded-lg border border-zinc-800 p-3">
       <h3 className="mb-2 text-xs font-medium uppercase tracking-wider text-zinc-400">
         {title}
       </h3>
@@ -34,7 +36,7 @@ function SectionCard({
   );
 }
 
-function DualColumn({ children }: { children: React.ReactNode }) {
+function DualColumn({ children }: { children: ReactNode }) {
   return <div className="grid grid-cols-2 gap-3">{children}</div>;
 }
 
@@ -55,6 +57,11 @@ function fmt(v: number | null | undefined, digits = 2): string {
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
+}
+
+function fmtPct(v: number | null | undefined, digits = 2): string {
+  if (v == null || !isFinite(v)) return "—";
+  return `${fmt(v, digits)}%`;
 }
 
 function sideColor(side: string | null | undefined): string {
@@ -79,103 +86,52 @@ function sideLabel(side: number | string | null | undefined): string {
   return side;
 }
 
-function FillList({ fills }: { fills: FillRow[] }) {
-  if (!fills.length) return <div className="text-zinc-500">—</div>;
-  return (
-    <div className="space-y-0.5">
-      {fills.slice(0, 3).map((f, i) => (
-        <div key={i} className="flex justify-between gap-1 text-[10px]">
-          <span className={sideColor(f.side)}>
-            {f.side} {f.size}
-          </span>
-          <span className="text-zinc-400">{fmt(f.price, 2)}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 export function Sidebar({
   status,
   position,
-  fills,
+  strategy,
+  performance,
   chartLevels,
-  regimeState,
-  gateOn,
   krakenMetrics,
 }: SidebarProps) {
   const kucoinPrice = status?.ticker?.last ?? status?.ticker?.mid ?? null;
   const kucoinEquity = status?.balance?.equity ?? null;
 
-  const venuePosSide = position?.side ?? null;
-  const venuePosSize = position?.position ?? null;
-  const venueHasPos = venuePosSide != null && venuePosSize != null && venuePosSize !== 0;
-
-  const levelsSide = chartLevels?.terminal?.side ?? chartLevels?.side ?? null;
-  const levelsEntryPx = chartLevels?.terminal?.entry_px ?? chartLevels?.entry_px ?? null;
-  const levelsLivePos = chartLevels?.live_pos ?? null;
-  const levelsHasPos = levelsSide != null && levelsEntryPx != null;
-
-  const kucoinSide = venueHasPos ? venuePosSide : (levelsHasPos ? levelsSide : null);
-  const kucoinSize = venueHasPos ? venuePosSize : (levelsLivePos != null ? levelsLivePos : null);
-  const kucoinHasPos = venueHasPos || levelsHasPos;
-
-  const fillsList = fills?.fills ?? fills?.rows ?? [];
+  const kucoinSide = position?.side ?? null;
+  const kucoinSizeNum = Number(position?.position ?? NaN);
+  const kucoinHasPos = Number.isFinite(kucoinSizeNum) && kucoinSizeNum !== 0;
 
   const kr = krakenMetrics;
   const krakenEquity = kr?.equity_usd ?? null;
   const krakenSide = kr?.venue_pos_side ?? kr?.pos_side ?? null;
-  const krakenSize = kr?.venue_pos_size ?? kr?.size_rem ?? null;
+  const krakenSizeNum = Number(kr?.venue_pos_size ?? kr?.size_rem ?? NaN);
   const krakenMode = kr?.mode ?? null;
   const krakenMark = kr?.mark_price ?? null;
-  const krakenHasPos = krakenSide != null && krakenSide !== 0;
+  const krakenHasPos = Number.isFinite(krakenSizeNum) && krakenSizeNum !== 0;
+
+  const strategyLabel = strategy?.strategy_label ?? "—";
 
   return (
     <aside className="flex w-80 flex-col gap-3 overflow-y-auto">
-      {/* Status */}
       <SectionCard title="Status">
         <DualColumn>
           <div>
             <VenueHeader name="KuCoin" accent="bg-blue-500" />
             <div className="space-y-0.5 font-mono text-xs text-zinc-100">
               <div>
-                Price:{" "}
-                <span className="text-zinc-300">{fmt(kucoinPrice, 4)}</span>
+                Price: <span className="text-zinc-300">{fmt(kucoinPrice, 4)}</span>
               </div>
-              {gateOn != null && (
-                <div>
-                  Gate:{" "}
-                  <span
-                    className={
-                      gateOn === 1 ? "text-emerald-400" : "text-red-400"
-                    }
-                  >
-                    {gateOn === 1 ? "ON" : "OFF"}
-                  </span>
-                </div>
-              )}
-              {regimeState && <div>Regime: {regimeState}</div>}
+              <div>
+                Regime: <span className="text-zinc-300">{strategyLabel}</span>
+              </div>
             </div>
           </div>
           <div>
             <VenueHeader name="Kraken" accent="bg-amber-500" />
             <div className="space-y-0.5 font-mono text-xs text-zinc-100">
               <div>
-                Price:{" "}
-                <span className="text-zinc-300">{fmt(krakenMark, 4)}</span>
+                Price: <span className="text-zinc-300">{fmt(krakenMark, 4)}</span>
               </div>
-              {kr?.gate_on != null && (
-                <div>
-                  Gate:{" "}
-                  <span
-                    className={
-                      kr.gate_on === 1 ? "text-emerald-400" : "text-red-400"
-                    }
-                  >
-                    {kr.gate_on === 1 ? "ON" : "OFF"}
-                  </span>
-                </div>
-              )}
               {krakenMode && (
                 <div>
                   Mode: <span className="text-zinc-300">{krakenMode}</span>
@@ -186,7 +142,6 @@ export function Sidebar({
         </DualColumn>
       </SectionCard>
 
-      {/* Position */}
       <SectionCard title="Position">
         <DualColumn>
           <div>
@@ -194,8 +149,7 @@ export function Sidebar({
             <div className="font-mono text-sm">
               {kucoinHasPos ? (
                 <span className={sideColor(kucoinSide)}>
-                  {sideLabel(kucoinSide)}
-                  {kucoinSize != null ? ` ${Math.abs(kucoinSize)}` : ""}
+                  {sideLabel(kucoinSide)} {Math.abs(kucoinSizeNum)}
                 </span>
               ) : (
                 <span className="text-zinc-500">Flat</span>
@@ -207,8 +161,7 @@ export function Sidebar({
             <div className="font-mono text-sm">
               {krakenHasPos ? (
                 <span className={sideColor(String(krakenSide))}>
-                  {sideLabel(krakenSide)}{" "}
-                  {krakenSize != null ? Math.abs(krakenSize).toFixed(4) : ""}
+                  {sideLabel(krakenSide)} {Math.abs(krakenSizeNum).toFixed(4)}
                 </span>
               ) : (
                 <span className="text-zinc-500">Flat</span>
@@ -218,7 +171,6 @@ export function Sidebar({
         </DualColumn>
       </SectionCard>
 
-      {/* Capital */}
       <SectionCard title="Capital">
         <DualColumn>
           <div>
@@ -256,7 +208,27 @@ export function Sidebar({
         </DualColumn>
       </SectionCard>
 
-      {/* Levels — from flip engine terminal state */}
+      <SectionCard title="Performance">
+        <div className="space-y-1 font-mono text-sm text-zinc-100">
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-zinc-400">PnL %</span>
+            <span>{fmtPct(performance?.pnl_pct)}</span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-zinc-400">Winrate</span>
+            <span>{fmtPct(performance?.winrate)}</span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-zinc-400">Monthly growth</span>
+            <span>{fmtPct(performance?.monthly_growth)}</span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-zinc-400">Average gain</span>
+            <span>{fmtPct(performance?.average_gain)}</span>
+          </div>
+        </div>
+      </SectionCard>
+
       <SectionCard title="Levels">
         {(() => {
           const t = chartLevels?.terminal;
@@ -268,14 +240,19 @@ export function Sidebar({
           const mode = t?.mode ?? chartLevels?.mode;
           const side = t?.side ?? chartLevels?.side;
           const hasAny = entryPx != null || sl != null || ttp != null;
-          if (!hasAny)
-            return (
-              <div className="font-mono text-sm text-zinc-500">—</div>
-            );
+
+          if (!hasAny) {
+            return <div className="font-mono text-sm text-zinc-500">—</div>;
+          }
+
           return (
             <div className="space-y-1 font-mono text-sm text-zinc-100">
               {side && (
-                <div className={side === "long" ? "text-emerald-400" : "text-red-400"}>
+                <div
+                  className={
+                    side === "long" ? "text-emerald-400" : "text-red-400"
+                  }
+                >
                   {side.toUpperCase()}
                 </div>
               )}
@@ -292,28 +269,10 @@ export function Sidebar({
               {tp2 != null && (
                 <div className="text-purple-400">TP2: {tp2.toFixed(2)}</div>
               )}
-              {mode && (
-                <div className="text-zinc-400">Mode: {mode}</div>
-              )}
+              {mode && <div className="text-zinc-400">Mode: {mode}</div>}
             </div>
           );
         })()}
-      </SectionCard>
-
-      {/* Fills */}
-      <SectionCard title="Fills">
-        <DualColumn>
-          <div>
-            <VenueHeader name="KuCoin" accent="bg-blue-500" />
-            <div className="font-mono text-xs">
-              <FillList fills={fillsList} />
-            </div>
-          </div>
-          <div>
-            <VenueHeader name="Kraken" accent="bg-amber-500" />
-            <div className="font-mono text-xs text-zinc-500">—</div>
-          </div>
-        </DualColumn>
       </SectionCard>
     </aside>
   );
