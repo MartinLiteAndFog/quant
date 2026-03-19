@@ -307,11 +307,12 @@ class KucoinFuturesBroker(BrokerAPI):
             return "CROSS" if cm else "ISOLATED"
         return None
 
-    def cancel_all(self, symbol: str) -> None:
+    def cancel_all(self, symbol: str) -> Dict[str, Any]:
         contract = _symbol_to_contract(symbol)
         path = f"/api/v1/orders/cancelAll?symbol={contract}"
         try:
-            self._req("DELETE", path)
+            data = self._req("DELETE", path)
+            return {"ok": True, "data": data}
         except Exception as e:
             log_throttled(
                 log,
@@ -322,7 +323,8 @@ class KucoinFuturesBroker(BrokerAPI):
                 contract,
                 e,
             )
-
+            return {"ok": False, "error": str(e)}
+            
     def place_limit(
         self,
         symbol: str,

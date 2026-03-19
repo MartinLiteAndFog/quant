@@ -1097,7 +1097,7 @@ def run_once(
                     else:
                         log.info("executor flip re-size: pre=%s post=%s equity=%s contract_mult=%s", qty, flip_qty, fresh_equity, contract_multiplier)
                         target_qty_for_verify = float(flip_qty)
-                        res = oms.enter(symbol=symbol, side=want_side, qty=float(flip_qty))
+                        res = oms.enter_aggressive(symbol=symbol, side=want_side, qty=float(flip_qty))
                         log.info("executor flip re-enter result=%s", res)
                         if _ok(res):
                             details = _details(res)
