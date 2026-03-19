@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-ffrom quant.execution.dashboard_state import (
+from quant.execution.dashboard_state import (
     _read_renko_df,
     _read_trades_df,
     build_combined_equity,
