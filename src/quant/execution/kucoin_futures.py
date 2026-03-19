@@ -309,22 +309,56 @@ class KucoinFuturesBroker(BrokerAPI):
 
     def cancel_all(self, symbol: str) -> Dict[str, Any]:
         contract = _symbol_to_contract(symbol)
-        path = f"/api/v1/orders/cancelAll?symbol={contract}"
+
         try:
-            data = self._req("DELETE", path)
-            return {"ok": True, "data": data}
+            data = self._req("GET", f"/api/v1/orders?symbol={contract}&status=active")
+            items = list((data or {}).get("items") or [])
         except Exception as e:
             log_throttled(
                 log,
                 logging.WARNING,
-                f"kucoin_cancel_all_failed:{contract}",
+                f"kucoin_list_open_failed:{contract}",
                 float(os.getenv("KUCOIN_LOG_THROTTLE_SEC", "30")),
-                "cancel_all %s failed: %s",
+                "list open orders %s failed: %s",
                 contract,
                 e,
             )
-            return {"ok": False, "error": str(e)}
-            
+            return {"ok": False, "error": f"list_open_failed: {e}", "cancelled": [], "failed": []}
+
+        cancelled = []
+        failed = []
+
+        for it in items:
+            order_id = str(it.get("id") or "").strip()
+            if not order_id:
+                continue
+            try:
+                resp = self._req("DELETE", f"/api/v1/orders/{order_id}")
+                cancelled.append({"order_id": order_id, "resp": resp})
+            except Exception as e:
+                failed.append({"order_id": order_id, "error": str(e)})
+
+        ok = len(failed) == 0
+        if not ok:
+            log_throttled(
+                log,
+                logging.WARNING,
+                f"kucoin_cancel_some_failed:{contract}",
+                float(os.getenv("KUCOIN_LOG_THROTTLE_SEC", "30")),
+                "cancel_all %s partial failure: cancelled=%s failed=%s",
+                contract,
+                len(cancelled),
+                len(failed),
+        )
+
+        return {
+            "ok": ok,
+            "symbol": contract,
+            "open_count": len(items),
+            "cancelled": cancelled,
+            "failed": failed,
+        }
+
     def place_limit(
         self,
         symbol: str,
