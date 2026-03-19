@@ -4,14 +4,14 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+
+import pandas as pd
+
 from quant.execution.event_store import (
     get_conn,
     insert_equity_snapshot,
     upsert_closed_trade,
 )
-
-import pandas as pd
-
 from quant.execution.kucoin_futures import KucoinFuturesBroker, list_fills
 from quant.regime import RegimeStore
 
@@ -66,8 +66,6 @@ def _epoch_seconds_from_any(v: Any) -> Optional[int]:
             return None
         if not (x > 0):
             return None
-        # Epoch magnitude in 2026:
-        # s  ~1e9, ms ~1e12, us ~1e15, ns ~1e18
         if x >= 1e18:
             return int(x / 1e9)   # ns -> s
         if x >= 1e15:
@@ -123,7 +121,6 @@ def _read_fills_df() -> pd.DataFrame:
     if not need.issubset(set(df.columns)):
         return pd.DataFrame()
     df = df.copy()
-    # Normalize optional metadata columns used for richer reason mapping.
     if "client_oid" not in df.columns and "clientOid" in df.columns:
         df["client_oid"] = df["clientOid"]
     if "order_id" not in df.columns and "orderId" in df.columns:
@@ -139,7 +136,6 @@ def _read_fills_df() -> pd.DataFrame:
     if "order_id" in df.columns:
         df["order_id"] = df["order_id"].where(df["order_id"].notna(), "").astype(str)
     if "reduce_only" in df.columns:
-        # Keep nullable/bool semantics when present.
         df["reduce_only"] = df["reduce_only"].astype("boolean")
     df = df.dropna(subset=["time", "side", "size", "price"])
     df = df[df["size"] > 0].sort_values("time").reset_index(drop=True)
@@ -189,6 +185,7 @@ def _refresh_renko_cache_if_needed(existing_df: pd.DataFrame) -> pd.DataFrame:
         return existing_df
     try:
         from quant.execution.renko_cache_updater import refresh_renko_cache
+
         info = refresh_renko_cache(
             symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
             box=float(os.getenv("DASHBOARD_RENKO_BOX", "0.1")),
@@ -216,8 +213,6 @@ def load_renko_bars(max_points: int = 5000, _df: Optional[pd.DataFrame] = None) 
     last_t = -1
     for _, r in df.iterrows():
         t_i = int(pd.Timestamp(r["ts"]).timestamp())
-        # Ensure strictly increasing chart times; Renko can emit multiple bricks
-        # on one minute, and second-resolution APIs otherwise collide visually.
         if t_i <= last_t:
             t_i = last_t + 1
         last_t = t_i
@@ -257,7 +252,11 @@ def load_renko_health(_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
     }
 
 
-def build_fibo_levels(max_points: int = 5000, lookback: Optional[int] = None, _df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+def build_fibo_levels(
+    max_points: int = 5000,
+    lookback: Optional[int] = None,
+    _df: Optional[pd.DataFrame] = None,
+) -> Dict[str, Any]:
     lb = int(lookback or int(os.getenv("LIVE_IMBA_LOOKBACK", "250")))
     lb = max(2, lb)
     df = _df if _df is not None else _read_renko_df()
@@ -292,6 +291,7 @@ def build_fibo_levels(max_points: int = 5000, lookback: Optional[int] = None, _d
         "short": out_short[-1]["value"] if out_short else None,
     }
     return {"lookback": lb, "long": out_long, "mid": out_mid, "short": out_short, "latest": latest}
+
 
 def load_closed_trades_from_postgres(
     venue: Optional[str] = None,
@@ -351,7 +351,7 @@ def load_closed_trades_from_postgres(
         if not rows:
             return pd.DataFrame()
 
-        df = pd.DataFrame(
+        return pd.DataFrame(
             rows,
             columns=[
                 "trade_id",
@@ -367,11 +367,14 @@ def load_closed_trades_from_postgres(
                 "exit_event",
             ],
         )
-        return df
     except Exception:
         return pd.DataFrame()
-    
-def load_trade_markers(max_points: int = 5000, _trades_df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
+
+
+def load_trade_markers(
+    max_points: int = 5000,
+    _trades_df: Optional[pd.DataFrame] = None,
+) -> List[Dict[str, Any]]:
     if _trades_df is not None:
         df = _trades_df
     else:
@@ -429,11 +432,10 @@ def load_trade_markers(max_points: int = 5000, _trades_df: Optional[pd.DataFrame
     return markers
 
 
-def load_trade_segments(max_points: int = 2000, _trades_df: Optional[pd.DataFrame] = None) -> List[Dict[str, Any]]:
-    """
-    Return entry->exit line segments for closed trades.
-    Color is green for positive PnL, red for negative PnL.
-    """
+def load_trade_segments(
+    max_points: int = 2000,
+    _trades_df: Optional[pd.DataFrame] = None,
+) -> List[Dict[str, Any]]:
     if _trades_df is not None:
         df = _trades_df
     else:
@@ -486,10 +488,10 @@ def load_trade_segments(max_points: int = 2000, _trades_df: Optional[pd.DataFram
                 side = int(side_raw)
         else:
             side = 1
+
         if pnl_col and pd.notna(r.get(pnl_col)):
             pnl_positive = float(r[pnl_col]) >= 0.0
         else:
-            # Fallback from direction-aware move.
             pnl_positive = ((xpx - epx) * (1 if side >= 0 else -1)) >= 0.0
 
         segs.append(
@@ -506,9 +508,6 @@ def load_trade_segments(max_points: int = 2000, _trades_df: Optional[pd.DataFram
 
 
 def _refresh_fills_cache_if_needed(symbol: str, fills_path: Path) -> None:
-    """
-    Refresh fills cache from KuCoin with cooldown to avoid API spam.
-    """
     global _LAST_FILLS_REFRESH_TS, _LAST_FILLS_REFRESH_ERROR
     if not _truthy(os.getenv("DASHBOARD_FILLS_AUTO_REFRESH_ON_READ", "1")):
         return
@@ -563,6 +562,7 @@ def _refresh_fills_cache_if_needed(symbol: str, fills_path: Path) -> None:
             dedupe_cols = [c for c in ("time", "side", "size", "price", "order_id", "client_oid") if c in all_df.columns]
             all_df = all_df.drop_duplicates(subset=dedupe_cols, keep="last").sort_values("time")
             all_df.to_parquet(fills_path, index=False)
+
         _LAST_FILLS_REFRESH_TS = now
         _LAST_FILLS_REFRESH_ERROR = None
     except Exception as e:
@@ -571,10 +571,6 @@ def _refresh_fills_cache_if_needed(symbol: str, fills_path: Path) -> None:
 
 
 def load_live_fill_markers(symbol: str, limit: int = 100, start_ts: Optional[int] = None) -> List[Dict[str, Any]]:
-    """
-    Build chart markers from live KuCoin fills as a fallback/augmentation
-    when local trades parquet is incomplete.
-    """
     fills_path = _env_path("DASHBOARD_FILLS_PARQUET", _live_default("fills_cache.parquet"))
     _refresh_fills_cache_if_needed(symbol=symbol, fills_path=fills_path)
 
@@ -608,12 +604,10 @@ def load_live_fill_markers(symbol: str, limit: int = 100, start_ts: Optional[int
                 "text": f"fill {side} {sz:g} @ {px:.3f}",
             }
         )
-    out = sorted(out, key=lambda x: int(x["time"]))
-    return out
+    return sorted(out, key=lambda x: int(x["time"]))
 
 
 def load_fills_cache_rows(max_points: int = 500, symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Expose normalized fills cache rows for diagnostics/UI."""
     fills_path = _env_path("DASHBOARD_FILLS_PARQUET", _live_default("fills_cache.parquet"))
     sym = str(symbol or os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"))
     _refresh_fills_cache_if_needed(symbol=sym, fills_path=fills_path)
@@ -625,7 +619,7 @@ def load_fills_cache_rows(max_points: int = 500, symbol: Optional[str] = None) -
     expected_by_time: List[Dict[str, Any]] = []
     expected_by_client_oid: Dict[str, str] = {}
     exp = load_latest_expected_entry()
-    # Build richer expected-event map from expected_trades.jsonl if available.
+
     p_exp = _env_path("DASHBOARD_EXPECTED_TRADES_JSONL", _live_default("expected_trades.jsonl"))
     if p_exp.exists():
         try:
@@ -662,6 +656,7 @@ def load_fills_cache_rows(max_points: int = 500, symbol: Optional[str] = None) -
         except Exception:
             expected_by_time = []
             expected_by_client_oid = {}
+
     if not expected_by_time and exp is not None:
         expected_by_time = [{"time": int(exp["entry_time"]), "reason": "entry"}]
 
@@ -680,7 +675,6 @@ def load_fills_cache_rows(max_points: int = 500, symbol: Optional[str] = None) -
             if dt < best_dt:
                 best_dt = dt
                 best = e
-        # Only map if reasonably close in time.
         if best is None or best_dt > 180:
             return "-"
         return str(best.get("reason") or "-")
@@ -698,6 +692,7 @@ def load_fills_cache_rows(max_points: int = 500, symbol: Optional[str] = None) -
                 fill_reduce_only = bool(r.get("reduce_only"))
             except Exception:
                 fill_reduce_only = None
+
         out.append(
             {
                 "time": ts_i,
@@ -713,6 +708,7 @@ def load_fills_cache_rows(max_points: int = 500, symbol: Optional[str] = None) -
         )
     return out
 
+
 def load_equity_history_from_postgres(
     venue: str,
     account: Optional[str] = None,
@@ -727,10 +723,7 @@ def load_equity_history_from_postgres(
                 order by ts desc
                 limit %(limit)s
             """
-            params = {
-                "venue": venue,
-                "limit": int(max(1, max_points)),
-            }
+            params = {"venue": venue, "limit": int(max(1, max_points))}
         else:
             sql = """
                 select ts, equity, currency, source
@@ -768,7 +761,6 @@ def load_equity_history_from_postgres(
 
 
 def _maybe_refresh_kucoin_equity() -> None:
-    """Fetch current KuCoin equity and insert a Postgres snapshot if stale."""
     refresh_sec = int(os.getenv("DASHBOARD_EQUITY_REFRESH_SEC", "60"))
     currency = os.getenv("DASHBOARD_EQUITY_CCY", "USDT")
     key = os.getenv("KUCOIN_FUTURES_API_KEY", "").strip()
@@ -815,10 +807,6 @@ def _maybe_refresh_kucoin_equity() -> None:
 
 
 def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
-    """
-    Load/refresh realized account-equity history in USDT.
-    Uses periodic snapshots from KuCoin account balance.
-    """
     _maybe_refresh_kucoin_equity()
 
     pg = load_equity_history_from_postgres(
@@ -832,12 +820,12 @@ def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
     return {"points": [], "source": "none"}
 
 
-
 def load_kraken_metrics() -> Dict[str, Any]:
     redis_url = os.getenv("REDIS_URL", "").strip()
     if redis_url:
         try:
             import redis as redis_lib
+
             r = redis_lib.from_url(redis_url, decode_responses=True)
             raw = r.get("kraken:metrics:latest")
             if raw:
@@ -908,6 +896,7 @@ def load_kraken_equity_history(max_points: int = 500) -> Dict[str, Any]:
     if redis_url:
         try:
             import redis as redis_lib
+
             r = redis_lib.from_url(redis_url, decode_responses=True)
             raw = r.get("kraken:equity:latest")
             if raw:
@@ -935,11 +924,11 @@ def load_kraken_equity_history(max_points: int = 500) -> Dict[str, Any]:
         pts = pts[-int(max(1, max_points)) :]
     return {"points": pts, "source": source}
 
+
 def build_combined_equity(
     kucoin_points: List[Dict[str, Any]],
     kraken_points_usd: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
-    """Combine KuCoin USDT and Kraken USD equity into one USDT-denominated series."""
     if not kucoin_points and not kraken_points_usd:
         return {"points": [], "source": "none"}
 
@@ -991,13 +980,10 @@ def load_active_levels() -> Dict[str, Any]:
 
 
 def load_latest_expected_entry() -> Optional[Dict[str, Any]]:
-    """
-    Best-effort fallback for open-position entry context from expected_trades.jsonl.
-    Returns latest entry-like event (entry / exit_flip) if available.
-    """
     p = _env_path("DASHBOARD_EXPECTED_TRADES_JSONL", _live_default("expected_trades.jsonl"))
     if not p.exists():
         return None
+
     rows: List[Dict[str, Any]] = []
     try:
         with open(p, "r", encoding="utf-8") as f:
@@ -1031,6 +1017,7 @@ def load_latest_expected_entry() -> Optional[Dict[str, Any]]:
                 )
     except Exception:
         return None
+
     if not rows:
         return None
     rows = sorted(rows, key=lambda x: int(x["entry_time"]))
@@ -1038,10 +1025,6 @@ def load_latest_expected_entry() -> Optional[Dict[str, Any]]:
 
 
 def _cluster_fills_df(fills: pd.DataFrame, window_sec: int = 90) -> pd.DataFrame:
-    """
-    Cluster adjacent same-side fills within a short time window into one execution block.
-    Price is size-weighted average, time is last fill timestamp in block.
-    """
     if fills.empty:
         return fills
     df = fills.copy().sort_values("time").reset_index(drop=True)
@@ -1101,15 +1084,10 @@ def _cluster_fills_df(fills: pd.DataFrame, window_sec: int = 90) -> pd.DataFrame
 
     if not out_rows:
         return pd.DataFrame(columns=df.columns)
-    out = pd.DataFrame(out_rows)
-    return out.sort_values("time").reset_index(drop=True)
+    return pd.DataFrame(out_rows).sort_values("time").reset_index(drop=True)
 
 
 def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
-    """
-    Build a normalized trading diary online from closed trades parquet;
-    fallback to reconstructed closed trades from fills cache.
-    """
     out: List[Dict[str, Any]] = []
 
     if _trades_df is not None:
@@ -1144,6 +1122,7 @@ def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame
             for _, r in df.iterrows():
                 epx = float(r[entry_col]) if entry_col and pd.notna(r.get(entry_col)) else None
                 xpx = float(r[exit_col]) if exit_col and pd.notna(r.get(exit_col)) else None
+
                 if side_col and pd.notna(r.get(side_col)):
                     side_raw = r.get(side_col)
                     if isinstance(side_raw, str):
@@ -1162,8 +1141,10 @@ def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame
                         pnl_pct = pnl_pct / epx * 100.0
                 elif epx and xpx and epx > 0:
                     pnl_pct = ((xpx - epx) / epx * 100.0) * (1 if side >= 0 else -1)
+
                 if pnl_pct is None:
                     continue
+
                 out.append(
                     {
                         "id": f"p_{int(pd.Timestamp(r['exit_ts']).timestamp())}_{'L' if side >= 0 else 'S'}",
@@ -1177,13 +1158,15 @@ def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame
                         "source": df_source,
                     }
                 )
+
             if out:
                 out = sorted(out, key=lambda x: int(x["time"]))[-int(max(1, max_points)) :]
                 return {"entries": out, "source": df_source}
-            
+
     fills = _read_fills_df()
     if fills.empty:
         return {"entries": [], "source": "none"}
+
     cluster_window_sec = int(os.getenv("DASHBOARD_FILLS_CLUSTER_SEC", "90"))
     fills = _cluster_fills_df(fills, window_sec=cluster_window_sec)
     if fills.empty:
@@ -1214,6 +1197,7 @@ def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame
         direction = 1.0 if pos_qty > 0 else -1.0
         pnl_per_unit = (px - avg_entry) * direction
         pnl_pct = (pnl_per_unit / avg_entry * 100.0) if avg_entry > 0 else 0.0
+
         events.append(
             {
                 "id": f"f_{t}_{len(events)}",
@@ -1241,28 +1225,27 @@ def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame
         avg_entry = px
         pos_open_ts = t
 
-
-        try:
-            trades_path = _env_path("DASHBOARD_TRADES_PARQUET", _live_default("trades.parquet"))
-            trades_path.parent.mkdir(parents=True, exist_ok=True)
-            if events:
-                write_rows = []
-                for e in events:
-                    side_i = 1 if str(e.get("side")) == "long" else -1
-                    write_rows.append(
-                        {
-                            "entry_ts": pd.to_datetime(int(e["entry_time"]), unit="s", utc=True),
-                            "exit_ts": pd.to_datetime(int(e["time"]), unit="s", utc=True),
-                            "side": side_i,
-                            "qty": e.get("qty"),
-                            "entry_price": e.get("entry_price"),
-                            "exit_price": e.get("exit_price"),
-                            "pnl_pct": e.get("pnl_pct"),
-                            "exit_event": "fills_reconstructed",
-                        }
-                    )
-                    try:
-                        upsert_closed_trade(
+    try:
+        trades_path = _env_path("DASHBOARD_TRADES_PARQUET", _live_default("trades.parquet"))
+        trades_path.parent.mkdir(parents=True, exist_ok=True)
+        if events:
+            write_rows = []
+            for e in events:
+                side_i = 1 if str(e.get("side")) == "long" else -1
+                write_rows.append(
+                    {
+                        "entry_ts": pd.to_datetime(int(e["entry_time"]), unit="s", utc=True),
+                        "exit_ts": pd.to_datetime(int(e["time"]), unit="s", utc=True),
+                        "side": side_i,
+                        "qty": e.get("qty"),
+                        "entry_price": e.get("entry_price"),
+                        "exit_price": e.get("exit_price"),
+                        "pnl_pct": e.get("pnl_pct"),
+                        "exit_event": "fills_reconstructed",
+                    }
+                )
+                try:
+                    upsert_closed_trade(
                         {
                             "trade_id": str(e["id"]),
                             "venue": "kucoin",
@@ -1282,35 +1265,49 @@ def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame
                             "payload_json": dict(e),
                         }
                     )
-                    except Exception:
-                      pass
-                new_df = pd.DataFrame(write_rows)
-                if trades_path.exists():
-                    try:
-                        old_df = pd.read_parquet(trades_path)
-                        all_df = pd.concat([old_df, new_df], ignore_index=True)
-                    except Exception:
-                        all_df = new_df
-                else:
+                except Exception:
+                    pass
+
+            new_df = pd.DataFrame(write_rows)
+            if trades_path.exists():
+                try:
+                    old_df = pd.read_parquet(trades_path)
+                    all_df = pd.concat([old_df, new_df], ignore_index=True)
+                except Exception:
                     all_df = new_df
-                dedupe_cols = [c for c in ("entry_ts", "exit_ts", "side", "qty", "entry_price", "exit_price") if c in all_df.columns]
-                all_df = all_df.drop_duplicates(subset=dedupe_cols, keep="last").sort_values("exit_ts")
-                all_df.to_parquet(trades_path, index=False)
-        except Exception:
-            pass
+            else:
+                all_df = new_df
+
+            dedupe_cols = [
+                c for c in ("entry_ts", "exit_ts", "side", "qty", "entry_price", "exit_price")
+                if c in all_df.columns
+            ]
+            all_df = all_df.drop_duplicates(subset=dedupe_cols, keep="last").sort_values("exit_ts")
+            all_df.to_parquet(trades_path, index=False)
+    except Exception:
+        pass
 
     events = sorted(events, key=lambda x: int(x["time"]))[-int(max(1, max_points)) :]
     return {"entries": events, "source": "fills_reconstructed_clustered"}
 
 
-def build_regime_overlay(symbol: str, hours: int = 24 * 14, _rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+def build_regime_overlay(
+    symbol: str,
+    hours: int = 24 * 14,
+    _rows: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     end_ts = pd.Timestamp.now("UTC")
     if _rows is not None:
         rows = _rows
     else:
         store = RegimeStore()
         start_ts = end_ts - pd.Timedelta(hours=int(max(1, hours)))
-        rows = store.get_history(symbol=symbol, start_ts=start_ts.isoformat(), end_ts=end_ts.isoformat(), limit=20000)
+        rows = store.get_history(
+            symbol=symbol,
+            start_ts=start_ts.isoformat(),
+            end_ts=end_ts.isoformat(),
+            limit=20000,
+        )
     if not rows:
         return {"spans": [], "points": [], "latest": None}
 
@@ -1343,6 +1340,7 @@ def build_regime_overlay(symbol: str, hours: int = 24 * 14, _rows: Optional[List
                 cur_conf = conf_i
             else:
                 cur_conf = max(cur_conf, conf_i)
+
         to_ts = max(pd.Timestamp(df.iloc[-1]["ts"]), end_ts)
         spans.append(
             {
@@ -1367,7 +1365,6 @@ def build_regime_overlay(symbol: str, hours: int = 24 * 14, _rows: Optional[List
 
 
 def build_equity_curve(max_points: int = 500, _trades_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
-    """Cumulative equity curve from normalized diary entries."""
     diary = build_trading_diary(max_points=max_points, _trades_df=_trades_df)
     entries = diary.get("entries", [])
     cum = 0.0
@@ -1391,14 +1388,18 @@ def build_equity_curve(max_points: int = 500, _trades_df: Optional[pd.DataFrame]
 
 
 def build_regime_scores(symbol: str, hours: int = 24 * 14, _rows: Optional[List[Dict[str, Any]]] = None) -> Dict[str, List]:
-    """Extract regime_score time series for the gradient band."""
     if _rows is not None:
         rows = _rows
     else:
         store = RegimeStore()
         end_ts = pd.Timestamp.now("UTC")
         start_ts = end_ts - pd.Timedelta(hours=int(max(1, hours)))
-        rows = store.get_history(symbol=symbol, start_ts=start_ts.isoformat(), end_ts=end_ts.isoformat(), limit=20000)
+        rows = store.get_history(
+            symbol=symbol,
+            start_ts=start_ts.isoformat(),
+            end_ts=end_ts.isoformat(),
+            limit=20000,
+        )
     if not rows:
         return {"scores": [], "forecast": []}
 
@@ -1410,3 +1411,172 @@ def build_regime_scores(symbol: str, hours: int = 24 * 14, _rows: Optional[List[
             scores.append({"time": int(ts.timestamp()), "score": round(float(rs), 4)})
 
     return {"scores": scores, "forecast": []}
+
+
+def _normalize_strategy_label(raw_state: Any, gate_on: Any) -> Dict[str, Any]:
+    raw = str(raw_state or "").strip().lower()
+
+    countertrend_states = {
+        "countertrend",
+        "counter_trend",
+        "mean_revert",
+        "mean_reversion",
+    }
+    trend_states = {
+        "trend",
+        "trendfollower",
+        "trend_follower",
+        "trendfollow",
+    }
+
+    if raw in countertrend_states:
+        return {
+            "strategy_label": "Countertrend",
+            "regime_state": raw,
+            "source": "regime_store_latest",
+        }
+    if raw in trend_states:
+        return {
+            "strategy_label": "Trendfollower",
+            "regime_state": raw,
+            "source": "regime_store_latest",
+        }
+
+    gate_i = pd.to_numeric(gate_on, errors="coerce")
+    if pd.notna(gate_i):
+        return {
+            "strategy_label": "Countertrend" if int(gate_i) == 1 else "Trendfollower",
+            "regime_state": raw or None,
+            "source": "gate_fallback",
+        }
+
+    return {
+        "strategy_label": "Trendfollower",
+        "regime_state": raw or None,
+        "source": "default_fallback",
+    }
+
+
+def load_dashboard_strategy(symbol: str) -> Dict[str, Any]:
+    now = pd.Timestamp.now("UTC")
+    try:
+        latest = RegimeStore().get_latest_state(symbol=symbol) or {}
+    except Exception:
+        latest = {}
+
+    mapped = _normalize_strategy_label(
+        raw_state=latest.get("regime_state"),
+        gate_on=latest.get("gate_on"),
+    )
+
+    return {
+        "symbol": symbol,
+        "strategy_label": mapped["strategy_label"],
+        "regime_state": mapped["regime_state"],
+        "source": mapped["source"],
+        "ts": now.isoformat(),
+    }
+
+
+def _performance_trade_frame(
+    symbol: str,
+    venue: str,
+    max_points: int,
+) -> tuple[pd.DataFrame, str]:
+    df = load_closed_trades_from_postgres(
+        venue=venue,
+        symbol=symbol,
+        max_points=max_points,
+    )
+    source = "postgres:closed_trades"
+
+    if df.empty:
+        df = _read_trades_df()
+        source = "trades_parquet"
+
+        if not df.empty:
+            if "symbol" in df.columns:
+                df = df[df["symbol"].astype(str) == str(symbol)]
+            if "venue" in df.columns:
+                df = df[df["venue"].astype(str) == str(venue)]
+
+    if df.empty:
+        return pd.DataFrame(), "none"
+
+    df = df.copy()
+
+    if "exit_ts" not in df.columns:
+        return pd.DataFrame(), source
+
+    df["exit_ts"] = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
+    df["pnl_pct"] = pd.to_numeric(df.get("pnl_pct"), errors="coerce")
+    df = df.dropna(subset=["exit_ts", "pnl_pct"]).sort_values("exit_ts").reset_index(drop=True)
+
+    return df, source
+
+
+def _compound_trade_returns_pct(s: pd.Series) -> Optional[float]:
+    if s is None or len(s) == 0:
+        return None
+    vals = pd.to_numeric(s, errors="coerce").dropna()
+    if vals.empty:
+        return None
+    return float(((1.0 + vals / 100.0).prod() - 1.0) * 100.0)
+
+
+def build_dashboard_performance(
+    symbol: str,
+    venue: str = "kucoin",
+    max_points: int = 5000,
+) -> Dict[str, Any]:
+    now = pd.Timestamp.now("UTC")
+    df, source = _performance_trade_frame(
+        symbol=symbol,
+        venue=venue,
+        max_points=max_points,
+    )
+
+    if df.empty:
+        return {
+            "symbol": symbol,
+            "venue": venue,
+            "as_of": now.isoformat(),
+            "window": "lifetime",
+            "pnl_pct": None,
+            "winrate": None,
+            "monthly_growth": None,
+            "average_gain": None,
+            "trade_count": 0,
+            "winning_trade_count": 0,
+            "losing_trade_count": 0,
+            "source": source,
+        }
+
+    winners = df[df["pnl_pct"] > 0]
+    losers = df[df["pnl_pct"] <= 0]
+
+    pnl_pct = _compound_trade_returns_pct(df["pnl_pct"])
+    monthly_growth = _compound_trade_returns_pct(
+        df.loc[df["exit_ts"] >= (now - pd.Timedelta(days=30)), "pnl_pct"]
+    )
+    average_gain = float(winners["pnl_pct"].mean()) if not winners.empty else None
+
+    trade_count = int(len(df))
+    winning_trade_count = int(len(winners))
+    losing_trade_count = int(len(losers))
+    winrate = (winning_trade_count / trade_count * 100.0) if trade_count > 0 else None
+
+    return {
+        "symbol": symbol,
+        "venue": venue,
+        "as_of": now.isoformat(),
+        "window": "lifetime",
+        "pnl_pct": round(float(pnl_pct), 4) if pnl_pct is not None else None,
+        "winrate": round(float(winrate), 4) if winrate is not None else None,
+        "monthly_growth": round(float(monthly_growth), 4) if monthly_growth is not None else None,
+        "average_gain": round(float(average_gain), 4) if average_gain is not None else None,
+        "trade_count": trade_count,
+        "winning_trade_count": winning_trade_count,
+        "losing_trade_count": losing_trade_count,
+        "source": source,
+    }

@@ -18,10 +18,11 @@ from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
-from quant.execution.dashboard_state import (
+ffrom quant.execution.dashboard_state import (
     _read_renko_df,
     _read_trades_df,
     build_combined_equity,
+    build_dashboard_performance,
     build_equity_curve,
     build_fibo_levels,
     build_trading_diary,
@@ -29,6 +30,7 @@ from quant.execution.dashboard_state import (
     build_regime_scores,
     load_active_levels,
     load_closed_trades_from_postgres,
+    load_dashboard_strategy,
     load_fills_cache_rows,
     load_latest_expected_entry,
     load_live_fill_markers,
@@ -40,6 +42,7 @@ from quant.execution.dashboard_state import (
     load_trade_segments,
     load_trade_markers,
 )
+
 from quant.execution.gate_provider import get_live_gate_state
 from quant.execution.dashboard_statespace import (
     load_state_space_trajectory,
@@ -945,6 +948,72 @@ def api_dashboard_chart(
         }
         _cache_put(_CHART_CACHE, cache_key, err_result)
         return err_result
+
+@app.get("/api/dashboard/strategy")
+def api_dashboard_strategy(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
+    try:
+        out = load_dashboard_strategy(symbol=symbol)
+        return {
+            "ok": True,
+            "symbol": out.get("symbol", symbol),
+            "strategy_label": out.get("strategy_label"),
+            "regime_state": out.get("regime_state"),
+            "source": out.get("source", "unknown"),
+            "ts": out.get("ts", _now_utc_iso()),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "strategy_label": None,
+            "regime_state": None,
+            "source": "error",
+            "error": str(e),
+            "ts": _now_utc_iso(),
+        }
+
+
+@app.get("/api/dashboard/performance")
+def api_dashboard_performance(
+    symbol: str = DEFAULT_SYMBOL,
+    venue: str = "kucoin",
+) -> Dict[str, Any]:
+    try:
+        out = build_dashboard_performance(symbol=symbol, venue=venue)
+        return {
+            "ok": True,
+            "symbol": out.get("symbol", symbol),
+            "venue": out.get("venue", venue),
+            "as_of": out.get("as_of", _now_utc_iso()),
+            "window": out.get("window", "lifetime"),
+            "pnl_pct": out.get("pnl_pct"),
+            "winrate": out.get("winrate"),
+            "monthly_growth": out.get("monthly_growth"),
+            "average_gain": out.get("average_gain"),
+            "trade_count": out.get("trade_count", 0),
+            "winning_trade_count": out.get("winning_trade_count", 0),
+            "losing_trade_count": out.get("losing_trade_count", 0),
+            "source": out.get("source", "unknown"),
+            "ts": _now_utc_iso(),
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "venue": venue,
+            "as_of": _now_utc_iso(),
+            "window": "lifetime",
+            "pnl_pct": None,
+            "winrate": None,
+            "monthly_growth": None,
+            "average_gain": None,
+            "trade_count": 0,
+            "winning_trade_count": 0,
+            "losing_trade_count": 0,
+            "source": "error",
+            "error": str(e),
+            "ts": _now_utc_iso(),
+        }
 
 
 @app.get("/api/gate/solusd")
