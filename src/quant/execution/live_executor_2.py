@@ -853,7 +853,15 @@ def _sync_kraken_stop_loss(
             stop_side, pos_qty, stop_price, e,
         )
 
-def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Optional[float] = None) -> None:
+def _write_dashboard_levels(
+    symbol: str,
+    terminal: Dict[str, Any],
+    live_pos: Optional[float] = None,
+    equity: Optional[float] = None,
+    bid: Optional[float] = None,
+    ask: Optional[float] = None,
+    mid: Optional[float] = None,
+) -> None:
     if not terminal:
         return
 
@@ -922,6 +930,10 @@ def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Opt
 
     write_execution_state({
         "symbol": symbol,
+        "venue": "kraken",
+        "strategy": "flip",
+        "ts": _now_iso(),
+        "position": float(live_pos) if live_pos is not None else None,
         "side": side,
         "mode": mode,
         "sl": sl,
@@ -931,6 +943,8 @@ def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Opt
         "ttp_trail_pct": _resolve_ttp_trail_pct(),
         "entry_bar_ts": int(pd.Timestamp(entry_bar_ts).timestamp()) if entry_bar_ts is not None else None,
         "live_pos": float(live_pos) if live_pos is not None else None,
+        "equity": float(equity) if equity is not None else None,
+        "market": {"bid": bid, "ask": ask, "mid": mid},
         "terminal": terminal,
     })
 
@@ -1061,7 +1075,15 @@ def run_once(
         live_mid=float(mid),
         ttp_trail_pct=_resolve_ttp_trail_pct(),
     )
-    _write_dashboard_levels(symbol=symbol, terminal=terminal, live_pos=pos)
+    _write_dashboard_levels(
+    symbol=symbol,
+    terminal=terminal,
+    live_pos=pos,
+    equity=equity,
+    bid=bid,
+    ask=ask,
+    mid=mid,
+    )
 
     want_side = "long" if terminal_pos > 0 else ("short" if terminal_pos < 0 else None)
 
