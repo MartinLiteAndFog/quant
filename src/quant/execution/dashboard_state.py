@@ -995,12 +995,11 @@ def load_kraken_metrics_from_action_events(symbol: str = "SOL-USDT") -> Dict[str
                 payload_json
             from action_events
             where venue = 'kraken'
-              and symbol = %(symbol)s
             order by ts desc
             limit 1
         """
         with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, {"symbol": symbol})
+            cur.execute(sql)
             row = cur.fetchone()
 
         if not row:
