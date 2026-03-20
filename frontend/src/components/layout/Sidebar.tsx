@@ -97,8 +97,8 @@ export function Sidebar({
   const kucoinPrice = status?.ticker?.last ?? status?.ticker?.mid ?? null;
   const kucoinEquity = status?.balance?.equity ?? null;
 
-  const kucoinSide = position?.side ?? null;
-  const kucoinSizeNum = Number(position?.position ?? NaN);
+  const kucoinSide = chartLevels?.side ?? position?.side ?? null;
+  const kucoinSizeNum = Number(chartLevels?.live_pos ?? position?.position ?? NaN);
   const kucoinHasPos = Number.isFinite(kucoinSizeNum) && kucoinSizeNum !== 0;
 
   const kr = krakenMetrics;
