@@ -98,8 +98,13 @@ export function Sidebar({
   const kucoinEquity = status?.balance?.equity ?? null;
 
   const kucoinSide = chartLevels?.side ?? position?.side ?? null;
-  const kucoinSizeNum = Number(chartLevels?.live_pos ?? position?.position ?? NaN);
+  const kucoinSizeNum = Number(
+    chartLevels?.live_pos ?? position?.position ?? NaN
+  );
   const kucoinHasPos = Number.isFinite(kucoinSizeNum) && kucoinSizeNum !== 0;
+  const kucoinDisplaySize = Number.isFinite(kucoinSizeNum)
+    ? Math.abs(kucoinSizeNum) / 10
+    : 0;
 
   const kr = krakenMetrics;
   const krakenEquity = kr?.equity_usd ?? null;
@@ -149,7 +154,7 @@ export function Sidebar({
             <div className="font-mono text-sm">
               {kucoinHasPos ? (
                 <span className={sideColor(kucoinSide)}>
-                  {sideLabel(kucoinSide)} {Math.abs(kucoinSizeNum)}
+                  {sideLabel(kucoinSide)} {kucoinDisplaySize.toFixed(1)}
                 </span>
               ) : (
                 <span className="text-zinc-500">Flat</span>
@@ -161,7 +166,7 @@ export function Sidebar({
             <div className="font-mono text-sm">
               {krakenHasPos ? (
                 <span className={sideColor(String(krakenSide))}>
-                  {sideLabel(krakenSide)} {Math.abs(krakenSizeNum).toFixed(4)}
+                  {sideLabel(krakenSide)} {Math.abs(krakenSizeNum).toFixed(1)}
                 </span>
               ) : (
                 <span className="text-zinc-500">Flat</span>
