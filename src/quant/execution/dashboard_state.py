@@ -853,6 +853,9 @@ def _extract_first_numeric(obj: Any, paths: List[List[str]]) -> Optional[float]:
 
 
 def load_kraken_metrics() -> Dict[str, Any]:
+    pg_live = load_kraken_metrics_from_action_events(symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"))
+    if pg_live:
+        return pg_live
     exec_state_path = _env_path(
         "KRAKEN_EXECUTION_STATE_JSON",
         _live_default("execution_state.json"),
@@ -981,6 +984,86 @@ def load_kraken_metrics() -> Dict[str, Any]:
         return {}
     return obj if isinstance(obj, dict) else {}
 
+def load_kraken_metrics_from_action_events(symbol: str = "SOL-USDT") -> Dict[str, Any]:
+    try:
+        sql = """
+            select
+                ts,
+                action_side,
+                position_after,
+                engine_mode_after,
+                payload_json
+            from action_events
+            where venue = 'kraken'
+              and symbol = %(symbol)s
+            order by ts desc
+            limit 1
+        """
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, {"symbol": symbol})
+            row = cur.fetchone()
+
+        if not row:
+            return {}
+
+        ts, action_side, position_after, engine_mode_after, payload_json = row
+
+        payload = payload_json or {}
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except Exception:
+                payload = {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        pos_num = pd.to_numeric(position_after, errors="coerce")
+        if pd.isna(pos_num):
+            pos_num = pd.to_numeric(payload.get("live_pos"), errors="coerce")
+
+        venue_pos_side = 0
+        if pd.notna(pos_num):
+            if float(pos_num) > 0:
+                venue_pos_side = 1
+            elif float(pos_num) < 0:
+                venue_pos_side = -1
+        else:
+            s = str(action_side or "").strip().lower()
+            if s in ("long", "buy", "1"):
+                venue_pos_side = 1
+            elif s in ("short", "sell", "-1"):
+                venue_pos_side = -1
+
+        entry_px = pd.to_numeric(payload.get("entry_px"), errors="coerce")
+        best_fav = pd.to_numeric(payload.get("best_fav"), errors="coerce")
+
+        eq_hist = load_kraken_equity_history(max_points=1)
+        latest_equity = _latest_equity_value_from_history(eq_hist)
+
+        return {
+            "ts": _to_ts_iso(ts),
+            "equity_usd": latest_equity,
+            "wallet_usd": latest_equity,
+            "upnl_usd": None,
+            "mark_price": None,
+            "target_size": None,
+            "gate_on": None,
+            "gate_source": "action_events",
+            "engine": "flip",
+            "mode": engine_mode_after or payload.get("mode"),
+            "pos_side": venue_pos_side,
+            "entry_px": float(entry_px) if pd.notna(entry_px) else None,
+            "best_fav": float(best_fav) if pd.notna(best_fav) else None,
+            "size_rem": float(pos_num) if pd.notna(pos_num) else 0.0,
+            "tp1_done": False,
+            "signal": None,
+            "signal_ts": None,
+            "venue_pos_side": venue_pos_side,
+            "venue_pos_size": float(pos_num) if pd.notna(pos_num) else 0.0,
+            "dry_run": None,
+        }
+    except Exception:
+        return {}
 
 def load_kraken_equity_history(max_points: int = 500) -> Dict[str, Any]:
     pg = load_equity_history_from_postgres(
