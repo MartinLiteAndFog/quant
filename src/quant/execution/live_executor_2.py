@@ -786,24 +786,41 @@ def _resolve_contract_multiplier(broker: KrakenOmsBroker, symbol: str) -> float:
     return 1.0
 
 
-def _kraken_strict_flatten_for_flip(*, broker: KrakenOmsBroker, symbol: str, current_side: str, qty: float) -> tuple[dict, float]:
+def _kraken_strict_flatten_for_flip(
+    *,
+    broker: KrakenOmsBroker,
+    symbol: str,
+    current_side: str,
+    qty: float,
+) -> tuple[dict, float]:
     try:
         broker.client.cancel_all_reduce_only_orders(symbol=broker._symbol(symbol))
     except Exception as e:
         log.warning("executor flip cancel reduce-only failed: %s", e)
 
+    close_side = "sell" if current_side == "long" else "buy"
+    client_id = f"kraken-flatten-{pd.Timestamp.now('UTC').strftime('%Y%m%d%H%M%S%f')}"
+
     try:
-        close_raw = broker.client.close_position(symbol=broker._symbol(symbol))
+        close_raw = broker.client.place_market(
+            side=close_side,
+            size=abs(float(qty)),
+            symbol=broker._symbol(symbol),
+            reduce_only=True,
+            cli_ord_id=client_id,
+        )
         close_data = close_raw.get("data") if isinstance(close_raw, dict) else None
+        send = (close_data or {}).get("sendStatus", close_data or {}) if isinstance(close_data, dict) else {}
+
         flat_res = {
             "ok": bool(isinstance(close_raw, dict) and close_raw.get("ok", False)),
-            "mode": "KRAKEN_CLOSE_POSITION",
+            "mode": "KRAKEN_FLATTEN_MKT",
             "details": {
                 "symbol": symbol,
-                "side": "sell" if current_side == "long" else "buy",
+                "side": close_side,
                 "qty": abs(float(qty)),
-                "order_id": ((close_data or {}).get("sendStatus") or {}).get("order_id") if isinstance(close_data, dict) else None,
-                "client_id": ((close_data or {}).get("sendStatus") or {}).get("cliOrdId") if isinstance(close_data, dict) else None,
+                "order_id": send.get("order_id") or send.get("orderId"),
+                "client_id": send.get("cliOrdId") or client_id,
                 "kind": "market",
                 "raw": close_raw,
             },
@@ -811,15 +828,18 @@ def _kraken_strict_flatten_for_flip(*, broker: KrakenOmsBroker, symbol: str, cur
     except Exception as e:
         flat_res = {
             "ok": False,
-            "mode": "KRAKEN_CLOSE_POSITION_ERR",
+            "mode": "KRAKEN_FLATTEN_MKT_ERR",
             "details": {
                 "symbol": symbol,
-                "side": "sell" if current_side == "long" else "buy",
+                "side": close_side,
                 "qty": abs(float(qty)),
                 "error": str(e),
             },
         }
-        return flat_res, float(broker.get_position(symbol)) if True else 0.0
+        try:
+            return flat_res, float(broker.get_position(symbol))
+        except Exception:
+            return flat_res, 0.0
 
     pos_after_flat = float(broker.get_position(symbol))
     if abs(pos_after_flat) > 1e-12:
@@ -827,6 +847,7 @@ def _kraken_strict_flatten_for_flip(*, broker: KrakenOmsBroker, symbol: str, cur
         while (time.time() - t0) < 5.0 and abs(pos_after_flat) > 1e-12:
             time.sleep(0.25)
             pos_after_flat = float(broker.get_position(symbol))
+
     return flat_res, pos_after_flat
 
 
@@ -1405,7 +1426,7 @@ def run_once(
         target_side_for_verify: Optional[str] = want_side if action.startswith(("enter_", "flip_to_", "scale_")) else None
 
         if action.startswith("enter_") and want_side is not None:
-            res = oms.enter(symbol=symbol, side=want_side, qty=float(qty))
+            res = oms.enter_market(symbol=symbol, side=want_side, qty=float(qty))
             log.info("executor enter result=%s", res)
             if _ok(res):
                 details = _details(res)
@@ -1514,7 +1535,7 @@ def run_once(
                     else:
                         log.info("executor flip re-size: pre=%s post=%s equity=%s contract_mult=%s", qty, flip_qty, fresh_equity, contract_multiplier)
                         target_qty_for_verify = float(flip_qty)
-                        res = oms.enter(symbol=symbol, side=want_side, qty=float(flip_qty))
+                        res = oms.enter_market(symbol=symbol, side=want_side, qty=float(flip_qty))
                         log.info("executor flip re-enter result=%s", res)
                         if _ok(res):
                             details = _details(res)
@@ -1543,7 +1564,13 @@ def run_once(
                 log.warning("executor flip aborted: flatten failed")
 
         elif action.startswith("exit_"):
-            res = oms.exit_sl(symbol=symbol, side=current_side, qty=abs(float(pos)))
+            try:
+                broker.client.cancel_all_reduce_only_orders(symbol=broker._symbol(symbol))
+            except Exception as e:
+                log.warning("executor exit cancel reduce-only failed: %s", e)
+
+            res = oms.flatten_market(symbol=symbol, side=current_side, qty=abs(float(pos)))
+
             log.info("executor exit result=%s", res)
             target_side_for_verify = None
             target_qty_for_verify = abs(float(pos))
@@ -1588,7 +1615,7 @@ def run_once(
             add_qty = max(0.0, float(qty) - abs(float(pos)))
             if add_qty > 0:
                 target_qty_for_verify = abs(float(pos)) + float(add_qty)
-                res = oms.enter(symbol=symbol, side=want_side, qty=add_qty)
+                res = oms.enter_market(symbol=symbol, side=want_side, qty=add_qty)
                 log.info("executor scale result=%s add_qty=%s target_qty=%s pos_before=%s", res, add_qty, qty, pos)
                 if _ok(res):
                     details = _details(res)

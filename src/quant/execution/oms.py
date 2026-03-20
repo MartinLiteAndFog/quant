@@ -204,6 +204,23 @@ class MakerFirstOMS:
             pass
         return self._fallback_market(symbol, want_side, qty, reduce_only=False, mode="FB_MKT_FLIP")
 
+    def enter_market(self, symbol: str, side: Literal["long", "short"], qty: float) -> OmsResult:
+        want_side: Side = "buy" if side == "long" else "sell"
+        try:
+            self.broker.cancel_all(symbol)
+        except Exception:
+            pass
+        return self._fallback_market(symbol, want_side, qty, reduce_only=False, mode="ENTRY_MKT")
+
+
+    def flatten_market(self, symbol: str, side: Literal["long", "short"], qty: float) -> OmsResult:
+        exit_side: Side = "sell" if side == "long" else "buy"
+        try:
+            self.broker.cancel_all(symbol)
+        except Exception:
+            pass
+        return self._fallback_market(symbol, exit_side, qty, reduce_only=True, mode="FLAT_MKT")    
+
     def _tp_maker_first_or_fallback(self, symbol: str, side: Side, qty: float, reduce_only: bool, reason: Reason) -> OmsResult:
         bid, ask = self.broker.get_best_bid_ask(symbol)
         ref = (ask if side == "sell" else bid) or (bid if side == "sell" else ask)
