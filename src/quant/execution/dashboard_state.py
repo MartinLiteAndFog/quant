@@ -1730,7 +1730,16 @@ def _performance_trade_frame(
     df["exit_ts"] = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
     df["pnl_pct"] = pd.to_numeric(df.get("pnl_pct"), errors="coerce")
     df = df.dropna(subset=["exit_ts", "pnl_pct"]).sort_values("exit_ts").reset_index(drop=True)
+    df = df[df["exit_ts"] >= pd.Timestamp("2026-03-10T00:00:00Z")]
 
+    if "strategy" in df.columns:
+        if venue == "kucoin":
+            df = df[df["strategy"].astype(str) == "live_executor"]
+        elif venue == "kraken":
+            df = df[df["strategy"].astype(str) == "live_executor_2"]
+
+    df = df.reset_index(drop=True)
+    
     return df, source
 
 
