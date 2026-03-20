@@ -17,7 +17,11 @@ from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
 from quant.execution.event_builders import build_action_event, build_execution_event
 from quant.execution.event_log import append_event_jsonl
-from quant.execution.event_store import insert_action_event, insert_execution_event
+from quant.execution.event_store import (
+    insert_action_event,
+    insert_execution_event,
+    upsert_closed_trade,
+)
 from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
 from quant.strategies.signal_io import read_signals_jsonl
 from quant.utils.log import get_logger, log_throttled
@@ -232,6 +236,90 @@ def _append_execution_event(
         log.warning("kucoin postgres execution event failed: %s", e)
 
 
+def _resolve_trade_exit_price(details: Dict[str, Any], fallback_px: Optional[float]) -> Optional[float]:
+    for key in ("price", "avg_fill_price", "fill_price", "avgPrice", "limit_px", "limitPrice"):
+        px = _coerce_float(details.get(key))
+        if px is not None and px > 0:
+            return float(px)
+    if fallback_px is not None and float(fallback_px) > 0:
+        return float(fallback_px)
+    return None
+
+
+def _append_closed_trade(
+    *,
+    symbol: str,
+    current_side: str,
+    terminal: Optional[Dict[str, Any]],
+    details: Dict[str, Any],
+    event_name: str,
+    action: str,
+    position_before: int,
+    position_after: int,
+    seq: int,
+    qty_default: float,
+    exit_px_fallback: Optional[float],
+) -> None:
+    entry_px_realized = _coerce_float((terminal or {}).get("entry_px"))
+    exit_px_realized = _resolve_trade_exit_price(details, exit_px_fallback)
+    qty_realized = _coerce_float(details.get("qty", qty_default))
+
+    entry_ts_raw = (terminal or {}).get("entry_bar_ts")
+    entry_ts = pd.to_datetime(entry_ts_raw, utc=True, errors="coerce")
+    exit_ts = pd.to_datetime(_now_iso(), utc=True)
+
+    if entry_px_realized is None or exit_px_realized is None or qty_realized is None:
+        log.warning(
+            "kucoin closed trade skipped: missing prices/qty action=%s event=%s entry_px=%s exit_px=%s qty=%s",
+            action,
+            event_name,
+            entry_px_realized,
+            exit_px_realized,
+            qty_realized,
+        )
+        return
+
+    if entry_px_realized <= 0 or qty_realized <= 0:
+        return
+
+    side_mult = 1.0 if current_side == "long" else -1.0
+    pnl_pct_realized = (
+        ((float(exit_px_realized) - float(entry_px_realized)) / float(entry_px_realized))
+        * 100.0
+        * side_mult
+    )
+
+    try:
+        upsert_closed_trade(
+            {
+                "trade_id": f"{symbol}:{_now_iso()}:{action}:{seq}",
+                "venue": "kucoin",
+                "symbol": symbol,
+                "entry_ts": entry_ts,
+                "exit_ts": exit_ts,
+                "side": current_side,
+                "qty": float(qty_realized),
+                "entry_price": float(entry_px_realized),
+                "exit_price": float(exit_px_realized),
+                "pnl_pct": float(pnl_pct_realized),
+                "exit_event": event_name,
+                "strategy": "live_executor",
+                "strategy_instance": "live_executor",
+                "config_hash": "live_executor_v1",
+                "source_action_event_id": None,
+                "payload_json": {
+                    "kind": "closed_trade",
+                    "action": action,
+                    "event_name": event_name,
+                    "position_before": position_before,
+                    "position_after": position_after,
+                },
+            }
+        )
+    except Exception as e:
+        log.warning("kucoin postgres closed trade failed: %s", e)
+
+
 def _resolve_ttp_trail_pct() -> float:
     raw = os.getenv("LIVE_FLIP_TTP_TRAIL_PCT", os.getenv("LIVE_TTP_TRAIL_PCT", "0.012"))
     try:
@@ -439,9 +527,6 @@ def _latest_backtest_event(
         be_trigger_pct=float(os.getenv("LIVE_FLIP_BE_TRIGGER_PCT", "0")),
         be_offset_pct=float(os.getenv("LIVE_FLIP_BE_OFFSET_PCT", "0")),
     )
-    # regime_on=None: live executor does not use regime to force-flatten positions.
-    # Regime gate controls exit strategy selection (TTP vs TP1/2), not position lifecycle.
-    # regime_forces_flat=False: never flatten a live trade due to regime change.
     _, events, terminal = run_flip_state_machine(
         bars=renko_bars,
         signals_df=signals_df,
@@ -1070,6 +1155,19 @@ def run_once(
                     reject_reason=None,
                     payload_json={"action": "flip_flatten", "result": flat_details, "event_name": event_name},
                 )
+                _append_closed_trade(
+                    symbol=symbol,
+                    current_side=current_side,
+                    terminal=terminal,
+                    details=flat_details,
+                    event_name=event_name,
+                    action="flip_flatten",
+                    position_before=position_before,
+                    position_after=0,
+                    seq=int(state.n_executions),
+                    qty_default=abs(float(pos)),
+                    exit_px_fallback=float(mid) if mid and mid > 0 else None,
+                )
 
                 pos_after_flat = float(broker.get_position(symbol))
                 if abs(pos_after_flat) > 1e-12:
@@ -1152,6 +1250,19 @@ def run_once(
                     status=_mode(res) or "fill",
                     reject_reason=None,
                     payload_json={"action": action, "result": details, "event_name": event_name},
+                )
+                _append_closed_trade(
+                    symbol=symbol,
+                    current_side=current_side,
+                    terminal=terminal,
+                    details=details,
+                    event_name=event_name,
+                    action=action,
+                    position_before=position_before,
+                    position_after=0,
+                    seq=int(state.n_executions),
+                    qty_default=abs(float(pos)),
+                    exit_px_fallback=float(mid) if mid and mid > 0 else None,
                 )
 
         elif action.startswith("scale_") and want_side is not None:
