@@ -835,6 +835,23 @@ def _latest_equity_value_from_history(history: Dict[str, Any]) -> Optional[float
     return None
 
 
+def _extract_first_numeric(obj: Any, paths: List[List[str]]) -> Optional[float]:
+    for path in paths:
+        cur = obj
+        ok = True
+        for key in path:
+            if not isinstance(cur, dict) or key not in cur:
+                ok = False
+                break
+            cur = cur.get(key)
+        if not ok:
+            continue
+        val = pd.to_numeric(cur, errors="coerce")
+        if pd.notna(val):
+            return float(val)
+    return None
+
+
 def load_kraken_metrics() -> Dict[str, Any]:
     exec_state_path = _env_path(
         "KRAKEN_EXECUTION_STATE_JSON",
@@ -864,15 +881,80 @@ def load_kraken_metrics() -> Dict[str, Any]:
             elif side_raw in ("short", "sell", "-1"):
                 venue_pos_side = -1
 
-            equity_hist = load_kraken_equity_history(max_points=1)
-            latest_equity = _latest_equity_value_from_history(equity_hist)
+            equity_usd = _extract_first_numeric(
+                obj,
+                [
+                    ["equity_usd"],
+                    ["equity"],
+                    ["wallet_usd"],
+                    ["wallet"],
+                    ["capital"],
+                    ["balance"],
+                    ["account_equity"],
+                    ["account", "equity_usd"],
+                    ["account", "equity"],
+                    ["venue", "equity_usd"],
+                    ["venue", "equity"],
+                    ["terminal", "equity_usd"],
+                    ["terminal", "equity"],
+                ],
+            )
+
+            wallet_usd = _extract_first_numeric(
+                obj,
+                [
+                    ["wallet_usd"],
+                    ["wallet"],
+                    ["balance"],
+                    ["account", "wallet_usd"],
+                    ["account", "wallet"],
+                    ["venue", "wallet_usd"],
+                    ["venue", "wallet"],
+                    ["terminal", "wallet_usd"],
+                    ["terminal", "wallet"],
+                ],
+            )
+
+            upnl_usd = _extract_first_numeric(
+                obj,
+                [
+                    ["upnl_usd"],
+                    ["upl_usd"],
+                    ["unrealized_pnl"],
+                    ["unrealized_pnl_usd"],
+                    ["account", "upnl_usd"],
+                    ["venue", "upnl_usd"],
+                    ["terminal", "upnl_usd"],
+                ],
+            )
+
+            mark_price = _extract_first_numeric(
+                obj,
+                [
+                    ["mark_price"],
+                    ["mark"],
+                    ["market", "mid"],
+                    ["market", "mark"],
+                    ["terminal", "mark_price"],
+                    ["terminal", "mark"],
+                    ["venue", "mark_price"],
+                    ["venue", "mark"],
+                ],
+            )
+
+            if equity_usd is None:
+                equity_hist = load_kraken_equity_history(max_points=1)
+                equity_usd = _latest_equity_value_from_history(equity_hist)
+
+            if wallet_usd is None:
+                wallet_usd = equity_usd
 
             return {
                 "ts": _to_ts_iso(obj.get("updated_at") or obj.get("ts")),
-                "equity_usd": latest_equity,
-                "wallet_usd": latest_equity,
-                "upnl_usd": None,
-                "mark_price": None,
+                "equity_usd": equity_usd,
+                "wallet_usd": wallet_usd,
+                "upnl_usd": upnl_usd,
+                "mark_price": mark_price,
                 "target_size": None,
                 "gate_on": None,
                 "gate_source": "execution_state",
