@@ -821,17 +821,83 @@ def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
 
 
 def load_kraken_metrics() -> Dict[str, Any]:
-    redis_url = os.getenv("REDIS_URL", "").strip()
-    if redis_url:
-        try:
-            import redis as redis_lib
+    exec_state_path = _env_path(
+        "KRAKEN_EXECUTION_STATE_JSON",
+        _live_default("execution_state.json"),
+    )
 
-            r = redis_lib.from_url(redis_url, decode_responses=True)
-            raw = r.get("kraken:metrics:latest")
-            if raw:
-                obj = json.loads(raw)
-                if isinstance(obj, dict):
-                    return obj
+    if exec_state_path.exists():
+        try:
+            obj = json.loads(exec_state_path.read_text(encoding="utf-8"))
+            if isinstance(obj, dict) and obj:
+                side_raw = obj.get("side")
+                live_pos = pd.to_numeric(obj.get("live_pos"), errors="coerce")
+                mark_price = None
+
+                try:
+                    terminal = obj.get("terminal") or {}
+                    if isinstance(terminal, dict):
+                        mark_price = pd.to_numeric(terminal.get("mark_price"), errors="coerce")
+                except Exception:
+                    mark_price = None
+
+                venue_pos_side = 0
+                if pd.notna(live_pos):
+                    if float(live_pos) > 0:
+                        venue_pos_side = 1
+                    elif float(live_pos) < 0:
+                        venue_pos_side = -1
+
+                if venue_pos_side == 0:
+                    s = str(side_raw or "").strip().lower()
+                    if s in ("long", "buy", "1"):
+                        venue_pos_side = 1
+                    elif s in ("short", "sell", "-1"):
+                        venue_pos_side = -1
+
+                out = {
+                    "ts": obj.get("updated_at") or obj.get("ts"),
+                    "equity_usd": None,
+                    "wallet_usd": None,
+                    "upnl_usd": None,
+                    "mark_price": float(mark_price) if pd.notna(mark_price) else None,
+                    "target_size": None,
+                    "gate_on": None,
+                    "gate_source": "execution_state",
+                    "engine": "flip",
+                    "mode": obj.get("mode"),
+                    "pos_side": venue_pos_side,
+                    "entry_px": pd.to_numeric(obj.get("entry_px"), errors="coerce"),
+                    "best_fav": pd.to_numeric(obj.get("best_fav"), errors="coerce"),
+                    "size_rem": float(live_pos) if pd.notna(live_pos) else 0.0,
+                    "tp1_done": False,
+                    "signal": None,
+                    "signal_ts": None,
+                    "venue_pos_side": venue_pos_side,
+                    "venue_pos_size": float(live_pos) if pd.notna(live_pos) else 0.0,
+                    "dry_run": None,
+                }
+
+                eq_hist = load_kraken_equity_history(max_points=1)
+                pts = eq_hist.get("points", []) if isinstance(eq_hist, dict) else []
+                if pts:
+                    try:
+                        out["equity_usd"] = float(pts[-1].get("equity"))
+                        out["wallet_usd"] = float(pts[-1].get("equity"))
+                        out["upnl_usd"] = 0.0
+                    except Exception:
+                        pass
+
+                for k in ("entry_px", "best_fav"):
+                    try:
+                        if pd.isna(out[k]):
+                            out[k] = None
+                        elif out[k] is not None:
+                            out[k] = float(out[k])
+                    except Exception:
+                        out[k] = None
+
+                return out
         except Exception:
             pass
 
