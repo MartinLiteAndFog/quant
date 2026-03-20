@@ -19,7 +19,7 @@ from quant.execution.gate_provider_2 import fetch_gate
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
 from quant.execution.event_builders import build_action_event, build_execution_event
 from quant.execution.event_log import append_event_jsonl
-from quant.execution.event_store import insert_action_event, insert_execution_event
+from quant.execution.event_store import insert_action_event, insert_execution_event, insert_equity_snapshot
 from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
 from quant.strategies.signal_io import read_signals_jsonl
 from quant.utils.log import get_logger, log_throttled
@@ -244,6 +244,34 @@ def _events_root() -> Path:
         return Path("/data/events")
     return Path("data/events")
 
+def _append_equity_snapshot(
+    *,
+    ts_iso: str,
+    equity: Optional[float],
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    try:
+        eq = float(equity) if equity is not None else None
+        if eq is None or eq <= 0:
+            return
+        ts = pd.to_datetime(ts_iso, utc=True, errors="coerce")
+        if pd.isna(ts):
+            ts = pd.Timestamp.now("UTC")
+
+        insert_equity_snapshot(
+            {
+                "ts": ts,
+                "venue": "kraken",
+                "account": "main",
+                "symbol": None,
+                "equity": eq,
+                "currency": "USD",
+                "source": "live_executor_2",
+                "payload_json": payload or {"equity_usd": eq},
+            }
+        )
+    except Exception:
+        pass
 
 def _append_action_event(
     *,
@@ -982,6 +1010,20 @@ def run_once(
 
     pos_pct = float(os.getenv("LIVE_EXECUTOR_2_POS_PCT", os.getenv("KRAKEN_EQUITY_PCT", os.getenv("LIVE_EXECUTOR_POS_PCT", "0.90"))))
     equity = _resolve_equity(broker)
+     
+    _append_equity_snapshot(
+        ts_iso=_now_iso(),
+        equity=equity,
+        payload={
+            "equity_usd": float(equity) if equity is not None else None,
+            "symbol": symbol,
+            "position": float(pos),
+            "side": current_side,
+            "gate_on": gate_on,
+            "source": "run_once",
+        },
+    )
+
     contract_multiplier = _resolve_contract_multiplier(broker, symbol)
     qty = _qty_from_equity_pct(
         equity=equity,
@@ -1337,6 +1379,18 @@ def run_once(
                     fresh_bid, fresh_ask = broker.get_best_bid_ask(symbol)
                     fresh_mid = (fresh_bid + fresh_ask) / 2.0 if (fresh_bid and fresh_ask) else (fresh_ask or fresh_bid or mid or 0.0)
                     fresh_equity = _resolve_equity(broker)
+                    _append_equity_snapshot(
+                        ts_iso=_now_iso(),
+                        equity=fresh_equity,
+                        payload={
+                            "equity_usd": float(fresh_equity) if fresh_equity is not None else None,
+                            "symbol": symbol,
+                            "position": float(pos_after_flat),
+                            "side": "flat" if abs(float(pos_after_flat)) <= 1e-12 else current_side,
+                            "gate_on": gate_on,
+                            "source": "post_flip_flatten",
+                        },
+                    )
                     flip_qty = _qty_from_equity_pct(
                         equity=fresh_equity,
                         pos_pct=pos_pct,
