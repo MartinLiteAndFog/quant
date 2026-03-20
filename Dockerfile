@@ -10,6 +10,8 @@ RUN npm run build
 FROM python:3.12-slim
 WORKDIR /app
 
+RUN apt-get update && apt-get install -y curl jq && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml .
 COPY src ./src
 COPY data/regimes/pc_3axis_gate_latest.csv ./data/regimes/pc_3axis_gate_latest.csv
