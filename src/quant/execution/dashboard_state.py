@@ -1016,7 +1016,16 @@ def load_kraken_metrics_from_action_events(symbol: str = "SOL-USDT") -> Dict[str
         if not isinstance(payload, dict):
             payload = {}
 
-        pos_num = pd.to_numeric(payload.get("live_pos"), errors="coerce")
+        inner_payload = payload.get("payload_json", {})
+        if isinstance(inner_payload, str):
+            try:
+                inner_payload = json.loads(inner_payload)
+            except Exception:
+                inner_payload = {}
+        if not isinstance(inner_payload, dict):
+            inner_payload = {}
+
+        pos_num = pd.to_numeric(inner_payload.get("live_pos"), errors="coerce")
         
         venue_pos_side = 0
         if pd.notna(pos_num):
