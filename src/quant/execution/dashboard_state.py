@@ -853,9 +853,6 @@ def _extract_first_numeric(obj: Any, paths: List[List[str]]) -> Optional[float]:
 
 
 def load_kraken_metrics() -> Dict[str, Any]:
-    pg_live = load_kraken_metrics_from_action_events(symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"))
-    if pg_live:
-        return pg_live
     exec_state_path = _env_path(
         "KRAKEN_EXECUTION_STATE_JSON",
         _live_default("execution_state.json"),
@@ -866,6 +863,8 @@ def load_kraken_metrics() -> Dict[str, Any]:
             obj = json.loads(exec_state_path.read_text(encoding="utf-8"))
         except Exception:
             obj = None
+
+    
 
         if isinstance(obj, dict) and obj:
             live_pos_num = pd.to_numeric(obj.get("live_pos"), errors="coerce")
@@ -974,6 +973,10 @@ def load_kraken_metrics() -> Dict[str, Any]:
                 "venue_pos_size": float(live_pos_num) if pd.notna(live_pos_num) else 0.0,
                 "dry_run": None,
             }
+        
+    pg_live = load_kraken_metrics_from_action_events(symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"))
+    if pg_live:
+        return pg_live
 
     p = _env_path("KRAKEN_METRICS_JSON", _live_default("kraken/metrics.json"))
     if not p.exists():
