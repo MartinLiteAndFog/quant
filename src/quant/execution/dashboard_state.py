@@ -717,7 +717,7 @@ def load_equity_history_from_postgres(
     try:
         if account is None:
             sql = """
-                select ts, equity, currency, source
+                select ts, equity, currency, source, payload_json
                 from equity_snapshots
                 where venue = %(venue)s
                 order by ts desc
@@ -726,7 +726,7 @@ def load_equity_history_from_postgres(
             params = {"venue": venue, "limit": int(max(1, max_points))}
         else:
             sql = """
-                select ts, equity, currency, source
+                select ts, equity, currency, source, payload_json
                 from equity_snapshots
                 where venue = %(venue)s
                   and account = %(account)s
@@ -751,6 +751,7 @@ def load_equity_history_from_postgres(
             {
                 "time": int(pd.Timestamp(r[0]).timestamp()),
                 "equity": float(r[1]),
+                "payload_json": r[4] if len(r) >= 5 else None,
             }
             for r in rows
         ]
@@ -853,127 +854,59 @@ def _extract_first_numeric(obj: Any, paths: List[List[str]]) -> Optional[float]:
 
 
 def load_kraken_metrics() -> Dict[str, Any]:
-    exec_state_path = _env_path(
-        "KRAKEN_EXECUTION_STATE_JSON",
-        _live_default("execution_state.json"),
-    )
+     
+    equity_hist = load_kraken_equity_history(max_points=1)
+    latest_points = equity_hist.get("points") or []
+    if latest_points:
+        latest = latest_points[-1] or {}
+        snap_payload = latest.get("payload_json") or {}
+        if isinstance(snap_payload, str):
+            try:
+                snap_payload = json.loads(snap_payload)
+            except Exception:
+                snap_payload = {}
+        if not isinstance(snap_payload, dict):
+            snap_payload = {}
 
-    if exec_state_path.exists():
-        try:
-            obj = json.loads(exec_state_path.read_text(encoding="utf-8"))
-        except Exception:
-            obj = None
+        snap_pos_qty = pd.to_numeric(snap_payload.get("position_qty"), errors="coerce")
+        snap_pos_side = pd.to_numeric(snap_payload.get("position_side"), errors="coerce")
 
-    
-
-        if isinstance(obj, dict) and obj:
-            live_pos_num = pd.to_numeric(obj.get("live_pos"), errors="coerce")
-            entry_px_num = pd.to_numeric(obj.get("entry_px"), errors="coerce")
-            best_fav_num = pd.to_numeric(obj.get("best_fav"), errors="coerce")
-            side_raw = str(obj.get("side") or "").strip().lower()
-
+        if pd.notna(snap_pos_qty):
             venue_pos_side = 0
-            if pd.notna(live_pos_num):
-                if float(live_pos_num) > 0:
+            if pd.notna(snap_pos_side):
+                venue_pos_side = int(snap_pos_side)
+            elif float(snap_pos_qty) > 0:
+                side_raw = str(snap_payload.get("side") or "").strip().lower()
+                if side_raw in ("long", "buy", "1"):
                     venue_pos_side = 1
-                elif float(live_pos_num) < 0:
+                elif side_raw in ("short", "sell", "-1"):
                     venue_pos_side = -1
-            elif side_raw in ("long", "buy", "1"):
-                venue_pos_side = 1
-            elif side_raw in ("short", "sell", "-1"):
-                venue_pos_side = -1
 
-            equity_usd = _extract_first_numeric(
-                obj,
-                [
-                    ["equity_usd"],
-                    ["equity"],
-                    ["wallet_usd"],
-                    ["wallet"],
-                    ["capital"],
-                    ["balance"],
-                    ["account_equity"],
-                    ["account", "equity_usd"],
-                    ["account", "equity"],
-                    ["venue", "equity_usd"],
-                    ["venue", "equity"],
-                    ["terminal", "equity_usd"],
-                    ["terminal", "equity"],
-                ],
-            )
-
-            wallet_usd = _extract_first_numeric(
-                obj,
-                [
-                    ["wallet_usd"],
-                    ["wallet"],
-                    ["balance"],
-                    ["account", "wallet_usd"],
-                    ["account", "wallet"],
-                    ["venue", "wallet_usd"],
-                    ["venue", "wallet"],
-                    ["terminal", "wallet_usd"],
-                    ["terminal", "wallet"],
-                ],
-            )
-
-            upnl_usd = _extract_first_numeric(
-                obj,
-                [
-                    ["upnl_usd"],
-                    ["upl_usd"],
-                    ["unrealized_pnl"],
-                    ["unrealized_pnl_usd"],
-                    ["account", "upnl_usd"],
-                    ["venue", "upnl_usd"],
-                    ["terminal", "upnl_usd"],
-                ],
-            )
-
-            mark_price = _extract_first_numeric(
-                obj,
-                [
-                    ["mark_price"],
-                    ["mark"],
-                    ["market", "mid"],
-                    ["market", "mark"],
-                    ["terminal", "mark_price"],
-                    ["terminal", "mark"],
-                    ["venue", "mark_price"],
-                    ["venue", "mark"],
-                ],
-            )
-
-            if equity_usd is None:
-                equity_hist = load_kraken_equity_history(max_points=1)
-                equity_usd = _latest_equity_value_from_history(equity_hist)
-
-            if wallet_usd is None:
-                wallet_usd = equity_usd
+            latest_equity = _latest_equity_value_from_history(equity_hist)
 
             return {
-                "ts": _to_ts_iso(obj.get("updated_at") or obj.get("ts")),
-                "equity_usd": equity_usd,
-                "wallet_usd": wallet_usd,
-                "upnl_usd": upnl_usd,
-                "mark_price": mark_price,
+                "ts": _to_ts_iso(latest.get("time")),
+                "equity_usd": latest_equity,
+                "wallet_usd": latest_equity,
+                "upnl_usd": None,
+                "mark_price": None,
                 "target_size": None,
                 "gate_on": None,
-                "gate_source": "execution_state",
+                "gate_source": "postgres_snapshot",
                 "engine": "flip",
-                "mode": obj.get("mode"),
+                "mode": snap_payload.get("mode"),
                 "pos_side": venue_pos_side,
-                "entry_px": float(entry_px_num) if pd.notna(entry_px_num) else None,
-                "best_fav": float(best_fav_num) if pd.notna(best_fav_num) else None,
-                "size_rem": float(live_pos_num) if pd.notna(live_pos_num) else 0.0,
+                "entry_px": None,
+                "best_fav": None,
+                "size_rem": float(snap_pos_qty),
                 "tp1_done": False,
                 "signal": None,
                 "signal_ts": None,
                 "venue_pos_side": venue_pos_side,
-                "venue_pos_size": float(live_pos_num) if pd.notna(live_pos_num) else 0.0,
+                "venue_pos_size": float(snap_pos_qty),
                 "dry_run": None,
             }
-        
+
     pg_live = load_kraken_metrics_from_action_events(symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"))
     if pg_live:
         return pg_live

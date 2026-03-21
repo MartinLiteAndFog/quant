@@ -254,6 +254,8 @@ def _append_equity_snapshot(
     *,
     ts_iso: str,
     equity: Optional[float],
+    position_qty: Optional[float] = None,
+    position_side: Optional[int] = None,
     payload: Optional[Dict[str, Any]] = None,
 ) -> None:
     try:
@@ -264,6 +266,12 @@ def _append_equity_snapshot(
         if pd.isna(ts):
             ts = pd.Timestamp.now("UTC")
 
+        base_payload: Dict[str, Any] = dict(payload or {"equity_usd": eq})
+        if position_qty is not None:
+            base_payload["position_qty"] = float(position_qty)
+        if position_side is not None:
+            base_payload["position_side"] = int(position_side)
+
         insert_equity_snapshot(
             {
                 "ts": ts,
@@ -273,7 +281,7 @@ def _append_equity_snapshot(
                 "equity": eq,
                 "currency": "USD",
                 "source": "live_executor_2",
-                "payload_json": payload or {"equity_usd": eq},
+                "payload_json": base_payload,
             }
         )
     except Exception:
@@ -1127,6 +1135,8 @@ def run_once(
     _append_equity_snapshot(
         ts_iso=_now_iso(),
         equity=equity,
+        position_qty=abs(float(pos)),
+        position_side=(1 if float(pos) > 0 else -1 if float(pos) < 0 else 0),
         payload={
             "equity_usd": float(equity) if equity is not None else None,
             "symbol": symbol,
@@ -1507,6 +1517,8 @@ def run_once(
                     _append_equity_snapshot(
                         ts_iso=_now_iso(),
                         equity=fresh_equity,
+                        position_qty=abs(float(pos_after_flat)),
+                        position_side=(1 if float(pos_after_flat) > 0 else -1 if float(pos_after_flat) < 0 else 0),
                         payload={
                             "equity_usd": float(fresh_equity) if fresh_equity is not None else None,
                             "symbol": symbol,
@@ -1516,6 +1528,7 @@ def run_once(
                             "source": "post_flip_flatten",
                         },
                     )
+                    
                     flip_qty = _qty_from_equity_pct(
                         equity=fresh_equity,
                         pos_pct=pos_pct,
