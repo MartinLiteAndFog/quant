@@ -1016,10 +1016,8 @@ def load_kraken_metrics_from_action_events(symbol: str = "SOL-USDT") -> Dict[str
         if not isinstance(payload, dict):
             payload = {}
 
-        pos_num = pd.to_numeric(position_after, errors="coerce")
-        if pd.isna(pos_num):
-            pos_num = pd.to_numeric(payload.get("live_pos"), errors="coerce")
-
+        pos_num = pd.to_numeric(payload.get("live_pos"), errors="coerce")
+        
         venue_pos_side = 0
         if pd.notna(pos_num):
             if float(pos_num) > 0:
