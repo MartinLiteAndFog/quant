@@ -64,6 +64,11 @@ function fmtPct(v: number | null | undefined, digits = 2): string {
   return `${fmt(v, digits)}%`;
 }
 
+function fmtInt(v: number | null | undefined): string {
+  if (v == null || !isFinite(v)) return "—";
+  return Math.round(v).toLocaleString();
+}
+
 function sideColor(side: string | null | undefined): string {
   if (!side) return "text-zinc-500";
   const s = side.toLowerCase();
@@ -231,6 +236,23 @@ export function Sidebar({
             <span className="text-zinc-400">Average gain</span>
             <span>{fmtPct(performance?.average_gain)}</span>
           </div>
+          <div className="mt-2 border-t border-zinc-800 pt-2" />
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-zinc-400">Trades</span>
+            <span>{fmtInt(performance?.trade_count)}</span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-zinc-400">Wins</span>
+            <span className="text-emerald-400">
+              {fmtInt(performance?.winning_trade_count)}
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-3">
+            <span className="text-zinc-400">Losses</span>
+            <span className="text-red-400">
+              {fmtInt(performance?.losing_trade_count)}
+            </span>
+          </div>
         </div>
       </SectionCard>
 
@@ -258,23 +280,45 @@ export function Sidebar({
                     side === "long" ? "text-emerald-400" : "text-red-400"
                   }
                 >
-                  {side.toUpperCase()}
+                  Side: {sideLabel(side)}
                 </div>
               )}
-              {entryPx != null && <div>Entry: {entryPx.toFixed(2)}</div>}
+              {mode && (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-zinc-400">Mode</span>
+                  <span>{mode}</span>
+                </div>
+              )}
+              {entryPx != null && (
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-zinc-400">Entry</span>
+                  <span>{fmt(entryPx, 4)}</span>
+                </div>
+              )}
               {sl != null && (
-                <div className="text-red-400">SL: {Number(sl).toFixed(2)}</div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-zinc-400">SL</span>
+                  <span>{fmt(sl, 4)}</span>
+                </div>
               )}
               {ttp != null && (
-                <div className="text-amber-400">TTP: {ttp.toFixed(2)}</div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-zinc-400">TTP</span>
+                  <span>{fmt(ttp, 4)}</span>
+                </div>
               )}
               {tp1 != null && (
-                <div className="text-blue-400">TP1: {tp1.toFixed(2)}</div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-zinc-400">TP1</span>
+                  <span>{fmt(tp1, 4)}</span>
+                </div>
               )}
               {tp2 != null && (
-                <div className="text-purple-400">TP2: {tp2.toFixed(2)}</div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-zinc-400">TP2</span>
+                  <span>{fmt(tp2, 4)}</span>
+                </div>
               )}
-              {mode && <div className="text-zinc-400">Mode: {mode}</div>}
             </div>
           );
         })()}
