@@ -43,7 +43,7 @@ export default function Dashboard() {
   const statusQuery = useStatus();
   const positionQuery = usePosition();
   const strategyQuery = useDashboardStrategy(symbol);
-  const performanceQuery = useDashboardPerformance(symbol, "kucoin");
+  const performanceQuery = useDashboardPerformance(symbol, "kraken");
 
   const chartData = chartQuery.data;
   const status = statusQuery.data ?? null;
