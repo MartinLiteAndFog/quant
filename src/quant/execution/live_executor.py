@@ -1102,7 +1102,7 @@ def run_once(
         target_side_for_verify: Optional[str] = want_side if action.startswith(("enter_", "flip_to_", "scale_")) else None
 
         if action.startswith("enter_") and want_side is not None:
-            res = oms.enter(symbol=symbol, side=want_side, qty=float(qty))
+            res = oms.enter_market(symbol=symbol, side=want_side, qty=float(qty))
             log.info("executor enter result=%s", res)
             if _ok(res):
                 details = _details(res)
@@ -1129,7 +1129,7 @@ def run_once(
                 )
 
         elif action.startswith("flip_to_") and want_side is not None:
-            flat_res = oms.exit_tp_or_flip(symbol=symbol, side=current_side, qty=abs(float(pos)), flip_to=None)
+            flat_res = oms.flatten_market(symbol=symbol, side=current_side, qty=abs(float(pos)))
             log.info("executor flip flatten result=%s", flat_res)
 
             if _ok(flat_res):
@@ -1195,7 +1195,7 @@ def run_once(
                     else:
                         log.info("executor flip re-size: pre=%s post=%s equity=%s contract_mult=%s", qty, flip_qty, fresh_equity, contract_multiplier)
                         target_qty_for_verify = float(flip_qty)
-                        res = oms.enter_aggressive(symbol=symbol, side=want_side, qty=float(flip_qty))
+                        res = oms.enter_market(symbol=symbol, side=want_side, qty=float(flip_qty))
                         log.info("executor flip re-enter result=%s", res)
                         if _ok(res):
                             details = _details(res)
@@ -1224,7 +1224,7 @@ def run_once(
                 log.warning("executor flip aborted: flatten failed")
 
         elif action.startswith("exit_"):
-            res = oms.exit_sl(symbol=symbol, side=current_side, qty=abs(float(pos)))
+            res = oms.flatten_market(symbol=symbol, side=current_side, qty=abs(float(pos)))
             log.info("executor exit result=%s", res)
             target_side_for_verify = None
             target_qty_for_verify = abs(float(pos))
@@ -1269,7 +1269,7 @@ def run_once(
             add_qty = max(0.0, float(qty) - abs(float(pos)))
             if add_qty > 0:
                 target_qty_for_verify = abs(float(pos)) + float(add_qty)
-                res = oms.enter(symbol=symbol, side=want_side, qty=add_qty)
+                res = oms.enter_market(symbol=symbol, side=want_side, qty=add_qty)
                 log.info("executor scale result=%s add_qty=%s target_qty=%s pos_before=%s", res, add_qty, qty, pos)
                 if _ok(res):
                     details = _details(res)
