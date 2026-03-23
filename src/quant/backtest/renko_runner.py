@@ -422,7 +422,8 @@ def _load_external_regime_to_bricks(
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-
+    
+    ap.add_argument("--min-opposite-bricks", type=int, default=0, help="Minimum brick distance required before opposite IMBA may flip")
     ap.add_argument("--parquet", required=True)
     ap.add_argument("--box", type=float, default=0.1)
     ap.add_argument("--fee-bps", type=float, default=4.0)
@@ -548,6 +549,7 @@ def main() -> None:
         min_sl_pct=float(args.min_sl_pct),
         max_sl_pct=float(args.max_sl_pct),
         swing_lookback=int(args.swing_lookback),
+        min_opposite_bricks=int(getattr(args, "min_opposite_bricks", 0)),
     )
 
     events = None
