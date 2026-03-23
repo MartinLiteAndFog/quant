@@ -48,8 +48,8 @@ def prune_equity_snapshots(
         FROM equity_snapshots
         WHERE ts < now() - (%(keep_hours)s || ' hours')::interval
           AND COALESCE(payload_json->>'snapshot_kind', 'base') = 'base'
-          AND (%(venue)s IS NULL OR venue = %(venue)s)
-          AND (%(account)s IS NULL OR COALESCE(account, '') = %(account)s)
+                    AND (%(venue)s::text IS NULL OR venue = %(venue)s::text)
+          AND (%(account)s::text IS NULL OR COALESCE(account, '') = %(account)s::text)
     )
     SELECT id
     FROM ranked
