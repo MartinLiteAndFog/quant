@@ -250,6 +250,12 @@ def _events_root() -> Path:
     return Path("data/events")
 
 
+_EQUITY_SNAPSHOT_BASE_INTERVAL_SEC = float(
+    os.getenv("LIVE_EXECUTOR_2_SNAPSHOT_BASE_SEC", "60")
+)
+_LAST_EQUITY_SNAPSHOT_TS: Optional[pd.Timestamp] = None
+
+
 def _append_equity_snapshot(
     *,
     ts_iso: str,
@@ -257,20 +263,32 @@ def _append_equity_snapshot(
     position_qty: Optional[float] = None,
     position_side: Optional[int] = None,
     payload: Optional[Dict[str, Any]] = None,
+    force: bool = False,
 ) -> None:
+    global _LAST_EQUITY_SNAPSHOT_TS
+
     try:
         eq = float(equity) if equity is not None else None
         if eq is None or eq <= 0:
             return
+
         ts = pd.to_datetime(ts_iso, utc=True, errors="coerce")
         if pd.isna(ts):
             ts = pd.Timestamp.now("UTC")
+
+        if not force:
+            min_interval = max(1.0, float(_EQUITY_SNAPSHOT_BASE_INTERVAL_SEC))
+            if _LAST_EQUITY_SNAPSHOT_TS is not None:
+                delta_sec = (ts - _LAST_EQUITY_SNAPSHOT_TS).total_seconds()
+                if delta_sec < min_interval:
+                    return
 
         base_payload: Dict[str, Any] = dict(payload or {"equity_usd": eq})
         if position_qty is not None:
             base_payload["position_qty"] = float(position_qty)
         if position_side is not None:
             base_payload["position_side"] = int(position_side)
+        base_payload["snapshot_kind"] = "event" if force else "base"
 
         insert_equity_snapshot(
             {
@@ -284,6 +302,7 @@ def _append_equity_snapshot(
                 "payload_json": base_payload,
             }
         )
+        _LAST_EQUITY_SNAPSHOT_TS = ts
     except Exception:
         pass
 
@@ -1527,6 +1546,7 @@ def run_once(
                             "gate_on": gate_on,
                             "source": "post_flip_flatten",
                         },
+                        force=True,
                     )
                     
                     flip_qty = _qty_from_equity_pct(
