@@ -1,12 +1,7 @@
----
-description: 
-alwaysApply: true
----
-
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **quant-main** (1749 symbols, 4921 relationships, 134 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **quant-main** (2124 symbols, 5814 relationships, 161 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

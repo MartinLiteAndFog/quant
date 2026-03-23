@@ -1,12 +1,13 @@
 {
-  "repoPath": "/Users/martinpeter/Desktop/quant",
-  "lastCommit": "eb174c69381e8ebca2ed4da46eaea787a8c989b6",
-  "indexedAt": "2026-03-04T14:00:39.942Z",
+  "repoPath": "/Users/martinpeter/Desktop/quant-main",
+  "lastCommit": "73729e00016d37b0024c8ba4edd117306afd0b38",
+  "indexedAt": "2026-03-23T10:04:59.725Z",
   "stats": {
-    "files": 604,
-    "nodes": 2366,
-    "edges": 5385,
-    "communities": 135,
-    "processes": 160
+    "files": 350,
+    "nodes": 2124,
+    "edges": 5814,
+    "communities": 160,
+    "processes": 161,
+    "embeddings": 0
   }
 }
