@@ -1480,6 +1480,24 @@ def run_once(
                     reject_reason=None,
                     payload_json={"action": action, "result": details, "event_name": event_name},
                 )
+                
+                fresh_equity = _resolve_equity(broker)
+                _append_equity_snapshot(
+                    ts_iso=_now_iso(),
+                    equity=fresh_equity,
+                    position_qty=abs(float(qty)),
+                    position_side=(1 if want_side == "long" else -1),
+                    payload={
+                        "equity_usd": float(fresh_equity) if fresh_equity is not None else None,
+                        "symbol": symbol,
+                        "position": float(qty),
+                        "side": want_side,
+                        "gate_on": gate_on,
+                        "source": "post_entry_fill",
+                        "event_name": event_name,
+                    },
+                    force=True,
+                )
 
         elif action.startswith("flip_to_") and want_side is not None:
             flat_res, pos_after_flat = _kraken_strict_flatten_for_flip(
@@ -1593,6 +1611,24 @@ def run_once(
                                 reject_reason=None,
                                 payload_json={"action": action, "result": details, "event_name": event_name},
                             )
+
+                            fresh_equity = _resolve_equity(broker)
+                            _append_equity_snapshot(
+                                ts_iso=_now_iso(),
+                                equity=fresh_equity,
+                                position_qty=float(flip_qty),
+                                position_side=(1 if want_side == "long" else -1),
+                                payload={
+                                    "equity_usd": float(fresh_equity) if fresh_equity is not None else None,
+                                    "symbol": symbol,
+                                    "position": float(flip_qty),
+                                    "side": want_side,
+                                    "gate_on": gate_on,
+                                    "source": "post_flip_reenter_fill",
+                                    "event_name": event_name,
+                                },
+                                force=True,
+                            )
             else:
                 log.warning("executor flip aborted: flatten failed")
 
@@ -1630,6 +1666,7 @@ def run_once(
                     reject_reason=None,
                     payload_json={"action": action, "result": details, "event_name": event_name},
                 )
+
                 _append_closed_trade(
                     symbol=symbol,
                     current_side=current_side,
@@ -1642,6 +1679,24 @@ def run_once(
                     seq=int(state.n_executions),
                     qty_default=abs(float(pos)),
                     exit_px_fallback=float(mid) if mid and mid > 0 else None,
+                )
+
+                fresh_equity = _resolve_equity(broker)
+                _append_equity_snapshot(
+                    ts_iso=_now_iso(),
+                    equity=fresh_equity,
+                    position_qty=0.0,
+                    position_side=0,
+                    payload={
+                        "equity_usd": float(fresh_equity) if fresh_equity is not None else None,
+                        "symbol": symbol,
+                        "position": 0.0,
+                        "side": "flat",
+                        "gate_on": gate_on,
+                        "source": "post_exit_fill",
+                        "event_name": event_name,
+                    },
+                    force=True,
                 )
 
         elif action.startswith("scale_") and want_side is not None:
@@ -1672,6 +1727,24 @@ def run_once(
                         status=_mode(res) or "fill",
                         reject_reason=None,
                         payload_json={"action": action, "result": details, "event_name": event_name},
+                    )
+                    fresh_equity = _resolve_equity(broker)
+                    new_pos_qty = abs(float(pos)) + float(add_qty)
+                    _append_equity_snapshot(
+                        ts_iso=_now_iso(),
+                        equity=fresh_equity,
+                        position_qty=new_pos_qty,
+                        position_side=(1 if want_side == "long" else -1),
+                        payload={
+                            "equity_usd": float(fresh_equity) if fresh_equity is not None else None,
+                            "symbol": symbol,
+                            "position": new_pos_qty,
+                            "side": want_side,
+                            "gate_on": gate_on,
+                            "source": "post_scale_fill",
+                            "event_name": event_name,
+                        },
+                        force=True,
                     )
             else:
                 log.info("executor scale skipped add_qty=0 target_qty=%s pos_before=%s", qty, pos)
