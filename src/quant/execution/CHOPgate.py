@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -126,6 +127,24 @@ def _hysteresis_low_is_good_last(x: pd.Series, on_th: float, off_th: float, star
         elif (not state) and v <= on_th:
             state = True
     return int(state), int(not state)
+
+
+def _publish_gate_state_to_redis(state: Dict[str, Any]) -> None:
+    redis_url = str(os.getenv("REDIS_URL", "")).strip()
+    if not redis_url:
+        return
+    try:
+        import redis as redis_lib
+
+        symbol = str(os.getenv("LIVE_GATE_SYMBOL", os.getenv("LIVE_SYMBOL", "SOL-USDT"))).strip().upper()
+        canon = "".join(ch for ch in symbol if ch.isalnum())
+        key = f"gate:{canon}:latest"
+
+        r = redis_lib.from_url(redis_url, decode_responses=True)
+        payload = json.dumps(state, ensure_ascii=False, separators=(",", ":"), default=str)
+        r.set(key, payload)
+    except Exception:
+        return
 
 
 def _load_live_renko() -> pd.DataFrame:
@@ -339,5 +358,7 @@ def get_live_gate_state() -> Dict[str, Any]:
 
     if _env_bool("LIVE_GATE_DEBUG", False):
         out["debug_last_ts"] = str(last["ts"])
+
+    _publish_gate_state_to_redis(out)
 
     return out
