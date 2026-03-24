@@ -226,6 +226,24 @@ def _cache_put(cache: Dict[str, Dict[str, Any]], key: str, value: Dict[str, Any]
     cache[key] = {"_ts": time.time(), "value": dict(value)}
 
 
+def _read_live_gate_from_redis() -> Optional[Dict[str, Any]]:
+    redis_url = os.getenv("REDIS_URL", "").strip()
+    if not redis_url:
+        return None
+    try:
+        symbol = str(os.getenv("LIVE_GATE_SYMBOL", os.getenv("LIVE_SYMBOL", "SOL-USDT"))).strip().upper()
+        canon = "".join(ch for ch in symbol if ch.isalnum())
+        key = f"gate:{canon}:latest"
+        r = redis_lib.from_url(redis_url, decode_responses=True)
+        raw = r.get(key)
+        if not raw:
+            return None
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
 def _start_renko_cache_updater_if_enabled() -> None:
     if not _truthy(os.getenv("ENABLE_DASHBOARD_RENKO_UPDATER", "1")):
         return
@@ -1019,19 +1037,21 @@ def api_dashboard_performance(
 @app.get("/api/gate/solusd")
 def api_gate_solusd() -> Dict[str, Any]:
     try:
-        out = get_live_gate_state()
+        out = _read_live_gate_from_redis()
+        if not out:
+            out = get_live_gate_state()
         return {
             "ok": True,
             "ts": out.get("ts"),
             "gate_on": int(out.get("gate_on", 0) or 0),
-            "gate_off": int(out.get("gate_off", 1)),
+            "gate_off": int(out.get("gate_off", 1) or 1),
             "source": out.get("source"),
-            "x": out.get("x"),
-            "y": out.get("y"),
-            "z": out.get("z"),
-            "g1_drift": out.get("g1_drift"),
-            "g2_elasticity": out.get("g2_elasticity"),
-            "g3_instability": out.get("g3_instability"),
+            "primary": out.get("primary"),
+            "gate_countertrend_on": out.get("gate_countertrend_on"),
+            "gate_trend_on": out.get("gate_trend_on"),
+            "chop": out.get("chop"),
+            "adx": out.get("adx"),
+            "er": out.get("er"),
             "age_sec": out.get("age_sec"),
         }
     except Exception as e:
