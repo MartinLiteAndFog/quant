@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 
 from quant.execution.execution_state import write_execution_state
+from quant.execution.CHOPgate import get_live_gate_state
 from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
 from quant.execution.event_builders import build_action_event, build_execution_event
@@ -851,6 +852,10 @@ def run_once(
     signals_df = _load_signals_df(signals_root, symbol)
     ev, terminal = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
 
+    gate = get_live_gate_state()
+    gate_on = int(gate.get("gate_on", 0) or 0)
+    exit_engine = "flip" if gate_on == 1 else "tp2"
+
     fallback_used = False
     fallback_sig_ts_iso: Optional[str] = None
     fallback_sig_v: Optional[int] = None
@@ -894,7 +899,10 @@ def run_once(
             state_payload = write_execution_state({
                 "symbol": symbol,
                 "venue": "kucoin",
-                "strategy": "flip",
+                "strategy": exit_engine,
+                "exit_engine": exit_engine,
+                "gate_on": gate_on,
+                "gate_state": gate,
                 "ts": _now_iso(),
                 "position": float(pos),
                 "side": current_side,
