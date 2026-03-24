@@ -1575,8 +1575,40 @@ def build_regime_scores(symbol: str, hours: int = 24 * 14, _rows: Optional[List[
     return {"scores": scores, "forecast": []}
 
 
-def _normalize_strategy_label(raw_state: Any, gate_on: Any) -> Dict[str, Any]:
+def _normalize_strategy_label(raw_state: Any, gate_on: Any, exec_state: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     raw = str(raw_state or "").strip().lower()
+    exec_state = exec_state or {}
+
+    exec_strategy = str(exec_state.get("strategy") or exec_state.get("exit_engine") or "").strip().lower()
+    exec_mode = str(exec_state.get("mode") or "").strip().upper()
+
+    if exec_strategy in ("tp2", "follow_tp2", "trend", "trendfollower"):
+        return {
+            "strategy_label": "TP2",
+            "regime_state": raw or None,
+            "source": "execution_state.strategy",
+        }
+
+    if exec_strategy in ("flip", "countertrend", "counter_trend"):
+        return {
+            "strategy_label": "Flip",
+            "regime_state": raw or None,
+            "source": "execution_state.strategy",
+        }
+
+    if exec_mode == "TP2":
+        return {
+            "strategy_label": "TP2",
+            "regime_state": raw or None,
+            "source": "execution_state.mode",
+        }
+
+    if exec_mode in ("TTP", "WAIT"):
+        return {
+            "strategy_label": "Flip",
+            "regime_state": raw or None,
+            "source": "execution_state.mode",
+        }
 
     countertrend_states = {
         "countertrend",
@@ -1593,13 +1625,13 @@ def _normalize_strategy_label(raw_state: Any, gate_on: Any) -> Dict[str, Any]:
 
     if raw in countertrend_states:
         return {
-            "strategy_label": "Countertrend",
+            "strategy_label": "Flip",
             "regime_state": raw,
             "source": "regime_store_latest",
         }
     if raw in trend_states:
         return {
-            "strategy_label": "Trendfollower",
+            "strategy_label": "TP2",
             "regime_state": raw,
             "source": "regime_store_latest",
         }
@@ -1607,17 +1639,16 @@ def _normalize_strategy_label(raw_state: Any, gate_on: Any) -> Dict[str, Any]:
     gate_i = pd.to_numeric(gate_on, errors="coerce")
     if pd.notna(gate_i):
         return {
-            "strategy_label": "Countertrend" if int(gate_i) == 1 else "Trendfollower",
+            "strategy_label": "Flip" if int(gate_i) == 1 else "TP2",
             "regime_state": raw or None,
             "source": "gate_fallback",
         }
 
     return {
-        "strategy_label": "Trendfollower",
+        "strategy_label": "TP2",
         "regime_state": raw or None,
         "source": "default_fallback",
     }
-
 
 def load_dashboard_strategy(symbol: str) -> Dict[str, Any]:
     now = pd.Timestamp.now("UTC")
@@ -1626,9 +1657,12 @@ def load_dashboard_strategy(symbol: str) -> Dict[str, Any]:
     except Exception:
         latest = {}
 
+    exec_state = load_active_levels()
+
     mapped = _normalize_strategy_label(
         raw_state=latest.get("regime_state"),
         gate_on=latest.get("gate_on"),
+        exec_state=exec_state,
     )
 
     return {
@@ -1638,7 +1672,6 @@ def load_dashboard_strategy(symbol: str) -> Dict[str, Any]:
         "source": mapped["source"],
         "ts": now.isoformat(),
     }
-
 
 def _performance_trade_frame(
     symbol: str,
