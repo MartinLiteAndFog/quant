@@ -76,6 +76,25 @@ def _now_iso() -> str:
     return _now_utc().strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
+def _read_live_gate_from_redis(symbol: str) -> Optional[Dict[str, Any]]:
+    redis_url = os.getenv("REDIS_URL", "").strip()
+    if not redis_url:
+        return None
+    try:
+        import redis as redis_lib
+
+        canon = _canon_symbol(symbol)
+        key = f"gate:{canon}:latest"
+        r = redis_lib.from_url(redis_url, decode_responses=True)
+        raw = r.get(key)
+        if not raw:
+            return None
+        obj = json.loads(raw)
+        return obj if isinstance(obj, dict) else None
+    except Exception:
+        return None
+
+
 def _events_root() -> Path:
     if Path("/data").exists():
         return Path("/data/events")
@@ -852,7 +871,9 @@ def run_once(
     signals_df = _load_signals_df(signals_root, symbol)
     ev, terminal = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
 
-    gate = get_live_gate_state()
+    gate = _read_live_gate_from_redis(symbol)
+    if not gate:
+        gate = get_live_gate_state()
     gate_on = int(gate.get("gate_on", 0) or 0)
     exit_engine = "flip" if gate_on == 1 else "tp2"
 
