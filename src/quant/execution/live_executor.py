@@ -1155,12 +1155,14 @@ def run_once(
                     reject_reason=None,
                     payload_json={"action": "flip_flatten", "result": flat_details, "event_name": event_name},
                 )
+                closed_trade_event = "signal_flip_exit" if action.startswith("flip_to_") else event_name
+
                 _append_closed_trade(
                     symbol=symbol,
                     current_side=current_side,
                     terminal=terminal,
                     details=flat_details,
-                    event_name=event_name,
+                    event_name=closed_trade_event,
                     action="flip_flatten",
                     position_before=position_before,
                     position_after=0,
