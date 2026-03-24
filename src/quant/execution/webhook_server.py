@@ -231,6 +231,8 @@ def _read_live_gate_from_redis() -> Optional[Dict[str, Any]]:
     if not redis_url:
         return None
     try:
+        import redis as redis_lib
+
         symbol = str(os.getenv("LIVE_GATE_SYMBOL", os.getenv("LIVE_SYMBOL", "SOL-USDT"))).strip().upper()
         canon = "".join(ch for ch in symbol if ch.isalnum())
         key = f"gate:{canon}:latest"
