@@ -26,6 +26,7 @@ from quant.execution.event_store import (
     upsert_closed_trade,
 )
 from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
+from quant.strategies.follow_tp2_engine import TP2Params, run_follow_tp2_state_machine
 from quant.strategies.signal_io import read_signals_jsonl
 from quant.utils.log import get_logger, log_throttled
 
@@ -613,6 +614,7 @@ class ExecutorState:
     n_executions: int = 0
     last_terminal_sig: Optional[str] = None
     last_gate_on: Optional[int] = None
+    latched_exit_engine: Optional[str] = None
 
 
 def _read_state(path: Path) -> ExecutorState:
@@ -629,6 +631,7 @@ def _read_state(path: Path) -> ExecutorState:
             n_executions=int(d.get("n_executions", 0)),
             last_terminal_sig=d.get("last_terminal_sig"),
             last_gate_on=(int(d.get("last_gate_on")) if d.get("last_gate_on") is not None else None),
+            latched_exit_engine=d.get("latched_exit_engine"),
         )
     except Exception:
         return ExecutorState()
@@ -1099,7 +1102,9 @@ def _write_dashboard_levels(
     write_execution_state({
         "symbol": symbol,
         "venue": "kraken",
-        "strategy": "flip",
+        "strategy": terminal.get("strategy"),
+        "exit_engine": terminal.get("exit_engine"),
+        "latched_exit_engine": terminal.get("latched_exit_engine"),
         "ts": _now_iso(),
         "position": float(live_pos) if live_pos is not None else None,
         "side": side,
@@ -1145,7 +1150,19 @@ def run_once(
 
     gate = get_live_gate_state()
     gate_on = int(gate.get("gate_on", 0) or 0)
-    gate_changed = state.last_gate_on is not None and gate_on != int(state.last_gate_on)
+    gate_countertrend_on = int(gate.get("gate_countertrend_on", 0) or 0)
+    gate_trend_on = int(gate.get("gate_trend_on", 0) or 0)
+
+    desired_exit_engine = "flip" if gate_countertrend_on == 1 else "tp2"
+    if gate_countertrend_on != 1 and gate_trend_on != 1:
+        desired_exit_engine = "flip" if gate_on == 1 else "tp2"
+
+    if abs(float(pos)) <= 1e-12:
+        state.latched_exit_engine = desired_exit_engine
+    elif not state.latched_exit_engine:
+        state.latched_exit_engine = desired_exit_engine
+
+    exit_engine = str(state.latched_exit_engine or desired_exit_engine)
 
     pos_pct = float(os.getenv("LIVE_EXECUTOR_2_POS_PCT", os.getenv("KRAKEN_EQUITY_PCT", os.getenv("LIVE_EXECUTOR_POS_PCT", "0.90"))))
     equity = _resolve_equity(broker)
@@ -1180,7 +1197,34 @@ def run_once(
 
     renko_bars = _load_renko_bars(_renko_path(), limit=int(os.getenv("LIVE_RENKO_LIMIT", "4000")))
     signals_df = _load_signals_df(signals_root, symbol)
-    ev, terminal = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
+
+    if exit_engine == "flip":
+        ev, terminal = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
+    else:
+        tp2_params = TP2Params(
+            fee_bps=float(os.getenv("LIVE_TP2_FEE_BPS", os.getenv("LIVE_FLIP_FEE_BPS", "0"))),
+            tp1_pct=float(os.getenv("LIVE_TP1_PCT", "0.07")),
+            tp2_pct=float(os.getenv("LIVE_TP2_PCT", "0.11")),
+            tp1_frac=float(os.getenv("LIVE_TP1_FRAC", "0.5")),
+            min_sl_pct=float(os.getenv("LIVE_TP2_MIN_SL_PCT", "0.03")),
+            max_sl_pct=float(os.getenv("LIVE_TP2_MAX_SL_PCT", "0.08")),
+            swing_lookback=int(os.getenv("LIVE_TP2_SWING_LOOKBACK", "180")),
+            flip_on_opposite=_truthy(os.getenv("LIVE_TP2_FLIP_ON_OPPOSITE", "1")),
+            be_after_tp1=_truthy(os.getenv("LIVE_TP2_BE_AFTER_TP1", "1")),
+            be_offset_pct=float(os.getenv("LIVE_TP2_BE_OFFSET_PCT", "0.0")),
+        )
+        _, events_df, terminal = run_follow_tp2_state_machine(
+            bars=renko_bars,
+            signals_df=signals_df,
+            params=tp2_params,
+            regime_on=None,
+            regime_forces_flat=False,
+        )
+        if events_df is not None and not events_df.empty:
+            events_df = events_df.sort_values(["ts", "seq"]).reset_index(drop=True)
+            ev = events_df.iloc[-1]
+        else:
+            ev = None
 
     fallback_used = False
     fallback_sig_ts_iso: Optional[str] = None
@@ -1225,7 +1269,9 @@ def run_once(
             state_payload = write_execution_state({
                 "symbol": symbol,
                 "venue": "kraken",
-                "strategy": "flip",
+                "strategy": exit_engine,
+                "exit_engine": exit_engine,
+                "latched_exit_engine": state.latched_exit_engine,
                 "ts": _now_iso(),
                 "position": float(pos),
                 "side": current_side,
@@ -1258,6 +1304,11 @@ def run_once(
         live_mid=float(mid),
         ttp_trail_pct=_resolve_ttp_trail_pct(),
     )
+    terminal = dict(terminal or {})
+    terminal["strategy"] = exit_engine
+    terminal["exit_engine"] = exit_engine
+    terminal["latched_exit_engine"] = state.latched_exit_engine
+
     _write_dashboard_levels(
         symbol=symbol,
         terminal=terminal,
@@ -1290,9 +1341,6 @@ def run_once(
         if abs(pos) < float(qty):
             action = "scale_short"
 
-    if gate_changed and current_side != "flat":
-        want_side = None
-        action = "exit_long" if current_side == "long" else "exit_short"
 
     if terminal_sig == state.last_terminal_sig and action == "hold":
         log_throttled(
@@ -1308,8 +1356,6 @@ def run_once(
         return state
 
     event_name = str(ev.get("event", "")) if ev is not None else "none"
-    if gate_changed and current_side != "flat":
-        event_name = "gate_change_flatten"
     ts_iso = _now_iso()
 
     event_sig = _event_sig(ev) if ev is not None else f"none|{terminal_sig}"
