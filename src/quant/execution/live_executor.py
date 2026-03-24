@@ -24,6 +24,7 @@ from quant.execution.event_store import (
     upsert_closed_trade,
 )
 from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
+from quant.strategies.follow_tp2_engine import TP2Params, run_follow_tp2_state_machine
 from quant.strategies.signal_io import read_signals_jsonl
 from quant.utils.log import get_logger, log_throttled
 
@@ -869,13 +870,40 @@ def run_once(
 
     renko_bars = _load_renko_bars(_renko_path(), limit=int(os.getenv("LIVE_RENKO_LIMIT", "4000")))
     signals_df = _load_signals_df(signals_root, symbol)
-    ev, terminal = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
 
     gate = _read_live_gate_from_redis(symbol)
     if not gate:
         gate = get_live_gate_state()
     gate_on = int(gate.get("gate_on", 0) or 0)
     exit_engine = "flip" if gate_on == 1 else "tp2"
+
+    if gate_on == 1:
+        ev, terminal = _latest_backtest_event(renko_bars=renko_bars, signals_df=signals_df)
+    else:
+        tp2_params = TP2Params(
+            fee_bps=float(os.getenv("LIVE_TP2_FEE_BPS", os.getenv("LIVE_FLIP_FEE_BPS", "0"))),
+            tp1_pct=float(os.getenv("LIVE_TP1_PCT", "0.07")),
+            tp2_pct=float(os.getenv("LIVE_TP2_PCT", "0.11")),
+            tp1_frac=float(os.getenv("LIVE_TP1_FRAC", "0.5")),
+            min_sl_pct=float(os.getenv("LIVE_TP2_MIN_SL_PCT", "0.03")),
+            max_sl_pct=float(os.getenv("LIVE_TP2_MAX_SL_PCT", "0.08")),
+            swing_lookback=int(os.getenv("LIVE_TP2_SWING_LOOKBACK", "180")),
+            flip_on_opposite=_truthy(os.getenv("LIVE_TP2_FLIP_ON_OPPOSITE", "1")),
+            be_after_tp1=_truthy(os.getenv("LIVE_TP2_BE_AFTER_TP1", "1")),
+            be_offset_pct=float(os.getenv("LIVE_TP2_BE_OFFSET_PCT", "0.0")),
+        )
+        _, events_df, terminal = run_follow_tp2_state_machine(
+            bars=renko_bars,
+            signals_df=signals_df,
+            params=tp2_params,
+            regime_on=None,
+            regime_forces_flat=False,
+        )
+        if events_df is not None and not events_df.empty:
+            events_df = events_df.sort_values(["ts", "seq"]).reset_index(drop=True)
+            ev = events_df.iloc[-1]
+        else:
+            ev = None
 
     fallback_used = False
     fallback_sig_ts_iso: Optional[str] = None
