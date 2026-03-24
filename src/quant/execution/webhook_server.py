@@ -1024,7 +1024,7 @@ def api_gate_solusd() -> Dict[str, Any]:
             "ok": True,
             "ts": out.get("ts"),
             "gate_on": int(out.get("gate_on", 0) or 0),
-            "gate_off": int(out.get("gate_off", 1) or 1),
+            "gate_off": int(out.get("gate_off", 1)),
             "source": out.get("source"),
             "x": out.get("x"),
             "y": out.get("y"),
