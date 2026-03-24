@@ -15,7 +15,7 @@ import pandas as pd
 
 from quant.execution.execution_state import write_execution_state
 from quant.execution.kraken_futures import KrakenFuturesClient
-from quant.execution.gate_provider_2 import fetch_gate
+from quant.execution.CHOPgate import get_live_gate_state
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
 from quant.execution.event_builders import build_action_event, build_execution_event
 from quant.execution.event_log import append_event_jsonl
@@ -1137,14 +1137,13 @@ def run_once(
     live_enabled: bool,
     dry_run: bool,
     leverage: float,
-    gate_url: str,
 ) -> ExecutorState:
     bid, ask = broker.get_best_bid_ask(symbol)
     mid = (bid + ask) / 2.0 if (bid and ask) else (ask or bid or 0.0)
     pos = float(broker.get_position(symbol))
     current_side = "long" if pos > 0 else ("short" if pos < 0 else "flat")
 
-    gate = fetch_gate(gate_url, symbol=symbol)
+    gate = get_live_gate_state()
     gate_on = int(gate.get("gate_on", 0) or 0)
     gate_changed = state.last_gate_on is not None and gate_on != int(state.last_gate_on)
 
@@ -1804,7 +1803,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--signals-dir", default=os.getenv("SIGNALS_DIR", "data/signals"))
     p.add_argument("--state-file", default=os.getenv("LIVE_EXECUTOR_2_STATE", os.getenv("LIVE_EXECUTOR_STATE", "data/live/live_executor_2_state.json")))
     p.add_argument("--poll-sec", type=float, default=float(os.getenv("LIVE_EXECUTOR_2_POLL_SEC", os.getenv("LIVE_EXECUTOR_POLL_SEC", "5"))))
-    p.add_argument("--gate-url", default=os.getenv("KRAKEN_GATE_URL", "http://127.0.0.1:8080/api/gate/solusd"))
     p.add_argument("--once", action="store_true")
     return p.parse_args()
 
@@ -1850,7 +1848,6 @@ def main() -> None:
                 live_enabled=live_enabled,
                 dry_run=dry_run,
                 leverage=leverage,
-                gate_url=args.gate_url,
             )
             _write_state(state_path, st)
         except Exception as e:

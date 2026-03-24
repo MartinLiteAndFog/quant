@@ -43,7 +43,7 @@ from quant.execution.dashboard_state import (
     load_trade_markers,
 )
 
-from quant.execution.gate_provider import get_live_gate_state
+from quant.execution.CHOPgate import get_live_gate_state
 from quant.execution.dashboard_statespace import (
     load_state_space_trajectory,
     compute_recent_density,
