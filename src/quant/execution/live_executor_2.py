@@ -1414,7 +1414,6 @@ def run_once(
             "last_event_sig": state.last_event_sig,
             "live_pos": float(pos),
             "gate": gate,
-            "gate_changed": bool(gate_changed),
             "ev": ev if isinstance(ev, dict) else None,
         },
     )
