@@ -418,6 +418,7 @@ class ExecutorState:
     tp2_remaining_qty_abs: Optional[float] = None
     tp2_tp1_hit_ts: Optional[str] = None
     tp2_tp1_hit_px: Optional[float] = None
+    tp2_last_consumed_tp1_hit_ts: Optional[str] = None
 
 
 def _read_state(path: Path) -> ExecutorState:
@@ -443,6 +444,7 @@ def _read_state(path: Path) -> ExecutorState:
             tp2_remaining_qty_abs=_coerce_float(d.get("tp2_remaining_qty_abs")),
             tp2_tp1_hit_ts=d.get("tp2_tp1_hit_ts"),
             tp2_tp1_hit_px=_coerce_float(d.get("tp2_tp1_hit_px")),
+            tp2_last_consumed_tp1_hit_ts=d.get("tp2_last_consumed_tp1_hit_ts"),
         )
     except Exception:
         return ExecutorState()
@@ -879,6 +881,7 @@ def _clear_tp2_leg_runtime(state: ExecutorState) -> None:
     state.tp2_remaining_qty_abs = None
     state.tp2_tp1_hit_ts = None
     state.tp2_tp1_hit_px = None
+    state.tp2_last_consumed_tp1_hit_ts = None
 
 
 def _sync_tp2_leg_runtime(
@@ -894,7 +897,9 @@ def _sync_tp2_leg_runtime(
     term_leg_id = str(term.get("leg_id") or "").strip()
     term_side = str(term.get("side") or "").strip().lower()
     term_entry_bar_ts = _safe_ts(term.get("entry_bar_ts"))
+    term_tp1_done = bool(term.get("tp1_done", False))
     term_tp1_hit_ts = _safe_ts(term.get("tp1_hit_ts"))
+    term_tp1_hit_ts_iso = term_tp1_hit_ts.isoformat() if term_tp1_hit_ts is not None else None
     term_tp1_hit_px = _coerce_float(term.get("tp1_hit_px"))
     term_size_rem = _coerce_float(term.get("size_rem"))
 
@@ -908,20 +913,37 @@ def _sync_tp2_leg_runtime(
         state.tp2_leg_id = term_leg_id
         state.tp2_leg_side = term_side
         state.tp2_entry_bar_ts = term_entry_bar_ts.isoformat() if term_entry_bar_ts is not None else None
-        state.tp2_tp1_done = False
+        state.tp2_tp1_done = bool(term_tp1_done)
         state.tp2_tp1_pending = False
-        state.tp2_size_rem = 1.0
+        if term_size_rem is not None:
+            state.tp2_size_rem = max(0.0, min(1.0, float(term_size_rem)))
+        else:
+            state.tp2_size_rem = 0.5 if term_tp1_done else 1.0
         if current_side == term_side and abs(float(live_pos)) > 1e-12:
             state.tp2_remaining_qty_abs = abs(float(live_pos))
     elif state.tp2_remaining_qty_abs is None and current_side == term_side and abs(float(live_pos)) > 1e-12:
         state.tp2_remaining_qty_abs = abs(float(live_pos))
 
-    if term_tp1_hit_ts is not None:
-        state.tp2_tp1_hit_ts = term_tp1_hit_ts.isoformat()
+    if term_tp1_hit_ts_iso is not None:
+        state.tp2_tp1_hit_ts = term_tp1_hit_ts_iso
     if term_tp1_hit_px is not None:
         state.tp2_tp1_hit_px = float(term_tp1_hit_px)
 
-    if term_tp1_hit_ts is not None and not state.tp2_tp1_done and not state.tp2_tp1_pending:
+    if term_tp1_done:
+        state.tp2_tp1_done = True
+        state.tp2_tp1_pending = False
+        if term_size_rem is not None:
+            state.tp2_size_rem = max(0.0, min(1.0, float(term_size_rem)))
+        if term_tp1_hit_ts_iso is not None:
+            state.tp2_last_consumed_tp1_hit_ts = term_tp1_hit_ts_iso
+        return
+
+    if (
+        term_tp1_hit_ts_iso is not None
+        and term_tp1_hit_ts_iso != state.tp2_last_consumed_tp1_hit_ts
+        and not state.tp2_tp1_done
+        and not state.tp2_tp1_pending
+    ):
         state.tp2_tp1_pending = True
         if term_size_rem is not None:
             state.tp2_size_rem = max(0.0, min(1.0, float(term_size_rem)))
@@ -1113,6 +1135,7 @@ def run_once(
         "remaining_qty_abs": state.tp2_remaining_qty_abs,
         "tp1_hit_ts": state.tp2_tp1_hit_ts,
         "tp1_hit_px": state.tp2_tp1_hit_px,
+        "last_consumed_tp1_hit_ts": state.tp2_last_consumed_tp1_hit_ts,
     }
 
     _write_dashboard_levels(symbol=symbol, terminal=terminal, live_pos=pos)
@@ -1353,6 +1376,10 @@ def run_once(
                 state.tp2_tp1_done = True
                 state.tp2_tp1_pending = False
                 state.tp2_remaining_qty_abs = pos_after_tp1
+                state.tp2_last_consumed_tp1_hit_ts = (
+                    state.tp2_tp1_hit_ts
+                    or (str(terminal.get("tp1_hit_ts")) if terminal.get("tp1_hit_ts") is not None else None)
+                )
 
         elif action.startswith("enter_") and want_side is not None:
             res = oms.enter_market(symbol=symbol, side=want_side, qty=float(qty))
