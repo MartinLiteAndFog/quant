@@ -178,9 +178,10 @@ def run_follow_tp2_state_machine(
     """
     Returns:
       pos_series indexed by ts,
-      events_df with columns: ts,event,side,price,pnl_pct,note,seq,size,
+      events_df with columns: ts,event,side,price,pnl_pct,note,seq,size,leg_id,...
       terminal_state dict with keys like:
-        pos, side, mode, entry_px, sl, tp1, tp2, be_px, be_armed, tp1_done, size_rem, entry_bar_ts
+        pos, side, mode, entry_px, sl, tp1, tp2, be_px, be_armed, tp1_done,
+        size_rem, entry_bar_ts, leg_id, tp1_frac, tp1_hit_ts, tp1_hit_px
     """
     bars = _ensure_cols(bars, ["ts", "close"], name="bars")
     has_hl = ("high" in bars.columns) and ("low" in bars.columns)
@@ -208,24 +209,42 @@ def run_follow_tp2_state_machine(
     tp1_done = False
     be_armed = False
 
+    leg_seq = 0
+    leg_id: Optional[str] = None
+    tp1_hit_ts: Optional[pd.Timestamp] = None
+    tp1_hit_px: Optional[float] = None
+
     events: List[Dict[str, Any]] = []
     seq = 0
     out_pos = pd.Series(0, index=times, dtype="int8")
 
-    def emit(ts: pd.Timestamp, event: str, side: int, price: float, pnl_pct: float, note: str, size: Optional[float] = None) -> None:
+    def _make_leg_id(ts: pd.Timestamp, side: int, n: int) -> str:
+        return f"{int(n)}|{pd.Timestamp(ts).isoformat()}|{int(side)}"
+
+    def emit(
+        ts: pd.Timestamp,
+        event: str,
+        side: int,
+        price: float,
+        pnl_pct: float,
+        note: str,
+        size: Optional[float] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
         nonlocal seq
-        events.append(
-            {
-                "ts": pd.Timestamp(ts),
-                "event": str(event),
-                "side": int(side),
-                "price": float(price),
-                "pnl_pct": float(pnl_pct),
-                "note": str(note),
-                "seq": int(seq),
-                "size": (float(size) if size is not None else np.nan),
-            }
-        )
+        row: Dict[str, Any] = {
+            "ts": pd.Timestamp(ts),
+            "event": str(event),
+            "side": int(side),
+            "price": float(price),
+            "pnl_pct": float(pnl_pct),
+            "note": str(note),
+            "seq": int(seq),
+            "size": (float(size) if size is not None else np.nan),
+        }
+        if extra:
+            row.update(extra)
+        events.append(row)
         seq += 1
 
     def realized_pnl_pct(exit_px: float, frac: float = 1.0) -> float:
@@ -236,10 +255,15 @@ def run_follow_tp2_state_machine(
             gross = (float(entry_px) - float(exit_px)) / float(entry_px)
         return float(frac * gross - frac * fee_rt)
 
-    def current_tp1_px() -> Optional[float]:
-        if entry_px is None or pos == 0 or tp1_done:
+    def tp1_anchor_px() -> Optional[float]:
+        if entry_px is None or pos == 0:
             return None
         return float(entry_px * (1.0 + params.tp1_pct)) if pos > 0 else float(entry_px * (1.0 - params.tp1_pct))
+
+    def current_tp1_live_px() -> Optional[float]:
+        if entry_px is None or pos == 0 or tp1_done:
+            return None
+        return tp1_anchor_px()
 
     def current_tp2_px() -> Optional[float]:
         if entry_px is None or pos == 0:
@@ -263,13 +287,29 @@ def run_follow_tp2_state_machine(
 
         if not gate and pos != 0 and regime_forces_flat:
             pnl = realized_pnl_pct(px, frac=size_rem)
-            emit(ts, "regime_exit", pos, px, pnl, "Regime off -> flat", size=size_rem)
+            emit(
+                ts,
+                "regime_exit",
+                pos,
+                px,
+                pnl,
+                "Regime off -> flat",
+                size=size_rem,
+                extra={
+                    "leg_id": leg_id,
+                    "size_before": float(size_rem),
+                    "size_after": 0.0,
+                },
+            )
             pos = 0
             entry_px = None
             entry_bar_ts = None
             size_rem = 0.0
             tp1_done = False
             be_armed = False
+            leg_id = None
+            tp1_hit_ts = None
+            tp1_hit_px = None
             out_pos.iloc[i] = pos
             continue
 
@@ -283,7 +323,24 @@ def run_follow_tp2_state_machine(
                 size_rem = 1.0
                 tp1_done = False
                 be_armed = False
-                emit(ts, "entry", pos, px, 0.0, "ENTER on signal", size=1.0)
+                leg_seq += 1
+                leg_id = _make_leg_id(pd.Timestamp(ts), pos, leg_seq)
+                tp1_hit_ts = None
+                tp1_hit_px = None
+                emit(
+                    ts,
+                    "entry",
+                    pos,
+                    px,
+                    0.0,
+                    "ENTER on signal",
+                    size=1.0,
+                    extra={
+                        "leg_id": leg_id,
+                        "size_before": 0.0,
+                        "size_after": 1.0,
+                    },
+                )
                 out_pos.iloc[i] = pos
             continue
 
@@ -298,59 +355,147 @@ def run_follow_tp2_state_machine(
             max_sl_pct=float(params.max_sl_pct),
         )
 
-        tp1_px = current_tp1_px()
+        tp1_px_live = current_tp1_live_px()
         tp2_px = current_tp2_px()
         be_px = current_be_px()
 
         if be_px is not None:
             if (pos > 0 and l <= be_px) or (pos < 0 and h >= be_px):
                 pnl = realized_pnl_pct(be_px, frac=size_rem)
-                emit(ts, "be_exit", pos, be_px, pnl, "BE hit -> flat", size=size_rem)
+                emit(
+                    ts,
+                    "be_exit",
+                    pos,
+                    be_px,
+                    pnl,
+                    "BE hit -> flat",
+                    size=size_rem,
+                    extra={
+                        "leg_id": leg_id,
+                        "size_before": float(size_rem),
+                        "size_after": 0.0,
+                    },
+                )
                 pos = 0
                 entry_px = None
                 entry_bar_ts = None
                 size_rem = 0.0
                 tp1_done = False
                 be_armed = False
+                leg_id = None
+                tp1_hit_ts = None
+                tp1_hit_px = None
                 out_pos.iloc[i] = pos
                 continue
 
         if (pos > 0 and l <= sl_px) or (pos < 0 and h >= sl_px):
             pnl = realized_pnl_pct(sl_px, frac=size_rem)
-            emit(ts, "sl_exit", pos, sl_px, pnl, f"SL hit -> flat (sl_pct={sl_pct:.5f})", size=size_rem)
+            emit(
+                ts,
+                "sl_exit",
+                pos,
+                sl_px,
+                pnl,
+                f"SL hit -> flat (sl_pct={sl_pct:.5f})",
+                size=size_rem,
+                extra={
+                    "leg_id": leg_id,
+                    "size_before": float(size_rem),
+                    "size_after": 0.0,
+                },
+            )
             pos = 0
             entry_px = None
             entry_bar_ts = None
             size_rem = 0.0
             tp1_done = False
             be_armed = False
+            leg_id = None
+            tp1_hit_ts = None
+            tp1_hit_px = None
             out_pos.iloc[i] = pos
             continue
 
         tp2_hit = tp2_px is not None and ((pos > 0 and h >= tp2_px) or (pos < 0 and l <= tp2_px))
         if tp2_hit:
             pnl = realized_pnl_pct(tp2_px, frac=size_rem)
-            emit(ts, "tp2_exit", pos, tp2_px, pnl, "TP2 hit -> flat", size=size_rem)
+            emit(
+                ts,
+                "tp2_exit",
+                pos,
+                tp2_px,
+                pnl,
+                "TP2 hit -> flat",
+                size=size_rem,
+                extra={
+                    "leg_id": leg_id,
+                    "size_before": float(size_rem),
+                    "size_after": 0.0,
+                },
+            )
             pos = 0
             entry_px = None
             entry_bar_ts = None
             size_rem = 0.0
             tp1_done = False
             be_armed = False
+            leg_id = None
+            tp1_hit_ts = None
+            tp1_hit_px = None
             out_pos.iloc[i] = pos
             continue
 
-        tp1_hit = tp1_px is not None and ((pos > 0 and h >= tp1_px) or (pos < 0 and l <= tp1_px))
+        tp1_hit = tp1_px_live is not None and ((pos > 0 and h >= tp1_px_live) or (pos < 0 and l <= tp1_px_live))
         if tp1_hit and (not tp1_done):
             frac = _clamp(float(params.tp1_frac), 0.0, 1.0)
             frac = min(frac, size_rem)
-            pnl = realized_pnl_pct(tp1_px, frac=frac)
-            emit(ts, "tp1_exit", pos, tp1_px, pnl, f"TP1 hit -> scale out frac={frac:.2f}", size=frac)
-            size_rem = float(max(0.0, size_rem - frac))
+            size_before = float(size_rem)
+            size_after = float(max(0.0, size_rem - frac))
+            pnl = realized_pnl_pct(tp1_px_live, frac=frac)
+
+            tp1_hit_ts = pd.Timestamp(ts)
+            tp1_hit_px = float(tp1_px_live)
+
+            emit(
+                ts,
+                "tp1_exit",
+                pos,
+                tp1_px_live,
+                pnl,
+                f"TP1 hit -> scale out frac={frac:.2f}",
+                size=frac,
+                extra={
+                    "leg_id": leg_id,
+                    "tp1_hit_ts": tp1_hit_ts,
+                    "tp1_hit_px": float(tp1_hit_px),
+                    "tp1_frac": float(frac),
+                    "size_before": size_before,
+                    "size_after": size_after,
+                },
+            )
+
+            size_rem = size_after
             tp1_done = True
+
             if params.be_after_tp1 and size_rem > 1e-12:
                 be_armed = True
-                emit(ts, "be_armed", pos, float(entry_px), 0.0, "BE armed at entry after TP1", size=size_rem)
+                emit(
+                    ts,
+                    "be_armed",
+                    pos,
+                    float(entry_px),
+                    0.0,
+                    "BE armed at entry after TP1",
+                    size=size_rem,
+                    extra={
+                        "leg_id": leg_id,
+                        "tp1_hit_ts": tp1_hit_ts,
+                        "tp1_hit_px": float(tp1_hit_px),
+                        "size_before": size_before,
+                        "size_after": float(size_rem),
+                    },
+                )
+
             if size_rem <= 1e-12:
                 pos = 0
                 entry_px = None
@@ -358,12 +503,28 @@ def run_follow_tp2_state_machine(
                 size_rem = 0.0
                 tp1_done = False
                 be_armed = False
+                leg_id = None
+                tp1_hit_ts = None
+                tp1_hit_px = None
                 out_pos.iloc[i] = pos
                 continue
 
         if gate and impulse != 0 and int(np.sign(impulse)) == -pos:
             pnl = realized_pnl_pct(px, frac=size_rem)
-            emit(ts, "signal_exit", pos, px, pnl, "Opposite signal -> close", size=size_rem)
+            emit(
+                ts,
+                "signal_exit",
+                pos,
+                px,
+                pnl,
+                "Opposite signal -> close",
+                size=size_rem,
+                extra={
+                    "leg_id": leg_id,
+                    "size_before": float(size_rem),
+                    "size_after": 0.0,
+                },
+            )
 
             if params.flip_on_opposite:
                 pos = int(np.sign(impulse))
@@ -372,7 +533,24 @@ def run_follow_tp2_state_machine(
                 size_rem = 1.0
                 tp1_done = False
                 be_armed = False
-                emit(ts, "entry", pos, px, 0.0, "Flip: open opposite on same bar", size=1.0)
+                leg_seq += 1
+                leg_id = _make_leg_id(pd.Timestamp(ts), pos, leg_seq)
+                tp1_hit_ts = None
+                tp1_hit_px = None
+                emit(
+                    ts,
+                    "entry",
+                    pos,
+                    px,
+                    0.0,
+                    "Flip: open opposite on same bar",
+                    size=1.0,
+                    extra={
+                        "leg_id": leg_id,
+                        "size_before": 0.0,
+                        "size_after": 1.0,
+                    },
+                )
                 out_pos.iloc[i] = pos
                 continue
 
@@ -382,6 +560,9 @@ def run_follow_tp2_state_machine(
             size_rem = 0.0
             tp1_done = False
             be_armed = False
+            leg_id = None
+            tp1_hit_ts = None
+            tp1_hit_px = None
             out_pos.iloc[i] = pos
             continue
 
@@ -396,8 +577,12 @@ def run_follow_tp2_state_machine(
         "entry_px": float(entry_px) if entry_px is not None else None,
         "size_rem": float(size_rem),
         "tp1_done": bool(tp1_done),
+        "tp1_frac": float(params.tp1_frac),
+        "tp1_hit_ts": pd.Timestamp(tp1_hit_ts) if tp1_hit_ts is not None else None,
+        "tp1_hit_px": float(tp1_hit_px) if tp1_hit_px is not None else None,
         "be_armed": bool(be_armed),
         "entry_bar_ts": pd.Timestamp(entry_bar_ts) if entry_bar_ts is not None else None,
+        "leg_id": leg_id,
     }
 
     if pos != 0 and entry_px is not None:
@@ -411,7 +596,7 @@ def run_follow_tp2_state_machine(
             max_sl_pct=float(params.max_sl_pct),
         )
         terminal_state["sl"] = float(sl_px)
-        terminal_state["tp1"] = current_tp1_px()
+        terminal_state["tp1"] = tp1_anchor_px()
         terminal_state["tp2"] = current_tp2_px()
         terminal_state["be_px"] = current_be_px()
         terminal_state["ttp"] = None

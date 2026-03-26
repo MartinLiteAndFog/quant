@@ -409,6 +409,16 @@ class ExecutorState:
     last_terminal_sig: Optional[str] = None
     latched_exit_engine: Optional[str] = None
 
+    tp2_leg_id: Optional[str] = None
+    tp2_leg_side: Optional[str] = None
+    tp2_entry_bar_ts: Optional[str] = None
+    tp2_tp1_done: bool = False
+    tp2_tp1_pending: bool = False
+    tp2_size_rem: float = 1.0
+    tp2_remaining_qty_abs: Optional[float] = None
+    tp2_tp1_hit_ts: Optional[str] = None
+    tp2_tp1_hit_px: Optional[float] = None
+
 
 def _read_state(path: Path) -> ExecutorState:
     if not path.exists():
@@ -424,6 +434,15 @@ def _read_state(path: Path) -> ExecutorState:
             n_executions=int(d.get("n_executions", 0)),
             last_terminal_sig=d.get("last_terminal_sig"),
             latched_exit_engine=d.get("latched_exit_engine"),
+            tp2_leg_id=d.get("tp2_leg_id"),
+            tp2_leg_side=d.get("tp2_leg_side"),
+            tp2_entry_bar_ts=d.get("tp2_entry_bar_ts"),
+            tp2_tp1_done=bool(d.get("tp2_tp1_done", False)),
+            tp2_tp1_pending=bool(d.get("tp2_tp1_pending", False)),
+            tp2_size_rem=float(d.get("tp2_size_rem", 1.0) or 1.0),
+            tp2_remaining_qty_abs=_coerce_float(d.get("tp2_remaining_qty_abs")),
+            tp2_tp1_hit_ts=d.get("tp2_tp1_hit_ts"),
+            tp2_tp1_hit_px=_coerce_float(d.get("tp2_tp1_hit_px")),
         )
     except Exception:
         return ExecutorState()
@@ -850,6 +869,64 @@ def _renko_path() -> Path:
     return Path("data/live/renko_latest.parquet")
 
 
+def _clear_tp2_leg_runtime(state: ExecutorState) -> None:
+    state.tp2_leg_id = None
+    state.tp2_leg_side = None
+    state.tp2_entry_bar_ts = None
+    state.tp2_tp1_done = False
+    state.tp2_tp1_pending = False
+    state.tp2_size_rem = 1.0
+    state.tp2_remaining_qty_abs = None
+    state.tp2_tp1_hit_ts = None
+    state.tp2_tp1_hit_px = None
+
+
+def _sync_tp2_leg_runtime(
+    state: ExecutorState,
+    *,
+    terminal: Dict[str, Any],
+    exit_engine: str,
+    live_pos: float,
+    current_side: str,
+) -> None:
+    term = dict(terminal or {})
+    term_mode = str(term.get("mode") or "").strip().upper()
+    term_leg_id = str(term.get("leg_id") or "").strip()
+    term_side = str(term.get("side") or "").strip().lower()
+    term_entry_bar_ts = _safe_ts(term.get("entry_bar_ts"))
+    term_tp1_hit_ts = _safe_ts(term.get("tp1_hit_ts"))
+    term_tp1_hit_px = _coerce_float(term.get("tp1_hit_px"))
+    term_size_rem = _coerce_float(term.get("size_rem"))
+
+    if exit_engine != "tp2" or term_mode != "TP2" or not term_leg_id or term_side not in ("long", "short"):
+        _clear_tp2_leg_runtime(state)
+        return
+
+    is_new_leg = state.tp2_leg_id != term_leg_id
+    if is_new_leg:
+        _clear_tp2_leg_runtime(state)
+        state.tp2_leg_id = term_leg_id
+        state.tp2_leg_side = term_side
+        state.tp2_entry_bar_ts = term_entry_bar_ts.isoformat() if term_entry_bar_ts is not None else None
+        state.tp2_tp1_done = False
+        state.tp2_tp1_pending = False
+        state.tp2_size_rem = 1.0
+        if current_side == term_side and abs(float(live_pos)) > 1e-12:
+            state.tp2_remaining_qty_abs = abs(float(live_pos))
+    elif state.tp2_remaining_qty_abs is None and current_side == term_side and abs(float(live_pos)) > 1e-12:
+        state.tp2_remaining_qty_abs = abs(float(live_pos))
+
+    if term_tp1_hit_ts is not None:
+        state.tp2_tp1_hit_ts = term_tp1_hit_ts.isoformat()
+    if term_tp1_hit_px is not None:
+        state.tp2_tp1_hit_px = float(term_tp1_hit_px)
+
+    if term_tp1_hit_ts is not None and not state.tp2_tp1_done and not state.tp2_tp1_pending:
+        state.tp2_tp1_pending = True
+        if term_size_rem is not None:
+            state.tp2_size_rem = max(0.0, min(1.0, float(term_size_rem)))
+
+
 def run_once(
     *,
     broker: KucoinFuturesBroker,
@@ -877,30 +954,10 @@ def run_once(
         contract_multiplier=contract_multiplier,
     )
 
-    size_rem = 1.0
-
-    try:
-
-        if terminal and terminal.get("mode") == "TP2":
-
-            size_rem = float(terminal.get("size_rem", 1.0) or 1.0)
-
-    except Exception:
-
-        size_rem = 1.0
-
-    size_rem = max(0.0, min(1.0, size_rem))
-
-    if isinstance(base_qty, int):
-
-        qty = int(base_qty * size_rem)
-
-    else:
-
-        qty = float(base_qty) * size_rem
+    qty = int(base_qty) if isinstance(base_qty, int) else float(base_qty)
     log.info(
-        "executor sizing: equity=%.2f pos_pct=%.2f leverage=%.1f mid=%.4f mult=%.4f base_qty=%s size_rem=%.3f -> qty=%s",
-        equity, pos_pct, leverage, mid, contract_multiplier, base_qty, size_rem, qty,
+        "executor sizing: equity=%.2f pos_pct=%.2f leverage=%.1f mid=%.4f mult=%.4f base_qty=%s -> qty=%s",
+        equity, pos_pct, leverage, mid, contract_multiplier, base_qty, qty,
     )
 
     renko_bars = _load_renko_bars(_renko_path(), limit=int(os.getenv("LIVE_RENKO_LIMIT", "4000")))
@@ -1037,12 +1094,48 @@ def run_once(
     terminal["exit_engine"] = exit_engine
     terminal["latched_exit_engine"] = state.latched_exit_engine
 
+    _sync_tp2_leg_runtime(
+        state,
+        terminal=terminal,
+        exit_engine=exit_engine,
+        live_pos=pos,
+        current_side=current_side,
+    )
+
+    terminal["tp2_leg_state"] = {
+        "active": bool(state.tp2_leg_id),
+        "leg_id": state.tp2_leg_id,
+        "side": state.tp2_leg_side,
+        "entry_bar_ts": state.tp2_entry_bar_ts,
+        "tp1_done": bool(state.tp2_tp1_done),
+        "tp1_pending": bool(state.tp2_tp1_pending),
+        "size_rem": float(state.tp2_size_rem),
+        "remaining_qty_abs": state.tp2_remaining_qty_abs,
+        "tp1_hit_ts": state.tp2_tp1_hit_ts,
+        "tp1_hit_px": state.tp2_tp1_hit_px,
+    }
+
     _write_dashboard_levels(symbol=symbol, terminal=terminal, live_pos=pos)
 
     want_side = "long" if terminal_pos > 0 else ("short" if terminal_pos < 0 else None)
 
+    tp2_leg_active = (
+        exit_engine == "tp2"
+        and bool(state.tp2_leg_id)
+        and current_side in ("long", "short")
+        and current_side == str(state.tp2_leg_side or "").strip().lower()
+    )
+    tp1_partial_qty = 0.0
+    if tp2_leg_active and state.tp2_tp1_pending and not state.tp2_tp1_done and abs(float(pos)) > 1e-12:
+        tp1_frac = _coerce_float(terminal.get("tp1_frac"))
+        if tp1_frac is None or tp1_frac <= 0.0 or tp1_frac >= 1.0:
+            tp1_frac = 0.5
+        tp1_partial_qty = max(0.0, min(abs(float(pos)), abs(float(pos)) * float(tp1_frac)))
+
     action = "hold"
-    if current_side == "flat" and want_side == "long":
+    if tp2_leg_active and state.tp2_tp1_pending and not state.tp2_tp1_done and tp1_partial_qty > 0:
+        action = "tp1_partial"
+    elif current_side == "flat" and want_side == "long":
         action = "enter_long"
     elif current_side == "flat" and want_side == "short":
         action = "enter_short"
@@ -1055,10 +1148,14 @@ def run_once(
     elif current_side == "short" and want_side == "long":
         action = "flip_to_long"
     elif current_side == "long" and want_side == "long":
-        if abs(pos) < float(qty):
+        if tp2_leg_active and state.tp2_tp1_done:
+            action = "hold"
+        elif abs(pos) < float(qty):
             action = "scale_long"
     elif current_side == "short" and want_side == "short":
-        if abs(pos) < float(qty):
+        if tp2_leg_active and state.tp2_tp1_done:
+            action = "hold"
+        elif abs(pos) < float(qty):
             action = "scale_short"
 
     if terminal_sig == state.last_terminal_sig and action == "hold":
@@ -1095,7 +1192,10 @@ def run_once(
     action_side = want_side if want_side is not None else current_side
     position_before = 1 if current_side == "long" else (-1 if current_side == "short" else 0)
     position_after = 1 if terminal_pos > 0 else (-1 if terminal_pos < 0 else 0)
-    if action == "hold":
+    if action == "tp1_partial":
+        action_side = current_side
+        position_after = position_before
+    elif action == "hold":
         position_after = position_before
 
     state.n_actions += 1
@@ -1141,6 +1241,11 @@ def run_once(
         exp_side = want_side
         exp_action = "entry"
         exp_qty = float(qty)
+        exp_note = f"executor action={action} event={event_name} current={current_side}"
+    elif action == "tp1_partial" and current_side in ("long", "short") and tp1_partial_qty > 0:
+        exp_side = current_side
+        exp_action = "exit_tp"
+        exp_qty = float(tp1_partial_qty)
         exp_note = f"executor action={action} event={event_name} current={current_side}"
     elif action in ("flip_to_long", "flip_to_short") and want_side is not None:
         exp_side = want_side
@@ -1212,7 +1317,44 @@ def run_once(
         target_qty_for_verify = float(qty)
         target_side_for_verify: Optional[str] = want_side if action.startswith(("enter_", "flip_to_", "scale_")) else None
 
-        if action.startswith("enter_") and want_side is not None:
+        if action == "tp1_partial" and current_side in ("long", "short") and tp1_partial_qty > 0:
+            res = oms.partial_tp1_market(symbol=symbol, side=current_side, qty=float(tp1_partial_qty))
+            log.info("executor tp1 partial result=%s qty=%s", res, tp1_partial_qty)
+            target_side_for_verify = current_side
+            target_qty_for_verify = max(0.0, abs(float(pos)) - float(tp1_partial_qty))
+            if _ok(res):
+                details = _details(res)
+                state.n_executions += 1
+                _append_execution_event(
+                    strategy="live_executor",
+                    symbol=symbol,
+                    ts_iso=_now_iso(),
+                    seq=int(state.n_executions),
+                    execution_kind="fill",
+                    order_action=_execution_side("sell" if current_side == "long" else "buy", details),
+                    reason_code=event_name,
+                    position_before=position_before,
+                    position_after=position_after,
+                    order_id=str(details.get("order_id") or "") or None,
+                    client_oid=str(details.get("client_id") or "") or None,
+                    side=_execution_side("sell" if current_side == "long" else "buy", details),
+                    qty=_execution_qty(float(tp1_partial_qty), details),
+                    price=_execution_price(details),
+                    reduce_only=True,
+                    status=_mode(res) or "fill",
+                    reject_reason=None,
+                    payload_json={"action": action, "result": details, "event_name": event_name},
+                )
+
+                pos_after_tp1 = abs(float(broker.get_position(symbol)))
+                term_size_rem = _coerce_float(terminal.get("size_rem"))
+                if term_size_rem is not None:
+                    state.tp2_size_rem = max(0.0, min(1.0, float(term_size_rem)))
+                state.tp2_tp1_done = True
+                state.tp2_tp1_pending = False
+                state.tp2_remaining_qty_abs = pos_after_tp1
+
+        elif action.startswith("enter_") and want_side is not None:
             res = oms.enter_market(symbol=symbol, side=want_side, qty=float(qty))
             log.info("executor enter result=%s", res)
             if _ok(res):

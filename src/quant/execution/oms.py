@@ -1,4 +1,4 @@
-# src/quant/execution/oms.py
+
 from __future__ import annotations
 
 import time
@@ -7,7 +7,7 @@ from typing import Optional, Dict, Any, Literal
 
 
 Side = Literal["buy", "sell"]
-Reason = Literal["entry", "tp_flip", "sl_exit", "flatten"]
+Reason = Literal["entry", "tp_flip", "tp1_partial", "sl_exit", "flatten"]
 
 
 @dataclass(frozen=True)
@@ -47,6 +47,7 @@ class BrokerAPI:
     Minimal interface your KuCoin client/executor should implement.
     Plug your real exchange adapter here.
     """
+
     def get_best_bid_ask(self, symbol: str) -> tuple[float, float]:
         raise NotImplementedError
 
@@ -111,6 +112,7 @@ class MakerFirstOMS:
       - sl always fast
       - flatten-first flip workflow
     """
+
     def __init__(self, broker: BrokerAPI, cfg: Optional[OmsDefaults] = None):
         self.broker = broker
         self.cfg = cfg or OmsDefaults()
@@ -119,9 +121,21 @@ class MakerFirstOMS:
         want_side: Side = "buy" if side == "long" else "sell"
         return self._entry_ladder(symbol=symbol, side=want_side, qty=qty, reason="entry")
 
-    def exit_tp_or_flip(self, symbol: str, side: Literal["long", "short"], qty: float, flip_to: Optional[Literal["long", "short"]] = None) -> OmsResult:
+    def exit_tp_or_flip(
+        self,
+        symbol: str,
+        side: Literal["long", "short"],
+        qty: float,
+        flip_to: Optional[Literal["long", "short"]] = None,
+    ) -> OmsResult:
         flatten_side: Side = "sell" if side == "long" else "buy"
-        flat = self._tp_maker_first_or_fallback(symbol=symbol, side=flatten_side, qty=qty, reduce_only=True, reason="tp_flip")
+        flat = self._tp_maker_first_or_fallback(
+            symbol=symbol,
+            side=flatten_side,
+            qty=qty,
+            reduce_only=True,
+            reason="tp_flip",
+        )
         if not flat.ok:
             return flat
 
@@ -132,6 +146,27 @@ class MakerFirstOMS:
             return OmsResult(False, "FLAT_TIMEOUT", {"symbol": symbol})
 
         return self.enter(symbol, flip_to, qty)
+
+    def partial_tp1_market(self, symbol: str, side: Literal["long", "short"], qty: float) -> OmsResult:
+        """
+        Immediate reduce-only partial close for TP1.
+        This is intentionally simple and explicit:
+          - reduce-only
+          - market
+          - caller decides qty (e.g. 50% of current live position)
+        """
+        exit_side: Side = "sell" if side == "long" else "buy"
+        try:
+            self.broker.cancel_all(symbol)
+        except Exception:
+            pass
+        return self._fallback_market(
+            symbol=symbol,
+            side=exit_side,
+            qty=qty,
+            reduce_only=True,
+            mode="TP1_PARTIAL_MKT",
+        )
 
     def exit_sl(self, symbol: str, side: Literal["long", "short"], qty: float) -> OmsResult:
         exit_side: Side = "sell" if side == "long" else "buy"
@@ -185,7 +220,18 @@ class MakerFirstOMS:
                 )
                 filled = self.broker.wait_filled(symbol, oid, timeout_s=self.cfg.reprice_every_s_entry)
                 if filled:
-                    return OmsResult(True, tag, {"symbol": symbol, "side": side, "qty": qty, "price": float(price), "client_id": cid, "order_id": oid})
+                    return OmsResult(
+                        True,
+                        tag,
+                        {
+                            "symbol": symbol,
+                            "side": side,
+                            "qty": qty,
+                            "price": float(price),
+                            "client_id": cid,
+                            "order_id": oid,
+                        },
+                    )
 
                 self.broker.cancel_all(symbol)
 
@@ -212,21 +258,35 @@ class MakerFirstOMS:
             pass
         return self._fallback_market(symbol, want_side, qty, reduce_only=False, mode="ENTRY_MKT")
 
-
     def flatten_market(self, symbol: str, side: Literal["long", "short"], qty: float) -> OmsResult:
         exit_side: Side = "sell" if side == "long" else "buy"
         try:
             self.broker.cancel_all(symbol)
         except Exception:
             pass
-        return self._fallback_market(symbol, exit_side, qty, reduce_only=True, mode="FLAT_MKT")    
+        return self._fallback_market(symbol, exit_side, qty, reduce_only=True, mode="FLAT_MKT")
 
-    def _tp_maker_first_or_fallback(self, symbol: str, side: Side, qty: float, reduce_only: bool, reason: Reason) -> OmsResult:
+    def _tp_maker_first_or_fallback(
+        self,
+        symbol: str,
+        side: Side,
+        qty: float,
+        reduce_only: bool,
+        reason: Reason,
+    ) -> OmsResult:
         bid, ask = self.broker.get_best_bid_ask(symbol)
         ref = (ask if side == "sell" else bid) or (bid if side == "sell" else ask)
 
         if not ref or ref <= 0:
-            return self._fallback_marketable(symbol, side, qty, ref_price=1.0, off_pct=self.cfg.tp_fallback_off_pct, reduce_only=reduce_only, mode="TP_FB_NOQUOTE")
+            return self._fallback_marketable(
+                symbol,
+                side,
+                qty,
+                ref_price=1.0,
+                off_pct=self.cfg.tp_fallback_off_pct,
+                reduce_only=reduce_only,
+                mode="TP_FB_NOQUOTE",
+            )
 
         t0 = time.time()
         requotes = 0
@@ -248,24 +308,59 @@ class MakerFirstOMS:
                 )
                 filled = self.broker.wait_filled(symbol, oid, timeout_s=self.cfg.reprice_every_s_tp)
                 if filled:
-                    return OmsResult(True, "PO", {"symbol": symbol, "side": side, "qty": qty, "price": float(px), "client_id": cid, "order_id": oid})
+                    return OmsResult(
+                        True,
+                        "PO",
+                        {
+                            "symbol": symbol,
+                            "side": side,
+                            "qty": qty,
+                            "price": float(px),
+                            "client_id": cid,
+                            "order_id": oid,
+                        },
+                    )
 
                 self.broker.cancel_all(symbol)
 
                 if (time.time() - t0) >= self.cfg.tp_timeout_s or requotes >= self.cfg.max_requotes_tp:
-                    return self._fallback_marketable(symbol, side, qty, ref_price=px, off_pct=self.cfg.tp_fallback_off_pct, reduce_only=reduce_only, mode="TP_FB_TIMEOUT")
+                    return self._fallback_marketable(
+                        symbol,
+                        side,
+                        qty,
+                        ref_price=px,
+                        off_pct=self.cfg.tp_fallback_off_pct,
+                        reduce_only=reduce_only,
+                        mode="TP_FB_TIMEOUT",
+                    )
 
                 requotes += 1
                 continue
 
-            return self._fallback_marketable(symbol, side, qty, ref_price=ref, off_pct=self.cfg.tp_fallback_off_pct, reduce_only=reduce_only, mode="TP_FB_VOL")
+            return self._fallback_marketable(
+                symbol,
+                side,
+                qty,
+                ref_price=ref,
+                off_pct=self.cfg.tp_fallback_off_pct,
+                reduce_only=reduce_only,
+                mode="TP_FB_VOL",
+            )
 
     def _sl_fast(self, symbol: str, side: Side, qty: float) -> OmsResult:
         bid, ask = self.broker.get_best_bid_ask(symbol)
         ref = bid if side == "sell" else ask
         if not ref or ref <= 0:
             ref = (bid + ask) / 2.0 if (bid and ask) else (ask or bid or 1.0)
-        return self._fallback_marketable(symbol, side, qty, ref_price=float(ref), off_pct=self.cfg.sl_marketable_off_pct, reduce_only=True, mode="SL_MK")
+        return self._fallback_marketable(
+            symbol,
+            side,
+            qty,
+            ref_price=float(ref),
+            off_pct=self.cfg.sl_marketable_off_pct,
+            reduce_only=True,
+            mode="SL_MK",
+        )
 
     def _fallback_market(self, symbol: str, side: Side, qty: float, reduce_only: bool, mode: str) -> OmsResult:
         cid = f"{mode}:{int(time.time()*1000)}"
@@ -291,7 +386,16 @@ class MakerFirstOMS:
             },
         )
 
-    def _fallback_marketable(self, symbol: str, side: Side, qty: float, ref_price: float, off_pct: float, reduce_only: bool, mode: str) -> OmsResult:
+    def _fallback_marketable(
+        self,
+        symbol: str,
+        side: Side,
+        qty: float,
+        ref_price: float,
+        off_pct: float,
+        reduce_only: bool,
+        mode: str,
+    ) -> OmsResult:
         ref_price = float(ref_price) if ref_price and ref_price > 0 else 1.0
         limit_px = ref_price * (1.0 + off_pct) if side == "buy" else ref_price * (1.0 - off_pct)
 
