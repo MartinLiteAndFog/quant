@@ -869,16 +869,38 @@ def run_once(
     pos_pct = float(os.getenv("LIVE_EXECUTOR_POS_PCT", "0.90"))
     equity = _resolve_equity(broker)
     contract_multiplier = _resolve_contract_multiplier(broker, symbol)
-    qty = _qty_from_equity_pct(
+    base_qty = _qty_from_equity_pct(
         equity=equity,
         pos_pct=pos_pct,
         leverage=leverage,
         mid_price=float(mid),
         contract_multiplier=contract_multiplier,
     )
+
+    size_rem = 1.0
+
+    try:
+
+        if terminal and terminal.get("mode") == "TP2":
+
+            size_rem = float(terminal.get("size_rem", 1.0) or 1.0)
+
+    except Exception:
+
+        size_rem = 1.0
+
+    size_rem = max(0.0, min(1.0, size_rem))
+
+    if isinstance(base_qty, int):
+
+        qty = int(base_qty * size_rem)
+
+    else:
+
+        qty = float(base_qty) * size_rem
     log.info(
-        "executor sizing: equity=%.2f pos_pct=%.2f leverage=%.1f mid=%.4f mult=%.4f -> qty=%d",
-        equity, pos_pct, leverage, mid, contract_multiplier, qty,
+        "executor sizing: equity=%.2f pos_pct=%.2f leverage=%.1f mid=%.4f mult=%.4f base_qty=%s size_rem=%.3f -> qty=%s",
+        equity, pos_pct, leverage, mid, contract_multiplier, base_qty, size_rem, qty,
     )
 
     renko_bars = _load_renko_bars(_renko_path(), limit=int(os.getenv("LIVE_RENKO_LIMIT", "4000")))
