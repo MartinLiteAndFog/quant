@@ -776,6 +776,8 @@ def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Opt
     entry_bar_ts = terminal.get("entry_bar_ts")
     sl = _coerce_float(terminal.get("sl"))
     ttp = _coerce_float(terminal.get("ttp"))
+    tp1 = _coerce_float(terminal.get("tp1"))
+    tp2 = _coerce_float(terminal.get("tp2"))
     be_armed = bool(terminal.get("be_armed", False))
     tp1_done = bool(terminal.get("tp1_done", False))
 
@@ -797,6 +799,10 @@ def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Opt
         rows.append({"kind": "sl", "px": sl, "side": side, "mode": mode})
     if ttp is not None:
         rows.append({"kind": "ttp", "px": ttp, "side": side, "mode": mode})
+    if tp1 is not None:
+        rows.append({"kind": "tp1", "px": tp1, "side": side, "mode": mode})
+    if tp2 is not None:
+        rows.append({"kind": "tp2", "px": tp2, "side": side, "mode": mode})
     rows.append({"kind": "meta", "be_armed": be_armed, "tp1_done": tp1_done, "side": side, "mode": mode})
 
     base = Path("/data/live")
@@ -823,6 +829,8 @@ def _write_dashboard_levels(symbol: str, terminal: Dict[str, Any], live_pos: Opt
         "latched_exit_engine": terminal.get("latched_exit_engine"),
         "sl": sl,
         "ttp": ttp,
+        "tp1": tp1,
+        "tp2": tp2,
         "entry_px": entry_px,
         "best_fav": _coerce_float(terminal.get("best_fav")),
         "ttp_trail_pct": _resolve_ttp_trail_pct(),
@@ -900,8 +908,8 @@ def run_once(
     else:
         tp2_params = TP2Params(
             fee_bps=float(os.getenv("LIVE_TP2_FEE_BPS", os.getenv("LIVE_FLIP_FEE_BPS", "0"))),
-            tp1_pct=float(os.getenv("LIVE_TP1_PCT", "0.07")),
-            tp2_pct=float(os.getenv("LIVE_TP2_PCT", "0.11")),
+            tp1_pct=float(os.getenv("LIVE_TP1_PCT", "0.04")),
+            tp2_pct=float(os.getenv("LIVE_TP2_PCT", "0.08")),
             tp1_frac=float(os.getenv("LIVE_TP1_FRAC", "0.5")),
             min_sl_pct=float(os.getenv("LIVE_TP2_MIN_SL_PCT", "0.03")),
             max_sl_pct=float(os.getenv("LIVE_TP2_MAX_SL_PCT", "0.08")),

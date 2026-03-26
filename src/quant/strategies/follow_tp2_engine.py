@@ -28,8 +28,8 @@ class TP2Params:
     """
 
     fee_bps: float = 0.0  # ROUNDTRIP bps
-    tp1_pct: float = 0.07
-    tp2_pct: float = 0.11
+    tp1_pct: float = 0.04
+    tp2_pct: float = 0.08
     tp1_frac: float = 0.5
     min_sl_pct: float = 0.03
     max_sl_pct: float = 0.08
