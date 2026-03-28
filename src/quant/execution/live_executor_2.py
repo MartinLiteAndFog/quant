@@ -566,6 +566,16 @@ def _coerce_float(v: Any) -> Optional[float]:
     return x
 
 
+def _scale_delta_epsilon() -> float:
+    step = _coerce_float(os.getenv("KRAKEN_SIZE_STEP", os.getenv("LIVE_EXECUTOR_2_SIZE_STEP", "0.1")))
+    if step is None or step <= 0:
+        step = 0.1
+    env_abs = _coerce_float(os.getenv("LIVE_EXECUTOR_2_MIN_SCALE_DELTA_ABS"))
+    if env_abs is not None and env_abs > 0:
+        return float(env_abs)
+    return float(step * 0.5)
+
+
 def _apply_live_ttp_guard(
     terminal: Dict[str, Any],
     *,
@@ -1308,10 +1318,25 @@ def run_once(
     if gate_countertrend_on != 1 and gate_trend_on != 1:
         desired_exit_engine = "flip" if gate_on == 1 else "tp2"
 
+    persisted_tp2_live = (
+        bool(state.tp2_leg_id)
+        and str(state.tp2_leg_side or "").strip().lower() in ("long", "short")
+        and current_side in ("long", "short")
+        and current_side == str(state.tp2_leg_side or "").strip().lower()
+        and abs(float(pos)) > 1e-12
+    )
+
     if abs(float(pos)) <= 1e-12:
         state.latched_exit_engine = desired_exit_engine
     elif not state.latched_exit_engine:
-        state.latched_exit_engine = desired_exit_engine
+        # Safety-first:
+        # Never reclassify an already-open live trade into flip mode just because
+        # the gate currently says "flip" and the persisted latch is missing.
+        # This was the dangerous path that could turn an active TP2 leg into TTP/flip.
+        state.latched_exit_engine = "tp2"
+
+    if persisted_tp2_live:
+        state.latched_exit_engine = "tp2"
 
     exit_engine = str(state.latched_exit_engine or desired_exit_engine)
 
@@ -1553,14 +1578,14 @@ def run_once(
             action = "hold"
         elif tp2_leg_active and state.tp2_tp1_done:
             action = "hold"
-        elif abs(pos) < float(qty_effective):
+        elif (float(qty_effective) - abs(float(pos))) > _scale_delta_epsilon():
             action = "scale_long"
     elif current_side == "short" and want_side == "short":
         if flat_latch_active:
             action = "hold"
         elif tp2_leg_active and state.tp2_tp1_done:
             action = "hold"
-        elif abs(pos) < float(qty_effective):
+        elif (float(qty_effective) - abs(float(pos))) > _scale_delta_epsilon():
             action = "scale_short"
 
 
@@ -2046,6 +2071,8 @@ def run_once(
 
         elif action.startswith("scale_") and want_side is not None:
             add_qty = max(0.0, float(qty_effective) - abs(float(pos)))
+            if add_qty <= _scale_delta_epsilon():
+                add_qty = 0.0
             if add_qty > 0:
                 target_qty_for_verify = abs(float(pos)) + float(add_qty)
                 res = oms.enter_market(symbol=symbol, side=want_side, qty=add_qty)
