@@ -419,6 +419,8 @@ class ExecutorState:
     tp2_tp1_hit_ts: Optional[str] = None
     tp2_tp1_hit_px: Optional[float] = None
     tp2_last_consumed_tp1_hit_ts: Optional[str] = None
+    flat_until_new_signal_ts: Optional[str] = None
+    flat_latch_reason: Optional[str] = None
 
 
 def _read_state(path: Path) -> ExecutorState:
@@ -445,6 +447,8 @@ def _read_state(path: Path) -> ExecutorState:
             tp2_tp1_hit_ts=d.get("tp2_tp1_hit_ts"),
             tp2_tp1_hit_px=_coerce_float(d.get("tp2_tp1_hit_px")),
             tp2_last_consumed_tp1_hit_ts=d.get("tp2_last_consumed_tp1_hit_ts"),
+            flat_until_new_signal_ts=d.get("flat_until_new_signal_ts"),
+            flat_latch_reason=d.get("flat_latch_reason"),
         )
     except Exception:
         return ExecutorState()
@@ -903,7 +907,42 @@ def _sync_tp2_leg_runtime(
     term_tp1_hit_px = _coerce_float(term.get("tp1_hit_px"))
     term_size_rem = _coerce_float(term.get("size_rem"))
 
-    if exit_engine != "tp2" or term_mode != "TP2" or not term_leg_id or term_side not in ("long", "short"):
+    live_qty_abs = abs(float(live_pos))
+    persisted_leg_matches_live = (
+        bool(state.tp2_leg_id)
+        and str(state.tp2_leg_side or "").strip().lower() in ("long", "short")
+        and current_side in ("long", "short")
+        and current_side == str(state.tp2_leg_side or "").strip().lower()
+        and live_qty_abs > 1e-12
+    )
+
+    if exit_engine != "tp2":
+        _clear_tp2_leg_runtime(state)
+        return
+
+    term_has_valid_tp2_leg = (
+        term_mode == "TP2"
+        and bool(term_leg_id)
+        and term_side in ("long", "short")
+    )
+
+    if not term_has_valid_tp2_leg:
+        if persisted_leg_matches_live:
+            # Keep the live leg authoritative when replay drifts or forgets the TP2 context.
+            if state.tp2_tp1_done:
+                prev = _coerce_float(state.tp2_remaining_qty_abs)
+                if prev is None or prev <= 0:
+                    state.tp2_remaining_qty_abs = live_qty_abs
+                else:
+                    state.tp2_remaining_qty_abs = min(float(prev), live_qty_abs)
+                state.tp2_tp1_pending = False
+                if state.tp2_size_rem > 0:
+                    # Never allow the remembered fraction to imply more than the current live remainder.
+                    state.tp2_size_rem = min(float(state.tp2_size_rem), 1.0)
+            else:
+                state.tp2_remaining_qty_abs = live_qty_abs
+            return
+
         _clear_tp2_leg_runtime(state)
         return
 
@@ -919,10 +958,10 @@ def _sync_tp2_leg_runtime(
             state.tp2_size_rem = max(0.0, min(1.0, float(term_size_rem)))
         else:
             state.tp2_size_rem = 0.5 if term_tp1_done else 1.0
-        if current_side == term_side and abs(float(live_pos)) > 1e-12:
-            state.tp2_remaining_qty_abs = abs(float(live_pos))
-    elif state.tp2_remaining_qty_abs is None and current_side == term_side and abs(float(live_pos)) > 1e-12:
-        state.tp2_remaining_qty_abs = abs(float(live_pos))
+        if current_side == term_side and live_qty_abs > 1e-12:
+            state.tp2_remaining_qty_abs = live_qty_abs
+    elif state.tp2_remaining_qty_abs is None and current_side == term_side and live_qty_abs > 1e-12:
+        state.tp2_remaining_qty_abs = live_qty_abs
 
     if term_tp1_hit_ts_iso is not None:
         state.tp2_tp1_hit_ts = term_tp1_hit_ts_iso
@@ -936,6 +975,12 @@ def _sync_tp2_leg_runtime(
             state.tp2_size_rem = max(0.0, min(1.0, float(term_size_rem)))
         if term_tp1_hit_ts_iso is not None:
             state.tp2_last_consumed_tp1_hit_ts = term_tp1_hit_ts_iso
+        if current_side == term_side and live_qty_abs > 1e-12:
+            prev = _coerce_float(state.tp2_remaining_qty_abs)
+            if prev is None or prev <= 0:
+                state.tp2_remaining_qty_abs = live_qty_abs
+            else:
+                state.tp2_remaining_qty_abs = min(float(prev), live_qty_abs)
         return
 
     if (
@@ -1042,7 +1087,16 @@ def run_once(
     sig_now = _latest_signal(signals_root=signals_root, symbol=symbol)
     sig_now_v = int(sig_now["signal"]) if sig_now is not None else 0
 
-    if terminal_pos == 0:
+    flat_latch_active = False
+    flat_latch_ts = _safe_ts(state.flat_until_new_signal_ts)
+    if flat_latch_ts is not None:
+        if sig_now is not None and sig_now["ts"] > flat_latch_ts:
+            state.flat_until_new_signal_ts = None
+            state.flat_latch_reason = None
+        else:
+            flat_latch_active = True
+
+    if terminal_pos == 0 and not flat_latch_active:
         if current_side == "long" and sig_now_v > 0:
             log.warning(
                 "GUARD FIRED: terminal_pos=0 but live long + latest signal long -> suppress flat symbol=%s sig_ts=%s bars=%s signals=%s",
@@ -1136,11 +1190,16 @@ def run_once(
         "tp1_hit_ts": state.tp2_tp1_hit_ts,
         "tp1_hit_px": state.tp2_tp1_hit_px,
         "last_consumed_tp1_hit_ts": state.tp2_last_consumed_tp1_hit_ts,
+        "flat_until_new_signal_ts": state.flat_until_new_signal_ts,
+        "flat_latch_reason": state.flat_latch_reason,
+        "flat_latch_active": flat_latch_active,
     }
 
     _write_dashboard_levels(symbol=symbol, terminal=terminal, live_pos=pos)
 
     want_side = "long" if terminal_pos > 0 else ("short" if terminal_pos < 0 else None)
+    if flat_latch_active and current_side == "flat":
+        want_side = None
 
     tp2_leg_active = (
         exit_engine == "tp2"
@@ -1148,6 +1207,14 @@ def run_once(
         and current_side in ("long", "short")
         and current_side == str(state.tp2_leg_side or "").strip().lower()
     )
+    qty_effective = float(qty)
+    if tp2_leg_active and state.tp2_tp1_done:
+        rem_abs = _coerce_float(state.tp2_remaining_qty_abs)
+        if rem_abs is not None and rem_abs > 0:
+            qty_effective = float(rem_abs)
+        elif abs(float(pos)) > 1e-12:
+            qty_effective = abs(float(pos))
+
     tp1_partial_qty = 0.0
     if tp2_leg_active and state.tp2_tp1_pending and not state.tp2_tp1_done and abs(float(pos)) > 1e-12:
         tp1_frac = _coerce_float(terminal.get("tp1_frac"))
@@ -1158,6 +1225,8 @@ def run_once(
     action = "hold"
     if tp2_leg_active and state.tp2_tp1_pending and not state.tp2_tp1_done and tp1_partial_qty > 0:
         action = "tp1_partial"
+    elif flat_latch_active and current_side == "flat":
+        action = "hold"
     elif current_side == "flat" and want_side == "long":
         action = "enter_long"
     elif current_side == "flat" and want_side == "short":
@@ -1171,14 +1240,18 @@ def run_once(
     elif current_side == "short" and want_side == "long":
         action = "flip_to_long"
     elif current_side == "long" and want_side == "long":
-        if tp2_leg_active and state.tp2_tp1_done:
+        if flat_latch_active:
             action = "hold"
-        elif abs(pos) < float(qty):
+        elif tp2_leg_active and state.tp2_tp1_done:
+            action = "hold"
+        elif abs(pos) < float(qty_effective):
             action = "scale_long"
     elif current_side == "short" and want_side == "short":
-        if tp2_leg_active and state.tp2_tp1_done:
+        if flat_latch_active:
             action = "hold"
-        elif abs(pos) < float(qty):
+        elif tp2_leg_active and state.tp2_tp1_done:
+            action = "hold"
+        elif abs(pos) < float(qty_effective):
             action = "scale_short"
 
     if terminal_sig == state.last_terminal_sig and action == "hold":
@@ -1286,7 +1359,7 @@ def run_once(
         exp_qty = abs(float(pos))
         exp_note = f"executor action={action} event={event_name} current={current_side}"
     elif action.startswith("scale_") and want_side is not None:
-        add_qty = max(0.0, float(qty) - abs(float(pos)))
+        add_qty = max(0.0, float(qty_effective) - abs(float(pos)))
         if add_qty > 0:
             exp_side = want_side
             exp_action = "entry"
@@ -1337,7 +1410,7 @@ def run_once(
         def _execution_price(details: Dict[str, Any]) -> Optional[float]:
             return _coerce_float(details.get("price"))
 
-        target_qty_for_verify = float(qty)
+        target_qty_for_verify = float(qty_effective)
         target_side_for_verify: Optional[str] = want_side if action.startswith(("enter_", "flip_to_", "scale_")) else None
 
         if action == "tp1_partial" and current_side in ("long", "short") and tp1_partial_qty > 0:
@@ -1547,12 +1620,21 @@ def run_once(
                     exit_px_fallback=float(mid) if mid and mid > 0 else None,
                 )
 
+                if exit_engine == "tp2" and event_name in ("tp2_exit", "be_exit", "sl_exit"):
+                    state.flat_until_new_signal_ts = (
+                        pd.Timestamp(ev["ts"]).isoformat()
+                        if ev is not None and "ts" in ev
+                        else _now_iso()
+                    )
+                    state.flat_latch_reason = event_name
+                    _clear_tp2_leg_runtime(state)
+
         elif action.startswith("scale_") and want_side is not None:
-            add_qty = max(0.0, float(qty) - abs(float(pos)))
+            add_qty = max(0.0, float(qty_effective) - abs(float(pos)))
             if add_qty > 0:
                 target_qty_for_verify = abs(float(pos)) + float(add_qty)
                 res = oms.enter_market(symbol=symbol, side=want_side, qty=add_qty)
-                log.info("executor scale result=%s add_qty=%s target_qty=%s pos_before=%s", res, add_qty, qty, pos)
+                log.info("executor scale result=%s add_qty=%s target_qty=%s pos_before=%s", res, add_qty, qty_effective, pos)
                 if _ok(res):
                     details = _details(res)
                     state.n_executions += 1
@@ -1577,7 +1659,7 @@ def run_once(
                         payload_json={"action": action, "result": details, "event_name": event_name},
                     )
             else:
-                log.info("executor scale skipped add_qty=0 target_qty=%s pos_before=%s", qty, pos)
+                log.info("executor scale skipped add_qty=0 target_qty=%s pos_before=%s", qty_effective, pos)
 
         else:
             log.info("executor hold symbol=%s pos=%s terminal_pos=%s event=%s", symbol, pos, terminal_pos, event_name)
