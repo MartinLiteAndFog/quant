@@ -626,6 +626,8 @@ class ExecutorState:
     tp2_tp1_hit_ts: Optional[str] = None
     tp2_tp1_hit_px: Optional[float] = None
     tp2_last_consumed_tp1_hit_ts: Optional[str] = None
+    flat_until_new_signal_ts: Optional[str] = None
+    flat_latch_reason: Optional[str] = None
 
 
 def _read_state(path: Path) -> ExecutorState:
@@ -653,6 +655,8 @@ def _read_state(path: Path) -> ExecutorState:
             tp2_tp1_hit_ts=d.get("tp2_tp1_hit_ts"),
             tp2_tp1_hit_px=_coerce_float(d.get("tp2_tp1_hit_px")),
             tp2_last_consumed_tp1_hit_ts=d.get("tp2_last_consumed_tp1_hit_ts"),
+            flat_until_new_signal_ts=d.get("flat_until_new_signal_ts"),
+            flat_latch_reason=d.get("flat_latch_reason"),
         )
     except Exception:
         return ExecutorState()
@@ -1385,7 +1389,16 @@ def run_once(
     sig_now = _latest_signal(signals_root=signals_root, symbol=symbol)
     sig_now_v = int(sig_now["signal"]) if sig_now is not None else 0
 
-    if terminal_pos == 0:
+    flat_latch_active = False
+    flat_latch_ts = _safe_ts(state.flat_until_new_signal_ts)
+    if flat_latch_ts is not None:
+        if sig_now is not None and sig_now["ts"] > flat_latch_ts:
+            state.flat_until_new_signal_ts = None
+            state.flat_latch_reason = None
+        else:
+            flat_latch_active = True
+
+    if terminal_pos == 0 and not flat_latch_active:
         if current_side == "long" and sig_now_v > 0:
             log.warning(
                 "GUARD FIRED: terminal_pos=0 but live long + latest signal long -> suppress flat symbol=%s sig_ts=%s bars=%s signals=%s",
@@ -1478,6 +1491,9 @@ def run_once(
         "tp1_hit_ts": state.tp2_tp1_hit_ts,
         "tp1_hit_px": state.tp2_tp1_hit_px,
         "last_consumed_tp1_hit_ts": state.tp2_last_consumed_tp1_hit_ts,
+        "flat_until_new_signal_ts": state.flat_until_new_signal_ts,
+        "flat_latch_reason": state.flat_latch_reason,
+        "flat_latch_active": flat_latch_active,
     }
 
     _write_dashboard_levels(
@@ -1491,6 +1507,8 @@ def run_once(
     )
 
     want_side = "long" if terminal_pos > 0 else ("short" if terminal_pos < 0 else None)
+    if flat_latch_active and current_side == "flat":
+        want_side = None
 
     tp2_leg_active = (
         exit_engine == "tp2"
@@ -1516,6 +1534,8 @@ def run_once(
     action = "hold"
     if tp2_leg_active and state.tp2_tp1_pending and not state.tp2_tp1_done and tp1_partial_qty > 0:
         action = "tp1_partial"
+    elif flat_latch_active and current_side == "flat":
+        action = "hold"
     elif current_side == "flat" and want_side == "long":
         action = "enter_long"
     elif current_side == "flat" and want_side == "short":
@@ -1529,12 +1549,16 @@ def run_once(
     elif current_side == "short" and want_side == "long":
         action = "flip_to_long"
     elif current_side == "long" and want_side == "long":
-        if tp2_leg_active and state.tp2_tp1_done:
+        if flat_latch_active:
+            action = "hold"
+        elif tp2_leg_active and state.tp2_tp1_done:
             action = "hold"
         elif abs(pos) < float(qty_effective):
             action = "scale_long"
     elif current_side == "short" and want_side == "short":
-        if tp2_leg_active and state.tp2_tp1_done:
+        if flat_latch_active:
+            action = "hold"
+        elif tp2_leg_active and state.tp2_tp1_done:
             action = "hold"
         elif abs(pos) < float(qty_effective):
             action = "scale_short"
@@ -1992,6 +2016,15 @@ def run_once(
                     qty_default=abs(float(pos)),
                     exit_px_fallback=float(mid) if mid and mid > 0 else None,
                 )
+
+                if exit_engine == "tp2" and event_name in ("tp2_exit", "be_exit", "sl_exit"):
+                    state.flat_until_new_signal_ts = (
+                        pd.Timestamp(ev["ts"]).isoformat()
+                        if ev is not None and "ts" in ev
+                        else _now_iso()
+                    )
+                    state.flat_latch_reason = event_name
+                    _clear_tp2_leg_runtime(state)
 
                 fresh_equity = _resolve_equity(broker)
                 _append_equity_snapshot(
