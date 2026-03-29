@@ -1596,15 +1596,9 @@ def run_once(
     elif current_side == "short" and want_side is None:
         action = "exit_short"
     elif current_side == "long" and want_side == "short":
-        if leg_mode == "tp2":
-            action = "hold"
-        else:
-            action = "flip_to_short"
+        action = "flip_to_short"
     elif current_side == "short" and want_side == "long":
-        if leg_mode == "tp2":
-            action = "hold"
-        else:
-            action = "flip_to_long"
+        action = "flip_to_long"
     elif current_side == "long" and want_side == "long":
         if flat_latch_active:
             action = "hold"
@@ -1950,6 +1944,7 @@ def run_once(
                 if abs(pos_after_flat) > 1e-12:
                     log.warning("executor flip aborted: not flat after flatten pos_after=%s", pos_after_flat)
                 else:
+                    state.latched_exit_engine = desired_exit_engine
                     fresh_bid, fresh_ask = broker.get_best_bid_ask(symbol)
                     fresh_mid = (fresh_bid + fresh_ask) / 2.0 if (fresh_bid and fresh_ask) else (fresh_ask or fresh_bid or mid or 0.0)
                     fresh_equity = _resolve_equity(broker)
@@ -1991,7 +1986,7 @@ def run_once(
                         res = oms.enter_market(symbol=symbol, side=want_side, qty=float(flip_qty))
                         log.info("executor flip re-enter result=%s", res)
                         if _ok(res):
-                            state.open_leg_mode = str(exit_engine)
+                            state.open_leg_mode = str(desired_exit_engine)
                             state.open_leg_id = str(terminal.get("leg_id") or "") or None
                             state.open_leg_side = str(want_side)
                             entry_bar_ts = terminal.get("entry_bar_ts")
