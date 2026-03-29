@@ -626,6 +626,11 @@ class ExecutorState:
     last_gate_on: Optional[int] = None
     latched_exit_engine: Optional[str] = None
 
+    open_leg_mode: Optional[str] = None
+    open_leg_id: Optional[str] = None
+    open_leg_side: Optional[str] = None
+    open_leg_entry_bar_ts: Optional[str] = None
+
     tp2_leg_id: Optional[str] = None
     tp2_leg_side: Optional[str] = None
     tp2_entry_bar_ts: Optional[str] = None
@@ -655,6 +660,10 @@ def _read_state(path: Path) -> ExecutorState:
             last_terminal_sig=d.get("last_terminal_sig"),
             last_gate_on=(int(d.get("last_gate_on")) if d.get("last_gate_on") is not None else None),
             latched_exit_engine=d.get("latched_exit_engine"),
+            open_leg_mode=d.get("open_leg_mode"),
+            open_leg_id=d.get("open_leg_id"),
+            open_leg_side=d.get("open_leg_side"),
+            open_leg_entry_bar_ts=d.get("open_leg_entry_bar_ts"),
             tp2_leg_id=d.get("tp2_leg_id"),
             tp2_leg_side=d.get("tp2_leg_side"),
             tp2_entry_bar_ts=d.get("tp2_entry_bar_ts"),
@@ -1521,6 +1530,17 @@ def run_once(
         "flat_latch_active": flat_latch_active,
     }
 
+    if (
+        bool(state.tp2_leg_id)
+        and current_side in ("long", "short")
+        and current_side == str(state.tp2_leg_side or "").strip().lower()
+        and abs(float(pos)) > 1e-12
+    ):
+        state.open_leg_mode = "tp2"
+        state.open_leg_id = state.tp2_leg_id
+        state.open_leg_side = state.tp2_leg_side
+        state.open_leg_entry_bar_ts = state.tp2_entry_bar_ts
+
     _write_dashboard_levels(
         symbol=symbol,
         terminal=terminal,
@@ -1556,8 +1576,14 @@ def run_once(
             tp1_frac = 0.5
         tp1_partial_qty = max(0.0, min(abs(float(pos)), abs(float(pos)) * float(tp1_frac)))
 
+    event_name = str(ev.get("event", "")) if ev is not None else "none"
+
+    leg_mode = str(state.open_leg_mode or "").strip().lower()
+
     action = "hold"
-    if tp2_leg_active and state.tp2_tp1_pending and not state.tp2_tp1_done and tp1_partial_qty > 0:
+    if leg_mode == "tp2" and event_name in ("tp_exit", "ttp_on") and current_side in ("long", "short"):
+        action = "hold"
+    elif tp2_leg_active and state.tp2_tp1_pending and not state.tp2_tp1_done and tp1_partial_qty > 0:
         action = "tp1_partial"
     elif flat_latch_active and current_side == "flat":
         action = "hold"
@@ -1570,9 +1596,15 @@ def run_once(
     elif current_side == "short" and want_side is None:
         action = "exit_short"
     elif current_side == "long" and want_side == "short":
-        action = "flip_to_short"
+        if leg_mode == "tp2":
+            action = "hold"
+        else:
+            action = "flip_to_short"
     elif current_side == "short" and want_side == "long":
-        action = "flip_to_long"
+        if leg_mode == "tp2":
+            action = "hold"
+        else:
+            action = "flip_to_long"
     elif current_side == "long" and want_side == "long":
         if flat_latch_active:
             action = "hold"
@@ -1602,7 +1634,6 @@ def run_once(
         state.last_gate_on = int(gate_on)
         return state
 
-    event_name = str(ev.get("event", "")) if ev is not None else "none"
     ts_iso = _now_iso()
 
     event_sig = _event_sig(ev) if ev is not None else f"none|{terminal_sig}"
@@ -1759,6 +1790,11 @@ def run_once(
             target_side_for_verify = current_side
             target_qty_for_verify = max(0.0, abs(float(pos)) - float(tp1_partial_qty))
             if _ok(res):
+                state.open_leg_mode = "tp2"
+                state.open_leg_id = str(terminal.get("leg_id") or state.open_leg_id or "") or None
+                state.open_leg_side = str(current_side)
+                entry_bar_ts = terminal.get("entry_bar_ts")
+                state.open_leg_entry_bar_ts = str(entry_bar_ts) if entry_bar_ts is not None else state.open_leg_entry_bar_ts
                 details = _details(res)
                 state.n_executions += 1
                 _append_execution_event(
@@ -1816,6 +1852,11 @@ def run_once(
             res = oms.enter_market(symbol=symbol, side=want_side, qty=float(qty))
             log.info("executor enter result=%s", res)
             if _ok(res):
+                state.open_leg_mode = str(exit_engine)
+                state.open_leg_id = str(terminal.get("leg_id") or "") or None
+                state.open_leg_side = str(want_side)
+                entry_bar_ts = terminal.get("entry_bar_ts")
+                state.open_leg_entry_bar_ts = str(entry_bar_ts) if entry_bar_ts is not None else None
                 details = _details(res)
                 state.n_executions += 1
                 _append_execution_event(
@@ -1950,6 +1991,11 @@ def run_once(
                         res = oms.enter_market(symbol=symbol, side=want_side, qty=float(flip_qty))
                         log.info("executor flip re-enter result=%s", res)
                         if _ok(res):
+                            state.open_leg_mode = str(exit_engine)
+                            state.open_leg_id = str(terminal.get("leg_id") or "") or None
+                            state.open_leg_side = str(want_side)
+                            entry_bar_ts = terminal.get("entry_bar_ts")
+                            state.open_leg_entry_bar_ts = str(entry_bar_ts) if entry_bar_ts is not None else None
                             details = _details(res)
                             state.n_executions += 1
                             _append_execution_event(
@@ -2041,6 +2087,11 @@ def run_once(
                     qty_default=abs(float(pos)),
                     exit_px_fallback=float(mid) if mid and mid > 0 else None,
                 )
+
+                state.open_leg_mode = None
+                state.open_leg_id = None
+                state.open_leg_side = None
+                state.open_leg_entry_bar_ts = None
 
                 if exit_engine == "tp2" and event_name in ("tp2_exit", "be_exit", "sl_exit"):
                     state.flat_until_new_signal_ts = (
