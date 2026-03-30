@@ -530,8 +530,13 @@ class LiveExecutor2TtpTests(unittest.TestCase):
 
 
 class KrakenNativeStopSyncTests(unittest.TestCase):
-    def test_sync_kraken_stop_loss_tightens_long_stop_to_opposite_imba(self) -> None:
-        broker = _NativeStopBroker(pos=4.8)
+    def test_sync_kraken_stop_loss_cancels_native_stop_when_opposite_imba_supersedes_long_sl(self) -> None:
+        broker = _NativeStopBroker(
+            pos=4.8,
+            open_stop_orders=[
+                {"order_id": "1", "client_id": "quant-sl-old", "stop_price": 79.831, "order_type": "stp", "side": "sell", "size": 4.8},
+            ],
+        )
 
         _sync_kraken_stop_loss(
             broker=broker,
@@ -545,8 +550,8 @@ class KrakenNativeStopSyncTests(unittest.TestCase):
             dry_run=False,
         )
 
-        self.assertEqual(len(broker.place_calls), 1)
-        self.assertAlmostEqual(broker.place_calls[0]["stop_price"], 80.53, places=6)
+        self.assertEqual(broker.cancel_calls, [("1", "quant-sl-old")])
+        self.assertEqual(len(broker.place_calls), 0)
 
     def test_sync_kraken_stop_loss_keeps_long_stop_when_opposite_imba_is_looser(self) -> None:
         broker = _NativeStopBroker(pos=4.8)
@@ -566,8 +571,13 @@ class KrakenNativeStopSyncTests(unittest.TestCase):
         self.assertEqual(len(broker.place_calls), 1)
         self.assertAlmostEqual(broker.place_calls[0]["stop_price"], 79.831, places=6)
 
-    def test_sync_kraken_stop_loss_tightens_short_stop_to_opposite_imba(self) -> None:
-        broker = _NativeStopBroker(pos=-4.8)
+    def test_sync_kraken_stop_loss_cancels_native_stop_when_opposite_imba_supersedes_short_sl(self) -> None:
+        broker = _NativeStopBroker(
+            pos=-4.8,
+            open_stop_orders=[
+                {"order_id": "1", "client_id": "quant-sl-old", "stop_price": 88.0, "order_type": "stp", "side": "buy", "size": 4.8},
+            ],
+        )
 
         _sync_kraken_stop_loss(
             broker=broker,
@@ -581,10 +591,10 @@ class KrakenNativeStopSyncTests(unittest.TestCase):
             dry_run=False,
         )
 
-        self.assertEqual(len(broker.place_calls), 1)
-        self.assertAlmostEqual(broker.place_calls[0]["stop_price"], 87.25, places=6)
+        self.assertEqual(broker.cancel_calls, [("1", "quant-sl-old")])
+        self.assertEqual(len(broker.place_calls), 0)
 
-    def test_sync_kraken_stop_loss_only_cancels_prior_native_stop_orders(self) -> None:
+    def test_sync_kraken_stop_loss_only_cancels_prior_native_stop_orders_when_opposite_imba_supersedes(self) -> None:
         broker = _NativeStopBroker(
             pos=4.8,
             open_stop_orders=[
@@ -607,7 +617,48 @@ class KrakenNativeStopSyncTests(unittest.TestCase):
         )
 
         self.assertEqual(broker.cancel_calls, [("1", "quant-sl-old")])
-        self.assertEqual(len(broker.place_calls), 1)
+        self.assertEqual(len(broker.place_calls), 0)
+
+    def test_tp2_branch_cancels_plain_sl_when_opposite_imba_supersedes_it(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="tp2",
+            open_leg_mode="tp2",
+            open_leg_id="leg-1",
+            open_leg_side="long",
+            open_leg_entry_bar_ts="2026-03-30T11:00:00Z",
+        )
+        broker = _LiveBroker(pos=4.8)
+        oms = _LiveOms()
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 0, "gate_trend_on": 1}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [82.0], "high": [83.0], "low": [81.5], "close": [82.5]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2.run_follow_tp2_state_machine", return_value=(pd.DataFrame(), pd.DataFrame([{"ts": "2026-03-30T12:00:00Z", "event": "tp2_live", "side": 1, "seq": 1}]), {"mode": "TP2", "pos": 1, "side": "long", "sl": 79.831, "tp1": 85.592, "tp2": 88.884, "entry_px": 82.3, "entry_bar_ts": "2026-03-30T11:00:00Z", "leg_id": "leg-1"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 78.0, "short_barrier": 80.53}),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+        ):
+            state = run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        self.assertEqual(state.last_action, "hold")
+        self.assertIn(("SOL-USDT", "tp2_sl"), oms.cancel_calls)
+        self.assertIn(("SOL-USDT", "long", 4.8, 80.53, "opposite_imba_short"), oms.stop_exit_calls)
 
 
 if __name__ == "__main__":

@@ -707,6 +707,36 @@ def _coerce_float(v: Any) -> Optional[float]:
     return x
 
 
+def _opposite_imba_barrier(
+    *,
+    terminal_pos: int,
+    imba_levels: Optional[Dict[str, Any]],
+) -> Optional[float]:
+    if not isinstance(imba_levels, dict):
+        return None
+    if terminal_pos > 0:
+        return _coerce_float(imba_levels.get("short_barrier"))
+    if terminal_pos < 0:
+        return _coerce_float(imba_levels.get("long_barrier"))
+    return None
+
+
+def _opposite_imba_supersedes_stop(
+    *,
+    terminal_pos: int,
+    base_stop: Optional[float],
+    imba_levels: Optional[Dict[str, Any]],
+) -> bool:
+    if base_stop is None or terminal_pos == 0:
+        return False
+    opposite_barrier = _opposite_imba_barrier(terminal_pos=terminal_pos, imba_levels=imba_levels)
+    if opposite_barrier is None:
+        return False
+    if terminal_pos > 0:
+        return float(opposite_barrier) > float(base_stop)
+    return float(opposite_barrier) < float(base_stop)
+
+
 def _scale_delta_epsilon() -> float:
     step = _coerce_float(os.getenv("KRAKEN_SIZE_STEP", os.getenv("LIVE_EXECUTOR_2_SIZE_STEP", "0.1")))
     if step is None or step <= 0:
@@ -1442,19 +1472,14 @@ def _sync_kraken_stop_loss(
         if not isinstance(imba_levels, dict):
             return base_stop
 
-        if terminal_pos > 0:
-            opposite_barrier = _coerce_float(imba_levels.get("short_barrier"))
-            if base_stop is None:
-                return opposite_barrier
-            if opposite_barrier is not None and opposite_barrier > base_stop:
-                return opposite_barrier
-            return base_stop
-
-        opposite_barrier = _coerce_float(imba_levels.get("long_barrier"))
         if base_stop is None:
-            return opposite_barrier
-        if opposite_barrier is not None and opposite_barrier < base_stop:
-            return opposite_barrier
+            return _opposite_imba_barrier(terminal_pos=terminal_pos, imba_levels=imba_levels)
+        if _opposite_imba_supersedes_stop(
+            terminal_pos=terminal_pos,
+            base_stop=base_stop,
+            imba_levels=imba_levels,
+        ):
+            return None
         return base_stop
 
     if not _truthy(os.getenv("KRAKEN_NATIVE_SL_ENABLED", "1")):
@@ -1469,6 +1494,7 @@ def _sync_kraken_stop_loss(
 
     stop_price = _resolved_native_stop_price()
     if stop_price is None:
+        _cancel_native_stop_orders()
         return
 
     stop_side = "sell" if terminal_pos > 0 else "buy"
@@ -2415,15 +2441,24 @@ def run_once(
         tp1_px = _coerce_float(terminal.get("tp1"))
         tp2_px = _coerce_float(terminal.get("tp2"))
         sl_px = _coerce_float(terminal.get("sl"))
+        imba_levels = terminal.get("imba_levels") if isinstance(terminal, dict) else None
+        opposite_supersedes_sl = _opposite_imba_supersedes_stop(
+            terminal_pos=(1 if current_side == "long" else -1),
+            base_stop=sl_px,
+            imba_levels=imba_levels if isinstance(imba_levels, dict) else None,
+        )
 
         changed = 0
-        changed += int(_sync_stop_order(
-            kind="tp2_sl",
-            side=current_side,
-            qty=live_qty,
-            stop_price=sl_px,
-            reduce_only=True,
-        ))
+        if opposite_supersedes_sl:
+            oms.cancel_orders_by_kind(symbol, "tp2_sl")
+        else:
+            changed += int(_sync_stop_order(
+                kind="tp2_sl",
+                side=current_side,
+                qty=live_qty,
+                stop_price=sl_px,
+                reduce_only=True,
+            ))
         changed += int(_sync_take_profit_order(
             kind="tp2_tp1",
             side=current_side,
@@ -2472,15 +2507,24 @@ def run_once(
     elif str(effective_terminal_mode or "").strip().upper() == "WAIT" and current_side in ("long", "short") and abs(float(pos)) > 1e-12:
         live_qty = float(abs(pos))
         sl_px = _coerce_float(terminal.get("sl"))
+        imba_levels = terminal.get("imba_levels") if isinstance(terminal, dict) else None
+        opposite_supersedes_sl = _opposite_imba_supersedes_stop(
+            terminal_pos=(1 if current_side == "long" else -1),
+            base_stop=sl_px,
+            imba_levels=imba_levels if isinstance(imba_levels, dict) else None,
+        )
 
         changed = 0
-        changed += int(_sync_stop_order(
-            kind="wait_sl",
-            side=current_side,
-            qty=live_qty,
-            stop_price=sl_px,
-            reduce_only=True,
-        ))
+        if opposite_supersedes_sl:
+            oms.cancel_orders_by_kind(symbol, "wait_sl")
+        else:
+            changed += int(_sync_stop_order(
+                kind="wait_sl",
+                side=current_side,
+                qty=live_qty,
+                stop_price=sl_px,
+                reduce_only=True,
+            ))
 
         oms.cancel_orders_by_kind(symbol, "tp2_sl")
         oms.cancel_orders_by_kind(symbol, "tp2_tp1")
