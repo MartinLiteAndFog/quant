@@ -355,6 +355,77 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         self.assertAlmostEqual(float(entries[0]["pnl_pct"]), 3.5, places=6)
 
+    def test_build_trading_diary_filters_preloaded_rows_by_symbol_and_venue(self) -> None:
+        df = pd.DataFrame(
+            {
+                "trade_id": ["k1", "x1"],
+                "venue": ["kucoin", "kraken"],
+                "symbol": ["SOL-USDT", "SOL-USDT"],
+                "entry_ts": [pd.Timestamp("2026-03-20T10:00:00Z"), pd.Timestamp("2026-03-20T11:00:00Z")],
+                "exit_ts": [pd.Timestamp("2026-03-20T10:08:00Z"), pd.Timestamp("2026-03-20T11:08:00Z")],
+                "side": ["long", "long"],
+                "qty": [1.0, 1.0],
+                "entry_price": [100.0, 100.0],
+                "exit_price": [101.0, 120.0],
+                "pnl_pct": [1.0, 20.0],
+                "exit_event": ["tp1", "tp1"],
+            }
+        )
+        diary = ds.build_trading_diary(max_points=100, symbol="SOL-USDT", venue="kucoin", _trades_df=df)
+        entries = diary.get("entries", [])
+        self.assertEqual(len(entries), 1)
+        self.assertAlmostEqual(float(entries[0]["pnl_pct"]), 1.0, places=6)
+
+    def test_build_trading_diary_normalizes_symbol_format(self) -> None:
+        df = pd.DataFrame(
+            {
+                "trade_id": ["k1"],
+                "venue": ["kucoin"],
+                "symbol": ["SOLUSDT"],
+                "entry_ts": [pd.Timestamp("2026-03-20T10:00:00Z")],
+                "exit_ts": [pd.Timestamp("2026-03-20T10:08:00Z")],
+                "side": ["long"],
+                "qty": [1.0],
+                "entry_price": [100.0],
+                "exit_price": [101.0],
+                "pnl_pct": [1.0],
+                "exit_event": ["tp_exit"],
+                "strategy": ["live_executor"],
+            }
+        )
+        diary = ds.build_trading_diary(max_points=100, symbol="SOL-USDT", venue="kucoin", _trades_df=df)
+        self.assertEqual(len(diary.get("entries", [])), 1)
+
+    def test_build_trading_diary_live_only_excludes_reconstruction(self) -> None:
+        df = pd.DataFrame(
+            {
+                "trade_id": ["live1", "reco1"],
+                "venue": ["kucoin", "kucoin"],
+                "symbol": ["SOLUSDT", "SOLUSDT"],
+                "entry_ts": [pd.Timestamp("2026-03-20T10:00:00Z"), pd.Timestamp("2026-03-20T11:00:00Z")],
+                "exit_ts": [pd.Timestamp("2026-03-20T10:08:00Z"), pd.Timestamp("2026-03-20T11:08:00Z")],
+                "side": ["long", "short"],
+                "qty": [1.0, 1.0],
+                "entry_price": [100.0, 100.0],
+                "exit_price": [101.0, 95.0],
+                "pnl_pct": [1.0, 5.0],
+                "exit_event": ["tp_exit", "fills_reconstructed"],
+                "strategy": ["live_executor", "dashboard_fills_reconstruction"],
+            }
+        )
+        diary = ds.build_trading_diary(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            live_only=True,
+            include_reconstructed=False,
+            allow_fill_reconstruction=False,
+            _trades_df=df,
+        )
+        entries = diary.get("entries", [])
+        self.assertEqual(len(entries), 1)
+        self.assertAlmostEqual(float(entries[0]["pnl_pct"]), 1.0, places=6)
+
     @patch("quant.execution.dashboard_state.load_closed_trades_from_postgres")
     def test_dashboard_performance_uses_logical_trades_and_neutral_bucket(self, mock_load_trades) -> None:
         mock_load_trades.return_value = pd.DataFrame(

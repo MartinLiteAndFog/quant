@@ -98,6 +98,11 @@ def _env_path(name: str, default_value: str) -> Path:
     return Path(os.getenv(name, default_value))
 
 
+def _normalize_symbol_token(v: Optional[str]) -> str:
+    s = str(v or "").strip().upper()
+    return s.replace("-", "").replace("_", "").replace("/", "")
+
+
 def _read_trades_df() -> pd.DataFrame:
     p = _env_path("DASHBOARD_TRADES_PARQUET", _live_default("trades.parquet"))
     if not p.exists():
@@ -279,12 +284,15 @@ def load_closed_trades_from_postgres(
     venue: Optional[str] = None,
     symbol: Optional[str] = None,
     max_points: int = 5000,
+    strategy_whitelist: Optional[List[str]] = None,
+    exclude_exit_events: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     try:
+        symbol_norm = _normalize_symbol_token(symbol) if symbol is not None else None
         if venue is None and symbol is None:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
-                       entry_price, exit_price, pnl_pct, exit_event
+                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance
                 from closed_trades
                 order by exit_ts desc
                 limit %(limit)s
@@ -293,17 +301,17 @@ def load_closed_trades_from_postgres(
         elif venue is None:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
-                       entry_price, exit_price, pnl_pct, exit_event
+                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance
                 from closed_trades
-                where symbol = %(symbol)s
+                where replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
                 order by exit_ts desc
                 limit %(limit)s
             """
-            params = {"symbol": symbol, "limit": int(max(1, max_points))}
+            params = {"symbol_norm": symbol_norm, "limit": int(max(1, max_points))}
         elif symbol is None:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
-                       entry_price, exit_price, pnl_pct, exit_event
+                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance
                 from closed_trades
                 where venue = %(venue)s
                 order by exit_ts desc
@@ -313,16 +321,16 @@ def load_closed_trades_from_postgres(
         else:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
-                       entry_price, exit_price, pnl_pct, exit_event
+                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance
                 from closed_trades
                 where venue = %(venue)s
-                  and symbol = %(symbol)s
+                  and replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
                 order by exit_ts desc
                 limit %(limit)s
             """
             params = {
                 "venue": venue,
-                "symbol": symbol,
+                "symbol_norm": symbol_norm,
                 "limit": int(max(1, max_points)),
             }
 
@@ -347,8 +355,23 @@ def load_closed_trades_from_postgres(
                 "exit_price",
                 "pnl_pct",
                 "exit_event",
+                "strategy",
+                "strategy_instance",
             ],
         )
+        if out.empty:
+            return out
+
+        if strategy_whitelist:
+            allowed = {str(s).strip() for s in strategy_whitelist if str(s).strip()}
+            if allowed and "strategy" in out.columns:
+                out = out[out["strategy"].astype(str).isin(allowed)]
+
+        if exclude_exit_events:
+            deny = {str(s).strip().lower() for s in exclude_exit_events if str(s).strip()}
+            if deny and "exit_event" in out.columns:
+                out = out[~out["exit_event"].astype(str).str.lower().isin(deny)]
+        return out.reset_index(drop=True)
     except Exception:
         return pd.DataFrame()
 
@@ -1362,22 +1385,65 @@ def _aggregate_logical_trades(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(out_rows).sort_values("exit_ts").reset_index(drop=True)
 
 
-def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+def build_trading_diary(
+    max_points: int = 500,
+    symbol: Optional[str] = None,
+    venue: str = "kucoin",
+    live_only: bool = False,
+    include_reconstructed: bool = False,
+    allow_file_fallback: bool = True,
+    allow_fill_reconstruction: bool = True,
+    _trades_df: Optional[pd.DataFrame] = None,
+) -> Dict[str, Any]:
     out: List[Dict[str, Any]] = []
+    symbol_eff = str(symbol or os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"))
+    venue_eff = str(venue or "kucoin")
 
     if _trades_df is not None:
-        df = _trades_df
+        df = _trades_df.copy()
         df_source = "preloaded"
+        if not df.empty and "symbol" in df.columns:
+            sym_norm = _normalize_symbol_token(symbol_eff)
+            df = df[df["symbol"].map(lambda x: _normalize_symbol_token(str(x))).astype(str) == sym_norm]
+        if not df.empty and "venue" in df.columns:
+            df = df[df["venue"].astype(str) == venue_eff]
+        if live_only:
+            if "strategy" in df.columns:
+                live_map = {"kucoin": {"live_executor"}, "kraken": {"live_executor_2"}}
+                allowed = live_map.get(venue_eff.lower(), set())
+                if allowed:
+                    df = df[df["strategy"].astype(str).isin(allowed)]
+            if not include_reconstructed and "exit_event" in df.columns:
+                df = df[df["exit_event"].astype(str).str.lower() != "fills_reconstructed"]
     else:
+        strategy_whitelist = None
+        if live_only:
+            live_map = {"kucoin": ["live_executor"], "kraken": ["live_executor_2"]}
+            strategy_whitelist = live_map.get(venue_eff.lower())
         df = load_closed_trades_from_postgres(
-            venue="kucoin",
-            symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
+            venue=venue_eff,
+            symbol=symbol_eff,
             max_points=max_points,
+            strategy_whitelist=strategy_whitelist,
+            exclude_exit_events=(None if include_reconstructed else ["fills_reconstructed"]),
         )
         df_source = "postgres:closed_trades"
-        if df.empty:
+        if df.empty and allow_file_fallback:
             df = _read_trades_df()
             df_source = "trades_parquet"
+            if not df.empty and "symbol" in df.columns:
+                sym_norm = _normalize_symbol_token(symbol_eff)
+                df = df[df["symbol"].map(lambda x: _normalize_symbol_token(str(x))).astype(str) == sym_norm]
+            if not df.empty and "venue" in df.columns:
+                df = df[df["venue"].astype(str) == venue_eff]
+            if live_only:
+                if "strategy" in df.columns:
+                    live_map = {"kucoin": {"live_executor"}, "kraken": {"live_executor_2"}}
+                    allowed = live_map.get(venue_eff.lower(), set())
+                    if allowed:
+                        df = df[df["strategy"].astype(str).isin(allowed)]
+                if not include_reconstructed and "exit_event" in df.columns:
+                    df = df[df["exit_event"].astype(str).str.lower() != "fills_reconstructed"]
 
     if not df.empty:
         logical_df = _aggregate_logical_trades(df).tail(int(max(1, max_points)))
@@ -1403,6 +1469,9 @@ def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame
         if out:
             out = sorted(out, key=lambda x: int(x["time"]))[-int(max(1, max_points)) :]
             return {"entries": out, "source": df_source}
+
+    if not allow_fill_reconstruction:
+        return {"entries": [], "source": "none"}
 
     fills = _read_fills_df()
     if fills.empty:
@@ -1605,8 +1674,26 @@ def build_regime_overlay(
     return {"spans": spans, "points": points, "latest": latest}
 
 
-def build_equity_curve(max_points: int = 500, _trades_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
-    diary = build_trading_diary(max_points=max_points, _trades_df=_trades_df)
+def build_equity_curve(
+    max_points: int = 500,
+    symbol: Optional[str] = None,
+    venue: str = "kucoin",
+    live_only: bool = False,
+    include_reconstructed: bool = False,
+    allow_file_fallback: bool = True,
+    allow_fill_reconstruction: bool = True,
+    _trades_df: Optional[pd.DataFrame] = None,
+) -> Dict[str, Any]:
+    diary = build_trading_diary(
+        max_points=max_points,
+        symbol=symbol,
+        venue=venue,
+        live_only=live_only,
+        include_reconstructed=include_reconstructed,
+        allow_file_fallback=allow_file_fallback,
+        allow_fill_reconstruction=allow_fill_reconstruction,
+        _trades_df=_trades_df,
+    )
     entries = diary.get("entries", [])
     cum = 0.0
     curve: List[Dict[str, Any]] = []

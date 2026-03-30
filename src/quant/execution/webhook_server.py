@@ -661,9 +661,27 @@ def api_dashboard_chart(
             venue="kucoin",
             symbol=symbol,
             max_points=int(max(100, max_points)),
+            strategy_whitelist=["live_executor"],
+            exclude_exit_events=["fills_reconstructed"],
         )
-        if trades_df.empty:
+        allow_file_fallback = str(os.getenv("DASHBOARD_TRADE_ALLOW_FILE_FALLBACK", "0")).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        if trades_df.empty and allow_file_fallback:
             trades_df = _read_trades_df()
+            if not trades_df.empty:
+                if "symbol" in trades_df.columns:
+                    sym_norm = _normalize_symbol(symbol)
+                    trades_df = trades_df[trades_df["symbol"].map(_normalize_symbol) == sym_norm]
+                if "venue" in trades_df.columns:
+                    trades_df = trades_df[trades_df["venue"].astype(str) == "kucoin"]
+                if "strategy" in trades_df.columns:
+                    trades_df = trades_df[trades_df["strategy"].astype(str) == "live_executor"]
+                if "exit_event" in trades_df.columns:
+                    trades_df = trades_df[trades_df["exit_event"].astype(str).str.lower() != "fills_reconstructed"]
         bars = load_renko_bars(max_points=int(max(100, max_points)), _df=renko_df)
         markers = load_trade_markers(max_points=int(max(1000, max_points * 50)), _trades_df=trades_df)
         oldest_bar_ts = int(bars[0]["time"]) if bars else None
@@ -798,7 +816,16 @@ def api_dashboard_chart(
         confidence_out = live_conf if live_conf is not None else latest.get("confidence")
 
         regime_score_data = build_regime_scores(symbol=symbol, hours=int(max(1, hours)), _rows=regime_rows)
-        equity = build_equity_curve(max_points=int(max(100, max_points)), _trades_df=trades_df)
+        equity = build_equity_curve(
+            max_points=int(max(100, max_points)),
+            symbol=symbol,
+            venue="kucoin",
+            live_only=True,
+            include_reconstructed=False,
+            allow_file_fallback=allow_file_fallback,
+            allow_fill_reconstruction=False,
+            _trades_df=trades_df,
+        )
         equity_real = load_real_equity_history(max_points=int(max(100, max_points)))
         equity_kraken = load_kraken_equity_history(max_points=int(max(100, max_points)))
         kraken_metrics = load_kraken_metrics()
@@ -806,7 +833,16 @@ def api_dashboard_chart(
             kucoin_points=equity_real.get("points", []),
             kraken_points_usd=equity_kraken.get("points", []),
         )
-        diary = build_trading_diary(max_points=int(max(100, max_points)), _trades_df=trades_df)
+        diary = build_trading_diary(
+            max_points=int(max(100, max_points)),
+            symbol=symbol,
+            venue="kucoin",
+            live_only=True,
+            include_reconstructed=False,
+            allow_file_fallback=allow_file_fallback,
+            allow_fill_reconstruction=False,
+            _trades_df=trades_df,
+        )
 
         equity_components = [
             {
@@ -1127,9 +1163,29 @@ def api_renko_latest_solusd(lookback: int = 50) -> Dict[str, Any]:
 
 
 @app.get("/api/dashboard/diary")
-def api_dashboard_diary(max_points: int = 500) -> Dict[str, Any]:
+def api_dashboard_diary(
+    symbol: str = DEFAULT_SYMBOL,
+    venue: str = "kucoin",
+    include_reconstructed: int = 0,
+    max_points: int = 500,
+) -> Dict[str, Any]:
     try:
-        diary = build_trading_diary(max_points=int(max(10, max_points)))
+        include_reco = int(include_reconstructed) == 1
+        allow_file_fallback = str(os.getenv("DASHBOARD_TRADE_ALLOW_FILE_FALLBACK", "0")).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        diary = build_trading_diary(
+            max_points=int(max(10, max_points)),
+            symbol=symbol,
+            venue=venue,
+            live_only=True,
+            include_reconstructed=include_reco,
+            allow_file_fallback=allow_file_fallback,
+            allow_fill_reconstruction=include_reco,
+        )
         return {"ok": True, "entries": diary.get("entries", []), "source": diary.get("source"), "ts": _now_utc_iso()}
     except Exception as e:
         return {"ok": False, "entries": [], "source": "none", "error": str(e), "ts": _now_utc_iso()}
