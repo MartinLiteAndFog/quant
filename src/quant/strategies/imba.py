@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -60,6 +60,67 @@ def _ensure_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     for c in ["open", "high", "low", "close"]:
         out[c] = pd.to_numeric(out[c], errors="coerce")
     return out
+
+
+def get_imba_barrier_series(df_ohlcv: pd.DataFrame, params: ImbaParams) -> Dict[str, Any]:
+    """
+    Return the drawable IMBA barrier series and the latest barrier snapshot.
+    """
+    df = _ensure_ohlcv(df_ohlcv)
+
+    if params.start_ts is not None:
+        start_ts = pd.to_datetime(params.start_ts, utc=True, errors="coerce")
+        df = df[df["ts"] >= start_ts].copy().reset_index(drop=True)
+
+    lookback = int(params.lookback)
+    if lookback <= 1:
+        raise ValueError("lookback must be > 1")
+
+    if len(df) < lookback:
+        return {
+            "long": [],
+            "mid": [],
+            "short": [],
+            "latest": {"long": None, "mid": None, "short": None, "ts": None},
+        }
+
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+
+    high_line = high.rolling(lookback, min_periods=lookback).max()
+    low_line = low.rolling(lookback, min_periods=lookback).min()
+    rng = (high_line - low_line).astype(float)
+
+    fib236 = high_line - rng * float(params.fib_236)
+    fib5 = high_line - rng * float(params.fib_5)
+    fib786 = high_line - rng * float(params.fib_786)
+
+    out_long: List[Dict[str, float]] = []
+    out_mid: List[Dict[str, float]] = []
+    out_short: List[Dict[str, float]] = []
+
+    for i in range(len(df)):
+        ts = pd.Timestamp(df.iloc[i]["ts"])
+        epoch = int(ts.timestamp())
+
+        long_v = fib236.iloc[i]
+        mid_v = fib5.iloc[i]
+        short_v = fib786.iloc[i]
+
+        if pd.notna(long_v):
+            out_long.append({"time": epoch, "value": float(long_v)})
+        if pd.notna(mid_v):
+            out_mid.append({"time": epoch, "value": float(mid_v)})
+        if pd.notna(short_v):
+            out_short.append({"time": epoch, "value": float(short_v)})
+
+    latest = {
+        "long": out_long[-1]["value"] if out_long else None,
+        "mid": out_mid[-1]["value"] if out_mid else None,
+        "short": out_short[-1]["value"] if out_short else None,
+        "ts": pd.Timestamp(df["ts"].iloc[-1]).isoformat() if (out_long or out_mid or out_short) else None,
+    }
+    return {"long": out_long, "mid": out_mid, "short": out_short, "latest": latest}
 
 def get_latest_imba_barriers(df_ohlcv: pd.DataFrame, params: ImbaParams) -> dict:
     """

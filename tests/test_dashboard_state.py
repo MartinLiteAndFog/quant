@@ -263,8 +263,14 @@ class DashboardStateTests(unittest.TestCase):
         self.assertTrue(health["ok"])
         self.assertEqual(health["bars"], 10)
 
-        fibo = ds.build_fibo_levels(max_points=100, _df=df)
+        fibo = ds.build_fibo_levels(max_points=100, lookback=3, _df=df)
         self.assertIn("long", fibo)
+        self.assertGreater(len(fibo["long"]), 0)
+        self.assertGreater(len(fibo["mid"]), 0)
+        self.assertGreater(len(fibo["short"]), 0)
+        self.assertAlmostEqual(float(fibo["latest"]["long"]), float(fibo["long"][-1]["value"]), places=6)
+        self.assertAlmostEqual(float(fibo["latest"]["mid"]), float(fibo["mid"][-1]["value"]), places=6)
+        self.assertAlmostEqual(float(fibo["latest"]["short"]), float(fibo["short"][-1]["value"]), places=6)
 
     def test_trade_functions_accept_preloaded_df(self) -> None:
         """Trade functions should accept a pre-loaded trades DataFrame."""

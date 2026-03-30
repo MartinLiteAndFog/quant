@@ -14,8 +14,7 @@ from quant.execution.event_store import (
 )
 from quant.execution.kucoin_futures import KucoinFuturesBroker, list_fills
 from quant.regime import RegimeStore
-from quant.strategies.imba import ImbaParams, get_latest_imba_barriers
-from quant.strategies.imba import ImbaParams, compute_imba_signals, get_latest_imba_barriers
+from quant.strategies.imba import ImbaParams, get_imba_barrier_series
 
 
 _LAST_REFRESH_TS: Optional[pd.Timestamp] = None
@@ -266,21 +265,14 @@ def build_fibo_levels(
         return {"lookback": lb, "long": [], "mid": [], "short": [], "latest": {}}
 
     df = df.tail(int(max(lb + 5, max_points))).copy()
-    levels = get_latest_imba_barriers(
+    barriers = get_imba_barrier_series(
         df,
         ImbaParams(
             lookback=lb,
             fixed_sl_abs=float(os.getenv("LIVE_IMBA_SL_ABS", "1.5")),
         ),
     )
-
-    latest = {
-        "long": levels.get("long_barrier"),
-        "mid": None,
-        "short": levels.get("short_barrier"),
-        "ts": levels.get("ts"),
-    }
-    return {"lookback": lb, "long": [], "mid": [], "short": [], "latest": latest}
+    return {"lookback": lb, **barriers}
 
 
 def load_closed_trades_from_postgres(
