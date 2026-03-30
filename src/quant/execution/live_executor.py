@@ -26,6 +26,7 @@ from quant.execution.event_store import (
 from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
 from quant.strategies.follow_tp2_engine import TP2Params, run_follow_tp2_state_machine
 from quant.strategies.signal_io import read_signals_jsonl
+from quant.strategies.imba import ImbaParams, compute_imba_signals, get_latest_imba_barriers
 from quant.utils.log import get_logger, log_throttled
 
 log = get_logger("quant.live_executor")

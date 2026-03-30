@@ -71,6 +71,8 @@ Main runner:
 
 ## 2. Live execution layer
 
+### KuCoin executor (`live_executor.py`)
+
 Main live components:
 
 - `src/quant/execution/live_signal_worker.py`
@@ -78,68 +80,114 @@ Main live components:
 - `src/quant/execution/oms.py`
 - `src/quant/execution/kucoin_futures.py`
 - `src/quant/execution/renko_cache_updater.py`
-- `src/quant/execution/kraken_bot.py`
+
+### Kraken executor (`live_executor_2.py`)
+
+Newer, more capable executor for Kraken. Implements stop-order-native architecture.
+
+Main file:
+- `src/quant/execution/live_executor_2.py`
 - `src/quant/execution/kraken_futures.py`
 
-Responsibilities:
+---
 
-### `renko_cache_updater.py`
-- **The single authority for live Renko data**
-- fetches 1m candles from KuCoin
-- builds Renko bricks via `renko_from_close`
-- writes `renko_latest.parquet` to `DASHBOARD_RENKO_PARQUET` (default: `data/live/renko_latest.parquet`)
-- also publishes to Redis if available
-- polls on configurable interval (default: 60s)
+## 3. OMS (`oms.py`)
 
-### `live_signal_worker.py`
-- **reads `renko_latest.parquet`** (the shared Renko authority — no independent Renko construction)
-- computes IMBA signals via `compute_imba_signals`
-- routes active stream via gate (countertrend or trendfollower)
-- writes routed JSONL signal stream to `SIGNALS_DIR/{SYM}/YYYYMMDD.jsonl`
-- writes strategy-specific substreams (`countertrend/`, `trendfollower/`)
-- emits JSONL `signal_events`
-- attempts Postgres `signal_events` persistence (partially working)
+Maker-first execution abstraction. Extended with native stop/take-profit order management.
 
-### `live_executor.py`
-- reads live signals from JSONL
-- **reads `renko_latest.parquet`** (same shared source as signal worker — identical Renko)
-- reconstructs desired terminal state via `run_flip_state_machine`
-- uses **exact timestamp matching** for signal/bar alignment (no fuzzy snapping)
-- decides engine action (`hold`, `enter_*`, `flip_to_*`, `exit_*`)
-- writes `action_events`
-- calls OMS / broker
-- writes KuCoin `execution_events`
-- writes runtime execution state for dashboard / debugging
-- regime gate controls exit strategy selection (TTP vs TP1/2), **never** force-flattens
+### BrokerAPI abstract interface — new methods added:
+- `place_stop_market()` — SL stop exit
+- `place_take_profit_market()` — TP trigger exit
+- `place_trigger_entry_market()` — stop-triggered entry
+- `cancel_order()` — cancel by order_id or client_id
+- `list_open_orders()` — active orders
+- `list_open_stop_orders()` — active stop orders
 
-### `oms.py`
-- maker-first execution abstraction
-- entry ladder
-- TP/flip exit logic
-- SL fast exit
-- flatten-first flip handling (required for exchange safety)
+### MakerFirstOMS — new methods added:
+- `arm_stop_entry(side, qty, stop_price, kind)` — place a trigger-entry stop order
+- `arm_stop_exit(side, qty, stop_price, kind)` — place a stop-loss exit order
+- `arm_take_profit_exit(side, qty, stop_price, kind)` — place a take-profit exit order
+- `arm_flip_close_stop(side, qty, stop_price, kind)` — place a stop to close and flip
+- `get_open_orders()` / `get_open_stop_orders()` — fetch live venue order lists
+- `cancel_orders_by_kind(symbol, kind_fragment)` — cancel all orders matching a `quant:<SYM>:<kind>:*` client ID pattern
+- `find_stop_order_by_kind(symbol, kind_fragment)` — find an existing stop order by kind tag
+- `cancel_all_quant_orders(symbol)` — cancel all quant-tagged orders
 
-Important current limitation:
+### Client ID convention:
+All orders placed by OMS carry a `quant:<SYM>:<kind>:<ms>` client ID.
+Kind tags include: `flat_entry_long`, `flat_entry_short`, `tp2_sl`, `tp2_tp1`, `tp2_tp2`, `ttp_exit`, `opposite_imba_long`, `opposite_imba_short`.
+
+### Important current limitation:
 - **OMS does not implement margin-aware resize/freeing logic**
 - it uses the `qty` it receives
 - it does not shrink and retry on margin rejection
 - it only cancels working orders during reprice/fallback flow
 
-### Venue adapters
-- `kucoin_futures.py`
-- `kraken_futures.py`
+---
 
-These handle real exchange API interaction.
+## 4. Venue adapters
 
-### `kucoin_futures.py` — leverage note
+### `kucoin_futures.py` — new methods:
+- `cancel_order(order_id, client_id)`
+- `list_open_orders(symbol)` — active orders (normalized dicts)
+- `list_open_stop_orders(symbol)` — active stop orders (normalized dicts)
 
+### `kucoin_futures.py` — leverage note:
 `KUCOIN_FUTURES_ORDER_LEVERAGE` (fallback: `LIVE_EXECUTOR_LEVERAGE`, default: `1`) is sent to KuCoin
 with every order. `LIVE_EXECUTOR_LEVERAGE` is used in the sizing formula only (local math, never
 sent to the exchange directly unless `KUCOIN_FUTURES_ORDER_LEVERAGE` is not set).
 
+### `kraken_futures.py` — new methods:
+- `place_take_profit_market(side, size, stop_price, ...)` — `orderType: take_profit`
+- `place_trigger_entry_market(side, size, stop_price, ...)` — `orderType: trigger_entry`
+
 ---
 
-## 3. Position sizing
+## 5. `live_executor_2.py` — Kraken executor (major extension)
+
+Stop-order-native execution engine for Kraken. Implements TTP re-entry and pending follow entry handoffs.
+
+### New `KrakenOmsBroker` methods:
+- `place_take_profit_market()`, `place_trigger_entry_market()`, `cancel_order()`, `list_open_orders()`, `list_open_stop_orders()`
+
+### New `ExecutorState` fields:
+```
+last_live_side                  # last known live position side from venue
+pending_follow_entry            # pending delayed entry
+pending_follow_entry_side
+pending_follow_entry_reason
+pending_follow_entry_source_ts
+pending_follow_entry_expires_at
+ttp_reenter_pending             # TTP re-entry handoff pending
+ttp_reenter_prior_side
+ttp_reenter_target_side
+ttp_reenter_source_ts
+ttp_reenter_expires_at
+ttp_reenter_exit_recorded
+ttp_reenter_cooldown_until
+ttp_reenter_last_attempt_key
+```
+
+### New helper functions:
+- `_record_ttp_external_exit()` — records execution + closed trade when TTP exit detected externally (venue filled the stop)
+- `_new_ttp_reenter_leg_id()` — generates unique leg ID for TTP re-entry legs
+- `_clear_pending_follow_entry()` / `_arm_pending_follow_entry()` / `_pending_follow_entry_is_active()` — pending follow-entry lifecycle
+- `_clear_ttp_reenter_handoff()` / `_arm_ttp_reenter_handoff()` / `_ttp_reenter_handoff_context()` — TTP re-entry handoff lifecycle
+- `_ttp_reenter_attempt_allowed()` / `_mark_ttp_reenter_attempt()` — cooldown/dedup for TTP re-entry attempts
+- `_ttp_reenter_handoff_action()` — resolves re-entry action from handoff context
+- `_derive_action_event_fields()` — action event field derivation helper
+
+### New `LiveExecutor2` methods:
+- `_retag_stop_order()` — cancel old stop and re-arm with new kind tag when signal changes
+- `_sync_stop_order(kind, side, stop_price, qty)` — idempotent stop-order sync (creates if missing, cancels if stale)
+- `_sync_take_profit_order(kind, side, stop_price, qty)` — idempotent TP-order sync
+
+### New IMBA barrier helper (`imba.py`):
+- `get_latest_imba_barriers(df_ohlcv, params)` — returns `{ts, long_barrier, short_barrier}` using the same rolling-window math as `compute_imba_signals()`
+
+---
+
+## 6. Position sizing
 
 Sizing formula (equity-based, restored in f450c93):
 
@@ -156,7 +204,7 @@ Previous bug (before f450c93): used `bal["available"]` (free margin) instead of 
 
 ---
 
-## 4. Persistence / forensic layer
+## 7. Persistence / forensic layer
 
 Main direction:
 
@@ -287,6 +335,13 @@ Current direction:
 - dashboard reads Postgres first where available
 - runtime files remain fallback / compatibility sources
 
+### Fib/IMBA barrier display (refactored)
+
+`build_fibo_levels()` in `dashboard_state.py` now delegates to `get_latest_imba_barriers()` from `imba.py`.
+This ensures the dashboard uses exactly the same barrier math as the live strategy, not a separate rolling-window implementation.
+The dashboard now returns `latest: {long, mid, short, ts}` but no longer returns per-bar series arrays
+(previously `out_long`, `out_mid`, `out_short` were per-bar series — now empty lists are returned).
+
 Already moved to Postgres-first:
 - real equity history
 - trade markers
@@ -354,6 +409,9 @@ Especially on KuCoin:
 `_apply_live_ttp_guard` / false-flat guard in executor remains as a safety net.
 Fires at WARNING level with `GUARD FIRED` prefix and bar/signal count.
 Should be removed once D3 (full replay instability) is fully resolved.
+
+### 5. TTP re-entry and pending follow-entry are new (live_executor_2 only)
+These are Kraken-only at this stage. Not yet ported to KuCoin executor.
 
 ---
 

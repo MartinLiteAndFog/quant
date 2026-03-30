@@ -301,6 +301,71 @@ class KrakenFuturesClient:
         data = self._req("POST", "/derivatives/api/v3/sendorder", params=params, private=True)
         return {"ok": True, "data": data}
 
+
+    def place_take_profit_market(
+        self,
+        side: str,
+        size: float,
+        stop_price: float,
+        symbol: Optional[str] = None,
+        reduce_only: bool = True,
+        trigger_signal: Optional[str] = None,
+        cli_ord_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        sym = self._norm_symbol(symbol)
+        side_n = self._norm_side(side)
+        size_s = self._norm_size_str(size)
+        stop_f = float(stop_price)
+        if stop_f <= 0:
+            raise ValueError("stop_price must be > 0")
+
+        params: Dict[str, Any] = {
+            "symbol": sym,
+            "side": side_n,
+            "size": size_s,
+            "orderType": "take_profit",
+            "stopPrice": f"{stop_f:.8f}",
+            "triggerSignal": self._norm_trigger_signal(trigger_signal),
+            "reduceOnly": "true" if reduce_only else "false",
+        }
+        if cli_ord_id:
+            params["cliOrdId"] = str(cli_ord_id)
+
+        data = self._req("POST", "/derivatives/api/v3/sendorder", params=params, private=True)
+        return {"ok": True, "data": data}
+
+    def place_trigger_entry_market(
+        self,
+        side: str,
+        size: float,
+        stop_price: float,
+        symbol: Optional[str] = None,
+        reduce_only: bool = False,
+        trigger_signal: Optional[str] = None,
+        cli_ord_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        sym = self._norm_symbol(symbol)
+        side_n = self._norm_side(side)
+        size_s = self._norm_size_str(size)
+        stop_f = float(stop_price)
+        if stop_f <= 0:
+            raise ValueError("stop_price must be > 0")
+
+        params: Dict[str, Any] = {
+            "symbol": sym,
+            "side": side_n,
+            "size": size_s,
+            "orderType": "trigger_entry",
+            "stopPrice": f"{stop_f:.8f}",
+            "triggerSignal": self._norm_trigger_signal(trigger_signal),
+            "reduceOnly": "true" if reduce_only else "false",
+        }
+        if cli_ord_id:
+            params["cliOrdId"] = str(cli_ord_id)
+
+        data = self._req("POST", "/derivatives/api/v3/sendorder", params=params, private=True)
+        return {"ok": True, "data": data}
+
     def cancel_order(
         self,
         order_id: Optional[str] = None,

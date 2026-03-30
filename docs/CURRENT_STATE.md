@@ -39,6 +39,68 @@ Runtime JSONL/state files remain as operational traces but are no longer intende
 
 ---
 
+# Recent Changes (uncommitted)
+
+## live_executor_2.py — Stop-order-native Kraken executor (major extension)
+
+This is the primary area of active development. Key additions:
+
+### TTP re-entry handoff
+After a TTP exit is detected externally (venue filled the stop), executor arms a `ttp_reenter_pending` handoff.
+On next signal, it attempts a re-entry on the new side via a stop trigger entry order placed at the IMBA barrier.
+Includes cooldown/dedup logic (`ttp_reenter_last_attempt_key`, `ttp_reenter_cooldown_until`) and expiry.
+
+### Pending follow-entry
+When a follow-entry is needed but market conditions aren't yet met, state stores `pending_follow_entry_*` fields.
+This allows the executor to wait for the right moment to enter without immediately firing a market order.
+
+### Stop order sync methods
+`_sync_stop_order()` and `_sync_take_profit_order()` provide idempotent stop-order management:
+- checks if the right order already exists at the right price
+- cancels stale orders and re-places if price drift exceeds threshold
+- tagged via `quant:<SYM>:<kind>:<ms>` client IDs for precise identification and cancellation
+
+### `_record_ttp_external_exit()`
+Records a synthetic execution event + closed trade when the TTP stop is filled by the venue
+(detected via position reconciliation, not via explicit bot-placed order).
+
+### New ExecutorState fields
+`last_live_side`, full `pending_follow_entry_*` block, full `ttp_reenter_*` block.
+
+## oms.py — Extended BrokerAPI and MakerFirstOMS
+
+New abstract methods on `BrokerAPI`:
+- `place_stop_market()`, `place_take_profit_market()`, `place_trigger_entry_market()`
+- `cancel_order()`, `list_open_orders()`, `list_open_stop_orders()`
+
+New methods on `MakerFirstOMS`:
+- `arm_stop_entry()`, `arm_stop_exit()`, `arm_take_profit_exit()`, `arm_flip_close_stop()`
+- `get_open_orders()`, `get_open_stop_orders()`
+- `cancel_orders_by_kind()`, `find_stop_order_by_kind()`, `cancel_all_quant_orders()`
+
+Client ID convention: `quant:<SYM>:<kind>:<ms>`
+
+## kraken_futures.py — New stop order types
+
+Added `place_take_profit_market()` (`orderType: take_profit`) and
+`place_trigger_entry_market()` (`orderType: trigger_entry`) to `KrakenFuturesClient`.
+
+## kucoin_futures.py — Order management additions
+
+Added `cancel_order()`, `list_open_orders()`, `list_open_stop_orders()` to `KucoinFuturesBroker`.
+
+## imba.py — New `get_latest_imba_barriers()`
+
+Returns `{ts, long_barrier, short_barrier}` using the same rolling-window math as `compute_imba_signals()`.
+Used by dashboard and live_executor_2 to compute IMBA entry barriers for stop order placement.
+
+## dashboard_state.py — `build_fibo_levels()` refactored
+
+Now delegates to `get_latest_imba_barriers()` instead of duplicating rolling-window logic.
+Returns `latest: {long, mid, short, ts}` but no longer returns per-bar series arrays.
+
+---
+
 # Currently Running Components
 
 ## Renko cache updater
@@ -89,18 +151,15 @@ Key files:
 - `src/quant/execution/oms.py`
 - `src/quant/execution/kucoin_futures.py`
 
-## Kraken execution bot
+## Kraken execution bot (live_executor_2)
 
-Loop: `quant.execution.kraken_bot`
+Worker: `quant.execution.live_executor_2`
 
-Responsibilities:
-- maintain bot state
-- execute strategy logic
-- reconcile venue position
-- persist execution events
-- persist equity snapshots
+Stop-order-native executor. Active development target.
 
-Key file: `src/quant/execution/kraken_bot.py`
+Key files:
+- `src/quant/execution/live_executor_2.py`
+- `src/quant/execution/kraken_futures.py`
 
 ## Event Persistence
 
@@ -119,7 +178,7 @@ Served by: `quant.execution.webhook_server`
 
 Main endpoint: `/dashboard`
 
-Provides: Renko chart, gate shading, fib levels, trade markers, entry→exit segments, SL/TTP/TP overlays
+Provides: Renko chart, gate shading, fib levels (via `get_latest_imba_barriers`), trade markers, entry→exit segments, SL/TTP/TP overlays
 
 Main files:
 - `src/quant/execution/dashboard_state.py`
@@ -174,6 +233,14 @@ Current OMS behavior:
 Executor re-runs `run_flip_state_machine` on all bars + signals every 5 seconds.
 Now mitigated by unified Renko. Long-term fix: event-sourced incremental state.
 
+## 5. TTP re-entry / pending follow-entry is Kraken-only
+`live_executor_2.py` stop-order-native features (TTP re-entry handoff, pending follow-entry, stop sync)
+are not yet ported to the KuCoin executor (`live_executor.py`).
+
+## 6. `build_fibo_levels()` no longer returns per-bar series
+The refactored dashboard function returns empty arrays for `long`, `mid`, `short` series.
+Only `latest` values are populated. Any frontend that relied on per-bar series arrays will see empty data.
+
 ---
 
 # Current Priorities
@@ -182,7 +249,8 @@ Now mitigated by unified Renko. Long-term fix: event-sourced incremental state.
 2. Fix `signal_events` Postgres field parity
 3. Incremental state machine (eliminate full replay)
 4. OMS margin-awareness
-5. Continue separating strategy parity bugs from OMS/venue reality bugs
+5. Validate TTP re-entry and pending follow-entry in live_executor_2 under real market conditions
+6. Continue separating strategy parity bugs from OMS/venue reality bugs
 
 ---
 

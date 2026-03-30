@@ -359,6 +359,66 @@ class KucoinFuturesBroker(BrokerAPI):
             "failed": failed,
         }
 
+
+    def cancel_order(
+        self,
+        order_id: Optional[str] = None,
+        client_id: Optional[str] = None,
+    ) -> None:
+        if order_id:
+            self._req("DELETE", f"/api/v1/orders/{str(order_id)}")
+            return
+        if client_id:
+            self._req("DELETE", f"/api/v1/orders/client-order/{_sanitize_client_oid(str(client_id))}")
+            return
+        raise ValueError("cancel_order requires order_id or client_id")
+
+    def list_open_orders(self, symbol: str) -> list[dict]:
+        contract = _symbol_to_contract(symbol)
+        data = self._req("GET", f"/api/v1/orders?symbol={contract}&status=active")
+        items = list((data or {}).get("items") or [])
+        out = []
+        for it in items:
+            out.append(
+                {
+                    "order_id": str(it.get("id") or ""),
+                    "client_id": str(it.get("clientOid") or ""),
+                    "symbol": contract,
+                    "side": str(it.get("side") or "").lower(),
+                    "qty": float(it.get("size", 0) or 0),
+                    "price": float(it.get("price", 0) or 0) if it.get("price") is not None else None,
+                    "stop_price": float(it.get("stopPrice", 0) or 0) if it.get("stopPrice") is not None else None,
+                    "type": str(it.get("type") or ""),
+                    "stop": str(it.get("stop") or ""),
+                    "reduce_only": bool(it.get("reduceOnly", False)),
+                    "raw": it,
+                }
+            )
+        return out
+
+    def list_open_stop_orders(self, symbol: str) -> list[dict]:
+        contract = _symbol_to_contract(symbol)
+        data = self._req("GET", f"/api/v1/stopOrders?symbol={contract}&status=active")
+        items = list((data or {}).get("items") or [])
+        out = []
+        for it in items:
+            out.append(
+                {
+                    "order_id": str(it.get("id") or it.get("orderId") or ""),
+                    "client_id": str(it.get("clientOid") or ""),
+                    "symbol": contract,
+                    "side": str(it.get("side") or "").lower(),
+                    "qty": float(it.get("size", 0) or 0),
+                    "price": float(it.get("price", 0) or 0) if it.get("price") is not None else None,
+                    "stop_price": float(it.get("stopPrice", 0) or 0) if it.get("stopPrice") is not None else None,
+                    "type": str(it.get("type") or ""),
+                    "stop": str(it.get("stop") or ""),
+                    "reduce_only": bool(it.get("reduceOnly", False)),
+                    "raw": it,
+                }
+            )
+        return out
+
     def place_limit(
         self,
         symbol: str,

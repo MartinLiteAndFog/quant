@@ -14,6 +14,8 @@ from quant.execution.event_store import (
 )
 from quant.execution.kucoin_futures import KucoinFuturesBroker, list_fills
 from quant.regime import RegimeStore
+from quant.strategies.imba import ImbaParams, get_latest_imba_barriers
+from quant.strategies.imba import ImbaParams, compute_imba_signals, get_latest_imba_barriers
 
 
 _LAST_REFRESH_TS: Optional[pd.Timestamp] = None
@@ -262,35 +264,23 @@ def build_fibo_levels(
     df = _df if _df is not None else _read_renko_df()
     if df.empty:
         return {"lookback": lb, "long": [], "mid": [], "short": [], "latest": {}}
-    df = df.tail(int(max(lb + 5, max_points))).copy()
-    hh = pd.to_numeric(df["high"], errors="coerce").rolling(lb, min_periods=lb).max()
-    ll = pd.to_numeric(df["low"], errors="coerce").rolling(lb, min_periods=lb).min()
-    rng = hh - ll
-    fib_long = hh - rng * 0.236
-    fib_mid = hh - rng * 0.5
-    fib_short = hh - rng * 0.786
 
-    out_long: List[Dict[str, Any]] = []
-    out_mid: List[Dict[str, Any]] = []
-    out_short: List[Dict[str, Any]] = []
-    for i in range(len(df)):
-        ts = int(pd.Timestamp(df.iloc[i]["ts"]).timestamp())
-        a = fib_long.iloc[i]
-        b = fib_mid.iloc[i]
-        c = fib_short.iloc[i]
-        if pd.notna(a):
-            out_long.append({"time": ts, "value": float(a)})
-        if pd.notna(b):
-            out_mid.append({"time": ts, "value": float(b)})
-        if pd.notna(c):
-            out_short.append({"time": ts, "value": float(c)})
+    df = df.tail(int(max(lb + 5, max_points))).copy()
+    levels = get_latest_imba_barriers(
+        df,
+        ImbaParams(
+            lookback=lb,
+            fixed_sl_abs=float(os.getenv("LIVE_IMBA_SL_ABS", "1.5")),
+        ),
+    )
 
     latest = {
-        "long": out_long[-1]["value"] if out_long else None,
-        "mid": out_mid[-1]["value"] if out_mid else None,
-        "short": out_short[-1]["value"] if out_short else None,
+        "long": levels.get("long_barrier"),
+        "mid": None,
+        "short": levels.get("short_barrier"),
+        "ts": levels.get("ts"),
     }
-    return {"lookback": lb, "long": out_long, "mid": out_mid, "short": out_short, "latest": latest}
+    return {"lookback": lb, "long": [], "mid": [], "short": [], "latest": latest}
 
 
 def load_closed_trades_from_postgres(

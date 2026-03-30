@@ -61,6 +61,66 @@ def _ensure_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
         out[c] = pd.to_numeric(out[c], errors="coerce")
     return out
 
+def get_latest_imba_barriers(df_ohlcv: pd.DataFrame, params: ImbaParams) -> dict:
+    """
+    Return the latest valid IMBA barriers from the same math used by compute_imba_signals().
+
+    Output:
+      {
+        "ts": "...iso timestamp..." | None,
+        "long_barrier": float | None,   # fib_236
+        "short_barrier": float | None,  # fib_786
+      }
+    """
+    df = _ensure_ohlcv(df_ohlcv)
+
+    if params.start_ts is not None:
+        start_ts = pd.to_datetime(params.start_ts, utc=True, errors="coerce")
+        df = df[df["ts"] >= start_ts].copy().reset_index(drop=True)
+
+    lookback = int(params.lookback)
+    if lookback <= 1:
+        raise ValueError("lookback must be > 1")
+
+    if len(df) < lookback:
+        return {
+            "ts": None,
+            "long_barrier": None,
+            "short_barrier": None,
+        }
+
+    high = df["high"].astype(float)
+    low = df["low"].astype(float)
+
+    high_line = high.rolling(lookback, min_periods=lookback).max()
+    low_line = low.rolling(lookback, min_periods=lookback).min()
+    rng = (high_line - low_line).astype(float)
+
+    fib236 = high_line - rng * float(params.fib_236)
+    fib786 = high_line - rng * float(params.fib_786)
+
+    valid = pd.DataFrame(
+        {
+            "ts": df["ts"].values,
+            "long_barrier": fib236.values,
+            "short_barrier": fib786.values,
+        }
+    ).dropna(subset=["long_barrier", "short_barrier"])
+
+    if valid.empty:
+        return {
+            "ts": None,
+            "long_barrier": None,
+            "short_barrier": None,
+        }
+
+    last = valid.iloc[-1]
+    return {
+        "ts": pd.Timestamp(last["ts"]).isoformat(),
+        "long_barrier": float(last["long_barrier"]),
+        "short_barrier": float(last["short_barrier"]),
+    }    
+
 
 def compute_imba_signals(df_ohlcv: pd.DataFrame, params: ImbaParams) -> pd.DataFrame:
     """

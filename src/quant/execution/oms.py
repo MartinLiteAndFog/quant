@@ -93,6 +93,52 @@ class BrokerAPI:
     ) -> str:
         raise NotImplementedError
 
+    def place_stop_market(
+        self,
+        symbol: str,
+        side: Side,
+        qty: float,
+        stop_price: float,
+        reduce_only: bool,
+        client_id: str,
+    ) -> str:
+        raise NotImplementedError
+
+    def place_take_profit_market(
+        self,
+        symbol: str,
+        side: Side,
+        qty: float,
+        stop_price: float,
+        reduce_only: bool,
+        client_id: str,
+    ) -> str:
+        raise NotImplementedError
+
+    def place_trigger_entry_market(
+        self,
+        symbol: str,
+        side: Side,
+        qty: float,
+        stop_price: float,
+        reduce_only: bool,
+        client_id: str,
+    ) -> str:
+        raise NotImplementedError
+
+    def cancel_order(
+        self,
+        order_id: Optional[str] = None,
+        client_id: Optional[str] = None,
+    ) -> None:
+        raise NotImplementedError
+
+    def list_open_orders(self, symbol: str) -> list[dict]:
+        raise NotImplementedError
+
+    def list_open_stop_orders(self, symbol: str) -> list[dict]:
+        raise NotImplementedError
+
     def wait_filled(self, symbol: str, order_id: str, timeout_s: int) -> bool:
         raise NotImplementedError
 
@@ -117,9 +163,214 @@ class MakerFirstOMS:
         self.broker = broker
         self.cfg = cfg or OmsDefaults()
 
+    def _cid(self, symbol: str, kind: str) -> str:
+        sym = str(symbol).replace("/", "-").replace(":", "-").replace(" ", "").upper()
+        return f"quant:{sym}:{kind}:{int(time.time()*1000)}"
+
     def enter(self, symbol: str, side: Literal["long", "short"], qty: float) -> OmsResult:
         want_side: Side = "buy" if side == "long" else "sell"
         return self._entry_ladder(symbol=symbol, side=want_side, qty=qty, reason="entry")
+
+    def arm_stop_entry(
+        self,
+        symbol: str,
+        side: Literal["long", "short"],
+        qty: float,
+        stop_price: float,
+        kind: str,
+    ) -> OmsResult:
+        order_side: Side = "buy" if side == "long" else "sell"
+        cid = self._cid(symbol, kind)
+        oid = self.broker.place_trigger_entry_market(
+            symbol=symbol,
+            side=order_side,
+            qty=qty,
+            stop_price=float(stop_price),
+            reduce_only=False,
+            client_id=cid,
+        )
+        return OmsResult(
+            True,
+            "STOP_ENTRY_ARMED",
+            {
+                "symbol": symbol,
+                "side": order_side,
+                "qty": float(qty),
+                "stop_price": float(stop_price),
+                "client_id": cid,
+                "order_id": oid,
+                "kind": kind,
+                "reduce_only": False,
+            },
+        )
+
+    def arm_stop_exit(
+        self,
+        symbol: str,
+        side: Literal["long", "short"],
+        qty: float,
+        stop_price: float,
+        kind: str,
+        reduce_only: bool = True,
+    ) -> OmsResult:
+        order_side: Side = "sell" if side == "long" else "buy"
+        cid = self._cid(symbol, kind)
+        oid = self.broker.place_stop_market(
+            symbol=symbol,
+            side=order_side,
+            qty=qty,
+            stop_price=float(stop_price),
+            reduce_only=reduce_only,
+            client_id=cid,
+        )
+        return OmsResult(
+            True,
+            "STOP_EXIT_ARMED",
+            {
+                "symbol": symbol,
+                "side": order_side,
+                "qty": float(qty),
+                "stop_price": float(stop_price),
+                "client_id": cid,
+                "order_id": oid,
+                "kind": kind,
+                "reduce_only": bool(reduce_only),
+            },
+        )
+
+    def arm_take_profit_exit(
+        self,
+        symbol: str,
+        side: Literal["long", "short"],
+        qty: float,
+        stop_price: float,
+        kind: str,
+        reduce_only: bool = True,
+    ) -> OmsResult:
+        order_side: Side = "sell" if side == "long" else "buy"
+        cid = self._cid(symbol, kind)
+        oid = self.broker.place_take_profit_market(
+            symbol=symbol,
+            side=order_side,
+            qty=qty,
+            stop_price=float(stop_price),
+            reduce_only=reduce_only,
+            client_id=cid,
+        )
+        return OmsResult(
+            True,
+            "TAKE_PROFIT_EXIT_ARMED",
+            {
+                "symbol": symbol,
+                "side": order_side,
+                "qty": float(qty),
+                "stop_price": float(stop_price),
+                "client_id": cid,
+                "order_id": oid,
+                "kind": kind,
+                "reduce_only": bool(reduce_only),
+            },
+        )
+
+    def arm_flip_close_stop(
+        self,
+        symbol: str,
+        side: Literal["long", "short"],
+        qty: float,
+        stop_price: float,
+    ) -> OmsResult:
+        return self.arm_stop_exit(
+            symbol=symbol,
+            side=side,
+            qty=qty,
+            stop_price=stop_price,
+            kind="flip_close",
+            reduce_only=True,
+        )
+
+    def get_open_orders(self, symbol: str) -> list[dict]:
+        rows = self.broker.list_open_orders(symbol)
+        return rows if isinstance(rows, list) else []
+
+    def get_open_stop_orders(self, symbol: str) -> list[dict]:
+        rows = self.broker.list_open_stop_orders(symbol)
+        return rows if isinstance(rows, list) else []
+
+    def cancel_orders_by_kind(self, symbol: str, kind_fragment: str) -> int:
+        target = str(kind_fragment or "").strip().lower()
+        if not target:
+            return 0
+
+        cancelled = 0
+        rows = self.get_open_orders(symbol) + self.get_open_stop_orders(symbol)
+        seen = set()
+
+        for row in rows:
+            order_id = row.get("order_id")
+            client_id = row.get("client_id") or row.get("cli_ord_id")
+            key = (str(order_id or ""), str(client_id or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+
+            cid = str(client_id or "").lower()
+            if target not in cid:
+                continue
+
+            self.broker.cancel_order(
+                order_id=str(order_id) if order_id else None,
+                client_id=str(client_id) if client_id else None,
+            )
+            cancelled += 1
+
+        return cancelled
+
+    def find_stop_order_by_kind(self, symbol: str, kind_fragment: str) -> Optional[dict]:
+        target = str(kind_fragment or "").strip().lower()
+        if not target:
+            return None
+
+        rows = self.get_open_stop_orders(symbol)
+        seen = set()
+
+        for row in rows:
+            order_id = row.get("order_id")
+            client_id = row.get("client_id") or row.get("cli_ord_id")
+            key = (str(order_id or ""), str(client_id or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+
+            cid = str(client_id or "").lower()
+            if target in cid:
+                return row
+
+        return None
+
+    def cancel_all_quant_orders(self, symbol: str) -> int:
+        cancelled = 0
+        rows = self.get_open_orders(symbol) + self.get_open_stop_orders(symbol)
+        seen = set()
+
+        for row in rows:
+            order_id = row.get("order_id")
+            client_id = row.get("client_id") or row.get("cli_ord_id")
+            key = (str(order_id or ""), str(client_id or ""))
+            if key in seen:
+                continue
+            seen.add(key)
+
+            cid = str(client_id or "").lower()
+            if not cid.startswith("quant:"):
+                continue
+
+            self.broker.cancel_order(
+                order_id=str(order_id) if order_id else None,
+                client_id=str(client_id) if client_id else None,
+            )
+            cancelled += 1
+
+        return cancelled
 
     def exit_tp_or_flip(
         self,
