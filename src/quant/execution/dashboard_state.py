@@ -1231,6 +1231,137 @@ def _cluster_fills_df(fills: pd.DataFrame, window_sec: int = 90) -> pd.DataFrame
     return pd.DataFrame(out_rows).sort_values("time").reset_index(drop=True)
 
 
+def _aggregate_logical_trades(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return pd.DataFrame()
+
+    w = df.copy()
+    if "entry_ts" not in w.columns and "ts" in w.columns:
+        w = w.rename(columns={"ts": "entry_ts"})
+    if "exit_ts" not in w.columns:
+        return pd.DataFrame()
+
+    w["entry_ts"] = pd.to_datetime(w.get("entry_ts"), utc=True, errors="coerce")
+    w["exit_ts"] = pd.to_datetime(w.get("exit_ts"), utc=True, errors="coerce")
+
+    def _side_sign(v: Any) -> int:
+        if pd.isna(v):
+            return 0
+        if isinstance(v, str):
+            s = v.strip().lower()
+            if s in ("long", "l", "buy", "1"):
+                return 1
+            if s in ("short", "s", "sell", "-1"):
+                return -1
+            return 0
+        try:
+            x = float(v)
+        except Exception:
+            return 0
+        if x > 0:
+            return 1
+        if x < 0:
+            return -1
+        return 0
+
+    side_raw = w["side"] if "side" in w.columns else pd.Series([1] * len(w), index=w.index)
+    w["side_sign"] = side_raw.map(_side_sign).astype(int)
+    w = w[w["side_sign"] != 0]
+    if w.empty:
+        return pd.DataFrame()
+
+    qty_col = next((c for c in ("qty", "size", "contracts") if c in w.columns), None)
+    if qty_col:
+        w["qty_raw"] = pd.to_numeric(w[qty_col], errors="coerce").abs()
+    else:
+        w["qty_raw"] = float("nan")
+
+    entry_col = next((c for c in ("entry_px", "entry_price", "price_entry", "entry") if c in w.columns), None)
+    exit_col = next((c for c in ("exit_px", "exit_price", "price_exit", "exit") if c in w.columns), None)
+    pnl_col = next((c for c in ("pnl_pct", "pnl", "pnl_abs", "net_pnl") if c in w.columns), None)
+
+    w["entry_price_num"] = pd.to_numeric(w[entry_col], errors="coerce") if entry_col else float("nan")
+    w["exit_price_num"] = pd.to_numeric(w[exit_col], errors="coerce") if exit_col else float("nan")
+
+    if pnl_col:
+        w["pnl_pct_num"] = pd.to_numeric(w[pnl_col], errors="coerce")
+        if pnl_col != "pnl_pct":
+            valid = w["entry_price_num"] > 0
+            w.loc[valid, "pnl_pct_num"] = (w.loc[valid, "pnl_pct_num"] / w.loc[valid, "entry_price_num"]) * 100.0
+    else:
+        w["pnl_pct_num"] = float("nan")
+
+    recompute_mask = w["pnl_pct_num"].isna() & (w["entry_price_num"] > 0) & w["exit_price_num"].notna()
+    w.loc[recompute_mask, "pnl_pct_num"] = (
+        ((w.loc[recompute_mask, "exit_price_num"] - w.loc[recompute_mask, "entry_price_num"]) / w.loc[recompute_mask, "entry_price_num"])
+        * 100.0
+        * w.loc[recompute_mask, "side_sign"]
+    )
+
+    w = w.dropna(subset=["exit_ts", "pnl_pct_num"]).sort_values("exit_ts").reset_index(drop=True)
+    if w.empty:
+        return pd.DataFrame()
+
+    w["qty_w"] = w["qty_raw"].where(w["qty_raw"].notna() & (w["qty_raw"] > 0), 1.0)
+    w["entry_anchor"] = w["entry_ts"].map(
+        lambda ts: (int(pd.Timestamp(ts).timestamp()) if pd.notna(ts) else pd.NA)
+    ).astype("Int64")
+
+    group_ids: List[int] = []
+    cur_gid = -1
+    prev_side: Optional[int] = None
+    prev_anchor: Optional[int] = None
+    for _, r in w.iterrows():
+        side_i = int(r["side_sign"])
+        anchor_i = None if pd.isna(r["entry_anchor"]) else int(r["entry_anchor"])
+        is_new = (
+            prev_side is None
+            or side_i != prev_side
+            or (anchor_i is not None and prev_anchor is not None and anchor_i != prev_anchor)
+            or (anchor_i is None and prev_anchor is not None)
+            or (anchor_i is not None and prev_anchor is None)
+        )
+        if is_new:
+            cur_gid += 1
+        group_ids.append(cur_gid)
+        prev_side = side_i
+        prev_anchor = anchor_i
+    w["logical_gid"] = group_ids
+
+    out_rows: List[Dict[str, Any]] = []
+    for gid, g in w.groupby("logical_gid", sort=True):
+        g = g.sort_values("exit_ts")
+        qty_w = pd.to_numeric(g["qty_w"], errors="coerce").fillna(1.0)
+        wsum = float(qty_w.sum())
+        if not (wsum > 0):
+            wsum = float(len(g))
+            qty_w = pd.Series([1.0] * len(g), index=g.index)
+        pnl_pct = float((pd.to_numeric(g["pnl_pct_num"], errors="coerce").fillna(0.0) * qty_w).sum() / wsum)
+
+        qty_sum = pd.to_numeric(g["qty_raw"], errors="coerce")
+        qty_out = float(qty_sum.sum()) if qty_sum.notna().any() else None
+        entry_price = pd.to_numeric(g["entry_price_num"], errors="coerce")
+        exit_price = pd.to_numeric(g["exit_price_num"], errors="coerce")
+        entry_out = float((entry_price.fillna(0.0) * qty_w).sum() / wsum) if entry_price.notna().any() else None
+        exit_out = float((exit_price.fillna(0.0) * qty_w).sum() / wsum) if exit_price.notna().any() else None
+
+        out_rows.append(
+            {
+                "logical_trade_id": f"lt_{int(gid)}",
+                "entry_ts": g["entry_ts"].dropna().min() if g["entry_ts"].notna().any() else g["exit_ts"].iloc[0],
+                "exit_ts": g["exit_ts"].max(),
+                "side": "long" if int(g["side_sign"].iloc[-1]) >= 0 else "short",
+                "qty": qty_out,
+                "entry_price": entry_out,
+                "exit_price": exit_out,
+                "pnl_pct": pnl_pct,
+                "slice_count": int(len(g)),
+            }
+        )
+
+    return pd.DataFrame(out_rows).sort_values("exit_ts").reset_index(drop=True)
+
+
 def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
     out: List[Dict[str, Any]] = []
 
@@ -1249,63 +1380,29 @@ def build_trading_diary(max_points: int = 500, _trades_df: Optional[pd.DataFrame
             df_source = "trades_parquet"
 
     if not df.empty:
-        if "entry_ts" not in df.columns and "ts" in df.columns:
-            df = df.rename(columns={"ts": "entry_ts"})
-        if "entry_ts" in df.columns and "exit_ts" in df.columns:
-            df["entry_ts"] = pd.to_datetime(df["entry_ts"], utc=True, errors="coerce")
-            df["exit_ts"] = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
-            df = df.dropna(subset=["entry_ts", "exit_ts"]).sort_values("exit_ts").tail(int(max(1, max_points)))
-
-            entry_col = next((c for c in ("entry_px", "entry_price", "price_entry", "entry") if c in df.columns), None)
-            exit_col = next((c for c in ("exit_px", "exit_price", "price_exit", "exit") if c in df.columns), None)
-            pnl_cols = [c for c in ("pnl_pct", "pnl", "pnl_abs", "net_pnl") if c in df.columns]
-            pnl_col = pnl_cols[0] if pnl_cols else None
-            side_col = "side" if "side" in df.columns else None
-            qty_col = next((c for c in ("qty", "size", "contracts") if c in df.columns), None)
-
-            for _, r in df.iterrows():
-                epx = float(r[entry_col]) if entry_col and pd.notna(r.get(entry_col)) else None
-                xpx = float(r[exit_col]) if exit_col and pd.notna(r.get(exit_col)) else None
-
-                if side_col and pd.notna(r.get(side_col)):
-                    side_raw = r.get(side_col)
-                    if isinstance(side_raw, str):
-                        s = side_raw.strip().lower()
-                        side = 1 if s in ("long", "l", "buy", "1") else (-1 if s in ("short", "s", "sell", "-1") else 1)
-                    else:
-                        side = int(side_raw)
-                else:
-                    side = 1
-
-                qty = float(r[qty_col]) if qty_col and pd.notna(r.get(qty_col)) else None
-                pnl_pct = None
-                if pnl_col and pd.notna(r.get(pnl_col)):
-                    pnl_pct = float(r[pnl_col])
-                    if pnl_col not in ("pnl_pct",) and epx and epx > 0:
-                        pnl_pct = pnl_pct / epx * 100.0
-                elif epx and xpx and epx > 0:
-                    pnl_pct = ((xpx - epx) / epx * 100.0) * (1 if side >= 0 else -1)
-
-                if pnl_pct is None:
-                    continue
-
-                out.append(
-                    {
-                        "id": f"p_{int(pd.Timestamp(r['exit_ts']).timestamp())}_{'L' if side >= 0 else 'S'}",
-                        "entry_time": int(pd.Timestamp(r["entry_ts"]).timestamp()),
-                        "time": int(pd.Timestamp(r["exit_ts"]).timestamp()),
-                        "side": "long" if side >= 0 else "short",
-                        "qty": qty,
-                        "entry_price": epx,
-                        "exit_price": xpx,
-                        "pnl_pct": round(float(pnl_pct), 4),
-                        "source": df_source,
-                    }
-                )
-
-            if out:
-                out = sorted(out, key=lambda x: int(x["time"]))[-int(max(1, max_points)) :]
-                return {"entries": out, "source": df_source}
+        logical_df = _aggregate_logical_trades(df).tail(int(max(1, max_points)))
+        for i, r in logical_df.iterrows():
+            entry_ts = pd.to_datetime(r.get("entry_ts"), utc=True, errors="coerce")
+            exit_ts = pd.to_datetime(r.get("exit_ts"), utc=True, errors="coerce")
+            pnl_pct = pd.to_numeric(r.get("pnl_pct"), errors="coerce")
+            if pd.isna(entry_ts) or pd.isna(exit_ts) or pd.isna(pnl_pct):
+                continue
+            out.append(
+                {
+                    "id": str(r.get("logical_trade_id") or f"lt_{i}"),
+                    "entry_time": int(pd.Timestamp(entry_ts).timestamp()),
+                    "time": int(pd.Timestamp(exit_ts).timestamp()),
+                    "side": str(r.get("side") or "long"),
+                    "qty": (float(r["qty"]) if pd.notna(pd.to_numeric(r.get("qty"), errors="coerce")) else None),
+                    "entry_price": (float(r["entry_price"]) if pd.notna(pd.to_numeric(r.get("entry_price"), errors="coerce")) else None),
+                    "exit_price": (float(r["exit_price"]) if pd.notna(pd.to_numeric(r.get("exit_price"), errors="coerce")) else None),
+                    "pnl_pct": round(float(pnl_pct), 4),
+                    "source": df_source,
+                }
+            )
+        if out:
+            out = sorted(out, key=lambda x: int(x["time"]))[-int(max(1, max_points)) :]
+            return {"entries": out, "source": df_source}
 
     fills = _read_fills_df()
     if fills.empty:
@@ -1697,8 +1794,10 @@ def _performance_trade_frame(
             df = df[df["strategy"].astype(str) == "live_executor_2"]
 
     df = df.reset_index(drop=True)
-    
-    return df, source
+    logical_df = _aggregate_logical_trades(df)
+    if logical_df.empty:
+        return pd.DataFrame(), source
+    return logical_df.reset_index(drop=True), source
 
 
 def _compound_trade_returns_pct(s: pd.Series) -> Optional[float]:
@@ -1739,13 +1838,13 @@ def build_dashboard_performance(
         }
 
     winners = df[df["pnl_pct"] > 0]
-    losers = df[df["pnl_pct"] <= 0]
+    losers = df[df["pnl_pct"] < 0]
 
     pnl_pct = _compound_trade_returns_pct(df["pnl_pct"])
     monthly_growth = _compound_trade_returns_pct(
         df.loc[df["exit_ts"] >= (now - pd.Timedelta(days=30)), "pnl_pct"]
     )
-    average_gain = float(winners["pnl_pct"].mean()) if not winners.empty else None
+    average_gain = float(pd.to_numeric(df["pnl_pct"], errors="coerce").dropna().mean()) if not df.empty else None
 
     trade_count = int(len(df))
     winning_trade_count = int(len(winners))

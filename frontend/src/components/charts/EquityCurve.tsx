@@ -292,7 +292,7 @@ export default function EquityCurve({
 
           {mode === "trade" ? (
             <Area
-              type="stepAfter"
+              type="linear"
               dataKey="cum_pct"
               name="Trade equity"
               fill="#22c55e"

@@ -233,7 +233,7 @@ export function Sidebar({
             <span>{fmtPct(performance?.monthly_growth)}</span>
           </div>
           <div className="flex items-center justify-between gap-3">
-            <span className="text-zinc-400">Average gain</span>
+            <span className="text-zinc-400">Average trade</span>
             <span>{fmtPct(performance?.average_gain)}</span>
           </div>
           <div className="mt-2 border-t border-zinc-800 pt-2" />

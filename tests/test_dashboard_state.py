@@ -328,6 +328,68 @@ class DashboardStateTests(unittest.TestCase):
 
         self.assertLessEqual(call_count, 1, f"Expected at most 1 Postgres call, got {call_count}")
 
+    def test_build_trading_diary_merges_partial_exits_into_logical_trade(self) -> None:
+        df = pd.DataFrame(
+            {
+                "trade_id": ["a1", "a2"],
+                "venue": ["kucoin", "kucoin"],
+                "symbol": ["SOL-USDT", "SOL-USDT"],
+                "entry_ts": [
+                    pd.Timestamp("2026-03-20T10:00:00Z"),
+                    pd.Timestamp("2026-03-20T10:00:00Z"),
+                ],
+                "exit_ts": [
+                    pd.Timestamp("2026-03-20T10:05:00Z"),
+                    pd.Timestamp("2026-03-20T10:08:00Z"),
+                ],
+                "side": ["long", "long"],
+                "qty": [1.0, 3.0],
+                "entry_price": [100.0, 100.0],
+                "exit_price": [102.0, 104.0],
+                "pnl_pct": [2.0, 4.0],
+                "exit_event": ["tp1", "tp2"],
+            }
+        )
+        diary = ds.build_trading_diary(max_points=100, _trades_df=df)
+        entries = diary.get("entries", [])
+        self.assertEqual(len(entries), 1)
+        self.assertAlmostEqual(float(entries[0]["pnl_pct"]), 3.5, places=6)
+
+    @patch("quant.execution.dashboard_state.load_closed_trades_from_postgres")
+    def test_dashboard_performance_uses_logical_trades_and_neutral_bucket(self, mock_load_trades) -> None:
+        mock_load_trades.return_value = pd.DataFrame(
+            {
+                "trade_id": ["a1", "a2", "b1", "c1"],
+                "venue": ["kraken", "kraken", "kraken", "kraken"],
+                "symbol": ["SOL-USDT", "SOL-USDT", "SOL-USDT", "SOL-USDT"],
+                "entry_ts": [
+                    pd.Timestamp("2026-03-20T10:00:00Z"),
+                    pd.Timestamp("2026-03-20T10:00:00Z"),
+                    pd.Timestamp("2026-03-20T11:00:00Z"),
+                    pd.Timestamp("2026-03-20T12:00:00Z"),
+                ],
+                "exit_ts": [
+                    pd.Timestamp("2026-03-20T10:05:00Z"),
+                    pd.Timestamp("2026-03-20T10:08:00Z"),
+                    pd.Timestamp("2026-03-20T11:07:00Z"),
+                    pd.Timestamp("2026-03-20T12:09:00Z"),
+                ],
+                "side": ["long", "long", "short", "long"],
+                "qty": [1.0, 3.0, 2.0, 1.0],
+                "entry_price": [100.0, 100.0, 105.0, 110.0],
+                "exit_price": [102.0, 104.0, 104.0, 110.0],
+                "pnl_pct": [2.0, 4.0, -1.0, 0.0],
+                "exit_event": ["tp1", "tp2", "sl_exit", "be_exit"],
+                "strategy": ["live_executor_2", "live_executor_2", "live_executor_2", "live_executor_2"],
+            }
+        )
+
+        perf = ds.build_dashboard_performance(symbol="SOL-USDT", venue="kraken", max_points=100)
+        self.assertEqual(int(perf["trade_count"]), 3)
+        self.assertEqual(int(perf["winning_trade_count"]), 1)
+        self.assertEqual(int(perf["losing_trade_count"]), 1)
+        self.assertAlmostEqual(float(perf["average_gain"]), (3.5 - 1.0 + 0.0) / 3.0, places=4)
+
 
 if __name__ == "__main__":
     unittest.main()
