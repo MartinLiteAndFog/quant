@@ -1405,17 +1405,69 @@ def _sync_kraken_stop_loss(
     dry_run: bool,
 ) -> None:
     """Sync a native reduce-only stop-market order on Kraken based on the flip engine terminal state."""
+    native_stop_prefix = "quant-sl-"
+
+    def _native_stop_orders() -> List[Dict[str, Any]]:
+        try:
+            rows = broker.list_open_stop_orders(symbol)
+        except Exception:
+            return []
+        if not isinstance(rows, list):
+            return []
+        out: List[Dict[str, Any]] = []
+        for row in rows:
+            client_id = str(row.get("client_id") or row.get("cli_ord_id") or "").strip().lower()
+            if client_id.startswith(native_stop_prefix):
+                out.append(row)
+        return out
+
+    def _cancel_native_stop_orders() -> None:
+        for row in _native_stop_orders():
+            try:
+                broker.cancel_order(
+                    order_id=str(row.get("order_id")) if row.get("order_id") else None,
+                    client_id=str(row.get("client_id") or row.get("cli_ord_id")) if (row.get("client_id") or row.get("cli_ord_id")) else None,
+                )
+            except Exception as e:
+                log.warning("kraken cancel native stop failed: %s", e)
+
+    def _resolved_native_stop_price() -> Optional[float]:
+        if terminal is None:
+            return None
+        base_stop = _coerce_float(terminal.get("sl"))
+        if base_stop is None:
+            base_stop = _coerce_float(terminal.get("ttp"))
+
+        imba_levels = terminal.get("imba_levels")
+        if not isinstance(imba_levels, dict):
+            return base_stop
+
+        if terminal_pos > 0:
+            opposite_barrier = _coerce_float(imba_levels.get("short_barrier"))
+            if base_stop is None:
+                return opposite_barrier
+            if opposite_barrier is not None and opposite_barrier > base_stop:
+                return opposite_barrier
+            return base_stop
+
+        opposite_barrier = _coerce_float(imba_levels.get("long_barrier"))
+        if base_stop is None:
+            return opposite_barrier
+        if opposite_barrier is not None and opposite_barrier < base_stop:
+            return opposite_barrier
+        return base_stop
+
     if not _truthy(os.getenv("KRAKEN_NATIVE_SL_ENABLED", "1")):
         return
 
     if terminal_pos == 0 or terminal is None:
         try:
-            broker.cancel_all_stop_orders(symbol)
+            _cancel_native_stop_orders()
         except Exception as e:
             log.warning("kraken cancel stop orders failed (flat): %s", e)
         return
 
-    stop_price = terminal.get("sl") or terminal.get("ttp")
+    stop_price = _resolved_native_stop_price()
     if stop_price is None:
         return
 
@@ -1431,10 +1483,20 @@ def _sync_kraken_stop_loss(
         )
         return
 
-    try:
-        broker.cancel_all_stop_orders(symbol)
-    except Exception as e:
-        log.warning("kraken cancel stop orders pre-place failed: %s", e)
+    native_orders = _native_stop_orders()
+    for row in native_orders:
+        cur_px = _coerce_float(row.get("stop_price", row.get("stopPrice")))
+        cur_side = str(row.get("side") or "").strip().lower()
+        cur_qty = abs(_coerce_float(row.get("size")) or 0.0)
+        if (
+            cur_px is not None
+            and abs(float(cur_px) - float(stop_price)) <= 1e-9
+            and cur_side == stop_side
+            and abs(cur_qty - float(pos_qty)) <= 1e-9
+        ):
+            return
+
+    _cancel_native_stop_orders()
 
     try:
         order_id = broker.place_stop_market(
@@ -2533,6 +2595,17 @@ def run_once(
     elif flat_latch_active and current_side == "flat":
         action = "hold"
 
+    native_stop_synced = False
+    if live_enabled and (not dry_run) and action == "hold":
+        _sync_kraken_stop_loss(
+            broker=broker,
+            symbol=symbol,
+            terminal=terminal,
+            terminal_pos=terminal_pos,
+            dry_run=dry_run,
+        )
+        native_stop_synced = True
+
 
     if terminal_sig == state.last_terminal_sig and action == "hold":
         log_throttled(
@@ -3238,13 +3311,14 @@ def run_once(
             dry_run,
         )
 
-        _sync_kraken_stop_loss(
-            broker=broker,
-            symbol=symbol,
-            terminal=terminal,
-            terminal_pos=terminal_pos,
-            dry_run=dry_run,
-        )
+        if not native_stop_synced:
+            _sync_kraken_stop_loss(
+                broker=broker,
+                symbol=symbol,
+                terminal=terminal,
+                terminal_pos=terminal_pos,
+                dry_run=dry_run,
+            )
 
     if fallback_used and fallback_sig_ts_iso is not None and fallback_sig_v is not None:
         state.last_signal_ts = fallback_sig_ts_iso

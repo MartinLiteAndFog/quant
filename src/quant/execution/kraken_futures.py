@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import hmac
 import json
@@ -25,6 +26,7 @@ class KrakenFuturesClient:
         self.symbol = os.getenv("KRAKEN_FUTURES_SYMBOL", "PF_SOLUSD")
         self.timeout_s = int(os.getenv("KRAKEN_FUTURES_TIMEOUT_SEC", "10"))
         self.default_trigger_signal = (os.getenv("KRAKEN_FUTURES_TRIGGER_SIGNAL", "mark") or "mark").strip().lower()
+        self._tick_size_cache: Dict[str, float] = {}
 
     # ------------------------------------------------------------------
     # Core HTTP
@@ -118,6 +120,40 @@ class KrakenFuturesClient:
         if s <= 0:
             raise ValueError("size must be > 0")
         return f"{s:.8f}"
+
+    def _tick_size(self, symbol: Optional[str] = None) -> Optional[float]:
+        sym = self._norm_symbol(symbol)
+        cached = self._tick_size_cache.get(sym)
+        if cached is not None and cached > 0:
+            return cached
+
+        try:
+            data = self._req("GET", "/derivatives/api/v3/instruments")
+        except Exception:
+            return None
+
+        rows = data.get("instruments", []) if isinstance(data, dict) else []
+        for row in rows:
+            if str(row.get("symbol")) != sym:
+                continue
+            try:
+                tick = float(row.get("tickSize") or 0.0)
+            except Exception:
+                tick = 0.0
+            if tick > 0:
+                self._tick_size_cache[sym] = tick
+                return tick
+        return None
+
+    def _norm_price_str(self, price: float, symbol: Optional[str] = None) -> str:
+        price_f = float(price)
+        tick = self._tick_size(symbol)
+        if tick is not None and tick > 0:
+            price_dec = Decimal(str(price_f))
+            tick_dec = Decimal(str(tick))
+            steps = (price_dec / tick_dec).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+            price_f = float(steps * tick_dec)
+        return f"{price_f:.8f}"
 
     def _norm_trigger_signal(self, trigger_signal: Optional[str]) -> str:
         sig = (trigger_signal or self.default_trigger_signal or "mark").strip().lower()
@@ -291,7 +327,7 @@ class KrakenFuturesClient:
             "side": side_n,
             "size": size_s,
             "orderType": "stp",
-            "stopPrice": f"{stop_f:.8f}",
+            "stopPrice": self._norm_price_str(stop_f, symbol=sym),
             "triggerSignal": self._norm_trigger_signal(trigger_signal),
             "reduceOnly": "true" if reduce_only else "false",
         }
@@ -324,7 +360,7 @@ class KrakenFuturesClient:
             "side": side_n,
             "size": size_s,
             "orderType": "take_profit",
-            "stopPrice": f"{stop_f:.8f}",
+            "stopPrice": self._norm_price_str(stop_f, symbol=sym),
             "triggerSignal": self._norm_trigger_signal(trigger_signal),
             "reduceOnly": "true" if reduce_only else "false",
         }
@@ -356,7 +392,7 @@ class KrakenFuturesClient:
             "side": side_n,
             "size": size_s,
             "orderType": "trigger_entry",
-            "stopPrice": f"{stop_f:.8f}",
+            "stopPrice": self._norm_price_str(stop_f, symbol=sym),
             "triggerSignal": self._norm_trigger_signal(trigger_signal),
             "reduceOnly": "true" if reduce_only else "false",
         }
