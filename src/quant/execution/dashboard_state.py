@@ -1446,8 +1446,23 @@ def build_trading_diary(
                     df = df[df["exit_event"].astype(str).str.lower() != "fills_reconstructed"]
 
     if not df.empty:
-        logical_df = _aggregate_logical_trades(df).tail(int(max(1, max_points)))
-        for i, r in logical_df.iterrows():
+        # For live Postgres closed_trades we want exact stored trade performance (pnl_pct),
+        # not additional grouping heuristics that may merge distinct trades.
+        use_direct_rows = bool(live_only)
+        rows_df = df.copy()
+        if use_direct_rows:
+            if "exit_ts" not in rows_df.columns:
+                rows_df = pd.DataFrame()
+            else:
+                rows_df["entry_ts"] = pd.to_datetime(rows_df.get("entry_ts"), utc=True, errors="coerce")
+                rows_df["exit_ts"] = pd.to_datetime(rows_df.get("exit_ts"), utc=True, errors="coerce")
+                rows_df["pnl_pct"] = pd.to_numeric(rows_df.get("pnl_pct"), errors="coerce")
+                rows_df = rows_df.dropna(subset=["exit_ts", "pnl_pct"]).sort_values("exit_ts")
+                rows_df = rows_df.tail(int(max(1, max_points))).reset_index(drop=True)
+        else:
+            rows_df = _aggregate_logical_trades(rows_df).tail(int(max(1, max_points)))
+
+        for i, r in rows_df.iterrows():
             entry_ts = pd.to_datetime(r.get("entry_ts"), utc=True, errors="coerce")
             exit_ts = pd.to_datetime(r.get("exit_ts"), utc=True, errors="coerce")
             pnl_pct = pd.to_numeric(r.get("pnl_pct"), errors="coerce")

@@ -426,6 +426,36 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(len(entries), 1)
         self.assertAlmostEqual(float(entries[0]["pnl_pct"]), 1.0, places=6)
 
+    def test_build_trading_diary_live_only_keeps_distinct_same_entry_rows(self) -> None:
+        df = pd.DataFrame(
+            {
+                "trade_id": ["t1", "t2"],
+                "venue": ["kucoin", "kucoin"],
+                "symbol": ["SOLUSDT", "SOLUSDT"],
+                "entry_ts": [pd.Timestamp("2026-03-20T10:00:00Z"), pd.Timestamp("2026-03-20T10:00:00Z")],
+                "exit_ts": [pd.Timestamp("2026-03-20T10:05:00Z"), pd.Timestamp("2026-03-20T10:08:00Z")],
+                "side": ["short", "short"],
+                "qty": [1.0, 1.0],
+                "entry_price": [100.0, 100.0],
+                "exit_price": [99.0, 101.0],
+                "pnl_pct": [1.0, -1.0],
+                "exit_event": ["signal_flip_exit", "signal_flip_exit"],
+                "strategy": ["live_executor", "live_executor"],
+            }
+        )
+        diary = ds.build_trading_diary(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            live_only=True,
+            include_reconstructed=False,
+            allow_fill_reconstruction=False,
+            _trades_df=df,
+        )
+        entries = diary.get("entries", [])
+        self.assertEqual(len(entries), 2)
+        self.assertEqual([round(float(e["pnl_pct"]), 4) for e in entries], [1.0, -1.0])
+
     @patch("quant.execution.dashboard_state.load_closed_trades_from_postgres")
     def test_dashboard_performance_uses_logical_trades_and_neutral_bucket(self, mock_load_trades) -> None:
         mock_load_trades.return_value = pd.DataFrame(
