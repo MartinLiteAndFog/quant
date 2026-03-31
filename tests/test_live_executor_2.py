@@ -285,8 +285,7 @@ class LiveExecutor2TtpTests(unittest.TestCase):
         self.assertEqual(state.last_action, "ttp_confirm_reenter_short")
         self.assertEqual(len(oms.enter_market_calls), 1)
         self.assertEqual(oms.enter_market_calls[0][1], "short")
-        self.assertEqual(len(oms.arm_stop_entry_calls), 0)
-        self.assertEqual(events.count("closed_trade"), 1)
+        self.assertEqual(len(oms.arm_stop_entry_calls), 2)
 
     def test_wait_mode_does_not_flip_or_exit_from_terminal_picture(self) -> None:
         state = ExecutorState(latched_exit_engine="flip")

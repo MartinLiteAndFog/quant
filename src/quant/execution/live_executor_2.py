@@ -2291,68 +2291,61 @@ def run_once(
                     state.pending_follow_entry_reason,
                 )
 
+        flat_entry_results = []
+
+        def _stop_px(row: Optional[Dict[str, Any]]) -> Optional[float]:
+            if not row:
+                return None
+            return _coerce_float(row.get("stop_price", row.get("stopPrice")))
+
+        long_existing = oms.find_stop_order_by_kind(symbol, "flat_entry_long")
+        short_existing = oms.find_stop_order_by_kind(symbol, "flat_entry_short")
+
+        if imba_long_barrier is not None and float(qty) > 0:
+            cur_px = _stop_px(long_existing)
+            if cur_px is None or abs(float(cur_px) - float(imba_long_barrier)) > 1e-9:
+                if long_existing:
+                    oms.cancel_orders_by_kind(symbol, "flat_entry_long")
+                flat_entry_results.append(
+                    oms.arm_stop_entry(
+                        symbol=symbol,
+                        side="long",
+                        qty=float(qty),
+                        stop_price=float(imba_long_barrier),
+                        kind="flat_entry_long",
+                    )
+                )
+
+        if imba_short_barrier is not None and float(qty) > 0:
+            cur_px = _stop_px(short_existing)
+            if cur_px is None or abs(float(cur_px) - float(imba_short_barrier)) > 1e-9:
+                if short_existing:
+                    oms.cancel_orders_by_kind(symbol, "flat_entry_short")
+                flat_entry_results.append(
+                    oms.arm_stop_entry(
+                        symbol=symbol,
+                        side="short",
+                        qty=float(qty),
+                        stop_price=float(imba_short_barrier),
+                        kind="flat_entry_short",
+                    )
+                )
+
+        log.info(
+            "executor flat-state entries synced symbol=%s qty=%s long_barrier=%s short_barrier=%s changed=%s",
+            symbol,
+            qty,
+            imba_long_barrier,
+            imba_short_barrier,
+            len(flat_entry_results),
+        )
+
         if ttp_handoff is None:
-            flat_entry_results = []
-
-            def _stop_px(row: Optional[Dict[str, Any]]) -> Optional[float]:
-                if not row:
-                    return None
-                return _coerce_float(row.get("stop_price", row.get("stopPrice")))
-
-            long_existing = oms.find_stop_order_by_kind(symbol, "flat_entry_long")
-            short_existing = oms.find_stop_order_by_kind(symbol, "flat_entry_short")
-
-            if imba_long_barrier is not None and float(qty) > 0:
-                cur_px = _stop_px(long_existing)
-                if cur_px is None or abs(float(cur_px) - float(imba_long_barrier)) > 1e-9:
-                    if long_existing:
-                        oms.cancel_orders_by_kind(symbol, "flat_entry_long")
-                    flat_entry_results.append(
-                        oms.arm_stop_entry(
-                            symbol=symbol,
-                            side="long",
-                            qty=float(qty),
-                            stop_price=float(imba_long_barrier),
-                            kind="flat_entry_long",
-                        )
-                    )
-
-            if imba_short_barrier is not None and float(qty) > 0:
-                cur_px = _stop_px(short_existing)
-                if cur_px is None or abs(float(cur_px) - float(imba_short_barrier)) > 1e-9:
-                    if short_existing:
-                        oms.cancel_orders_by_kind(symbol, "flat_entry_short")
-                    flat_entry_results.append(
-                        oms.arm_stop_entry(
-                            symbol=symbol,
-                            side="short",
-                            qty=float(qty),
-                            stop_price=float(imba_short_barrier),
-                            kind="flat_entry_short",
-                        )
-                    )
-
-            log.info(
-                "executor flat-state entries synced symbol=%s qty=%s long_barrier=%s short_barrier=%s changed=%s",
-                symbol,
-                qty,
-                imba_long_barrier,
-                imba_short_barrier,
-                len(flat_entry_results),
-            )
-
             state.last_terminal_sig = terminal_sig
             state.last_action = "sync_flat_entries"
             state.last_gate_on = int(gate_on)
             state.last_live_side = current_side
             return state
-
-        log.info(
-            "executor preserving flat TTP handoff symbol=%s prior_side=%s target_side=%s",
-            symbol,
-            ttp_handoff.get("prior_side"),
-            ttp_handoff.get("target_side"),
-        )
 
 
     if state.last_live_side == "flat" and current_side == "long" and imba_short_barrier is not None:
