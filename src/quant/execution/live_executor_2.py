@@ -2438,6 +2438,29 @@ def run_once(
         tp1_px = _coerce_float(terminal.get("tp1"))
         tp2_px = _coerce_float(terminal.get("tp2"))
         sl_px = _coerce_float(terminal.get("sl"))
+
+        if sl_px is not None:
+            if current_side == "long" and float(sl_px) >= float(mid):
+                log.warning("tp2 SL rejected: long but sl=%.4f >= mid=%.4f (stale terminal)", float(sl_px), float(mid))
+                sl_px = None
+            elif current_side == "short" and float(sl_px) <= float(mid):
+                log.warning("tp2 SL rejected: short but sl=%.4f <= mid=%.4f (stale terminal)", float(sl_px), float(mid))
+                sl_px = None
+        if tp1_px is not None:
+            if current_side == "long" and float(tp1_px) <= float(mid):
+                log.warning("tp2 TP1 rejected: long but tp1=%.4f <= mid=%.4f (stale terminal)", float(tp1_px), float(mid))
+                tp1_px = None
+            elif current_side == "short" and float(tp1_px) >= float(mid):
+                log.warning("tp2 TP1 rejected: short but tp1=%.4f >= mid=%.4f (stale terminal)", float(tp1_px), float(mid))
+                tp1_px = None
+        if tp2_px is not None:
+            if current_side == "long" and float(tp2_px) <= float(mid):
+                log.warning("tp2 TP2 rejected: long but tp2=%.4f <= mid=%.4f (stale terminal)", float(tp2_px), float(mid))
+                tp2_px = None
+            elif current_side == "short" and float(tp2_px) >= float(mid):
+                log.warning("tp2 TP2 rejected: short but tp2=%.4f >= mid=%.4f (stale terminal)", float(tp2_px), float(mid))
+                tp2_px = None
+
         imba_levels = terminal.get("imba_levels") if isinstance(terminal, dict) else None
         opposite_supersedes_sl = _opposite_imba_supersedes_stop(
             terminal_pos=(1 if current_side == "long" else -1),
@@ -2504,6 +2527,15 @@ def run_once(
     elif str(effective_terminal_mode or "").strip().upper() == "WAIT" and current_side in ("long", "short") and abs(float(pos)) > 1e-12:
         live_qty = float(abs(pos))
         sl_px = _coerce_float(terminal.get("sl"))
+
+        if sl_px is not None:
+            if current_side == "long" and float(sl_px) >= float(mid):
+                log.warning("wait SL rejected: long but sl=%.4f >= mid=%.4f (stale terminal)", float(sl_px), float(mid))
+                sl_px = None
+            elif current_side == "short" and float(sl_px) <= float(mid):
+                log.warning("wait SL rejected: short but sl=%.4f <= mid=%.4f (stale terminal)", float(sl_px), float(mid))
+                sl_px = None
+
         imba_levels = terminal.get("imba_levels") if isinstance(terminal, dict) else None
         opposite_supersedes_sl = _opposite_imba_supersedes_stop(
             terminal_pos=(1 if current_side == "long" else -1),
@@ -2559,6 +2591,14 @@ def run_once(
     elif str(effective_terminal_mode or "").strip().upper() == "TTP" and current_side in ("long", "short") and abs(float(pos)) > 1e-12:
         live_qty = float(abs(pos))
         ttp_px = _coerce_float(terminal.get("ttp"))
+
+        if ttp_px is not None:
+            if current_side == "long" and float(ttp_px) >= float(mid):
+                log.warning("ttp exit rejected: long but ttp=%.4f >= mid=%.4f (stale terminal)", float(ttp_px), float(mid))
+                ttp_px = None
+            elif current_side == "short" and float(ttp_px) <= float(mid):
+                log.warning("ttp exit rejected: short but ttp=%.4f <= mid=%.4f (stale terminal)", float(ttp_px), float(mid))
+                ttp_px = None
 
         changed = 0
         changed += int(_sync_stop_order(
