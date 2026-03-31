@@ -391,7 +391,7 @@ class KrakenFuturesClient:
             "symbol": sym,
             "side": side_n,
             "size": size_s,
-            "orderType": "trigger_entry",
+            "orderType": "stp",
             "stopPrice": self._norm_price_str(stop_f, symbol=sym),
             "triggerSignal": self._norm_trigger_signal(trigger_signal),
             "reduceOnly": "true" if reduce_only else "false",
