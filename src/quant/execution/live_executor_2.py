@@ -2209,6 +2209,43 @@ def run_once(
         return True
 
     if current_side == "flat":
+        if (
+            not _pending_follow_entry_is_active(state)
+            and state.last_live_side in ("long", "short")
+        ):
+            opposite_imba_filled = False
+            target_flip_side: Optional[str] = None
+            if state.last_live_side == "long":
+                opp_order = oms.find_stop_order_by_kind(symbol, "opposite_imba_short")
+                if opp_order is None:
+                    opposite_imba_filled = True
+                    target_flip_side = "short"
+            elif state.last_live_side == "short":
+                opp_order = oms.find_stop_order_by_kind(symbol, "opposite_imba_long")
+                if opp_order is None:
+                    opposite_imba_filled = True
+                    target_flip_side = "long"
+
+            if opposite_imba_filled and target_flip_side is not None:
+                target_pos = 1 if target_flip_side == "long" else -1
+                if terminal_pos == target_pos:
+                    log.info(
+                        "executor detected opposite_imba fill (order gone, terminal agrees) was=%s target=%s terminal_pos=%s -> arming follow entry",
+                        state.last_live_side, target_flip_side, terminal_pos,
+                    )
+                    _arm_pending_follow_entry(
+                        state,
+                        source_side=str(state.last_live_side),
+                        target_side=target_flip_side,
+                        reason="opposite_imba_stop_filled",
+                        source_ts=ttp_source_ts,
+                    )
+                else:
+                    log.info(
+                        "executor detected opposite_imba fill but terminal disagrees was=%s target=%s terminal_pos=%s -> skipping follow entry",
+                        state.last_live_side, target_flip_side, terminal_pos,
+                    )
+
         if _pending_follow_entry_is_active(state):
             pending_side = str(state.pending_follow_entry_side or "").strip().lower()
             if float(qty) > 0:
