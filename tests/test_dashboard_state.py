@@ -16,6 +16,7 @@ from quant.execution.dashboard_state import (
     load_kraken_equity_history,
     load_kraken_metrics,
     load_active_levels,
+    load_dashboard_strategy,
     load_fills_cache_rows,
     load_live_fill_markers,
     load_renko_bars,
@@ -107,7 +108,7 @@ class DashboardStateTests(unittest.TestCase):
         self.assertAlmostEqual(float(levels["tp2"]), 105.5, places=6)
 
     def test_regime_overlay(self) -> None:
-        overlay = build_regime_overlay(symbol="SOL-USDT", hours=24 * 30)
+        overlay = build_regime_overlay(symbol="SOL-USDT", hours=24 * 90)
         self.assertTrue(len(overlay["points"]) >= 2)
         self.assertTrue(len(overlay["spans"]) >= 1)
         self.assertIn("latest", overlay)
@@ -245,6 +246,25 @@ class DashboardStateTests(unittest.TestCase):
         self.assertTrue(len(pts) >= 2)
         self.assertEqual(int(pts[0]["time"]), 100)
         self.assertAlmostEqual(float(pts[0]["equity"]), 500.0, places=6)
+
+    @patch("quant.execution.dashboard_state.get_live_gate_state", create=True)
+    def test_load_dashboard_strategy_prefers_daily_gate_regime_label(self, mock_gate_state) -> None:
+        mock_gate_state.return_value = {
+            "gate_on": 1,
+            "gate_countertrend_on": 1,
+            "gate_trend_on": 0,
+            "source": "postgres_daily_gate",
+        }
+        (self.tmp_path / "execution_state.json").write_text(
+            json.dumps({"mode": "TP2", "strategy": "tp2"}),
+            encoding="utf-8",
+        )
+
+        out = load_dashboard_strategy(symbol="SOL-USDT")
+
+        self.assertEqual(out.get("strategy_label"), "countertrend")
+        self.assertEqual(out.get("regime_state"), "countertrend")
+        self.assertEqual(out.get("source"), "daily_gate")
 
     def test_renko_functions_accept_preloaded_df(self) -> None:
         """Renko functions should accept a pre-loaded DataFrame to avoid redundant reads."""

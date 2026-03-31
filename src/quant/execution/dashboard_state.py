@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from quant.execution.CHOPgate import get_live_gate_state
 from quant.execution.event_store import (
     get_conn,
     insert_equity_snapshot,
@@ -2008,8 +2009,53 @@ def _normalize_strategy_label(raw_state: Any, gate_on: Any, exec_state: Optional
         "source": "default_fallback",
     }
 
+
+def _daily_gate_strategy_label(gate_state: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    gate_state = gate_state or {}
+
+    try:
+        if int(gate_state.get("gate_countertrend_on", 0) or 0) == 1:
+            return {
+                "strategy_label": "countertrend",
+                "regime_state": "countertrend",
+                "source": "daily_gate",
+            }
+        if int(gate_state.get("gate_trend_on", 0) or 0) == 1:
+            return {
+                "strategy_label": "trend",
+                "regime_state": "trend",
+                "source": "daily_gate",
+            }
+    except Exception:
+        pass
+
+    gate_on = pd.to_numeric(gate_state.get("gate_on"), errors="coerce")
+    if pd.notna(gate_on):
+        gate_on_means = str(os.getenv("GATE_ON_MEANS", "countertrend")).strip().lower()
+        label = "trend" if (gate_on_means == "trend") == (int(gate_on) == 1) else "countertrend"
+        return {
+            "strategy_label": label,
+            "regime_state": label,
+            "source": "daily_gate_fallback",
+        }
+    return None
+
 def load_dashboard_strategy(symbol: str) -> Dict[str, Any]:
     now = pd.Timestamp.now("UTC")
+    try:
+        day_gate = get_live_gate_state()
+    except Exception:
+        day_gate = None
+    day_mapped = _daily_gate_strategy_label(day_gate)
+    if day_mapped:
+        return {
+            "symbol": symbol,
+            "strategy_label": day_mapped["strategy_label"],
+            "regime_state": day_mapped["regime_state"],
+            "source": day_mapped["source"],
+            "ts": now.isoformat(),
+        }
+
     try:
         latest = RegimeStore().get_latest_state(symbol=symbol) or {}
     except Exception:
