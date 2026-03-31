@@ -2209,8 +2209,6 @@ def run_once(
         return True
 
     if current_side == "flat":
-        _clear_pending_follow_entry(state)
-
         if _pending_follow_entry_is_active(state):
             pending_side = str(state.pending_follow_entry_side or "").strip().lower()
             if float(qty) > 0:

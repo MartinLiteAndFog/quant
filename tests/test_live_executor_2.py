@@ -406,8 +406,8 @@ class LiveExecutor2TtpTests(unittest.TestCase):
         self.assertEqual(state.pending_follow_entry_side, "short")
         self.assertEqual(oms.enter_market_calls, [])
 
-    def test_pending_follow_entry_cleared_when_flat_no_market_order(self) -> None:
-        """When flat, pending follow entries are cleared — entries only via stop orders."""
+    def test_pending_follow_entry_reenters_without_waiting_for_terminal_confirmation(self) -> None:
+        """Flip: pending follow entry armed while in position fires market entry when flat."""
         state = ExecutorState(
             latched_exit_engine="flip",
             pending_follow_entry=True,
@@ -448,8 +448,8 @@ class LiveExecutor2TtpTests(unittest.TestCase):
             )
 
         self.assertFalse(state.pending_follow_entry)
-        self.assertEqual(len(oms.enter_market_calls), 0)
-        self.assertEqual(len(oms.arm_stop_entry_calls), 2)
+        self.assertEqual(len(oms.enter_market_calls), 1)
+        self.assertEqual(oms.enter_market_calls[0][1], "short")
 
     def test_opposite_imba_cross_arms_flip_process_without_direct_market_action(self) -> None:
         state = ExecutorState(latched_exit_engine="flip")
