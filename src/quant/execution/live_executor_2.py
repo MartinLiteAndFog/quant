@@ -2301,7 +2301,7 @@ def run_once(
         long_existing = oms.find_stop_order_by_kind(symbol, "flat_entry_long")
         short_existing = oms.find_stop_order_by_kind(symbol, "flat_entry_short")
 
-        if imba_long_barrier is not None and float(qty) > 0:
+        if imba_long_barrier is not None and float(qty) > 0 and float(mid) < float(imba_long_barrier):
             cur_px = _stop_px(long_existing)
             if cur_px is None or abs(float(cur_px) - float(imba_long_barrier)) > 1e-9:
                 if long_existing:
@@ -2315,8 +2315,10 @@ def run_once(
                         kind="flat_entry_long",
                     )
                 )
+        elif long_existing:
+            oms.cancel_orders_by_kind(symbol, "flat_entry_long")
 
-        if imba_short_barrier is not None and float(qty) > 0:
+        if imba_short_barrier is not None and float(qty) > 0 and float(mid) > float(imba_short_barrier):
             cur_px = _stop_px(short_existing)
             if cur_px is None or abs(float(cur_px) - float(imba_short_barrier)) > 1e-9:
                 if short_existing:
@@ -2330,6 +2332,8 @@ def run_once(
                         kind="flat_entry_short",
                     )
                 )
+        elif short_existing:
+            oms.cancel_orders_by_kind(symbol, "flat_entry_short")
 
         log.info(
             "executor flat-state entries synced symbol=%s qty=%s long_barrier=%s short_barrier=%s changed=%s",
