@@ -575,26 +575,67 @@ def load_trade_markers(
         else:
             side = int(side_raw)
 
+        entry_px_col = next(
+            (c for c in ("entry_px", "entry_price", "price_entry", "entry") if c in df.columns), None
+        )
+        exit_px_col = next(
+            (c for c in ("exit_px", "exit_price", "price_exit", "exit") if c in df.columns), None
+        )
+        pnl_cols = [c for c in ("pnl_pct", "pnl", "pnl_abs", "net_pnl") if c in df.columns]
+        pnl_col = pnl_cols[0] if pnl_cols else None
+
+        epx_str = ""
+        if entry_px_col and pd.notna(r.get(entry_px_col)):
+            try:
+                epx_str = f" @ {float(r[entry_px_col]):.3f}"
+            except Exception:
+                pass
+
         markers.append(
             {
                 "time": int(pd.Timestamp(r["entry_ts"]).timestamp()),
                 "position": "belowBar" if side >= 0 else "aboveBar",
                 "shape": "arrowUp" if side >= 0 else "arrowDown",
                 "color": "#2ecc71" if side >= 0 else "#f39c12",
-                "text": f"entry {'L' if side >= 0 else 'S'}",
+                "text": f"{'LONG' if side >= 0 else 'SHORT'}{epx_str}",
             }
         )
 
         if "exit_ts" in df.columns and pd.notna(r.get("exit_ts")):
             exit_ts = pd.to_datetime(r["exit_ts"], utc=True, errors="coerce")
             if pd.notna(exit_ts):
+                # determine PnL for exit color
+                pnl_positive = True
+                if pnl_col and pd.notna(r.get(pnl_col)):
+                    pnl_positive = float(r[pnl_col]) >= 0.0
+                elif entry_px_col and exit_px_col and pd.notna(r.get(entry_px_col)) and pd.notna(r.get(exit_px_col)):
+                    try:
+                        pnl_positive = ((float(r[exit_px_col]) - float(r[entry_px_col])) * (1 if side >= 0 else -1)) >= 0.0
+                    except Exception:
+                        pass
+
+                exit_event = str(r.get("exit_event", "exit"))
+                pnl_str = ""
+                if pnl_col and pd.notna(r.get(pnl_col)):
+                    try:
+                        pnl_val = float(r[pnl_col])
+                        pnl_str = f" {pnl_val:+.2f}%"
+                    except Exception:
+                        pass
+                xpx_str = ""
+                if exit_px_col and pd.notna(r.get(exit_px_col)):
+                    try:
+                        xpx_str = f" @ {float(r[exit_px_col]):.3f}"
+                    except Exception:
+                        pass
+
                 markers.append(
                     {
                         "time": int(pd.Timestamp(exit_ts).timestamp()),
                         "position": "aboveBar" if side >= 0 else "belowBar",
-                        "shape": "circle",
-                        "color": "#9aa5b1",
-                        "text": str(r.get("exit_event", "exit")),
+                        "shape": "square",
+                        "color": "#2ecc71" if pnl_positive else "#f7768e",
+                        "text": f"{exit_event}{xpx_str}{pnl_str}",
                     }
                 )
 

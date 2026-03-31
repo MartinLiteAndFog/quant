@@ -398,10 +398,11 @@ export default function PriceChart({
     for (const seg of segments) {
       const s = chart.addLineSeries({
         color: seg.color,
-        lineWidth: 2,
-        title: seg.positive ? "Trade +" : "Trade -",
+        lineWidth: 3,
+        lineStyle: seg.positive ? LineStyle.Solid : LineStyle.Dashed,
         priceLineVisible: false,
         lastValueVisible: false,
+        crosshairMarkerVisible: false,
       });
       s.setData([
         { time: seg.from_time as UTCTimestamp, value: seg.from_price },
