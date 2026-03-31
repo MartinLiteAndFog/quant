@@ -25,6 +25,8 @@ class WebhookDashboardApiTests(unittest.TestCase):
         os.environ["GATE_DAILY_PATH"] = str(root / "gate_daily.csv")
         os.environ["GATE_DAILY_TS_COL"] = "ts"
         os.environ["GATE_DAILY_COL"] = "gate_on_2of3"
+        os.environ["GATE_DAILY_OFF_PATH"] = str(root / "gate_daily_off.csv")
+        os.environ["GATE_DAILY_OFF_COL"] = "gate_off_2of3"
         os.environ["GATE_ON_MEANS"] = "trend"
         os.environ["GATE_CONF_HORIZONS_MINUTES"] = "5,30,120,240"
         os.environ["GATE_CONF_CACHE_SEC"] = "0"
@@ -92,6 +94,12 @@ class WebhookDashboardApiTests(unittest.TestCase):
                 "gate_on_2of3": [0, 1],
             }
         ).to_csv(root / "gate_daily.csv", index=False)
+        pd.DataFrame(
+            {
+                "ts": ["2026-02-19T00:00:00Z", "2026-02-20T00:00:00Z"],
+                "gate_off_2of3": [1, 0],
+            }
+        ).to_csv(root / "gate_daily_off.csv", index=False)
         pd.DataFrame(
             {
                 "ts": pd.date_range("2026-02-20", periods=300, freq="min", tz="UTC"),
@@ -165,6 +173,9 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIn("gate_on", body)
         self.assertIn("gate_off", body)
         self.assertIn("ts", body)
+        self.assertEqual(body.get("source"), "daily_csv")
+        self.assertIn("gate_on_ts", body)
+        self.assertIn("gate_off_ts", body)
 
     def test_chart_includes_live_entry_marker_when_trades_missing(self) -> None:
         root = Path(self.tmp.name)

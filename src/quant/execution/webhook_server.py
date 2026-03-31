@@ -1087,10 +1087,15 @@ def api_gate_solusd() -> Dict[str, Any]:
             "primary": out.get("primary"),
             "gate_countertrend_on": out.get("gate_countertrend_on"),
             "gate_trend_on": out.get("gate_trend_on"),
+            "gate_on_ts": out.get("gate_on_ts"),
+            "gate_off_ts": out.get("gate_off_ts"),
+            "gate_on_age_sec": out.get("gate_on_age_sec"),
+            "gate_off_age_sec": out.get("gate_off_age_sec"),
             "chop": out.get("chop"),
             "adx": out.get("adx"),
             "er": out.get("er"),
             "age_sec": out.get("age_sec"),
+            "error": out.get("error"),
         }
     except Exception as e:
         return {

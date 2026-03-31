@@ -147,6 +147,88 @@ def _publish_gate_state_to_redis(state: Dict[str, Any]) -> None:
         return
 
 
+def _default_daily_gate_path() -> str:
+    return str(Path(_live_default("live/gate_conf/gate_daily.csv")))
+
+
+def _default_daily_gate_off_path() -> str:
+    return str(Path(_live_default("live/gate_conf/gate_daily_off.csv")))
+
+
+def _load_daily_gate_row(path: str, *, ts_col: str, value_col: str, now_ts: pd.Timestamp) -> Dict[str, Any]:
+    csv_path = Path(path)
+    if not csv_path.exists():
+        raise FileNotFoundError(f"missing_gate_csv:{csv_path}")
+
+    df = pd.read_csv(csv_path)
+    if ts_col not in df.columns:
+        raise ValueError(f"gate_csv_missing_ts_col:{ts_col}")
+    if value_col not in df.columns:
+        raise ValueError(f"gate_csv_missing_value_col:{value_col}")
+
+    work = df[[ts_col, value_col]].copy()
+    work[ts_col] = pd.to_datetime(work[ts_col], utc=True, errors="coerce")
+    vals = pd.to_numeric(work[value_col], errors="coerce")
+    if vals.isna().all():
+        vals = work[value_col].astype(str).str.strip().str.lower().map({"true": 1, "false": 0})
+    work["gate"] = vals.fillna(0).astype(int).clip(0, 1)
+    work = work.dropna(subset=[ts_col]).sort_values(ts_col).drop_duplicates(subset=[ts_col], keep="last").reset_index(drop=True)
+    work = work[work[ts_col] <= now_ts].reset_index(drop=True)
+    if work.empty:
+        raise ValueError("gate_csv_no_applicable_row")
+
+    row = work.iloc[-1]
+    row_ts = pd.Timestamp(row[ts_col])
+    return {
+        "ts": row_ts,
+        "gate": int(row["gate"]),
+        "age_sec": float((now_ts - row_ts).total_seconds()),
+        "path": str(csv_path),
+        "value_col": value_col,
+    }
+
+
+def _daily_csv_gate_state(now_ts: pd.Timestamp) -> Dict[str, Any]:
+    ts_col = str(os.getenv("GATE_DAILY_TS_COL", "ts")).strip() or "ts"
+    on_path = str(os.getenv("GATE_DAILY_PATH", _default_daily_gate_path())).strip()
+    on_col = str(os.getenv("GATE_DAILY_COL", "gate_on_2of3")).strip() or "gate_on_2of3"
+    off_path = str(os.getenv("GATE_DAILY_OFF_PATH", _default_daily_gate_off_path())).strip()
+    off_ts_col = str(os.getenv("GATE_DAILY_OFF_TS_COL", ts_col)).strip() or ts_col
+    off_col = str(os.getenv("GATE_DAILY_OFF_COL", "gate_off_2of3")).strip() or "gate_off_2of3"
+
+    on_row = _load_daily_gate_row(on_path, ts_col=ts_col, value_col=on_col, now_ts=now_ts)
+    off_row = _load_daily_gate_row(off_path, ts_col=off_ts_col, value_col=off_col, now_ts=now_ts)
+
+    gate_countertrend_on = int(on_row["gate"])
+    gate_trend_on = int(off_row["gate"])
+
+    primary = str(os.getenv("LIVE_GATE_PRIMARY", "off")).strip().lower()
+    if primary in ("on", "countertrend", "flip"):
+        gate_on = gate_countertrend_on
+    else:
+        gate_on = gate_trend_on
+    gate_off = int(1 - gate_on)
+
+    selected_ts = max(pd.Timestamp(on_row["ts"]), pd.Timestamp(off_row["ts"]))
+    return {
+        "ts": selected_ts.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gate_on": int(gate_on),
+        "gate_off": int(gate_off),
+        "source": "daily_csv",
+        "primary": primary,
+        "gate_countertrend_on": int(gate_countertrend_on),
+        "gate_trend_on": int(gate_trend_on),
+        "gate_on_ts": pd.Timestamp(on_row["ts"]).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gate_off_ts": pd.Timestamp(off_row["ts"]).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gate_on_age_sec": round(float(on_row["age_sec"]), 1),
+        "gate_off_age_sec": round(float(off_row["age_sec"]), 1),
+        "gate_on_path": str(on_row["path"]),
+        "gate_off_path": str(off_row["path"]),
+        "gate_on_col": str(on_row["value_col"]),
+        "gate_off_col": str(off_row["value_col"]),
+    }
+
+
 def _load_live_renko() -> pd.DataFrame:
     renko_path = Path(
         os.getenv(
@@ -224,141 +306,28 @@ def _fit_thresholds_live(hist: pd.DataFrame) -> Dict[str, float]:
 
 def get_live_gate_state() -> Dict[str, Any]:
     """
-    Live CHOP/ADX/ER gate provider based on live Renko bars.
-
-    This replaces the old XYZ / PC statespace provider entirely.
+    Live daily CSV gate provider.
 
     Primary behavior:
-    - Compute CHOP / ADX / ER on live Renko.
-    - Fit thresholds from recent live history (rolling quantiles) OR use fixed thresholds.
-    - Build a 2-of-3 gate.
-    - Expose both countertrend/trend views, while gate_on/gate_off follow LIVE_GATE_PRIMARY.
+    - Read the latest applicable ON/OFF rows from the daily gate CSV artifacts.
+    - Expose both countertrend/trend views.
+    - Map gate_on/gate_off from those views using LIVE_GATE_PRIMARY.
 
-    Defaults:
-    - LIVE_GATE_MODE=rolling_quantiles
-    - LIVE_GATE_CHOP_Q=0.40
-    - LIVE_GATE_ADX_Q=0.60
-    - LIVE_GATE_ER_Q=0.30
-    - LIVE_GATE_PRIMARY=off   # because your reference file was ...daily_OFF.csv
-
-    If you want classic countertrend semantics as gate_on:
-    - set LIVE_GATE_PRIMARY=on
+    If daily CSV data is missing or invalid:
+    - default safe OFF
+    - surface the CSV error in the payload
     """
+    now_ts = pd.Timestamp.now("UTC")
     try:
-        bars = _load_live_renko()
+        out = _daily_csv_gate_state(now_ts)
+        _publish_gate_state_to_redis(out)
+        return out
     except Exception as e:
         return {
-            "ts": pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "ts": now_ts.strftime("%Y-%m-%dT%H:%M:%SZ"),
             "gate_on": 0,
             "gate_off": 1,
             "source": "default_off",
             "error": str(e),
+            "daily_csv_error": str(e),
         }
-
-    max_age_sec = _env_float("LIVE_GATE_MAX_AGE_SEC", 1800.0)
-    last_ts = pd.Timestamp(bars["ts"].iloc[-1])
-    age_sec = float((pd.Timestamp.now("UTC") - last_ts).total_seconds())
-    if age_sec > max_age_sec:
-        return {
-            "ts": last_ts.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "gate_on": 0,
-            "gate_off": 1,
-            "source": "stale_default_off",
-            "age_sec": round(age_sec, 1),
-            "error": f"renko_too_old:{age_sec:.1f}s",
-        }
-
-    chop_len = _env_int("LIVE_GATE_CHOP_LEN", 14)
-    adx_len = _env_int("LIVE_GATE_ADX_LEN", 14)
-    er_len = _env_int("LIVE_GATE_ER_LEN", 40)
-
-    bars = bars.copy()
-    bars["CHOP"] = _choppiness(bars, chop_len)
-    bars["ADX"] = _adx(bars, adx_len)
-    bars["ER"] = _efficiency_ratio(bars, er_len)
-
-    # recent history used to fit dynamic thresholds
-    fit_bars = _env_int("LIVE_GATE_FIT_BARS", 4000)
-    hist = bars.tail(fit_bars).copy()
-
-    req = ["CHOP", "ADX", "ER"]
-    hist = hist.dropna(subset=req).reset_index(drop=True)
-    if len(hist) < max(chop_len, adx_len, er_len, 100):
-        return {
-            "ts": last_ts.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "gate_on": 0,
-            "gate_off": 1,
-            "source": "default_off",
-            "age_sec": round(age_sec, 1),
-            "error": f"not_enough_history:{len(hist)}",
-        }
-
-    th = _fit_thresholds_live(hist)
-
-    chop_ok, chop_bad = _hysteresis_high_is_good_last(hist["CHOP"], th["chop_on"], th["chop_off"])
-    adx_ok, adx_bad = _hysteresis_low_is_good_last(hist["ADX"], th["adx_on"], th["adx_off"], start_on=True)
-    er_ok, er_bad = _hysteresis_low_is_good_last(hist["ER"], th["er_on"], th["er_off"], start_on=True)
-
-    # old confirmed logic = countertrend regime:
-    # CHOP high + ADX low + ER low
-    gate_countertrend_on = int((chop_ok + adx_ok + er_ok) >= 2)
-    gate_trend_on = int(1 - gate_countertrend_on)
-
-    primary = str(os.getenv("LIVE_GATE_PRIMARY", "off")).strip().lower()
-    if primary in ("on", "countertrend", "flip"):
-        gate_on = gate_countertrend_on
-    else:
-        gate_on = gate_trend_on
-
-    gate_off = int(1 - gate_on)
-
-    last = hist.iloc[-1]
-    ts = pd.Timestamp(last["ts"]).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-    out: Dict[str, Any] = {
-        "ts": ts,
-        "gate_on": int(gate_on),
-        "gate_off": int(gate_off),
-        "source": "renko_live_chop_adx_er",
-        "mode": str(os.getenv("LIVE_GATE_MODE", "rolling_quantiles")).strip().lower(),
-        "primary": primary,
-        "age_sec": round(age_sec, 1),
-
-        # explicit regime views so executor/dashboard can choose cleanly later
-        "gate_countertrend_on": int(gate_countertrend_on),
-        "gate_trend_on": int(gate_trend_on),
-
-        # latest indicator values
-        "chop": round(float(last["CHOP"]), 4),
-        "adx": round(float(last["ADX"]), 4),
-        "er": round(float(last["ER"]), 6),
-
-        # current metric states under old CHOP/ADX/ER semantics
-        "chop_ok": int(chop_ok),
-        "adx_ok": int(adx_ok),
-        "er_ok": int(er_ok),
-        "chop_bad": int(chop_bad),
-        "adx_bad": int(adx_bad),
-        "er_bad": int(er_bad),
-
-        # active thresholds
-        "chop_on_th": round(float(th["chop_on"]), 4) if np.isfinite(th["chop_on"]) else None,
-        "chop_off_th": round(float(th["chop_off"]), 4) if np.isfinite(th["chop_off"]) else None,
-        "adx_on_th": round(float(th["adx_on"]), 4) if np.isfinite(th["adx_on"]) else None,
-        "adx_off_th": round(float(th["adx_off"]), 4) if np.isfinite(th["adx_off"]) else None,
-        "er_on_th": round(float(th["er_on"]), 6) if np.isfinite(th["er_on"]) else None,
-        "er_off_th": round(float(th["er_off"]), 6) if np.isfinite(th["er_off"]) else None,
-
-        # fit config
-        "fit_bars": int(fit_bars),
-        "chop_len": int(chop_len),
-        "adx_len": int(adx_len),
-        "er_len": int(er_len),
-    }
-
-    if _env_bool("LIVE_GATE_DEBUG", False):
-        out["debug_last_ts"] = str(last["ts"])
-
-    _publish_gate_state_to_redis(out)
-
-    return out
