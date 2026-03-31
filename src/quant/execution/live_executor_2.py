@@ -2209,43 +2209,6 @@ def run_once(
         return True
 
     if current_side == "flat":
-        if (
-            not _pending_follow_entry_is_active(state)
-            and state.last_live_side in ("long", "short")
-        ):
-            if (
-                state.last_live_side == "long"
-                and imba_short_barrier is not None
-                and float(mid) <= float(imba_short_barrier)
-            ):
-                log.info(
-                    "executor detected opposite_imba_short fill while flat (was long) symbol=%s mid=%.4f barrier=%.4f -> arming follow entry short",
-                    symbol, float(mid), float(imba_short_barrier),
-                )
-                _arm_pending_follow_entry(
-                    state,
-                    source_side="long",
-                    target_side="short",
-                    reason="opposite_imba_stop_filled",
-                    source_ts=ttp_source_ts,
-                )
-            elif (
-                state.last_live_side == "short"
-                and imba_long_barrier is not None
-                and float(mid) >= float(imba_long_barrier)
-            ):
-                log.info(
-                    "executor detected opposite_imba_long fill while flat (was short) symbol=%s mid=%.4f barrier=%.4f -> arming follow entry long",
-                    symbol, float(mid), float(imba_long_barrier),
-                )
-                _arm_pending_follow_entry(
-                    state,
-                    source_side="short",
-                    target_side="long",
-                    reason="opposite_imba_stop_filled",
-                    source_ts=ttp_source_ts,
-                )
-
         if _pending_follow_entry_is_active(state):
             pending_side = str(state.pending_follow_entry_side or "").strip().lower()
             if float(qty) > 0:
