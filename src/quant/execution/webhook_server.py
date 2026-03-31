@@ -58,6 +58,26 @@ _POSITION_CACHE: Dict[str, Dict[str, Any]] = {}
 _CHART_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
+def _daily_regime_label(gate_state: Optional[Dict[str, Any]]) -> Optional[str]:
+    if not isinstance(gate_state, dict):
+        return None
+    if int(gate_state.get("gate_countertrend_on", 0) or 0) == 1:
+        return "countertrend"
+    if int(gate_state.get("gate_trend_on", 0) or 0) == 1:
+        return "trend"
+    gate_on = gate_state.get("gate_on")
+    if gate_on is None:
+        return None
+    try:
+        gate_on_i = int(gate_on)
+    except Exception:
+        return None
+    gate_on_means = str(os.getenv("GATE_ON_MEANS", "countertrend")).strip().lower()
+    if gate_on_means == "trend":
+        return "trend" if gate_on_i == 1 else "countertrend"
+    return "countertrend" if gate_on_i == 1 else "trend"
+
+
 def _state_space_refresh_loop() -> None:
     interval = int(os.getenv("DASHBOARD_SS_REFRESH_SEC", "300"))
     while True:
@@ -805,6 +825,8 @@ def api_dashboard_chart(
         )
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)), _rows=regime_rows)
         latest = regime.get("latest") or {}
+        day_gate = get_live_gate_state()
+        day_regime_state = _daily_regime_label(day_gate)
         live_gc = None
         live_gc_error = "temporarily_disabled"
         selected_p_trend = (live_gc or {}).get("selected_p_trend")
@@ -824,7 +846,7 @@ def api_dashboard_chart(
             include_reconstructed=False,
             allow_file_fallback=allow_file_fallback,
             allow_fill_reconstruction=False,
-            _trades_df=trades_df,
+            _trades_df=None,
         )
         equity_real = load_real_equity_history(max_points=int(max(100, max_points)))
         equity_kraken = load_kraken_equity_history(max_points=int(max(100, max_points)))
@@ -841,7 +863,7 @@ def api_dashboard_chart(
             include_reconstructed=False,
             allow_file_fallback=allow_file_fallback,
             allow_fill_reconstruction=False,
-            _trades_df=trades_df,
+            _trades_df=None,
         )
 
         equity_components = [
@@ -936,6 +958,7 @@ def api_dashboard_chart(
             "confidence": confidence_out,
             "gate_on": latest.get("gate_on"),
             "regime_state": latest.get("regime_state"),
+            "day_regime_state": day_regime_state,
             "gate_confidence": live_gc,
             "gate_confidence_error": live_gc_error,
             "segments": segments,
@@ -2363,7 +2386,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         }
       }
 
-      document.getElementById('regime-state').textContent = payload.regime_state || '-';
+      document.getElementById('regime-state').textContent = payload.day_regime_state || payload.regime_state || '-';
       const conf = payload.confidence == null ? null : Number(payload.confidence);
       document.getElementById('confidence').textContent = conf == null ? '-' : conf.toFixed(3);
       if (conf != null) {

@@ -1,7 +1,14 @@
+## End-to-End Delivery Rule
+
+- Treat every implementation request as an end-to-end, working solution by default.
+- Do not stop at partial plumbing or reader-side changes if the request clearly requires a producer, writer, startup command, cron/service wiring, environment variables, deployment configuration, or verification.
+- Infer obvious required components from the goal. For example: if live should read a CSV artifact, the implementation is not complete until the CSV is also produced in the correct format and the runtime is wired to use it.
+- Only leave work intentionally partial if the user explicitly scopes something out.
+
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **quant-main** (2230 symbols, 6218 relationships, 171 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **quant-main** (2286 symbols, 6375 relationships, 176 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
 > If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
 

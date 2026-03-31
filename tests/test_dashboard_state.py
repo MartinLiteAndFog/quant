@@ -456,6 +456,61 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(len(entries), 2)
         self.assertEqual([round(float(e["pnl_pct"]), 4) for e in entries], [1.0, -1.0])
 
+    def test_reconstruct_trades_from_execution_fills_keeps_partials_in_single_trade(self) -> None:
+        fills = pd.DataFrame(
+            {
+                "ts": [
+                    pd.Timestamp("2026-03-20T10:00:00Z"),
+                    pd.Timestamp("2026-03-20T10:05:00Z"),
+                    pd.Timestamp("2026-03-20T10:08:00Z"),
+                    pd.Timestamp("2026-03-20T10:10:00Z"),
+                    pd.Timestamp("2026-03-20T10:14:00Z"),
+                ],
+                "seq": [1, 2, 3, 4, 5],
+                "side": ["buy", "sell", "sell", "sell", "buy"],
+                "qty": [1.0, 0.5, 0.5, 1.0, 1.0],
+                "price": [100.0, 102.0, 104.0, 103.0, 100.0],
+            }
+        )
+        trades = ds._reconstruct_trades_from_execution_fills_df(
+            fills_df=fills,
+            max_points=100,
+            source="test",
+        )
+        self.assertEqual(len(trades), 2)
+        self.assertAlmostEqual(float(trades[0]["pnl_pct"]), 3.0, places=4)
+        self.assertGreater(float(trades[1]["pnl_pct"]), 0.0)
+
+    @patch("quant.execution.dashboard_state.load_execution_fills_from_postgres")
+    def test_build_trading_diary_live_only_prefers_execution_events(self, mock_load_exec_fills) -> None:
+        mock_load_exec_fills.return_value = pd.DataFrame(
+            {
+                "ts": [
+                    pd.Timestamp("2026-03-20T10:00:00Z"),
+                    pd.Timestamp("2026-03-20T10:05:00Z"),
+                ],
+                "seq": [1, 2],
+                "side": ["buy", "sell"],
+                "qty": [1.0, 1.0],
+                "price": [100.0, 102.0],
+                "execution_stage": ["fill", "fill"],
+                "status": ["fill", "fill"],
+                "reduce_only": [False, True],
+                "payload_json": [{}, {}],
+            }
+        )
+        diary = ds.build_trading_diary(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            live_only=True,
+            include_reconstructed=False,
+            allow_file_fallback=False,
+            allow_fill_reconstruction=False,
+        )
+        self.assertEqual(diary.get("source"), "postgres:execution_events_reconstructed")
+        self.assertEqual(len(diary.get("entries", [])), 1)
+
     @patch("quant.execution.dashboard_state.load_closed_trades_from_postgres")
     def test_dashboard_performance_uses_logical_trades_and_neutral_bucket(self, mock_load_trades) -> None:
         mock_load_trades.return_value = pd.DataFrame(

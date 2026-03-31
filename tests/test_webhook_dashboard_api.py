@@ -168,6 +168,19 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIn("equity_combined", body)
         self.assertIn("kraken_metrics", body)
 
+    @patch("quant.execution.webhook_server.get_live_gate_state")
+    def test_chart_payload_exposes_day_regime_separately_from_trade_regime(self, mock_gate_state) -> None:
+        mock_gate_state.return_value = {
+            "gate_countertrend_on": 1,
+            "gate_trend_on": 0,
+            "gate_on": 0,
+            "source": "daily_csv",
+        }
+        body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+        self.assertTrue(body.get("ok"))
+        self.assertIsNone(body.get("regime_state"))
+        self.assertEqual(body.get("day_regime_state"), "countertrend")
+
     def test_gate_solusd_endpoint(self) -> None:
         body = api_gate_solusd()
         self.assertIn("gate_on", body)

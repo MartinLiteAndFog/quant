@@ -376,6 +376,169 @@ def load_closed_trades_from_postgres(
         return pd.DataFrame()
 
 
+def load_execution_fills_from_postgres(
+    venue: str,
+    symbol: str,
+    max_points: int = 20000,
+) -> pd.DataFrame:
+    try:
+        sql = """
+            select ts, seq, side, qty, price, reduce_only, status, execution_stage, payload_json
+            from execution_events
+            where venue = %(venue)s
+              and replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
+              and execution_stage = 'fill'
+            order by ts desc, seq desc
+            limit %(limit)s
+        """
+        params = {
+            "venue": str(venue),
+            "symbol_norm": _normalize_symbol_token(symbol),
+            "limit": int(max(1, max_points)),
+        }
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        if not rows:
+            return pd.DataFrame()
+        out = pd.DataFrame(
+            rows,
+            columns=[
+                "ts",
+                "seq",
+                "side",
+                "qty",
+                "price",
+                "reduce_only",
+                "status",
+                "execution_stage",
+                "payload_json",
+            ],
+        )
+        out["ts"] = pd.to_datetime(out["ts"], utc=True, errors="coerce")
+        out["qty"] = pd.to_numeric(out.get("qty"), errors="coerce")
+        out["price"] = pd.to_numeric(out.get("price"), errors="coerce")
+        out["seq"] = pd.to_numeric(out.get("seq"), errors="coerce")
+        out = out.dropna(subset=["ts", "qty", "price"])
+        out = out[(out["qty"] > 0) & (out["price"] > 0)]
+        return out.sort_values(["ts", "seq"], na_position="last").reset_index(drop=True)
+    except Exception:
+        return pd.DataFrame()
+
+
+def _signed_fill_qty(side: Any, qty: float) -> float:
+    s = str(side or "").strip().lower()
+    if s in ("buy", "long", "1"):
+        return abs(float(qty))
+    if s in ("sell", "short", "-1"):
+        return -abs(float(qty))
+    return 0.0
+
+
+def _reconstruct_trades_from_execution_fills_df(
+    fills_df: pd.DataFrame,
+    max_points: int = 500,
+    source: str = "postgres:execution_events",
+) -> List[Dict[str, Any]]:
+    if fills_df.empty:
+        return []
+    df = fills_df.copy()
+    if "ts" not in df.columns or "side" not in df.columns or "qty" not in df.columns or "price" not in df.columns:
+        return []
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    df["qty"] = pd.to_numeric(df["qty"], errors="coerce")
+    df["price"] = pd.to_numeric(df["price"], errors="coerce")
+    df = df.dropna(subset=["ts", "qty", "price"]).sort_values(["ts", "seq"], na_position="last").reset_index(drop=True)
+    if df.empty:
+        return []
+
+    entries: List[Dict[str, Any]] = []
+    pos_qty = 0.0
+    avg_entry = 0.0
+    open_ts: Optional[pd.Timestamp] = None
+    open_side: Optional[str] = None
+    realized_pnl_abs = 0.0
+    realized_notional_abs = 0.0
+    realized_qty = 0.0
+
+    def _flush(close_ts: pd.Timestamp, exit_price: float) -> None:
+        nonlocal realized_pnl_abs, realized_notional_abs, realized_qty, open_ts, open_side
+        if open_ts is None or open_side is None or realized_notional_abs <= 0:
+            realized_pnl_abs = 0.0
+            realized_notional_abs = 0.0
+            realized_qty = 0.0
+            open_ts = None
+            open_side = None
+            return
+        pnl_pct = (realized_pnl_abs / realized_notional_abs) * 100.0
+        entries.append(
+            {
+                "id": f"x_{int(pd.Timestamp(close_ts).timestamp())}_{len(entries)}",
+                "entry_time": int(pd.Timestamp(open_ts).timestamp()),
+                "time": int(pd.Timestamp(close_ts).timestamp()),
+                "side": str(open_side),
+                "qty": float(realized_qty) if realized_qty > 0 else None,
+                "entry_price": float(avg_entry) if avg_entry > 0 else None,
+                "exit_price": float(exit_price),
+                "pnl_pct": round(float(pnl_pct), 4),
+                "source": source,
+            }
+        )
+        realized_pnl_abs = 0.0
+        realized_notional_abs = 0.0
+        realized_qty = 0.0
+        open_ts = None
+        open_side = None
+
+    eps = 1e-12
+    for _, r in df.iterrows():
+        ts = pd.Timestamp(r["ts"])
+        qty = float(r["qty"])
+        px = float(r["price"])
+        signed = _signed_fill_qty(r.get("side"), qty)
+        if abs(signed) <= eps:
+            continue
+
+        if abs(pos_qty) <= eps:
+            pos_qty = signed
+            avg_entry = px
+            open_ts = ts
+            open_side = "long" if pos_qty > 0 else "short"
+            continue
+
+        if pos_qty * signed > 0:
+            new_abs = abs(pos_qty) + abs(signed)
+            avg_entry = ((abs(pos_qty) * avg_entry) + (abs(signed) * px)) / new_abs
+            pos_qty += signed
+            continue
+
+        close_qty = min(abs(pos_qty), abs(signed))
+        direction = 1.0 if pos_qty > 0 else -1.0
+        realized_pnl_abs += (px - avg_entry) * direction * close_qty
+        realized_notional_abs += avg_entry * close_qty
+        realized_qty += close_qty
+
+        pos_after_abs = abs(pos_qty) - close_qty
+        remainder_abs = abs(signed) - close_qty
+
+        if pos_after_abs <= eps:
+            _flush(ts, px)
+            pos_qty = 0.0
+            avg_entry = 0.0
+            if remainder_abs > eps:
+                pos_qty = remainder_abs if signed > 0 else -remainder_abs
+                avg_entry = px
+                open_ts = ts
+                open_side = "long" if pos_qty > 0 else "short"
+            continue
+
+        pos_qty = (1.0 if pos_qty > 0 else -1.0) * pos_after_abs
+
+    if not entries:
+        return []
+    return entries[-int(max(1, max_points)) :]
+
+
 def load_trade_markers(
     max_points: int = 5000,
     _trades_df: Optional[pd.DataFrame] = None,
@@ -1398,6 +1561,20 @@ def build_trading_diary(
     out: List[Dict[str, Any]] = []
     symbol_eff = str(symbol or os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"))
     venue_eff = str(venue or "kucoin")
+
+    if live_only and _trades_df is None:
+        fills_df = load_execution_fills_from_postgres(
+            venue=venue_eff,
+            symbol=symbol_eff,
+            max_points=int(max(100, max_points * 40)),
+        )
+        fills_entries = _reconstruct_trades_from_execution_fills_df(
+            fills_df=fills_df,
+            max_points=max_points,
+            source="postgres:execution_events_reconstructed",
+        )
+        if fills_entries:
+            return {"entries": fills_entries, "source": "postgres:execution_events_reconstructed"}
 
     if _trades_df is not None:
         df = _trades_df.copy()
