@@ -87,20 +87,36 @@ class _LiveOms:
         self.enter_market_calls: list[tuple[str, str, float]] = []
         self.flatten_market_calls: list[tuple[str, str, float]] = []
         self.stop_exit_calls: list[tuple[str, str, float, float, str]] = []
+        self.stop_entry_calls: list[tuple[str, str, float, float, str]] = []
         self.cancel_calls: list[tuple[str, str]] = []
+        self.open_orders: dict[str, dict] = {}
 
     def find_stop_order_by_kind(self, symbol: str, kind: str):
-        return None
+        return self.open_orders.get(kind)
 
     def cancel_orders_by_kind(self, symbol: str, kind: str) -> int:
         self.cancel_calls.append((symbol, kind))
+        self.open_orders.pop(kind, None)
         return 0
 
     def arm_stop_exit(self, symbol: str, side: str, qty: float, stop_price: float, kind: str, reduce_only: bool = True):
         self.stop_exit_calls.append((symbol, side, float(qty), float(stop_price), kind))
+        self.open_orders[kind] = {
+            "stop_price": float(stop_price),
+            "size": float(qty),
+            "kind": kind,
+            "reduce_only": bool(reduce_only),
+        }
         return {"ok": True}
 
     def arm_stop_entry(self, symbol: str, side: str, qty: float, stop_price: float, kind: str):
+        self.stop_entry_calls.append((symbol, side, float(qty), float(stop_price), kind))
+        self.open_orders[kind] = {
+            "stop_price": float(stop_price),
+            "size": float(qty),
+            "kind": kind,
+            "reduce_only": False,
+        }
         return {"ok": True}
 
     def arm_take_profit_exit(self, *args, **kwargs):
@@ -288,7 +304,12 @@ class LiveExecutor2TtpTests(unittest.TestCase):
         self.assertEqual(len(oms.arm_stop_entry_calls), 2)
 
     def test_wait_mode_does_not_flip_or_exit_from_terminal_picture(self) -> None:
-        state = ExecutorState(latched_exit_engine="flip")
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            open_leg_mode="tp2",
+            open_leg_side="long",
+            open_leg_entry_bar_ts="2026-03-30T11:00:00Z",
+        )
         broker = _LiveBroker(pos=5.0)
         oms = _LiveOms()
 
@@ -324,7 +345,12 @@ class LiveExecutor2TtpTests(unittest.TestCase):
         self.assertEqual(oms.enter_market_calls, [])
 
     def test_wait_same_side_imba_only_switches_order_set_to_ttp(self) -> None:
-        state = ExecutorState(latched_exit_engine="flip")
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            open_leg_mode="tp2",
+            open_leg_side="short",
+            open_leg_entry_bar_ts="2026-03-30T11:00:00Z",
+        )
         broker = _LiveBroker(pos=5.0)
         oms = _LiveOms()
 
@@ -366,7 +392,7 @@ class LiveExecutor2TtpTests(unittest.TestCase):
             latched_exit_engine="flip",
             pending_follow_entry=True,
             pending_follow_entry_side="short",
-            pending_follow_entry_reason="opposite_imba_close",
+            pending_follow_entry_reason="flip_to_short",
             pending_follow_entry_source_ts="2026-03-30T12:00:00Z",
             pending_follow_entry_expires_at="2099-01-01T00:00:00Z",
         )
@@ -411,7 +437,7 @@ class LiveExecutor2TtpTests(unittest.TestCase):
             latched_exit_engine="flip",
             pending_follow_entry=True,
             pending_follow_entry_side="short",
-            pending_follow_entry_reason="opposite_imba_close",
+            pending_follow_entry_reason="flip_to_short",
             pending_follow_entry_source_ts="2026-03-30T12:00:00Z",
             pending_follow_entry_expires_at="2099-01-01T00:00:00Z",
         )
@@ -450,8 +476,13 @@ class LiveExecutor2TtpTests(unittest.TestCase):
         self.assertEqual(len(oms.enter_market_calls), 1)
         self.assertEqual(oms.enter_market_calls[0][1], "short")
 
-    def test_opposite_imba_cross_arms_flip_process_without_direct_market_action(self) -> None:
-        state = ExecutorState(latched_exit_engine="flip")
+    def test_opposite_imba_cross_syncs_short_exit_and_flip_entry_orders(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            open_leg_mode="tp2",
+            open_leg_side="long",
+            open_leg_entry_bar_ts="2026-03-30T11:00:00Z",
+        )
         broker = _LiveBroker(pos=9.0, bid=98.0, ask=98.0)
         oms = _LiveOms()
 
@@ -482,10 +513,410 @@ class LiveExecutor2TtpTests(unittest.TestCase):
                 leverage=1.0,
             )
 
-        self.assertTrue(state.pending_follow_entry)
-        self.assertEqual(state.pending_follow_entry_side, "short")
+        self.assertFalse(state.pending_follow_entry)
         self.assertEqual(oms.enter_market_calls, [])
         self.assertEqual(oms.flatten_market_calls, [])
+        self.assertIn(("SOL-USDT", "long", 9.0, 99.0, "opposite_imba_short"), oms.stop_exit_calls)
+        self.assertIn(("SOL-USDT", "short", 9.0, 98.901, "opposite_imba_flip_entry_short"), oms.stop_entry_calls)
+
+    def test_opposite_imba_cross_syncs_long_exit_and_flip_entry_orders(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            open_leg_mode="tp2",
+            open_leg_side="short",
+            open_leg_entry_bar_ts="2026-03-30T11:00:00Z",
+        )
+        broker = _LiveBroker(pos=-7.0, bid=102.0, ask=102.0)
+        oms = _LiveOms()
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2._latest_backtest_event", return_value=({"ts": "2026-03-30T12:00:00Z", "event": "tp2_live", "side": -1, "seq": 1}, {"mode": "TP2", "pos": -1, "side": "short", "sl": 105.0, "tp1": 96.0, "tp2": 92.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2._latest_signal", return_value={"ts": pd.Timestamp("2026-03-30T12:00:00Z"), "signal": 1}),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            state = run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        self.assertFalse(state.pending_follow_entry)
+        self.assertEqual(oms.enter_market_calls, [])
+        self.assertEqual(oms.flatten_market_calls, [])
+        self.assertIn(("SOL-USDT", "short", 7.0, 101.0, "opposite_imba_long"), oms.stop_exit_calls)
+        long_flip_entries = [
+            call for call in oms.stop_entry_calls if call[4] == "opposite_imba_flip_entry_long"
+        ]
+        self.assertEqual(len(long_flip_entries), 1)
+        self.assertEqual(long_flip_entries[0][:3], ("SOL-USDT", "long", 7.0))
+        self.assertAlmostEqual(long_flip_entries[0][3], 101.101, places=6)
+
+    def test_opposite_imba_flip_entry_orders_are_idempotent(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            open_leg_mode="tp2",
+            open_leg_side="long",
+            open_leg_entry_bar_ts="2026-03-30T11:00:00Z",
+        )
+        broker = _LiveBroker(pos=9.0, bid=98.0, ask=98.0)
+        oms = _LiveOms()
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2._latest_backtest_event", return_value=({"ts": "2026-03-30T12:00:00Z", "event": "tp2_live", "side": 1, "seq": 1}, {"mode": "TP2", "pos": 1, "side": "long", "sl": 95.0, "tp1": 104.0, "tp2": 108.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2._latest_signal", return_value={"ts": pd.Timestamp("2026-03-30T12:00:00Z"), "signal": -1}),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            state = run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+            state = run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        short_entry_calls = [
+            call for call in oms.stop_entry_calls if call[4] == "opposite_imba_flip_entry_short"
+        ]
+        self.assertEqual(len(short_entry_calls), 1)
+
+    def test_flat_path_cancels_stale_opposite_imba_orders_inside_barriers(self) -> None:
+        state = ExecutorState(latched_exit_engine="flip")
+        broker = _LiveBroker(pos=0.0, bid=100.0, ask=100.0)
+        oms = _LiveOms()
+        oms.open_orders = {
+            "opposite_imba_short": {"stop_price": 99.0, "reduce_only": True},
+            "opposite_imba_long": {"stop_price": 101.0, "reduce_only": True},
+            "opposite_imba_flip_entry_short": {"stop_price": 98.901, "reduce_only": False},
+            "opposite_imba_flip_entry_long": {"stop_price": 101.101, "reduce_only": False},
+        }
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2._latest_backtest_event", return_value=({"ts": "2026-03-30T12:00:00Z", "event": "flat_after_close", "side": 0, "seq": 1}, {"mode": "WAIT", "pos": 0, "side": None, "sl": 95.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2._latest_signal", return_value=None),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            state = run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        self.assertFalse(state.pending_follow_entry)
+        self.assertIn(("SOL-USDT", "opposite_imba_short"), oms.cancel_calls)
+        self.assertIn(("SOL-USDT", "opposite_imba_long"), oms.cancel_calls)
+        self.assertIn(("SOL-USDT", "opposite_imba_flip_entry_short"), oms.cancel_calls)
+        self.assertIn(("SOL-USDT", "opposite_imba_flip_entry_long"), oms.cancel_calls)
+
+    def test_retagged_opposite_imba_stop_is_replaced_with_reduce_only_exit(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            open_leg_mode="tp2",
+            open_leg_side="long",
+            open_leg_entry_bar_ts="2026-03-30T11:00:00Z",
+            last_live_side="flat",
+        )
+        broker = _LiveBroker(pos=5.0, bid=100.0, ask=100.0)
+        oms = _LiveOms()
+        oms.open_orders["flat_entry_short"] = {"stop_price": 99.0, "reduce_only": False}
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2._latest_backtest_event", return_value=({"ts": "2026-03-30T12:00:00Z", "event": "tp2_live", "side": 1, "seq": 1}, {"mode": "TP2", "pos": 1, "side": "long", "sl": 95.0, "tp1": 104.0, "tp2": 108.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2._latest_signal", return_value={"ts": pd.Timestamp("2026-03-30T12:00:00Z"), "signal": -1}),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        self.assertIn(("SOL-USDT", "flat_entry_short"), oms.cancel_calls)
+        self.assertTrue(oms.open_orders["opposite_imba_short"]["reduce_only"])
+        self.assertIn(("SOL-USDT", "long", 5.0, 99.0, "opposite_imba_short"), oms.stop_exit_calls)
+
+    def test_ttp_state_syncs_short_exit_and_flip_entry_orders(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            open_leg_mode="flip",
+            open_leg_side="long",
+            open_leg_entry_bar_ts="2026-03-30T11:00:00Z",
+        )
+        broker = _LiveBroker(pos=5.0, bid=100.0, ask=100.0)
+        oms = _LiveOms()
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2._latest_backtest_event", return_value=({"ts": "2026-03-30T12:00:00Z", "event": "ttp_on", "side": 1, "seq": 1}, {"mode": "TTP", "pos": 1, "side": "long", "ttp": 99.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            state = run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        self.assertEqual(state.last_action, "hold")
+        self.assertEqual(oms.enter_market_calls, [])
+        self.assertIn(("SOL-USDT", "long", 5.0, 99.0, "ttp_exit"), oms.stop_exit_calls)
+        self.assertIn(("SOL-USDT", "short", 5.0, 98.901, "ttp_flip_entry_short"), oms.stop_entry_calls)
+
+    def test_ttp_state_syncs_long_exit_and_flip_entry_orders(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            open_leg_mode="flip",
+            open_leg_side="short",
+            open_leg_entry_bar_ts="2026-03-30T11:00:00Z",
+        )
+        broker = _LiveBroker(pos=-5.0, bid=100.0, ask=100.0)
+        oms = _LiveOms()
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2._latest_backtest_event", return_value=({"ts": "2026-03-30T12:00:00Z", "event": "ttp_on", "side": -1, "seq": 1}, {"mode": "TTP", "pos": -1, "side": "short", "ttp": 101.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            state = run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        self.assertEqual(state.last_action, "hold")
+        self.assertEqual(oms.enter_market_calls, [])
+        self.assertIn(("SOL-USDT", "short", 5.0, 101.0, "ttp_exit"), oms.stop_exit_calls)
+        long_entries = [call for call in oms.stop_entry_calls if call[4] == "ttp_flip_entry_long"]
+        self.assertEqual(len(long_entries), 1)
+        self.assertEqual(long_entries[0][:3], ("SOL-USDT", "long", 5.0))
+        self.assertAlmostEqual(long_entries[0][3], 101.101, places=6)
+
+    def test_flat_path_cancels_stale_ttp_flip_entry_orders(self) -> None:
+        state = ExecutorState(latched_exit_engine="flip")
+        broker = _LiveBroker(pos=0.0, bid=100.0, ask=100.0)
+        oms = _LiveOms()
+        oms.open_orders = {
+            "ttp_flip_entry_short": {"stop_price": 98.901, "reduce_only": False},
+            "ttp_flip_entry_long": {"stop_price": 101.101, "reduce_only": False},
+        }
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2._latest_backtest_event", return_value=({"ts": "2026-03-30T12:00:00Z", "event": "flat_after_close", "side": 0, "seq": 1}, {"mode": "TTP", "pos": 0, "ttp": 99.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        self.assertIn(("SOL-USDT", "ttp_flip_entry_short"), oms.cancel_calls)
+        self.assertIn(("SOL-USDT", "ttp_flip_entry_long"), oms.cancel_calls)
+
+    def test_wait_branch_cancels_stale_ttp_flip_entry_orders(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            open_leg_mode="flip",
+            open_leg_side="long",
+            open_leg_entry_bar_ts="2026-03-30T11:00:00Z",
+        )
+        broker = _LiveBroker(pos=5.0, bid=100.0, ask=100.0)
+        oms = _LiveOms()
+        oms.open_orders = {
+            "ttp_flip_entry_short": {"stop_price": 98.901, "reduce_only": False},
+            "ttp_flip_entry_long": {"stop_price": 101.101, "reduce_only": False},
+        }
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2._latest_backtest_event", return_value=({"ts": "2026-03-30T12:00:00Z", "event": "wait_mode", "side": 1, "seq": 1}, {"mode": "WAIT", "pos": 1, "side": "long", "sl": 95.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2._latest_signal", return_value=None),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        self.assertIn(("SOL-USDT", "ttp_flip_entry_short"), oms.cancel_calls)
+        self.assertIn(("SOL-USDT", "ttp_flip_entry_long"), oms.cancel_calls)
+
+    def test_tp2_branch_cancels_stale_ttp_orders(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="tp2",
+            open_leg_mode="tp2",
+            open_leg_side="long",
+            open_leg_entry_bar_ts="2026-03-30T11:00:00Z",
+        )
+        broker = _LiveBroker(pos=5.0, bid=100.0, ask=100.0)
+        oms = _LiveOms()
+        oms.open_orders = {
+            "ttp_exit": {"stop_price": 99.0, "reduce_only": True},
+            "ttp_flip_entry_short": {"stop_price": 98.901, "reduce_only": False},
+            "ttp_flip_entry_long": {"stop_price": 101.101, "reduce_only": False},
+        }
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 0, "gate_trend_on": 1}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2.run_follow_tp2_state_machine", return_value=(pd.DataFrame(), pd.DataFrame([{"ts": "2026-03-30T12:00:00Z", "event": "tp2_live", "side": 1, "seq": 1}]), {"mode": "TP2", "pos": 1, "side": "long", "sl": 95.0, "tp1": 104.0, "tp2": 108.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        self.assertIn(("SOL-USDT", "ttp_exit"), oms.cancel_calls)
+        self.assertIn(("SOL-USDT", "ttp_flip_entry_short"), oms.cancel_calls)
+        self.assertIn(("SOL-USDT", "ttp_flip_entry_long"), oms.cancel_calls)
 
     def test_hold_path_still_syncs_native_kraken_stop_loss(self) -> None:
         state = ExecutorState(

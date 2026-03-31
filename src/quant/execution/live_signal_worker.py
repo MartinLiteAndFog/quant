@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
+from quant.execution.CHOPgate import get_live_gate_state
 from quant.execution.event_builders import build_signal_event
 from quant.execution.event_log import append_event_jsonl
 from quant.execution.event_types import SignalEvent
@@ -314,6 +315,18 @@ def _load_or_seed_gate(regime_store: RegimeStore, symbol: str, default_gate_on: 
     return regime_store.get_latest_state(symbol=symbol) or {"gate_on": gate_on, "regime_state": strategy_for_gate(gate_on)}
 
 
+def _resolve_live_gate(regime_store: RegimeStore, symbol: str, default_gate_on: int) -> Dict[str, Any]:
+    try:
+        gate = get_live_gate_state()
+        gate_on = int(gate.get("gate_on", default_gate_on) or 0)
+        if "regime_state" not in gate or not gate.get("regime_state"):
+            gate = dict(gate)
+            gate["regime_state"] = strategy_for_gate(gate_on)
+        return gate
+    except Exception:
+        return _load_or_seed_gate(regime_store=regime_store, symbol=symbol, default_gate_on=default_gate_on)
+
+
 def _maybe_emit_bootstrap_from_position(
     *,
     broker: KucoinFuturesBroker,
@@ -440,7 +453,7 @@ def run_once(
         )
         state.last_poll_ts = _now_utc_iso()
         return state
-    gate = _load_or_seed_gate(regime_store=regime_store, symbol=symbol, default_gate_on=default_gate_on)
+    gate = _resolve_live_gate(regime_store=regime_store, symbol=symbol, default_gate_on=default_gate_on)
     gate_on = int(gate.get("gate_on", default_gate_on))
     active_mode = strategy_for_gate(gate_on)
 
