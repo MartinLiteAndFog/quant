@@ -737,7 +737,7 @@ def _opposite_imba_supersedes_stop(
     return float(opposite_barrier) < float(base_stop)
 
 
-def _opposite_imba_flip_entry_price(
+def _ttp_flip_entry_stop_price(
     *,
     target_side: str,
     barrier_price: Optional[float],
@@ -747,7 +747,12 @@ def _opposite_imba_flip_entry_price(
         return None
 
     try:
-        offset_pct = float(os.getenv("LIVE_EXECUTOR_2_FLIP_ENTRY_OFFSET_PCT", "0.001"))
+        offset_pct = float(
+            os.getenv(
+                "LIVE_EXECUTOR_2_TTP_FLIP_ENTRY_OFFSET_PCT",
+                os.getenv("LIVE_EXECUTOR_2_FLIP_ENTRY_OFFSET_PCT", "0.001"),
+            )
+        )
     except Exception:
         offset_pct = 0.001
 
@@ -2187,52 +2192,13 @@ def run_once(
         source_ts=ttp_source_ts,
     )
 
-    def _retag_stop_order(
-        *,
-        old_kind: str,
-        new_kind: str,
-        side: str,
-        qty: float,
-        stop_price: float,
-    ) -> bool:
-        row = oms.find_stop_order_by_kind(symbol, old_kind)
-        if not row:
-            return False
-
-        cur_px = _coerce_float(row.get("stop_price", row.get("stopPrice")))
-        if cur_px is None:
-            return False
-
-        if abs(float(cur_px) - float(stop_price)) > 1e-9:
-            return False
-
-        oms.cancel_orders_by_kind(symbol, old_kind)
-        oms.arm_stop_exit(
-            symbol=symbol,
-            side=side,
-            qty=float(qty),
-            stop_price=float(stop_price),
-            kind=new_kind,
-            reduce_only=True,
-        )
-        return True
-
     if current_side == "flat":
         oms.cancel_orders_by_kind(symbol, "opposite_imba_short")
         oms.cancel_orders_by_kind(symbol, "opposite_imba_long")
+        oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_short")
+        oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_long")
         oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_short")
         oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_long")
-
-        keep_short_flip_entry = (
-            imba_short_barrier is not None and float(mid) <= float(imba_short_barrier)
-        )
-        keep_long_flip_entry = (
-            imba_long_barrier is not None and float(mid) >= float(imba_long_barrier)
-        )
-        if not keep_short_flip_entry:
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_short")
-        if not keep_long_flip_entry:
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_long")
 
         if _pending_follow_entry_is_active(state):
             pending_side = str(state.pending_follow_entry_side or "").strip().lower()
@@ -2377,22 +2343,10 @@ def run_once(
             return state
 
 
-    if state.last_live_side == "flat" and current_side == "long" and imba_short_barrier is not None:
-        _retag_stop_order(
-            old_kind="flat_entry_short",
-            new_kind="opposite_imba_short",
-            side="long",
-            qty=float(abs(pos)),
-            stop_price=float(imba_short_barrier),
-        )
-    elif state.last_live_side == "flat" and current_side == "short" and imba_long_barrier is not None:
-        _retag_stop_order(
-            old_kind="flat_entry_long",
-            new_kind="opposite_imba_long",
-            side="short",
-            qty=float(abs(pos)),
-            stop_price=float(imba_long_barrier),
-        )
+    if current_side == "long":
+        oms.cancel_orders_by_kind(symbol, "flat_entry_short")
+    elif current_side == "short":
+        oms.cancel_orders_by_kind(symbol, "flat_entry_long")
 
     def _sync_stop_order(
         *,
@@ -2485,48 +2439,6 @@ def run_once(
         )
         return True
 
-    def _sync_opposite_imba_flip_orders(*, live_qty: float) -> int:
-        changed = 0
-        if current_side == "long":
-            changed += int(_sync_stop_order(
-                kind="opposite_imba_short",
-                side="long",
-                qty=live_qty,
-                stop_price=imba_short_barrier,
-                reduce_only=True,
-            ))
-            changed += int(_sync_stop_entry_order(
-                kind="opposite_imba_flip_entry_short",
-                side="short",
-                qty=live_qty,
-                stop_price=_opposite_imba_flip_entry_price(
-                    target_side="short",
-                    barrier_price=imba_short_barrier,
-                ),
-            ))
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_long")
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_long")
-        else:
-            changed += int(_sync_stop_order(
-                kind="opposite_imba_long",
-                side="short",
-                qty=live_qty,
-                stop_price=imba_long_barrier,
-                reduce_only=True,
-            ))
-            changed += int(_sync_stop_entry_order(
-                kind="opposite_imba_flip_entry_long",
-                side="long",
-                qty=live_qty,
-                stop_price=_opposite_imba_flip_entry_price(
-                    target_side="long",
-                    barrier_price=imba_long_barrier,
-                ),
-            ))
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_short")
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_short")
-        return changed
-
     def _sync_ttp_flip_orders(*, live_qty: float, ttp_price: Optional[float]) -> int:
         changed = 0
         if current_side == "long":
@@ -2534,7 +2446,7 @@ def run_once(
                 kind="ttp_flip_entry_short",
                 side="short",
                 qty=live_qty,
-                stop_price=_opposite_imba_flip_entry_price(
+                stop_price=_ttp_flip_entry_stop_price(
                     target_side="short",
                     barrier_price=ttp_price,
                 ),
@@ -2545,12 +2457,63 @@ def run_once(
                 kind="ttp_flip_entry_long",
                 side="long",
                 qty=live_qty,
-                stop_price=_opposite_imba_flip_entry_price(
+                stop_price=_ttp_flip_entry_stop_price(
                     target_side="long",
                     barrier_price=ttp_price,
                 ),
             ))
             oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_short")
+        return changed
+
+    def _sync_opposite_imba_flip_orders(*, live_qty: float) -> int:
+        """Live opposite-IMBA bracket: exit at barrier + stop-entry for opposite side (TP2/WAIT)."""
+        changed = 0
+        if current_side == "long":
+            changed += int(
+                _sync_stop_order(
+                    kind="opposite_imba_short",
+                    side="long",
+                    qty=live_qty,
+                    stop_price=imba_short_barrier,
+                    reduce_only=True,
+                )
+            )
+            changed += int(
+                _sync_stop_entry_order(
+                    kind="opposite_imba_flip_entry_short",
+                    side="short",
+                    qty=live_qty,
+                    stop_price=_ttp_flip_entry_stop_price(
+                        target_side="short",
+                        barrier_price=imba_short_barrier,
+                    ),
+                )
+            )
+            oms.cancel_orders_by_kind(symbol, "opposite_imba_long")
+            oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_long")
+        else:
+            changed += int(
+                _sync_stop_order(
+                    kind="opposite_imba_long",
+                    side="short",
+                    qty=live_qty,
+                    stop_price=imba_long_barrier,
+                    reduce_only=True,
+                )
+            )
+            changed += int(
+                _sync_stop_entry_order(
+                    kind="opposite_imba_flip_entry_long",
+                    side="long",
+                    qty=live_qty,
+                    stop_price=_ttp_flip_entry_stop_price(
+                        target_side="long",
+                        barrier_price=imba_long_barrier,
+                    ),
+                )
+            )
+            oms.cancel_orders_by_kind(symbol, "opposite_imba_short")
+            oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_short")
         return changed
 
     leg_mode = str(state.open_leg_mode or "").strip().lower()
@@ -2599,30 +2562,36 @@ def run_once(
         if opposite_supersedes_sl:
             oms.cancel_orders_by_kind(symbol, "tp2_sl")
         else:
-            changed += int(_sync_stop_order(
-                kind="tp2_sl",
-                side=current_side,
-                qty=live_qty,
-                stop_price=sl_px,
-                reduce_only=True,
-            ))
+            changed += int(
+                _sync_stop_order(
+                    kind="tp2_sl",
+                    side=current_side,
+                    qty=live_qty,
+                    stop_price=sl_px,
+                    reduce_only=True,
+                )
+            )
         oms.cancel_orders_by_kind(symbol, "ttp_exit")
         oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_short")
         oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_long")
-        changed += int(_sync_take_profit_order(
-            kind="tp2_tp1",
-            side=current_side,
-            qty=live_qty * 0.5,
-            stop_price=tp1_px,
-            reduce_only=True,
-        ))
-        changed += int(_sync_take_profit_order(
-            kind="tp2_tp2",
-            side=current_side,
-            qty=live_qty,
-            stop_price=tp2_px,
-            reduce_only=True,
-        ))
+        changed += int(
+            _sync_take_profit_order(
+                kind="tp2_tp1",
+                side=current_side,
+                qty=live_qty * 0.5,
+                stop_price=tp1_px,
+                reduce_only=True,
+            )
+        )
+        changed += int(
+            _sync_take_profit_order(
+                kind="tp2_tp2",
+                side=current_side,
+                qty=live_qty,
+                stop_price=tp2_px,
+                reduce_only=True,
+            )
+        )
 
         changed += _sync_opposite_imba_flip_orders(live_qty=live_qty)
 
@@ -2660,13 +2629,15 @@ def run_once(
         if opposite_supersedes_sl:
             oms.cancel_orders_by_kind(symbol, "wait_sl")
         else:
-            changed += int(_sync_stop_order(
-                kind="wait_sl",
-                side=current_side,
-                qty=live_qty,
-                stop_price=sl_px,
-                reduce_only=True,
-            ))
+            changed += int(
+                _sync_stop_order(
+                    kind="wait_sl",
+                    side=current_side,
+                    qty=live_qty,
+                    stop_price=sl_px,
+                    reduce_only=True,
+                )
+            )
 
         oms.cancel_orders_by_kind(symbol, "tp2_sl")
         oms.cancel_orders_by_kind(symbol, "tp2_tp1")
@@ -3061,22 +3032,10 @@ def run_once(
                     force=True,
                 )
 
-                if want_side == "long" and imba_short_barrier is not None:
-                    _retag_stop_order(
-                        old_kind="flat_entry_short",
-                        new_kind="opposite_imba_short",
-                        side="long",
-                        qty=float(qty),
-                        stop_price=float(imba_short_barrier),
-                    )
-                elif want_side == "short" and imba_long_barrier is not None:
-                    _retag_stop_order(
-                        old_kind="flat_entry_long",
-                        new_kind="opposite_imba_long",
-                        side="short",
-                        qty=float(qty),
-                        stop_price=float(imba_long_barrier),
-                    )
+                if want_side == "long":
+                    oms.cancel_orders_by_kind(symbol, "flat_entry_short")
+                elif want_side == "short":
+                    oms.cancel_orders_by_kind(symbol, "flat_entry_long")
 
         elif action.startswith("flip_to_") and want_side is not None:
             flat_res, pos_after_flat = _kraken_strict_flatten_for_flip(

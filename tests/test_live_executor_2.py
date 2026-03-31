@@ -663,7 +663,7 @@ class LiveExecutor2TtpTests(unittest.TestCase):
         self.assertIn(("SOL-USDT", "opposite_imba_flip_entry_short"), oms.cancel_calls)
         self.assertIn(("SOL-USDT", "opposite_imba_flip_entry_long"), oms.cancel_calls)
 
-    def test_retagged_opposite_imba_stop_is_replaced_with_reduce_only_exit(self) -> None:
+    def test_long_position_cancels_sibling_flat_entry_short_and_syncs_opposite_imba_bracket(self) -> None:
         state = ExecutorState(
             latched_exit_engine="flip",
             open_leg_mode="tp2",
