@@ -110,6 +110,8 @@ async def _lifespan(a: FastAPI):
     t.start()
     log.info("state space refresh thread started (interval=%ss)", os.getenv("DASHBOARD_SS_REFRESH_SEC", "300"))
     _start_renko_cache_updater_if_enabled()
+    from quant.execution.tv_signal_executor import start_tv_executor
+    start_tv_executor()
     yield
 
 
@@ -2645,6 +2647,48 @@ async def tradingview_webhook(
     _append_jsonl(out_path, enriched)
     log.info(f"webhook saved symbol={sym} file={out_path}")
     return {"ok": True, "saved_to": str(out_path), "symbol": sym}
+
+
+@app.post("/webhook/tv-execute")
+async def tv_execute_webhook(
+    request: Request,
+    x_webhook_token: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json")
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+    # Auth: accept token from header OR body
+    body_token = payload.get("token") if isinstance(payload, dict) else None
+    effective_token = x_webhook_token or body_token
+    if _auth_required():
+        _check_token(effective_token)
+
+    from quant.execution.tv_signal_executor import (
+        parse_tv_signal,
+        execute_tv_signal,
+        TVExecConfig,
+        _ready as tv_ready,
+    )
+
+    if not tv_ready.is_set():
+        raise HTTPException(status_code=503, detail="tv_executor not ready")
+
+    try:
+        config = TVExecConfig.from_env()
+        signal = parse_tv_signal(payload, default_symbol=config.symbol)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, execute_tv_signal, signal, config)
+
+    return result
 
 
 if (_SPA_DIR / "assets").is_dir():
