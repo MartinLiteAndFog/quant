@@ -616,194 +616,218 @@ def _sync_protective_stop_from_terminal(
 # Pure state machine logic
 # ---------------------------------------------------------------------------
 
-def run_once_logic(
+def run_once(
+    client: KrakenFuturesClient,
     state: BotState,
-    gate_on: int,
-    signal: int,
-    signal_ts: str,
-    mark: float,
-    swing_low: float,
-    swing_high: float,
-    target_size: float,
+    gate_url: str,
+    signal_url: str,
+    renko_url: str,
+    equity_pct: float,
+    leverage: float,
+    dry_run: bool,
     flip_p: FlipParams,
     tp2_p: TP2Params,
-) -> Tuple[BotState, List[Dict[str, Any]]]:
-    """Pure state-machine tick: returns (new_state, actions) with no side effects."""
-    ns = BotState(**asdict(state))
-    actions: List[Dict[str, Any]] = []
+    metrics_path: Path,
+    equity_path: Path,
+    state_path: Path,
+    symbol: str = "SOL-USDT",
+) -> BotState:
+    gate = fetch_gate(gate_url, symbol=symbol)
+    sig = fetch_signal(signal_url, symbol=symbol)
+    mark = client.get_mark_price()
+    eq = client.get_account_equity()
+    equity_usd = float(eq.get("equity_usd", 0.0) or 0.0)
 
-    engine = "flip" if gate_on == 1 else "tp2"
-    ns.engine = engine
+    venue_pos_raw = client.get_position()
+    current_venue_side, current_venue_size = _normalize_venue_position(venue_pos_raw)
+
+    target_size = compute_target_size(equity_usd, mark, leverage, equity_pct)
+
+    renko = fetch_renko(renko_url, flip_p.swing_lookback, symbol=symbol)
+    swing_low = float(renko.get("swing_low", 0.0) or 0.0)
+    swing_high = float(renko.get("swing_high", 0.0) or 0.0)
 
     if signal_ts and signal_ts == state.last_signal_ts:
-        signal = 0
+        signal_value = 0
 
-    if gate_on != int(state.gate_on) and int(state.pos_side) != 0:
-        actions.append({"action": "close_all", "reason": "regime_exit"})
-        ns.pos_side = 0
-        ns.entry_px = 0.0
-        ns.best_fav = 0.0
-        ns.size_full = 0.0
-        ns.size_rem = 0.0
-        ns.tp1_done = False
-        ns.mode = "FLAT"
-        ns.gate_on = gate_on
-        return ns, actions
+    state = reconcile_state_with_venue(
+        state=state,
+        venue_pos_raw=venue_pos_raw,
+        gate_on=gate_on,
+        mark=mark,
+    )
 
-    ns.gate_on = gate_on
-    ps = int(state.pos_side)
-    entry = float(state.entry_px or 0.0)
-    best_fav = float(state.best_fav or 0.0)
+    old_state = BotState(**asdict(state))
+    new_state, actions = run_once_logic(
+        state=state,
+        gate_on=gate_on,
+        signal=signal_value,
+        signal_ts=signal_ts,
+        mark=float(mark),
+        swing_low=swing_low,
+        swing_high=swing_high,
+        target_size=float(target_size),
+        flip_p=flip_p,
+        tp2_p=tp2_p,
+    )
 
-    if ps != 0 and entry > 0 and best_fav > 0:
-        if ps > 0:
-            ns.best_fav = max(best_fav, mark)
-        else:
-            ns.best_fav = min(best_fav, mark)
-        best_fav = float(ns.best_fav)
+    preview_pos = int(current_venue_side)
+    preview_mode_before = str(old_state.mode)
+    preview_mode_after = str(new_state.mode)
 
-    if ps != 0 and signal != 0 and signal != ps:
-        actions.append({"action": "close_all", "reason": "signal_flip"})
+    for idx, a in enumerate(actions, start=1):
+        new_state.event_seq += 1
+        act = str(a.get("action", "") or "unknown")
+        reason_code = str(a.get("reason", "") or "bot_action_missing_reason")
 
-        do_flip = True
-        if engine == "tp2" and not tp2_p.flip_on_opposite:
-            do_flip = False
+        if act == "close_all":
+            pos_before = int(preview_pos)
+            pos_after = 0
+            side = "sell" if pos_before > 0 else "buy" if pos_before < 0 else ""
+            _append_action_event(
+                strategy="kraken_bot",
+                symbol=symbol,
+                ts_iso=_now_iso(),
+                seq=int(new_state.event_seq),
+                engine_action="close_all",
+                action_side=side,
+                reason_code=reason_code,
+                position_before=pos_before,
+                position_after=pos_after,
+                engine_mode_before=preview_mode_before,
+                engine_mode_after=preview_mode_after,
+                source_signal_ts=signal_ts,
+                payload_json={"signal": signal_value, "gate_on": gate_on, "mark": mark, **a},
+            )
+            preview_pos = 0
 
-        if do_flip:
-            side_str = "long" if signal > 0 else "short"
-            order_side = "buy" if signal > 0 else "sell"
-            actions.append({"action": f"enter_{side_str}", "side": order_side, "size": target_size, "reason": "signal_flip"})
-            ns.pos_side = 1 if signal > 0 else -1
-            ns.entry_px = mark
-            ns.best_fav = mark
-            ns.size_full = target_size
-            ns.size_rem = target_size
-            ns.tp1_done = False
-            ns.mode = "FLIP_TTP" if engine == "flip" else "TP2_OPEN"
-        else:
-            ns.pos_side = 0
-            ns.entry_px = 0.0
-            ns.best_fav = 0.0
-            ns.size_full = 0.0
-            ns.size_rem = 0.0
-            ns.tp1_done = False
-            ns.mode = "FLAT"
-        return ns, actions
+        elif act in ("enter_long", "enter_short"):
+            pos_before = int(preview_pos)
+            pos_after = 1 if act == "enter_long" else -1
+            side = "buy" if pos_after > 0 else "sell"
+            _append_action_event(
+                strategy="kraken_bot",
+                symbol=symbol,
+                ts_iso=_now_iso(),
+                seq=int(new_state.event_seq),
+                engine_action=act,
+                action_side=side,
+                reason_code=reason_code,
+                position_before=pos_before,
+                position_after=pos_after,
+                engine_mode_before=preview_mode_before,
+                engine_mode_after=preview_mode_after,
+                source_signal_ts=signal_ts,
+                payload_json={"signal": signal_value, "gate_on": gate_on, "mark": mark, **a},
+            )
+            preview_pos = pos_after
 
-    if ps != 0 and signal == ps:
-        if state.mode == "FLIP_WAIT":
-            ns.mode = "FLIP_TTP"
-            ns.best_fav = mark
-            return ns, actions
+        elif act == "close_partial":
+            pos_before = int(preview_pos)
+            pos_after = int(preview_pos)
+            side = str(a.get("close_side", "") or "")
+            _append_action_event(
+                strategy="kraken_bot",
+                symbol=symbol,
+                ts_iso=_now_iso(),
+                seq=int(new_state.event_seq),
+                engine_action="close_partial",
+                action_side=side,
+                reason_code=reason_code,
+                position_before=pos_before,
+                position_after=pos_after,
+                engine_mode_before=preview_mode_before,
+                engine_mode_after=preview_mode_after,
+                source_signal_ts=signal_ts,
+                payload_json={"signal": signal_value, "gate_on": gate_on, "mark": mark, **a},
+            )
 
-    if state.mode == "FLIP_TTP" and ps != 0 and entry > 0:
-        ttp_stop = best_fav * (1.0 - flip_p.ttp_trail_pct) if ps > 0 else best_fav * (1.0 + flip_p.ttp_trail_pct)
-        if (ps > 0 and mark <= ttp_stop) or (ps < 0 and mark >= ttp_stop):
-            actions.append({"action": "close_all", "reason": "ttp_flip"})
-            new_side = -ps
-            side_str = "long" if new_side > 0 else "short"
-            order_side = "buy" if new_side > 0 else "sell"
-            actions.append({"action": f"enter_{side_str}", "side": order_side, "size": target_size, "reason": "ttp_flip"})
-            ns.pos_side = new_side
-            ns.entry_px = mark
-            ns.best_fav = mark
-            ns.size_full = target_size
-            ns.size_rem = target_size
-            ns.tp1_done = False
-            ns.mode = "FLIP_WAIT"
-            return ns, actions
+    if actions:
+        exec_res = execute_actions(
+            client=client,
+            actions=actions,
+            dry_run=dry_run,
+            state=new_state,
+        )
+        if isinstance(exec_res, list):
+            for item in exec_res:
+                if not isinstance(item, dict):
+                    continue
+                new_state.event_seq += 1
+                _append_execution_event(
+                    strategy="kraken_bot",
+                    symbol=symbol,
+                    ts_iso=_now_iso(),
+                    seq=int(new_state.event_seq),
+                    execution_kind=str(item.get("execution_kind", "fill") or "fill"),
+                    order_action=str(item.get("order_action", "") or ""),
+                    reason_code=str(item.get("reason_code", "kraken_exec") or "kraken_exec"),
+                    position_before=int(item.get("position_before", current_venue_side) or 0),
+                    position_after=int(item.get("position_after", current_venue_side) or 0),
+                    source_signal_ts=signal_ts,
+                )
 
-    if state.mode == "FLIP_WAIT" and ps != 0 and entry > 0:
-        sl_px = compute_swing_sl(ps, entry, swing_low, swing_high, flip_p.min_sl_pct, flip_p.max_sl_pct)
-        if (ps > 0 and mark <= sl_px) or (ps < 0 and mark >= sl_px):
-            actions.append({"action": "close_all", "reason": "swing_sl"})
-            ns.pos_side = 0
-            ns.entry_px = 0.0
-            ns.best_fav = 0.0
-            ns.size_full = 0.0
-            ns.size_rem = 0.0
-            ns.tp1_done = False
-            ns.mode = "FLAT"
-            return ns, actions
+    stop_res = _sync_protective_stop(
+        client=client,
+        state=new_state,
+        renko=renko,
+        flip_p=flip_p,
+        tp2_p=tp2_p,
+        dry_run=dry_run,
+    )
 
-    if state.mode == "TP2_OPEN" and ps != 0 and entry > 0:
-        tp2_px = entry * (1.0 + tp2_p.tp2_pct) if ps > 0 else entry * (1.0 - tp2_p.tp2_pct)
-        tp1_px = entry * (1.0 + tp2_p.tp1_pct) if ps > 0 else entry * (1.0 - tp2_p.tp1_pct)
+    _append_equity(equity_path, ts=_now_iso(), equity_usd=equity_usd)
+    try:
+        insert_equity_snapshot(
+            {
+                "ts": _now_iso(),
+                "strategy": "kraken_bot",
+                "symbol": symbol,
+                "venue": "kraken",
+                "equity": float(equity_usd),
+                "cash": None,
+                "position_qty": float(new_state.size_rem or 0.0),
+                "position_side": int(new_state.pos_side),
+                "payload_json": {
+                    "mark": float(mark),
+                    "gate_on": int(gate_on),
+                    "signal": int(signal_value),
+                    "signal_ts": signal_ts,
+                    "stop_sync": stop_res,
+                },
+            }
+        )
+    except Exception as e:
+        log.warning("kraken postgres equity snapshot failed: %s", e)
 
-        if (ps > 0 and mark >= tp2_px) or (ps < 0 and mark <= tp2_px):
-            actions.append({"action": "close_all", "reason": "tp2_exit"})
-            ns.pos_side = 0
-            ns.entry_px = 0.0
-            ns.best_fav = 0.0
-            ns.size_full = 0.0
-            ns.size_rem = 0.0
-            ns.tp1_done = False
-            ns.mode = "FLAT"
-            return ns, actions
+    _publish_metrics(
+        metrics_path,
+        {
+            "ts": _now_iso(),
+            "symbol": symbol,
+            "gate_on": gate_on,
+            "signal": signal_value,
+            "signal_ts": signal_ts,
+            "mark": float(mark),
+            "equity_usd": float(equity_usd),
+            "target_size": float(target_size),
+            "venue_side": int(current_venue_side),
+            "venue_size": float(current_venue_size),
+            "state_mode_before": old_state.mode,
+            "state_mode_after": new_state.mode,
+            "state_pos_after": int(new_state.pos_side),
+            "actions": actions,
+            "stop_sync": stop_res,
+        },
+    )
 
-        if not state.tp1_done and (ps > 0 and mark >= tp1_px) or (ps < 0 and mark <= tp1_px):
-            close_qty = float(state.size_full) * tp2_p.tp1_frac
-            close_side = "sell" if ps > 0 else "buy"
-            actions.append({"action": "close_partial", "close_side": close_side, "size": close_qty, "reason": "tp1_exit"})
-            ns.tp1_done = True
-            ns.size_rem = float(state.size_full) - close_qty
-            ns.mode = "TP2_BE"
-            return ns, actions
+    if signal_ts and int(sig.get("signal", 0) or 0) != 0:
+        new_state.last_signal_ts = signal_ts
+        new_state.last_signal_value = int(sig.get("signal", 0) or 0)
 
-        sl_px = compute_swing_sl(ps, entry, swing_low, swing_high, tp2_p.min_sl_pct, tp2_p.max_sl_pct)
-        if (ps > 0 and mark <= sl_px) or (ps < 0 and mark >= sl_px):
-            actions.append({"action": "close_all", "reason": "swing_sl"})
-            ns.pos_side = 0
-            ns.entry_px = 0.0
-            ns.best_fav = 0.0
-            ns.size_full = 0.0
-            ns.size_rem = 0.0
-            ns.tp1_done = False
-            ns.mode = "FLAT"
-            return ns, actions
+    save_state(new_state, state_path)
 
-    if state.mode == "TP2_BE" and ps != 0 and entry > 0:
-        tp2_px = entry * (1.0 + tp2_p.tp2_pct) if ps > 0 else entry * (1.0 - tp2_p.tp2_pct)
-
-        if (ps > 0 and mark >= tp2_px) or (ps < 0 and mark <= tp2_px):
-            actions.append({"action": "close_all", "reason": "tp2_exit"})
-            ns.pos_side = 0
-            ns.entry_px = 0.0
-            ns.best_fav = 0.0
-            ns.size_full = 0.0
-            ns.size_rem = 0.0
-            ns.tp1_done = False
-            ns.mode = "FLAT"
-            return ns, actions
-
-        if (ps > 0 and mark <= entry) or (ps < 0 and mark >= entry):
-            actions.append({"action": "close_all", "reason": "be_exit"})
-            ns.pos_side = 0
-            ns.entry_px = 0.0
-            ns.best_fav = 0.0
-            ns.size_full = 0.0
-            ns.size_rem = 0.0
-            ns.tp1_done = False
-            ns.mode = "FLAT"
-            return ns, actions
-
-    if ps == 0 and signal != 0:
-        side_str = "long" if signal > 0 else "short"
-        order_side = "buy" if signal > 0 else "sell"
-        actions.append({"action": f"enter_{side_str}", "side": order_side, "size": target_size, "reason": "signal_entry"})
-        ns.pos_side = 1 if signal > 0 else -1
-        ns.entry_px = mark
-        ns.best_fav = mark
-        ns.size_full = target_size
-        ns.size_rem = target_size
-        ns.tp1_done = False
-        ns.mode = "FLIP_TTP" if engine == "flip" else "TP2_OPEN"
-        return ns, actions
-
-    if ps == 0:
-        ns.mode = "FLAT"
-
-    return ns, actions
+    return new_state
 
 
 # ---------------------------------------------------------------------------
