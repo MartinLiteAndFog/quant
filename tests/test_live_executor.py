@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -49,8 +50,15 @@ class _DummyOms:
         self.enter_calls.append((symbol, side, float(qty)))
         return _Res(True)
 
+    def enter_market(self, symbol: str, side: str, qty: float):
+        return self.enter(symbol, side, qty)
+
     def exit_tp_or_flip(self, symbol: str, side: str, qty: float, flip_to: str | None = None):
         self.flip_calls.append((symbol, side, float(qty), flip_to))
+        return _Res(True)
+
+    def flatten_market(self, symbol: str, side: str, qty: float):
+        self.flip_calls.append((symbol, side, float(qty), None))
         return _Res(True)
 
     def exit_sl(self, symbol: str, side: str, qty: float):
@@ -311,6 +319,29 @@ class LiveExecutorTests(unittest.TestCase):
         self.assertEqual(len(oms2.enter_calls), 0, "No enter calls on idempotent hold")
         self.assertEqual(len(oms2.flip_calls), 0, "No flip calls on idempotent hold")
         self.assertEqual(len(oms2.exit_calls), 0, "No exit calls on idempotent hold")
+
+    @patch("quant.execution.live_executor._read_live_gate_from_redis", side_effect=AssertionError("redis bypass should not be used"))
+    @patch(
+        "quant.execution.live_executor.get_live_gate_state",
+        return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0, "source": "forced_countertrend"},
+    )
+    def test_run_once_uses_canonical_gate_provider(self, mock_gate, mock_redis) -> None:
+        broker = _DummyBroker(pos=0.0, bid=84.9, ask=85.1)
+        oms = _DummyOms()
+
+        st = run_once(
+            broker=broker,
+            oms=oms,
+            symbol="SOL-USDT",
+            signals_root=self.signals_root,
+            state=ExecutorState(),
+            live_enabled=True,
+            dry_run=True,
+            leverage=1.0,
+        )
+
+        self.assertEqual(st.last_action, "enter_short")
+        mock_gate.assert_called_once()
 
     def test_apply_live_ttp_guard_short_does_not_loosen(self) -> None:
         terminal = {"side": "short", "mode": "TTP", "ttp": 83.50}

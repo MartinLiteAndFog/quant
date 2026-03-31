@@ -2,6 +2,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 
@@ -39,92 +40,96 @@ class TestDailyCsvLiveGate(unittest.TestCase):
             if k.startswith("LIVE_GATE_"):
                 del os.environ[k]
 
-    def test_reads_latest_applicable_daily_csv_rows(self):
-        pd.DataFrame(
-            {
-                "ts": [_daily_ts(2), _daily_ts(0)],
-                "gate_on_2of3": [0, 1],
-            }
-        ).to_csv(self.on_csv, index=False)
-        pd.DataFrame(
-            {
-                "ts": [_daily_ts(2), _daily_ts(0)],
-                "gate_off_2of3": [1, 0],
-            }
-        ).to_csv(self.off_csv, index=False)
-        os.environ["LIVE_GATE_PRIMARY"] = "on"
+    @patch("quant.execution.CHOPgate._read_live_gate_from_redis")
+    @patch("quant.execution.CHOPgate.load_latest_daily_gate_from_postgres")
+    def test_prefers_postgres_daily_gate_history_over_redis(self, mock_pg, mock_redis):
+        mock_pg.return_value = {
+            "ts": _daily_ts(0),
+            "gate_on": 1,
+            "gate_off": 0,
+            "source": "postgres_daily_gate",
+            "primary": "on",
+            "gate_countertrend_on": 1,
+            "gate_trend_on": 0,
+            "gate_on_ts": _daily_ts(0),
+            "gate_off_ts": _daily_ts(0),
+            "gate_on_age_sec": 10.0,
+            "gate_off_age_sec": 10.0,
+        }
+        mock_redis.return_value = {
+            "ts": _daily_ts(0),
+            "gate_on": 0,
+            "gate_off": 1,
+            "source": "redis",
+            "gate_countertrend_on": 0,
+            "gate_trend_on": 1,
+        }
 
         result = get_live_gate_state()
 
-        self.assertEqual(result["source"], "daily_csv")
+        self.assertEqual(result["source"], "postgres_daily_gate")
         self.assertEqual(result["gate_countertrend_on"], 1)
         self.assertEqual(result["gate_trend_on"], 0)
-        self.assertEqual(result["gate_on"], 1)
-        self.assertEqual(result["gate_off"], 0)
+        mock_pg.assert_called_once()
+        mock_redis.assert_not_called()
 
-    def test_ignores_future_daily_rows(self):
-        future_ts = (pd.Timestamp.now("UTC").normalize() + pd.Timedelta(days=1)).strftime("%Y-%m-%dT00:00:00Z")
-        pd.DataFrame(
-            {
-                "ts": [_daily_ts(1), future_ts],
-                "gate_on_2of3": [1, 0],
-            }
-        ).to_csv(self.on_csv, index=False)
-        pd.DataFrame(
-            {
-                "ts": [_daily_ts(1), future_ts],
-                "gate_off_2of3": [0, 1],
-            }
-        ).to_csv(self.off_csv, index=False)
-        os.environ["LIVE_GATE_PRIMARY"] = "on"
-
-        result = get_live_gate_state()
-
-        self.assertEqual(result["gate_countertrend_on"], 1)
-        self.assertEqual(result["gate_trend_on"], 0)
-        self.assertEqual(result["ts"], _daily_ts(1))
-
-    def test_primary_off_uses_off_gate_column(self):
-        pd.DataFrame({"ts": [_daily_ts(0)], "gate_on_2of3": [0]}).to_csv(self.on_csv, index=False)
-        pd.DataFrame({"ts": [_daily_ts(0)], "gate_off_2of3": [1]}).to_csv(self.off_csv, index=False)
+    @patch("quant.execution.CHOPgate._read_live_gate_from_redis", return_value=None)
+    @patch("quant.execution.CHOPgate.load_latest_daily_gate_from_postgres")
+    def test_primary_off_uses_postgres_trend_gate(self, mock_pg, mock_redis):
+        mock_pg.return_value = {
+            "ts": _daily_ts(0),
+            "gate_on": 1,
+            "gate_off": 0,
+            "source": "postgres_daily_gate",
+            "primary": "off",
+            "gate_countertrend_on": 0,
+            "gate_trend_on": 1,
+            "gate_on_ts": _daily_ts(0),
+            "gate_off_ts": _daily_ts(0),
+            "gate_on_age_sec": 10.0,
+            "gate_off_age_sec": 10.0,
+        }
 
         result = get_live_gate_state()
 
+        self.assertEqual(result["source"], "postgres_daily_gate")
         self.assertEqual(result["gate_countertrend_on"], 0)
         self.assertEqual(result["gate_trend_on"], 1)
         self.assertEqual(result["gate_on"], 1)
         self.assertEqual(result["gate_off"], 0)
 
-    def test_missing_daily_csv_defaults_safe_off(self):
-        result = get_live_gate_state()
-
-        self.assertEqual(result["gate_on"], 0)
-        self.assertEqual(result["gate_off"], 1)
-        self.assertEqual(result["source"], "default_off")
-        self.assertIn("error", result)
-
-    def test_missing_daily_csv_does_not_fall_back_to_renko_gate(self):
-        renko_path = Path(self.tmp.name) / "renko_latest.parquet"
-        ts = pd.date_range(end=pd.Timestamp.now("UTC").floor("min"), periods=220, freq="5min", tz="UTC")
-        close = pd.Series(range(len(ts)), dtype=float) + 100.0
-        renko = pd.DataFrame(
-            {
-                "ts": ts,
-                "open": close,
-                "high": close + 0.5,
-                "low": close - 0.5,
-                "close": close + 0.25,
-            }
-        )
-        renko.to_parquet(renko_path, index=False)
-        os.environ["LIVE_RENKO_PATH"] = str(renko_path)
+    @patch("quant.execution.CHOPgate._read_live_gate_from_redis")
+    @patch("quant.execution.CHOPgate.load_latest_daily_gate_from_postgres", return_value=None)
+    def test_uses_redis_when_postgres_missing(self, mock_pg, mock_redis):
+        mock_redis.return_value = {
+            "ts": _daily_ts(0),
+            "gate_on": 0,
+            "gate_off": 1,
+            "source": "redis",
+            "gate_countertrend_on": 0,
+            "gate_trend_on": 1,
+        }
 
         result = get_live_gate_state()
 
-        self.assertEqual(result["source"], "default_off")
-        self.assertEqual(result["gate_on"], 0)
-        self.assertEqual(result["gate_off"], 1)
-        self.assertIn("daily_csv_error", result)
+        self.assertEqual(result["source"], "redis")
+        self.assertEqual(result["gate_countertrend_on"], 0)
+        self.assertEqual(result["gate_trend_on"], 1)
+        mock_pg.assert_called_once()
+        mock_redis.assert_called_once()
+
+    @patch("quant.execution.CHOPgate._read_live_gate_from_redis", return_value=None)
+    @patch("quant.execution.CHOPgate.load_latest_daily_gate_from_postgres", return_value=None)
+    def test_missing_postgres_and_redis_forces_countertrend_fallback(self, mock_pg, mock_redis):
+        result = get_live_gate_state()
+
+        self.assertEqual(result["source"], "forced_countertrend")
+        self.assertEqual(result["gate_on"], 1)
+        self.assertEqual(result["gate_off"], 0)
+        self.assertEqual(result["gate_countertrend_on"], 1)
+        self.assertEqual(result["gate_trend_on"], 0)
+        mock_pg.assert_called_once()
+        mock_redis.assert_called_once()
 
 
 if __name__ == "__main__":

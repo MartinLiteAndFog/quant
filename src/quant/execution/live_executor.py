@@ -1031,9 +1031,7 @@ def run_once(
     renko_bars = _load_renko_bars(_renko_path(), limit=int(os.getenv("LIVE_RENKO_LIMIT", "4000")))
     signals_df = _load_signals_df(signals_root, symbol)
 
-    gate = _read_live_gate_from_redis(symbol)
-    if not gate:
-        gate = get_live_gate_state()
+    gate = get_live_gate_state()
 
     gate_countertrend_on = int(gate.get("gate_countertrend_on", 0) or 0)
     gate_trend_on = int(gate.get("gate_trend_on", 0) or 0)

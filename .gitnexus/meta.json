@@ -1,13 +1,13 @@
 {
   "repoPath": "/Users/martinpeter/Desktop/quant-main",
-  "lastCommit": "5cf1e3a19640d88dc4d764dbd7c1486943831cfb",
-  "indexedAt": "2026-03-30T10:10:23.696Z",
+  "lastCommit": "07a6770e754885f06484cb88826a33f37a54d238",
+  "indexedAt": "2026-03-31T12:17:39.736Z",
   "stats": {
-    "files": 352,
-    "nodes": 2230,
-    "edges": 6218,
-    "communities": 155,
-    "processes": 171,
+    "files": 359,
+    "nodes": 2307,
+    "edges": 6425,
+    "communities": 164,
+    "processes": 177,
     "embeddings": 0
   }
 }

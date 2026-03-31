@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Dict, Iterator, Optional
 
+import pandas as pd
 import psycopg
 
 
@@ -45,6 +46,60 @@ def _to_jsonable(v: Any) -> Any:
 
 def _payload(v: Optional[Dict[str, Any]]) -> str:
     return json.dumps(_to_jsonable(v or {}), ensure_ascii=False, separators=(",", ":"))
+
+
+def _normalize_symbol_token(symbol: str) -> str:
+    return "".join(ch for ch in str(symbol or "").upper() if ch.isalnum())
+
+
+def ensure_daily_gate_history_schema() -> None:
+    sql = """
+    create table if not exists daily_gate_history (
+      id bigserial primary key,
+      ts timestamptz not null,
+      symbol text not null,
+      gate_on smallint not null check (gate_on in (0, 1)),
+      gate_off smallint not null check (gate_off in (0, 1)),
+      gate_countertrend_on smallint not null check (gate_countertrend_on in (0, 1)),
+      gate_trend_on smallint not null check (gate_trend_on in (0, 1)),
+      source text,
+      payload_json jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now()
+    );
+    create unique index if not exists uq_daily_gate_history_symbol_ts
+    on daily_gate_history (symbol, ts);
+    create index if not exists idx_daily_gate_history_symbol_ts
+    on daily_gate_history (symbol, ts desc);
+    create index if not exists idx_daily_gate_history_ts
+    on daily_gate_history (ts desc);
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql)
+
+
+def ensure_live_renko_bricks_schema() -> None:
+    sql = """
+    create table if not exists live_renko_bricks (
+      id bigserial primary key,
+      ts timestamptz not null,
+      symbol text not null,
+      open numeric not null,
+      high numeric not null,
+      low numeric not null,
+      close numeric not null,
+      source text,
+      payload_json jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now()
+    );
+    create unique index if not exists uq_live_renko_bricks_symbol_ts
+    on live_renko_bricks (symbol, ts);
+    create index if not exists idx_live_renko_bricks_symbol_ts
+    on live_renko_bricks (symbol, ts desc);
+    create index if not exists idx_live_renko_bricks_ts
+    on live_renko_bricks (ts desc);
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql)
 
 
 def insert_signal_event(row: Dict[str, Any]) -> None:
@@ -176,3 +231,182 @@ def upsert_closed_trade(row: Dict[str, Any]) -> None:
     data["payload_json"] = _payload(data.get("payload_json"))
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, data)
+
+
+def upsert_daily_gate_history(row: Dict[str, Any]) -> None:
+    ensure_daily_gate_history_schema()
+    sql = """
+    insert into daily_gate_history (
+      ts, symbol, gate_on, gate_off, gate_countertrend_on, gate_trend_on, source, payload_json
+    ) values (
+      %(ts)s, %(symbol)s, %(gate_on)s, %(gate_off)s, %(gate_countertrend_on)s, %(gate_trend_on)s, %(source)s, %(payload_json)s::jsonb
+    )
+    on conflict (symbol, ts) do update set
+      gate_on = excluded.gate_on,
+      gate_off = excluded.gate_off,
+      gate_countertrend_on = excluded.gate_countertrend_on,
+      gate_trend_on = excluded.gate_trend_on,
+      source = excluded.source,
+      payload_json = excluded.payload_json
+    """
+    data = dict(row)
+    data["payload_json"] = _payload(data.get("payload_json"))
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, data)
+
+
+def load_latest_daily_gate_from_postgres(
+    *,
+    symbol: str,
+    now_ts: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    ensure_daily_gate_history_schema()
+    sql = """
+    select
+      ts,
+      symbol,
+      gate_on,
+      gate_off,
+      gate_countertrend_on,
+      gate_trend_on,
+      source,
+      payload_json
+    from daily_gate_history
+    where replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
+      and (%(now_ts)s::timestamptz is null or ts <= %(now_ts)s::timestamptz)
+    order by ts desc
+    limit 1
+    """
+    params = {
+        "symbol_norm": _normalize_symbol_token(symbol),
+        "now_ts": now_ts,
+    }
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        row = cur.fetchone()
+    if not row:
+        return None
+    ts, out_symbol, gate_on, gate_off, gate_countertrend_on, gate_trend_on, source, payload_json = row
+    payload = payload_json if isinstance(payload_json, dict) else {}
+    return {
+        "ts": ts,
+        "symbol": out_symbol,
+        "gate_on": int(gate_on),
+        "gate_off": int(gate_off),
+        "gate_countertrend_on": int(gate_countertrend_on),
+        "gate_trend_on": int(gate_trend_on),
+        "source": str(source or "postgres_daily_gate"),
+        "payload_json": payload,
+    }
+
+
+def upsert_live_renko_bricks(
+    *,
+    symbol: str,
+    renko: pd.DataFrame,
+    source: Optional[str] = None,
+    payload_json: Optional[Dict[str, Any]] = None,
+) -> int:
+    ensure_live_renko_bricks_schema()
+    if renko is None or renko.empty:
+        return 0
+    work = renko.copy()
+    need = {"ts", "open", "high", "low", "close"}
+    missing = need - set(work.columns)
+    if missing:
+        raise ValueError(f"missing_renko_columns:{sorted(missing)}")
+    work["ts"] = pd.to_datetime(work["ts"], utc=True, errors="coerce")
+    for col in ("open", "high", "low", "close"):
+        work[col] = pd.to_numeric(work[col], errors="coerce")
+    work = work.dropna(subset=["ts", "open", "high", "low", "close"]).sort_values("ts").drop_duplicates(subset=["ts"], keep="last")
+    if work.empty:
+        return 0
+    sql = """
+    insert into live_renko_bricks (
+      ts, symbol, open, high, low, close, source, payload_json
+    ) values (
+      %(ts)s, %(symbol)s, %(open)s, %(high)s, %(low)s, %(close)s, %(source)s, %(payload_json)s::jsonb
+    )
+    on conflict (symbol, ts) do update set
+      open = excluded.open,
+      high = excluded.high,
+      low = excluded.low,
+      close = excluded.close,
+      source = excluded.source,
+      payload_json = excluded.payload_json
+    """
+    rows = []
+    payload = _payload(payload_json)
+    for row in work.to_dict("records"):
+        rows.append(
+            {
+                "ts": row["ts"],
+                "symbol": str(symbol),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "source": source,
+                "payload_json": payload,
+            }
+        )
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.executemany(sql, rows)
+    return len(rows)
+
+
+def load_live_renko_bricks_from_postgres(
+    *,
+    symbol: str,
+    start_ts: Optional[str] = None,
+    end_ts: Optional[str] = None,
+    limit: Optional[int] = None,
+) -> pd.DataFrame:
+    ensure_live_renko_bricks_schema()
+    sql = """
+    select ts, open, high, low, close
+    from live_renko_bricks
+    where replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
+      and (%(start_ts)s::timestamptz is null or ts >= %(start_ts)s::timestamptz)
+      and (%(end_ts)s::timestamptz is null or ts <= %(end_ts)s::timestamptz)
+    order by ts desc
+    """
+    if limit is not None:
+        sql += " limit %(limit)s"
+    params = {
+        "symbol_norm": _normalize_symbol_token(symbol),
+        "start_ts": start_ts,
+        "end_ts": end_ts,
+    }
+    if limit is not None:
+        params["limit"] = int(limit)
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    if not rows:
+        return pd.DataFrame(columns=["ts", "open", "high", "low", "close"])
+    df = pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close"])
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    for col in ("open", "high", "low", "close"):
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    return df.dropna(subset=["ts", "open", "high", "low", "close"]).sort_values("ts").reset_index(drop=True)
+
+
+def prune_live_renko_bricks_before(
+    *,
+    symbol: str,
+    cutoff_ts: str,
+) -> int:
+    ensure_live_renko_bricks_schema()
+    sql = """
+    delete from live_renko_bricks
+    where replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
+      and ts < %(cutoff_ts)s::timestamptz
+    """
+    params = {
+        "symbol_norm": _normalize_symbol_token(symbol),
+        "cutoff_ts": cutoff_ts,
+    }
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        return int(cur.rowcount or 0)

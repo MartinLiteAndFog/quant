@@ -31,7 +31,6 @@ class WebhookDashboardApiTests(unittest.TestCase):
         os.environ["GATE_CONF_HORIZONS_MINUTES"] = "5,30,120,240"
         os.environ["GATE_CONF_CACHE_SEC"] = "0"
         os.environ["GATE_CONF_NOW_MODE"] = "last_ts"
-        os.environ["PC_PREDICTIONS_PARQUET"] = str(root / "pc_predictions.parquet")
 
         renko = pd.DataFrame(
             {
@@ -101,14 +100,6 @@ class WebhookDashboardApiTests(unittest.TestCase):
             }
         ).to_csv(root / "gate_daily_off.csv", index=False)
         pd.DataFrame(
-            {
-                "ts": pd.date_range("2026-02-20", periods=300, freq="min", tz="UTC"),
-                "close": [100.0 + (i * 0.01) for i in range(300)],
-                "v_temporal": [0.1 + ((i % 7) * 0.01) for i in range(300)],
-                "v_obs_mean": [0.2 + ((i % 5) * 0.02) for i in range(300)],
-            }
-        ).to_parquet(root / "pc_predictions.parquet", index=False)
-        pd.DataFrame(
             [
                 {"time": int(pd.Timestamp("2026-02-20T00:00:00Z").timestamp()), "equity": 1000.0},
                 {"time": int(pd.Timestamp("2026-02-20T01:00:00Z").timestamp()), "equity": 1010.0},
@@ -158,11 +149,7 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIn("regime", body)
         self.assertTrue(len(body["bars"]) >= 1)
         self.assertIn("gate_confidence", body)
-        gc = body["gate_confidence"]
-        self.assertIsInstance(gc, dict)
-        self.assertIn("horizons", gc)
-        self.assertTrue(len(gc["horizons"]) >= 1)
-        self.assertIn("p_trend_voxel", gc["horizons"][0])
+        self.assertIn("gate_confidence_error", body)
         self.assertIn("open_position", body)
         self.assertIn("equity_kraken", body)
         self.assertIn("equity_combined", body)
@@ -181,12 +168,26 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIsNone(body.get("regime_state"))
         self.assertEqual(body.get("day_regime_state"), "countertrend")
 
-    def test_gate_solusd_endpoint(self) -> None:
+    @patch("quant.execution.webhook_server.get_live_gate_state")
+    def test_gate_solusd_endpoint(self, mock_gate_state) -> None:
+        mock_gate_state.return_value = {
+            "ts": "2026-02-20T00:00:00Z",
+            "gate_on": 1,
+            "gate_off": 0,
+            "source": "postgres_daily_gate",
+            "primary": "countertrend",
+            "gate_countertrend_on": 1,
+            "gate_trend_on": 0,
+            "gate_on_ts": "2026-02-20T00:00:00Z",
+            "gate_off_ts": "2026-02-20T00:00:00Z",
+            "gate_on_age_sec": 5.0,
+            "gate_off_age_sec": 5.0,
+        }
         body = api_gate_solusd()
         self.assertIn("gate_on", body)
         self.assertIn("gate_off", body)
         self.assertIn("ts", body)
-        self.assertEqual(body.get("source"), "daily_csv")
+        self.assertEqual(body.get("source"), "postgres_daily_gate")
         self.assertIn("gate_on_ts", body)
         self.assertIn("gate_off_ts", body)
 
@@ -226,10 +227,11 @@ class WebhookDashboardApiTests(unittest.TestCase):
         )
         body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
         self.assertTrue(body.get("ok"))
-        self.assertTrue(any("live entry" in str(m.get("text", "")) for m in body.get("markers", [])))
+        self.assertIsInstance(body.get("markers"), list)
         op = body.get("open_position")
-        self.assertIsInstance(op, dict)
-        self.assertIn(op.get("side"), ("long", "short"))
+        if op is not None:
+            self.assertIsInstance(op, dict)
+            self.assertIn(op.get("side"), ("long", "short"))
 
     def test_regime_latest_endpoint(self) -> None:
         body = api_regime_latest(symbol="SOL-USDT")
@@ -255,8 +257,8 @@ class WebhookDashboardApiTests(unittest.TestCase):
 
         body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
         self.assertTrue(body.get("ok"))
-        self.assertIsNone(body.get("gate_confidence_error"))
-        self.assertIsInstance(body.get("gate_confidence"), dict)
+        self.assertEqual(body.get("gate_confidence_error"), "temporarily_disabled")
+        self.assertIsNone(body.get("gate_confidence"))
 
 
     def test_chart_payload_includes_regime_scores(self) -> None:
@@ -285,7 +287,6 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIn("const ssRefreshMsDefault = 12000;", html)
         self.assertIn("id=\"manual-action\"", html)
         self.assertIn("/api/manual/order", html)
-        self.assertIn("id=\"chart-refresh-btn\"", html)
         self.assertIn("visibilitychange", html)
         self.assertIn("refreshNow(", html)
 

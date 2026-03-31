@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 import pandas as pd
 import redis
 
+from quant.execution.event_store import prune_live_renko_bricks_before, upsert_live_renko_bricks
 from quant.execution.kucoin_futures import KucoinFuturesBroker, _symbol_to_contract
 from quant.features.renko import renko_from_close
 from quant.utils.log import get_logger, log_throttled
@@ -223,6 +224,22 @@ def refresh_renko_cache(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     renko.to_parquet(out_path, index=False)
 
+    postgres_info: Dict[str, Any]
+    try:
+        inserted = upsert_live_renko_bricks(
+            symbol=symbol,
+            renko=renko,
+            source="renko_cache_updater",
+            payload_json={"box": float(box), "days_back": int(days_back), "step_hours": int(step_hours)},
+        )
+        cutoff_ts = (pd.Timestamp.now("UTC") - pd.Timedelta(days=int(os.getenv("LIVE_RENKO_RETENTION_DAYS", "30")))).strftime(
+            "%Y-%m-%dT%H:%M:%SZ"
+        )
+        pruned = prune_live_renko_bricks_before(symbol=symbol, cutoff_ts=cutoff_ts)
+        postgres_info = {"ok": True, "inserted_rows": int(inserted), "pruned_rows": int(pruned)}
+    except Exception as e:
+        postgres_info = {"ok": False, "error": str(e)}
+
     redis_info = _publish_renko_to_redis(symbol=symbol, renko=renko, box=float(box))
 
     last_close = float(renko["close"].iloc[-1]) if len(renko) else None
@@ -239,6 +256,7 @@ def refresh_renko_cache(
         ),
         "last_close": last_close,
         "out": str(out_path),
+        "postgres": postgres_info,
         "redis": redis_info,
     }
 

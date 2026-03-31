@@ -156,6 +156,33 @@ LIVE_EXECUTOR_STATE
 
 The exact set depends on the service.
 
+Daily gate runtime variables
+
+For the cron service that builds the durable daily gate:
+
+- `POSTGRES_URL` or `DATABASE_URL`
+- `REDIS_URL`
+- `LIVE_GATE_SYMBOL`
+- `LIVE_GATE_PRIMARY`
+
+Recommended cron start command:
+
+```bash
+bash -lc "python -u scripts/build_live_daily_gate_artifacts.py --symbol SOL-USDT && python -u -m quant.execution.equity_retention --apply"
+```
+
+Operational note:
+- the durable source of truth is now Postgres `daily_gate_history`
+- the durable Renko input for gate creation is now Postgres `live_renko_bricks`
+- Redis carries the latest cached snapshot for fast reads
+- the producer computes the winner-lineage `CHOP + ADX + ER` daily 2-of-3 gate from Renko OHLC
+- local gate CSV paths are optional debug outputs only, not the live reader input anymore
+- recommended setting: `LIVE_GATE_PRIMARY=on` so `gate_on` continues to mean countertrend
+
+Renko updater note:
+- the service running the Renko updater should still keep its local `DASHBOARD_RENKO_PARQUET` cache for existing readers
+- but it must also have `POSTGRES_URL` so it can mirror the Renko bricks into `live_renko_bricks` for the cron gate builder
+
 6. Public domain
 
 In Railway:

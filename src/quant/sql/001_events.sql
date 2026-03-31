@@ -103,6 +103,46 @@ create index if not exists idx_equity_snapshots_ts on equity_snapshots (ts desc)
 create index if not exists idx_equity_snapshots_venue_ts on equity_snapshots (venue, ts desc);
 
 
+create table if not exists daily_gate_history (
+  id bigserial primary key,
+  ts timestamptz not null,
+  symbol text not null,
+  gate_on smallint not null check (gate_on in (0, 1)),
+  gate_off smallint not null check (gate_off in (0, 1)),
+  gate_countertrend_on smallint not null check (gate_countertrend_on in (0, 1)),
+  gate_trend_on smallint not null check (gate_trend_on in (0, 1)),
+  source text,
+  payload_json jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists uq_daily_gate_history_symbol_ts
+on daily_gate_history (symbol, ts);
+create index if not exists idx_daily_gate_history_symbol_ts
+on daily_gate_history (symbol, ts desc);
+create index if not exists idx_daily_gate_history_ts
+on daily_gate_history (ts desc);
+
+
+create table if not exists live_renko_bricks (
+  id bigserial primary key,
+  ts timestamptz not null,
+  symbol text not null,
+  open numeric not null,
+  high numeric not null,
+  low numeric not null,
+  close numeric not null,
+  source text,
+  payload_json jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+create unique index if not exists uq_live_renko_bricks_symbol_ts
+on live_renko_bricks (symbol, ts);
+create index if not exists idx_live_renko_bricks_symbol_ts
+on live_renko_bricks (symbol, ts desc);
+create index if not exists idx_live_renko_bricks_ts
+on live_renko_bricks (ts desc);
+
+
 create table if not exists closed_trades (
   id bigserial primary key,
   trade_id text unique,

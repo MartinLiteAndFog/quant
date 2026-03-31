@@ -242,6 +242,39 @@ bash -lc "python -u -m quant.execution.live_signal_worker --symbol SOLUSDT --sig
 Operational preference going forward:
 separate services are cleaner than one chained shell process, unless there is a strong reason to keep them combined.
 
+## Cronjob service
+
+Purpose:
+- build the durable daily CHOP/ADX/ER gate from Renko OHLC
+- persist daily gate history in Postgres
+- mirror the latest gate snapshot to Redis
+- prune old base equity snapshots
+
+Recommended Railway start command:
+
+```bash
+bash -lc "python -u scripts/build_live_daily_gate_artifacts.py --symbol SOL-USDT && python -u -m quant.execution.equity_retention --apply"
+```
+
+Required variables for the cron service:
+- `POSTGRES_URL` or `DATABASE_URL`
+- `REDIS_URL`
+
+Usually set as well:
+- `LIVE_GATE_SYMBOL=SOL-USDT`
+- `LIVE_GATE_PRIMARY=on` to keep `gate_on = countertrend`
+- `PYTHONUNBUFFERED=1`
+
+Important runtime rule:
+- the web/API service and both live executors now read the gate from `get_live_gate_state()` with priority `Postgres -> Redis -> forced countertrend`
+- service-local gate CSVs are now optional debug artifacts only and are not the live source of truth
+- the producer now follows the winner lineage `CHOP + ADX + ER` with `qch=0.4`, `qadx=0.6`, `qer=0.3`
+- cron reads Renko from Postgres first, so it no longer requires a shared Renko parquet volume
+
+Renko updater requirement:
+- the service that runs `renko_cache_updater` still writes the parquet cache for existing readers, but it must also have `POSTGRES_URL` so it can mirror bricks into `live_renko_bricks`
+- that service may still use `DASHBOARD_RENKO_PARQUET` locally for dashboard/chart readers
+
 9. Health checks
 Web/API checks
 
@@ -270,6 +303,16 @@ latest action_events in Postgres
 latest execution_events in Postgres
 
 current venue/account position
+
+Cron checks
+
+Useful checks after a cron run:
+
+- verify the cron logs show `persisted daily gate history rows=...`
+- verify `GET /api/gate/solusd` returns `source=postgres_daily_gate` in the healthy case
+- verify the returned `ts`, `gate_on_ts`, and `gate_off_ts` match the intended trading day
+- if Postgres is temporarily unavailable, verify the endpoint falls back to `source=redis`
+- if both Postgres and Redis are unavailable, verify the endpoint falls back to `source=forced_countertrend`
 
 10. Recommended live-debug flow
 

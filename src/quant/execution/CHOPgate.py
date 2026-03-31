@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 import numpy as np
 import pandas as pd
 
+from quant.execution.event_store import load_latest_daily_gate_from_postgres
+
 
 def _live_default(rel_path: str) -> str:
     if Path("/data").exists():
@@ -136,7 +138,7 @@ def _publish_gate_state_to_redis(state: Dict[str, Any]) -> None:
     try:
         import redis as redis_lib
 
-        symbol = str(os.getenv("LIVE_GATE_SYMBOL", os.getenv("LIVE_SYMBOL", "SOL-USDT"))).strip().upper()
+        symbol = _gate_symbol()
         canon = "".join(ch for ch in symbol if ch.isalnum())
         key = f"gate:{canon}:latest"
 
@@ -145,6 +147,32 @@ def _publish_gate_state_to_redis(state: Dict[str, Any]) -> None:
         r.set(key, payload)
     except Exception:
         return
+
+
+def _gate_symbol() -> str:
+    return str(os.getenv("LIVE_GATE_SYMBOL", os.getenv("LIVE_SYMBOL", "SOL-USDT"))).strip().upper()
+
+
+def _read_live_gate_from_redis() -> Optional[Dict[str, Any]]:
+    redis_url = str(os.getenv("REDIS_URL", "")).strip()
+    if not redis_url:
+        return None
+    try:
+        import redis as redis_lib
+
+        key = f"gate:{''.join(ch for ch in _gate_symbol() if ch.isalnum())}:latest"
+        r = redis_lib.from_url(redis_url, decode_responses=True)
+        raw = r.get(key)
+        if not raw:
+            return None
+        obj = json.loads(raw)
+        if not isinstance(obj, dict):
+            return None
+        out = dict(obj)
+        out["source"] = "redis"
+        return out
+    except Exception:
+        return None
 
 
 def _default_daily_gate_path() -> str:
@@ -227,6 +255,41 @@ def _daily_csv_gate_state(now_ts: pd.Timestamp) -> Dict[str, Any]:
         "gate_on_col": str(on_row["value_col"]),
         "gate_off_col": str(off_row["value_col"]),
     }
+
+
+def _build_gate_state_payload(
+    *,
+    ts: pd.Timestamp,
+    gate_countertrend_on: int,
+    gate_trend_on: int,
+    now_ts: pd.Timestamp,
+    source: str,
+    error: Optional[str] = None,
+) -> Dict[str, Any]:
+    primary = str(os.getenv("LIVE_GATE_PRIMARY", "off")).strip().lower()
+    if source == "forced_countertrend":
+        gate_on = 1
+        primary = "countertrend"
+    elif primary in ("on", "countertrend", "flip"):
+        gate_on = int(gate_countertrend_on)
+    else:
+        gate_on = int(gate_trend_on)
+    out = {
+        "ts": pd.Timestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gate_on": int(gate_on),
+        "gate_off": int(1 - gate_on),
+        "source": source,
+        "primary": primary,
+        "gate_countertrend_on": int(gate_countertrend_on),
+        "gate_trend_on": int(gate_trend_on),
+        "gate_on_ts": pd.Timestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gate_off_ts": pd.Timestamp(ts).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "gate_on_age_sec": round(float((now_ts - pd.Timestamp(ts)).total_seconds()), 1),
+        "gate_off_age_sec": round(float((now_ts - pd.Timestamp(ts)).total_seconds()), 1),
+    }
+    if error:
+        out["error"] = error
+    return out
 
 
 def _load_live_renko() -> pd.DataFrame:
@@ -318,16 +381,36 @@ def get_live_gate_state() -> Dict[str, Any]:
     - surface the CSV error in the payload
     """
     now_ts = pd.Timestamp.now("UTC")
+    pg_error = None
     try:
-        out = _daily_csv_gate_state(now_ts)
-        _publish_gate_state_to_redis(out)
-        return out
+        row = load_latest_daily_gate_from_postgres(
+            symbol=_gate_symbol(),
+            now_ts=now_ts.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
+        if row:
+            out = _build_gate_state_payload(
+                ts=pd.Timestamp(row["ts"]),
+                gate_countertrend_on=int(row.get("gate_countertrend_on", 0) or 0),
+                gate_trend_on=int(row.get("gate_trend_on", 0) or 0),
+                now_ts=now_ts,
+                source=str(row.get("source") or "postgres_daily_gate"),
+            )
+            _publish_gate_state_to_redis(out)
+            return out
     except Exception as e:
-        return {
-            "ts": now_ts.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "gate_on": 0,
-            "gate_off": 1,
-            "source": "default_off",
-            "error": str(e),
-            "daily_csv_error": str(e),
-        }
+        pg_error = str(e)
+
+    redis_state = _read_live_gate_from_redis()
+    if redis_state:
+        return redis_state
+
+    out = _build_gate_state_payload(
+        ts=now_ts,
+        gate_countertrend_on=1,
+        gate_trend_on=0,
+        now_ts=now_ts,
+        source="forced_countertrend",
+        error=pg_error,
+    )
+    _publish_gate_state_to_redis(out)
+    return out

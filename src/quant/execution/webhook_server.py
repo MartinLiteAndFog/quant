@@ -1098,9 +1098,7 @@ def api_dashboard_performance(
 @app.get("/api/gate/solusd")
 def api_gate_solusd() -> Dict[str, Any]:
     try:
-        out = _read_live_gate_from_redis()
-        if not out:
-            out = get_live_gate_state()
+        out = get_live_gate_state()
         return {
             "ok": True,
             "ts": out.get("ts"),
