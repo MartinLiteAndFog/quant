@@ -64,7 +64,7 @@ class TVExecConfig:
             leverage=float(os.getenv("TV_EXEC_LEVERAGE", "10.0")),
             tp1_close_pct=float(os.getenv("TV_EXEC_TP1_PCT", "0.50")),
             dry_run=_truthy(os.getenv("TV_EXEC_DRY_RUN", "1")),
-            gate_mode=os.getenv("TV_EXEC_GATE_MODE", "block_all").strip().lower(),
+            gate_mode=os.getenv("TV_EXEC_GATE_MODE", "countertrend").strip().lower(),
             cache_sec=float(os.getenv("TV_EXEC_CACHE_SEC", "10")),
             cache_max_age_sec=float(os.getenv("TV_EXEC_CACHE_MAX_AGE_SEC", "60")),
         )
@@ -167,7 +167,9 @@ def _build_cache(broker: KucoinFuturesBroker, config: TVExecConfig) -> TVCache:
     gate = get_live_gate_state()
     gate_on = int(gate.get("gate_on", 0) or 0)
     gate_allows = True
-    if config.gate_mode == "block_all" and gate_on == 1:
+    if config.gate_mode == "countertrend":
+        gate_allows = True
+    elif config.gate_mode == "block_all" and gate_on == 1:
         gate_allows = False
 
     return TVCache(
