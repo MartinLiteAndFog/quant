@@ -13,7 +13,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from quant.execution.execution_state import write_execution_state
+from quant.execution.execution_state import read_execution_state, write_execution_state
 from quant.execution.kraken_futures import KrakenFuturesClient
 from quant.execution.CHOPgate import get_live_gate_state
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
@@ -557,12 +557,14 @@ def _append_closed_trade(
     seq: int,
     qty_default: float,
     exit_px_fallback: Optional[float],
+    prior_entry_px: Optional[float] = None,
+    prior_entry_bar_ts: Any = None,
 ) -> None:
-    entry_px_realized = _coerce_float((terminal or {}).get("entry_px"))
+    entry_px_realized = _coerce_float(prior_entry_px) or _coerce_float((terminal or {}).get("entry_px"))
     exit_px_realized = _resolve_trade_exit_price(details, exit_px_fallback)
     qty_realized = _coerce_float(details.get("qty", qty_default))
 
-    entry_ts_raw = (terminal or {}).get("entry_bar_ts")
+    entry_ts_raw = prior_entry_bar_ts if prior_entry_bar_ts is not None else (terminal or {}).get("entry_bar_ts")
     entry_ts = pd.to_datetime(entry_ts_raw, utc=True, errors="coerce")
     exit_ts = pd.to_datetime(_now_iso(), utc=True)
 
@@ -630,6 +632,8 @@ def _record_ttp_external_exit(
     execution_seq: int,
     qty: float,
     exit_details: Dict[str, Any],
+    prior_entry_px: Optional[float] = None,
+    prior_entry_bar_ts: Any = None,
 ) -> None:
     position_before = 1 if prior_side == "long" else (-1 if prior_side == "short" else 0)
     order_action = "sell" if prior_side == "long" else "buy"
@@ -674,6 +678,8 @@ def _record_ttp_external_exit(
         seq=int(execution_seq),
         qty_default=float(qty),
         exit_px_fallback=ttp_px,
+        prior_entry_px=prior_entry_px,
+        prior_entry_bar_ts=prior_entry_bar_ts,
     )
 
     state.open_leg_mode = None
@@ -1821,6 +1827,11 @@ def run_once(
     mid = (bid + ask) / 2.0 if (bid and ask) else (ask or bid or 0.0)
     pos = float(broker.get_position(symbol))
     current_side = "long" if pos > 0 else ("short" if pos < 0 else "flat")
+
+    # Snapshot entry data of the current open trade BEFORE flip engine overwrites it
+    _prior_state = read_execution_state()
+    _prior_entry_px = _coerce_float(_prior_state.get("entry_px"))
+    _prior_entry_bar_ts = _prior_state.get("entry_bar_ts")
 
     if (
         _pending_follow_entry_is_active(state)
@@ -3084,6 +3095,8 @@ def run_once(
                     seq=int(state.n_executions),
                     qty_default=abs(float(pos)),
                     exit_px_fallback=float(mid) if mid and mid > 0 else None,
+                    prior_entry_px=_prior_entry_px,
+                    prior_entry_bar_ts=_prior_entry_bar_ts,
                 )
 
                 if abs(pos_after_flat) > 1e-12:
@@ -3198,6 +3211,8 @@ def run_once(
                     seq=int(state.n_executions),
                     qty_default=abs(float(pos)),
                     exit_px_fallback=float(mid) if mid and mid > 0 else None,
+                    prior_entry_px=_prior_entry_px,
+                    prior_entry_bar_ts=_prior_entry_bar_ts,
                 )
 
                 state.open_leg_mode = None
@@ -3280,6 +3295,8 @@ def run_once(
                         execution_seq=int(state.n_executions),
                         qty=ttp_exit_qty,
                         exit_details=exit_details,
+                        prior_entry_px=_prior_entry_px,
+                        prior_entry_bar_ts=_prior_entry_bar_ts,
                     )
 
                 fresh_bid, fresh_ask = broker.get_best_bid_ask(symbol)

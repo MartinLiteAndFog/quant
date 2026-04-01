@@ -13,6 +13,16 @@ def execution_state_path() -> Path:
     return Path(os.getenv("DASHBOARD_LEVELS_JSON", default_path))
 
 
+def read_execution_state() -> Dict[str, Any]:
+    p = execution_state_path()
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
 def write_execution_state(state: Dict[str, Any]) -> Path:
     p = execution_state_path()
     p.parent.mkdir(parents=True, exist_ok=True)

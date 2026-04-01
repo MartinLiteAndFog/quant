@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 import pandas as pd
 
-from quant.execution.execution_state import write_execution_state
+from quant.execution.execution_state import read_execution_state, write_execution_state
 from quant.execution.CHOPgate import get_live_gate_state
 from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
@@ -281,12 +281,14 @@ def _append_closed_trade(
     seq: int,
     qty_default: float,
     exit_px_fallback: Optional[float],
+    prior_entry_px: Optional[float] = None,
+    prior_entry_bar_ts: Any = None,
 ) -> None:
-    entry_px_realized = _coerce_float((terminal or {}).get("entry_px"))
+    entry_px_realized = _coerce_float(prior_entry_px) or _coerce_float((terminal or {}).get("entry_px"))
     exit_px_realized = _resolve_trade_exit_price(details, exit_px_fallback)
     qty_realized = _coerce_float(details.get("qty", qty_default))
 
-    entry_ts_raw = (terminal or {}).get("entry_bar_ts")
+    entry_ts_raw = prior_entry_bar_ts if prior_entry_bar_ts is not None else (terminal or {}).get("entry_bar_ts")
     entry_ts = pd.to_datetime(entry_ts_raw, utc=True, errors="coerce")
     exit_ts = pd.to_datetime(_now_iso(), utc=True)
 
@@ -1011,6 +1013,11 @@ def run_once(
     pos = float(broker.get_position(symbol))
     current_side = "long" if pos > 0 else ("short" if pos < 0 else "flat")
 
+    # Snapshot entry data of the current open trade BEFORE flip engine overwrites it
+    _prior_state = read_execution_state()
+    _prior_entry_px = _coerce_float(_prior_state.get("entry_px"))
+    _prior_entry_bar_ts = _prior_state.get("entry_bar_ts")
+
     pos_pct = float(os.getenv("LIVE_EXECUTOR_POS_PCT", "0.90"))
     equity = _resolve_equity(broker)
     contract_multiplier = _resolve_contract_multiplier(broker, symbol)
@@ -1521,6 +1528,8 @@ def run_once(
                     seq=int(state.n_executions),
                     qty_default=abs(float(pos)),
                     exit_px_fallback=float(mid) if mid and mid > 0 else None,
+                    prior_entry_px=_prior_entry_px,
+                    prior_entry_bar_ts=_prior_entry_bar_ts,
                 )
 
                 pos_after_flat = float(broker.get_position(symbol))
@@ -1617,6 +1626,8 @@ def run_once(
                     seq=int(state.n_executions),
                     qty_default=abs(float(pos)),
                     exit_px_fallback=float(mid) if mid and mid > 0 else None,
+                    prior_entry_px=_prior_entry_px,
+                    prior_entry_bar_ts=_prior_entry_bar_ts,
                 )
 
                 if exit_engine == "tp2" and event_name in ("tp2_exit", "be_exit", "sl_exit"):
