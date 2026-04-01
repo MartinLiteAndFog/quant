@@ -11,6 +11,9 @@
   /** @type {(() => void) | null} */
   let stopPolling = null;
 
+  /** @type {import('./components/PriceChart.svelte').default | null} */
+  let priceChartRef = $state(null);
+
   let refreshBarActive = $state(false);
 
   /** @type {number | null} */
@@ -97,8 +100,8 @@
     <StatsPanel />
   </div>
   <div class="chart-area">
-    <PriceChart />
-    <RegimeBand />
+    <PriceChart bind:this={priceChartRef} />
+    <RegimeBand chartComponent={priceChartRef} />
   </div>
   <div class="right-panel">
     <AxisBars />
