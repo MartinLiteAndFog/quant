@@ -2688,6 +2688,30 @@ async def tv_execute_webhook(
     return result
 
 
+_DASHBOARD2_DIST = Path(
+    os.getenv(
+        "DASHBOARD2_DIST",
+        str(Path(__file__).resolve().parent.parent.parent.parent / "dashboard" / "dist"),
+    )
+)
+
+if (_DASHBOARD2_DIST / "assets").is_dir():
+    app.mount(
+        "/dashboard2/assets",
+        StaticFiles(directory=str(_DASHBOARD2_DIST / "assets")),
+        name="dashboard2-assets",
+    )
+
+
+@app.get("/dashboard2")
+@app.get("/dashboard2/{path:path}")
+def dashboard2(path: str = "") -> Response:
+    index = _DASHBOARD2_DIST / "index.html"
+    if index.exists():
+        return FileResponse(index, media_type="text/html")
+    raise HTTPException(status_code=404, detail="dashboard2 not built — run npm run build in dashboard/")
+
+
 if (_SPA_DIR / "assets").is_dir():
     app.mount("/assets", StaticFiles(directory=str(_SPA_DIR / "assets")), name="spa-assets")
 
