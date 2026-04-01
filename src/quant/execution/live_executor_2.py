@@ -1294,6 +1294,32 @@ def _qty_from_equity_pct(
     return float(max(0.0, floored))
 
 
+def _projected_equity_at_price(
+    equity: float,
+    pos_qty: float,
+    pos_side: str,
+    current_price: float,
+    target_price: float,
+    leverage: float,
+) -> float:
+    """
+    Estimate equity if price moves from current_price to target_price
+    with an open position of pos_qty on pos_side at the given leverage.
+
+    For a long: pnl = pos_qty * (target - current)
+    For a short: pnl = pos_qty * (current - target)
+    """
+    if pos_qty <= 0 or current_price <= 0 or target_price <= 0:
+        return float(equity)
+    if pos_side == "long":
+        pnl = pos_qty * (target_price - current_price)
+    elif pos_side == "short":
+        pnl = pos_qty * (current_price - target_price)
+    else:
+        return float(equity)
+    return float(max(0.0, equity + pnl))
+
+
 def _resolve_equity(broker: KrakenOmsBroker) -> float:
     try:
         bal = broker.get_account_balance(currency="USDT")
@@ -2300,40 +2326,65 @@ def run_once(
                 return None
             return _coerce_float(row.get("stop_price", row.get("stopPrice")))
 
+        def _qty_at_barrier(barrier_price: float) -> float:
+            proj_eq = _projected_equity_at_price(
+                equity=equity,
+                pos_qty=abs(float(pos)),
+                pos_side=current_side,
+                current_price=float(mid),
+                target_price=barrier_price,
+                leverage=leverage,
+            )
+            return _qty_from_equity_pct(
+                equity=proj_eq,
+                pos_pct=pos_pct,
+                leverage=leverage,
+                mid_price=barrier_price,
+                contract_multiplier=contract_multiplier,
+            )
+
         long_existing = oms.find_stop_order_by_kind(symbol, "flat_entry_long")
         short_existing = oms.find_stop_order_by_kind(symbol, "flat_entry_short")
 
-        if imba_long_barrier is not None and float(qty) > 0 and float(mid) < float(imba_long_barrier):
-            cur_px = _stop_px(long_existing)
-            if cur_px is None or abs(float(cur_px) - float(imba_long_barrier)) > 1e-9:
-                if long_existing:
-                    oms.cancel_orders_by_kind(symbol, "flat_entry_long")
-                flat_entry_results.append(
-                    oms.arm_stop_entry(
-                        symbol=symbol,
-                        side="long",
-                        qty=float(qty),
-                        stop_price=float(imba_long_barrier),
-                        kind="flat_entry_long",
+        if imba_long_barrier is not None and float(mid) < float(imba_long_barrier):
+            long_qty = _qty_at_barrier(float(imba_long_barrier))
+            if long_qty > 0:
+                cur_px = _stop_px(long_existing)
+                if cur_px is None or abs(float(cur_px) - float(imba_long_barrier)) > 1e-9:
+                    if long_existing:
+                        oms.cancel_orders_by_kind(symbol, "flat_entry_long")
+                    flat_entry_results.append(
+                        oms.arm_stop_entry(
+                            symbol=symbol,
+                            side="long",
+                            qty=float(long_qty),
+                            stop_price=float(imba_long_barrier),
+                            kind="flat_entry_long",
+                        )
                     )
-                )
+            elif long_existing:
+                oms.cancel_orders_by_kind(symbol, "flat_entry_long")
         elif long_existing:
             oms.cancel_orders_by_kind(symbol, "flat_entry_long")
 
-        if imba_short_barrier is not None and float(qty) > 0 and float(mid) > float(imba_short_barrier):
-            cur_px = _stop_px(short_existing)
-            if cur_px is None or abs(float(cur_px) - float(imba_short_barrier)) > 1e-9:
-                if short_existing:
-                    oms.cancel_orders_by_kind(symbol, "flat_entry_short")
-                flat_entry_results.append(
-                    oms.arm_stop_entry(
-                        symbol=symbol,
-                        side="short",
-                        qty=float(qty),
-                        stop_price=float(imba_short_barrier),
-                        kind="flat_entry_short",
+        if imba_short_barrier is not None and float(mid) > float(imba_short_barrier):
+            short_qty = _qty_at_barrier(float(imba_short_barrier))
+            if short_qty > 0:
+                cur_px = _stop_px(short_existing)
+                if cur_px is None or abs(float(cur_px) - float(imba_short_barrier)) > 1e-9:
+                    if short_existing:
+                        oms.cancel_orders_by_kind(symbol, "flat_entry_short")
+                    flat_entry_results.append(
+                        oms.arm_stop_entry(
+                            symbol=symbol,
+                            side="short",
+                            qty=float(short_qty),
+                            stop_price=float(imba_short_barrier),
+                            kind="flat_entry_short",
+                        )
                     )
-                )
+            elif short_existing:
+                oms.cancel_orders_by_kind(symbol, "flat_entry_short")
         elif short_existing:
             oms.cancel_orders_by_kind(symbol, "flat_entry_short")
 
