@@ -1,0 +1,25 @@
+:root {
+  --bg: #000000;
+  --text: #e0e0e8;
+  --muted: #555555;
+  --green: #2ecc71;
+  --red: #f7768e;
+  --blue: #7aa2f7;
+  --purple: #bb9af7;
+  --amber: #e0af68;
+  --grid: #111118;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, sans-serif;
+  overflow: hidden;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}

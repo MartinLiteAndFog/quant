@@ -17,6 +17,8 @@ data/
 # Frontend
 node_modules/
 frontend/dist/
+dashboard/dist/
+dashboard/node_modules/
 
 # Secrets
 .env
