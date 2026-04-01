@@ -2540,15 +2540,19 @@ def run_once(
                     reduce_only=True,
                 )
             )
+            flip_entry_px = _ttp_flip_entry_stop_price(target_side="short", barrier_price=imba_short_barrier)
+            flip_qty = _qty_from_equity_pct(
+                equity=_projected_equity_at_price(equity, live_qty, "long", float(mid), float(imba_short_barrier or mid), leverage),
+                pos_pct=pos_pct, leverage=leverage,
+                mid_price=float(flip_entry_px or imba_short_barrier or mid),
+                contract_multiplier=contract_multiplier,
+            ) if imba_short_barrier is not None else 0.0
             changed += int(
                 _sync_stop_entry_order(
                     kind="opposite_imba_flip_entry_short",
                     side="short",
-                    qty=live_qty,
-                    stop_price=_ttp_flip_entry_stop_price(
-                        target_side="short",
-                        barrier_price=imba_short_barrier,
-                    ),
+                    qty=flip_qty,
+                    stop_price=flip_entry_px,
                 )
             )
             oms.cancel_orders_by_kind(symbol, "opposite_imba_long")
@@ -2563,15 +2567,19 @@ def run_once(
                     reduce_only=True,
                 )
             )
+            flip_entry_px = _ttp_flip_entry_stop_price(target_side="long", barrier_price=imba_long_barrier)
+            flip_qty = _qty_from_equity_pct(
+                equity=_projected_equity_at_price(equity, live_qty, "short", float(mid), float(imba_long_barrier or mid), leverage),
+                pos_pct=pos_pct, leverage=leverage,
+                mid_price=float(flip_entry_px or imba_long_barrier or mid),
+                contract_multiplier=contract_multiplier,
+            ) if imba_long_barrier is not None else 0.0
             changed += int(
                 _sync_stop_entry_order(
                     kind="opposite_imba_flip_entry_long",
                     side="long",
-                    qty=live_qty,
-                    stop_price=_ttp_flip_entry_stop_price(
-                        target_side="long",
-                        barrier_price=imba_long_barrier,
-                    ),
+                    qty=flip_qty,
+                    stop_price=flip_entry_px,
                 )
             )
             oms.cancel_orders_by_kind(symbol, "opposite_imba_short")

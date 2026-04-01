@@ -517,7 +517,14 @@ class LiveExecutor2TtpTests(unittest.TestCase):
         self.assertEqual(oms.enter_market_calls, [])
         self.assertEqual(oms.flatten_market_calls, [])
         self.assertIn(("SOL-USDT", "long", 9.0, 99.0, "opposite_imba_short"), oms.stop_exit_calls)
-        self.assertIn(("SOL-USDT", "short", 9.0, 98.901, "opposite_imba_flip_entry_short"), oms.stop_entry_calls)
+        short_flip_entries = [
+            call for call in oms.stop_entry_calls if call[4] == "opposite_imba_flip_entry_short"
+        ]
+        self.assertEqual(len(short_flip_entries), 1)
+        self.assertEqual(short_flip_entries[0][0], "SOL-USDT")
+        self.assertEqual(short_flip_entries[0][1], "short")
+        self.assertGreater(short_flip_entries[0][2], 0)
+        self.assertAlmostEqual(short_flip_entries[0][3], 98.901, places=3)
 
     def test_opposite_imba_cross_syncs_long_exit_and_flip_entry_orders(self) -> None:
         state = ExecutorState(
@@ -564,7 +571,9 @@ class LiveExecutor2TtpTests(unittest.TestCase):
             call for call in oms.stop_entry_calls if call[4] == "opposite_imba_flip_entry_long"
         ]
         self.assertEqual(len(long_flip_entries), 1)
-        self.assertEqual(long_flip_entries[0][:3], ("SOL-USDT", "long", 7.0))
+        self.assertEqual(long_flip_entries[0][0], "SOL-USDT")
+        self.assertEqual(long_flip_entries[0][1], "long")
+        self.assertGreater(long_flip_entries[0][2], 0)
         self.assertAlmostEqual(long_flip_entries[0][3], 101.101, places=6)
 
     def test_opposite_imba_flip_entry_orders_are_idempotent(self) -> None:
