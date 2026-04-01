@@ -55,6 +55,7 @@ class TVExecConfig:
     gate_mode: str
     cache_sec: float
     cache_max_age_sec: float
+    emergency_sl_pct: float
 
     @classmethod
     def from_env(cls) -> TVExecConfig:
@@ -67,6 +68,7 @@ class TVExecConfig:
             gate_mode=os.getenv("TV_EXEC_GATE_MODE", "countertrend").strip().lower(),
             cache_sec=float(os.getenv("TV_EXEC_CACHE_SEC", "10")),
             cache_max_age_sec=float(os.getenv("TV_EXEC_CACHE_MAX_AGE_SEC", "60")),
+            emergency_sl_pct=float(os.getenv("TV_EXEC_EMERGENCY_SL_PCT", "0.023")),
         )
 
 
@@ -433,6 +435,53 @@ def _place_market(
     return order_id
 
 
+def _cancel_emergency_sl(broker: KucoinFuturesBroker, symbol: str) -> None:
+    try:
+        broker.cancel_all_stop_orders(symbol)
+    except Exception as e:
+        log.warning("tv_executor cancel emergency SL failed: %s", e)
+
+
+def _place_emergency_sl(
+    broker: KucoinFuturesBroker,
+    symbol: str,
+    position_side: str,
+    qty: int,
+    mid_price: float,
+    sl_pct: float,
+) -> Optional[str]:
+    if sl_pct <= 0 or qty <= 0 or mid_price <= 0:
+        return None
+
+    if position_side == "long":
+        sl_price = mid_price * (1.0 - sl_pct)
+        sl_side = "sell"
+    elif position_side == "short":
+        sl_price = mid_price * (1.0 + sl_pct)
+        sl_side = "buy"
+    else:
+        return None
+
+    cid = _client_oid("emergency_sl")
+    try:
+        oid = broker.place_stop_market(
+            symbol=symbol,
+            side=sl_side,
+            qty=qty,
+            stop_price=round(sl_price, 4),
+            reduce_only=True,
+            client_id=cid,
+        )
+        log.info(
+            "tv_executor emergency SL placed: side=%s qty=%d sl_price=%.4f (%.1f%% from %.4f) order_id=%s",
+            sl_side, qty, sl_price, sl_pct * 100, mid_price, oid,
+        )
+        return oid
+    except Exception as e:
+        log.error("tv_executor emergency SL placement failed: %s", e)
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Core dispatch
 # ---------------------------------------------------------------------------
@@ -495,6 +544,7 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
         oid = _place_market(broker, signal.symbol, order_side, qty, reduce_only=False, action_label="entry")
         pos_after_i = 1 if want_side == "long" else -1
 
+        _place_emergency_sl(broker, signal.symbol, want_side, qty, cache.mid_price, config.emergency_sl_pct)
         _refresh_position_in_cache(broker, config)
 
         _log_bg(_log_action, symbol=signal.symbol, seq=seq, action="entry",
@@ -670,6 +720,7 @@ def _do_flip(
             log.warning("tv_executor DRY_RUN flip->flatten_only (gate blocks re-entry) %s qty=%d", current_side, abs(int(pos)))
             return {"ok": True, "action": "flip", "reason": "dry_run_flatten_only_gate"}
 
+        _cancel_emergency_sl(broker, symbol)
         close_side = "sell" if current_side == "long" else "buy"
         close_qty = abs(int(pos))
         oid = _place_market(broker, symbol, close_side, close_qty, reduce_only=True, action_label="flip_flatten")
@@ -695,10 +746,10 @@ def _do_flip(
         return {"ok": True, "action": "flip", "reason": "dry_run", "qty": total, "side": want_side}
 
     if current_side == "flat":
-        # Just enter
         oid = _place_market(broker, symbol, order_side, qty, reduce_only=False, action_label="flip_entry")
         pos_after_i = 1 if want_side == "long" else -1
 
+        _place_emergency_sl(broker, symbol, want_side, qty, cache.mid_price, config.emergency_sl_pct)
         _refresh_position_in_cache(broker, config)
 
         _log_bg(_log_action, symbol=symbol, seq=seq, action="flip_entry",
@@ -711,11 +762,13 @@ def _do_flip(
 
         return {"ok": True, "action": "flip", "side": want_side, "qty": qty, "order_id": oid}
 
-    # Net-off flip: single order with qty = new_position_qty + abs(old_position)
+    # Net-off flip: cancel old SL, single order, place new SL
+    _cancel_emergency_sl(broker, symbol)
     total_qty = qty + abs(int(pos))
     oid = _place_market(broker, symbol, order_side, total_qty, reduce_only=False, action_label="flip")
     pos_after_i = 1 if want_side == "long" else -1
 
+    _place_emergency_sl(broker, symbol, want_side, qty, cache.mid_price, config.emergency_sl_pct)
     _refresh_position_in_cache(broker, config)
 
     _log_bg(_log_action, symbol=symbol, seq=seq, action="flip",
