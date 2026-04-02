@@ -1101,5 +1101,129 @@ class KrakenNativeStopSyncTests(unittest.TestCase):
         self.assertIn(("SOL-USDT", "long", 4.8, 80.53, "opposite_imba_short"), oms.stop_exit_calls)
 
 
+class TestLastTradeSideSuppression(unittest.TestCase):
+    """After a completed trade, only the opposite IMBA entry should be armed."""
+
+    def test_flat_after_short_trade_suppresses_short_entry(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            last_trade_side="short",
+        )
+        broker = _FlatBroker()
+        oms = _LiveOms()
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2._latest_backtest_event", return_value=({"ts": "2026-03-30T12:00:00Z", "event": "flat_after_close", "side": 0, "seq": 1}, {"mode": "WAIT", "pos": 0, "side": None, "sl": 95.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2._latest_signal", return_value=None),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            state = run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        long_entries = [c for c in oms.stop_entry_calls if c[4] == "flat_entry_long"]
+        short_entries = [c for c in oms.stop_entry_calls if c[4] == "flat_entry_short"]
+        self.assertEqual(len(long_entries), 1, "long entry should be armed")
+        self.assertEqual(len(short_entries), 0, "short entry must be suppressed after short trade")
+
+    def test_flat_after_long_trade_suppresses_long_entry(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            last_trade_side="long",
+        )
+        broker = _FlatBroker()
+        oms = _LiveOms()
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2._latest_backtest_event", return_value=({"ts": "2026-03-30T12:00:00Z", "event": "flat_after_close", "side": 0, "seq": 1}, {"mode": "WAIT", "pos": 0, "side": None, "sl": 95.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2._latest_signal", return_value=None),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            state = run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        long_entries = [c for c in oms.stop_entry_calls if c[4] == "flat_entry_long"]
+        short_entries = [c for c in oms.stop_entry_calls if c[4] == "flat_entry_short"]
+        self.assertEqual(len(long_entries), 0, "long entry must be suppressed after long trade")
+        self.assertEqual(len(short_entries), 1, "short entry should be armed")
+
+    def test_flat_without_prior_trade_arms_both_sides(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            last_trade_side=None,
+        )
+        broker = _FlatBroker()
+        oms = _LiveOms()
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2._latest_backtest_event", return_value=({"ts": "2026-03-30T12:00:00Z", "event": "flat_after_close", "side": 0, "seq": 1}, {"mode": "WAIT", "pos": 0, "side": None, "sl": 95.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2._latest_signal", return_value=None),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            state = run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        long_entries = [c for c in oms.stop_entry_calls if c[4] == "flat_entry_long"]
+        short_entries = [c for c in oms.stop_entry_calls if c[4] == "flat_entry_short"]
+        self.assertEqual(len(long_entries), 1, "long entry should be armed when no prior trade")
+        self.assertEqual(len(short_entries), 1, "short entry should be armed when no prior trade")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -849,6 +849,7 @@ class ExecutorState:
     tp2_last_consumed_tp1_hit_ts: Optional[str] = None
     flat_until_new_signal_ts: Optional[str] = None
     flat_latch_reason: Optional[str] = None
+    last_trade_side: Optional[str] = None
 
     pending_follow_entry: bool = False
     pending_follow_entry_source_side: Optional[str] = None
@@ -899,6 +900,7 @@ def _read_state(path: Path) -> ExecutorState:
             tp2_last_consumed_tp1_hit_ts=d.get("tp2_last_consumed_tp1_hit_ts"),
             flat_until_new_signal_ts=d.get("flat_until_new_signal_ts"),
             flat_latch_reason=d.get("flat_latch_reason"),
+            last_trade_side=d.get("last_trade_side"),
             pending_follow_entry=bool(d.get("pending_follow_entry", False)),
             pending_follow_entry_source_side=d.get("pending_follow_entry_source_side"),
             pending_follow_entry_side=d.get("pending_follow_entry_side"),
@@ -2255,6 +2257,7 @@ def run_once(
                     state.open_leg_mode = str(desired_exit_engine)
                     state.open_leg_id = str(terminal.get("leg_id") or "") or None
                     state.open_leg_side = str(pending_side)
+                    state.last_trade_side = None
                     entry_bar_ts = terminal.get("entry_bar_ts")
                     state.open_leg_entry_bar_ts = str(entry_bar_ts) if entry_bar_ts is not None else None
 
@@ -2346,7 +2349,13 @@ def run_once(
         long_existing = oms.find_stop_order_by_kind(symbol, "flat_entry_long")
         short_existing = oms.find_stop_order_by_kind(symbol, "flat_entry_short")
 
-        if imba_long_barrier is not None and float(mid) < float(imba_long_barrier):
+        suppress_long = (state.last_trade_side == "long")
+        suppress_short = (state.last_trade_side == "short")
+
+        if suppress_long:
+            if long_existing:
+                oms.cancel_orders_by_kind(symbol, "flat_entry_long")
+        elif imba_long_barrier is not None and float(mid) < float(imba_long_barrier):
             long_qty = _qty_at_barrier(float(imba_long_barrier))
             if long_qty > 0:
                 cur_px = _stop_px(long_existing)
@@ -2367,7 +2376,10 @@ def run_once(
         elif long_existing:
             oms.cancel_orders_by_kind(symbol, "flat_entry_long")
 
-        if imba_short_barrier is not None and float(mid) > float(imba_short_barrier):
+        if suppress_short:
+            if short_existing:
+                oms.cancel_orders_by_kind(symbol, "flat_entry_short")
+        elif imba_short_barrier is not None and float(mid) > float(imba_short_barrier):
             short_qty = _qty_at_barrier(float(imba_short_barrier))
             if short_qty > 0:
                 cur_px = _stop_px(short_existing)
@@ -2389,11 +2401,13 @@ def run_once(
             oms.cancel_orders_by_kind(symbol, "flat_entry_short")
 
         log.info(
-            "executor flat-state entries synced symbol=%s qty=%s long_barrier=%s short_barrier=%s changed=%s",
+            "executor flat-state entries synced symbol=%s qty=%s long_barrier=%s short_barrier=%s suppress_long=%s suppress_short=%s changed=%s",
             symbol,
             qty,
             imba_long_barrier,
             imba_short_barrier,
+            suppress_long,
+            suppress_short,
             len(flat_entry_results),
         )
 
@@ -3059,6 +3073,7 @@ def run_once(
                 state.open_leg_mode = str(exit_engine)
                 state.open_leg_id = str(terminal.get("leg_id") or "") or None
                 state.open_leg_side = str(want_side)
+                state.last_trade_side = None
                 entry_bar_ts = terminal.get("entry_bar_ts")
                 state.open_leg_entry_bar_ts = str(entry_bar_ts) if entry_bar_ts is not None else None
                 details = _details(res)
@@ -3158,6 +3173,7 @@ def run_once(
                     prior_entry_bar_ts=_prior_entry_bar_ts,
                 )
 
+                state.last_trade_side = current_side
                 if abs(pos_after_flat) > 1e-12:
                     log.warning("executor flip aborted: not flat after flatten pos_after=%s", pos_after_flat)
                     _clear_pending_follow_entry(state)
@@ -3278,6 +3294,7 @@ def run_once(
                 state.open_leg_id = None
                 state.open_leg_side = None
                 state.open_leg_entry_bar_ts = None
+                state.last_trade_side = current_side
 
                 if exit_engine == "tp2" and event_name in ("tp2_exit", "be_exit", "sl_exit"):
                     state.flat_until_new_signal_ts = (
@@ -3396,6 +3413,7 @@ def run_once(
                         state.open_leg_mode = str(exit_engine)
                         state.open_leg_id = _new_ttp_reenter_leg_id(reenter_side, source_ts=ttp_source_ts)
                         state.open_leg_side = str(reenter_side)
+                        state.last_trade_side = None
                         state.open_leg_entry_bar_ts = _now_iso()
 
                         state.n_executions += 1
