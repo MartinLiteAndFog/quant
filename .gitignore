@@ -28,3 +28,4 @@ dashboard/node_modules/
 .gitnexus/*
 !.gitnexus/wiki/
 !.gitnexus/wiki/**
+artifacts/ergo/
