@@ -126,187 +126,54 @@
 </script>
 
 <div class="panel">
-  <section class="block">
-    <h3 class="section-head">Status</h3>
-    <div class="two-col">
-      <div>
-        <div class="venue">KuCoin</div>
-        <div class="mono val">{fmtPrice($chartStore?.bars?.at(-1)?.close)}</div>
-      </div>
-      <div>
-        <div class="venue">Kraken</div>
-        <div class="mono val">{krakenPrice($chartStore?.kraken_metrics)}</div>
-      </div>
-    </div>
-    <div class="kv mono val top-gap">
-      <span class="k">Regime</span>
-      <span>{$chartStore?.day_regime_state ?? $chartStore?.regime_state ?? EM}</span>
-    </div>
-  </section>
-
-  <section class="block">
-    <h3 class="section-head">Position</h3>
-    <div class="two-col">
-      <div>
-        <div class="venue">KuCoin</div>
-        <div class="mono val">{kucoinPositionLabel($statusStore?.position?.side, $statusStore?.position?.position)}</div>
-      </div>
-      <div>
-        <div class="venue">Kraken</div>
-        <div class="mono val">{krakenPositionLabel($chartStore?.kraken_metrics)}</div>
-      </div>
-    </div>
-  </section>
-
-  <section class="block">
-    <h3 class="section-head">Capital</h3>
-    <div class="two-col">
-      <div>
-        <div class="venue">KuCoin</div>
-        <div class="mono val">{fmtMoney($statusStore?.status?.balance?.equity)}</div>
-      </div>
-      <div>
-        <div class="venue">Kraken</div>
-        <div class="mono val">{krakenBalance($chartStore?.kraken_metrics)}</div>
-      </div>
-    </div>
-  </section>
-
-  <section class="block">
-    <h3 class="section-head">Performance</h3>
-    <div class="kv mono val">
-      <span class="k">PnL %</span>
-      <span class={pctClass($statusStore?.performance?.pnl_pct)}>{fmtSignedPct($statusStore?.performance?.pnl_pct)}</span>
-    </div>
-    <div class="kv mono val row-gap">
-      <span class="k">Winrate</span>
-      <span>{fmtWinrate($statusStore?.performance?.winrate)}</span>
-    </div>
-    <div class="kv mono val row-gap">
-      <span class="k">Monthly growth</span>
-      <span class={pctClass($statusStore?.performance?.monthly_growth)}
-        >{fmtSignedPct($statusStore?.performance?.monthly_growth)}</span
-      >
-    </div>
-    <div class="kv mono val row-gap">
-      <span class="k">Average trade</span>
-      <span class={pctClass($statusStore?.performance?.average_gain)}
-        >{fmtSignedPct($statusStore?.performance?.average_gain)}</span
-      >
-    </div>
-    <div class="kv mono val row-gap">
-      <span class="k">Trades</span>
-      <span>{fmtInt($statusStore?.performance?.trade_count)}</span>
-    </div>
-    <div class="kv mono val row-gap">
-      <span class="k">Wins</span>
-      <span class="pos">{fmtInt($statusStore?.performance?.winning_trade_count)}</span>
-    </div>
-    <div class="kv mono val row-gap">
-      <span class="k">Losses</span>
-      <span class="neg">{fmtInt($statusStore?.performance?.losing_trade_count)}</span>
-    </div>
-  </section>
-
-  <section class="block">
-    <h3 class="section-head">Levels</h3>
-    <div class="kv mono val">
-      <span class="k">Side</span>
-      <span>{capitalizeSide($chartStore?.levels?.side)}</span>
-    </div>
-    <div class="kv mono val row-gap">
-      <span class="k">Mode</span>
-      <span>{$chartStore?.levels?.mode ?? EM}</span>
-    </div>
-    <div class="kv mono val row-gap">
-      <span class="k">Entry</span>
-      <span>{fmtNum($chartStore?.levels?.entry_px, 4)}</span>
-    </div>
-    <div class="kv mono val row-gap">
-      <span class="k">SL</span>
-      <span class="neg">{fmtNum($chartStore?.levels?.sl, 4)}</span>
-    </div>
-    <div class="kv mono val row-gap">
-      <span class="k">TP1</span>
-      <span>{fmtNum($chartStore?.levels?.tp1, 4)}</span>
-    </div>
-    <div class="kv mono val row-gap">
-      <span class="k">TP2</span>
-      <span>{fmtNum($chartStore?.levels?.tp2, 4)}</span>
-    </div>
-  </section>
+  <div class="row"><span class="label">Ticker (KuCoin)</span><span class="mono">{fmtPrice($chartStore?.bars?.at(-1)?.close)}</span></div>
+  <div class="row"><span class="label">Ticker (Kraken)</span><span class="mono">{krakenPrice($chartStore?.kraken_metrics)}</span></div>
+  <div class="row"><span class="label">Position</span><span class="mono">{kucoinPositionLabel($statusStore?.position?.side, $statusStore?.position?.position)}</span></div>
+  <div class="row"><span class="label">Notional (est)</span><span class="mono">{fmtMoney($statusStore?.status?.balance?.equity)}</span></div>
+  <hr />
+  <div class="row"><span class="label">Capital</span><span class="mono ok">{fmtMoney($statusStore?.status?.balance?.equity)}</span></div>
+  <div class="row"><span class="label">Regime</span><span>{$chartStore?.day_regime_state ?? $chartStore?.regime_state ?? EM}</span></div>
+  <div class="row"><span class="label">Confidence</span><span class="mono confidence">{fmtSignedPct($statusStore?.performance?.pnl_pct)}</span></div>
+  <div class="row"><span class="label">Bar time</span><span class="mono">{EM}</span></div>
+  <div class="row"><span class="label">Exit mode</span><span>{$chartStore?.levels?.mode ?? EM}</span></div>
+  <div class="row"><span class="label">SL</span><span class="mono">{fmtNum($chartStore?.levels?.sl, 4)}</span></div>
+  <div class="row"><span class="label">TTP</span><span class="mono">{fmtNum($chartStore?.levels?.ttp, 4)}</span></div>
+  <div class="row"><span class="label">TP1</span><span class="mono">{fmtNum($chartStore?.levels?.tp1, 4)}</span></div>
+  <div class="row"><span class="label">TP2</span><span class="mono">{fmtNum($chartStore?.levels?.tp2, 4)}</span></div>
 </div>
 
 <style>
   .panel {
-    padding: 1rem;
+    padding: 0.75rem;
+  }
+
+  .row {
     display: flex;
-    flex-direction: column;
-    gap: 16px;
-    background: transparent;
+    justify-content: space-between;
+    gap: 1rem;
+    margin: 0.4rem 0;
   }
 
-  .block {
-    margin: 0;
-  }
-
-  .section-head {
-    font-size: 0.7rem;
-    letter-spacing: 0.05em;
+  .label {
     color: var(--muted);
-    text-transform: uppercase;
-    font-weight: 600;
-    margin: 0 0 8px 0;
-  }
-
-  .two-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px 16px;
-  }
-
-  .venue {
-    font-size: 0.65rem;
-    letter-spacing: 0.04em;
-    color: var(--muted);
-    text-transform: uppercase;
-    margin-bottom: 4px;
   }
 
   .mono {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
 
-  .val {
-    color: var(--text);
-  }
-
-  .pos {
+  .ok {
     color: var(--green);
   }
 
-  .neg {
-    color: var(--red);
+  .confidence {
+    font-weight: 700;
   }
 
-  .kv {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 12px;
-  }
-
-  .k {
-    color: var(--muted);
-    font-size: 0.75rem;
-    flex-shrink: 0;
-  }
-
-  .row-gap {
-    margin-top: 6px;
-  }
-
-  .top-gap {
-    margin-top: 10px;
+  hr {
+    border-color: #2a3044;
+    border-style: solid;
+    border-width: 1px 0 0 0;
+    margin: 0.8rem 0;
   }
 </style>
