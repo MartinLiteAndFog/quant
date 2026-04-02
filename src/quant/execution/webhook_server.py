@@ -56,6 +56,9 @@ log = get_logger("quant.webhook")
 _STATUS_CACHE: Dict[str, Dict[str, Any]] = {}
 _POSITION_CACHE: Dict[str, Dict[str, Any]] = {}
 _CHART_CACHE: Dict[str, Dict[str, Any]] = {}
+_STRATEGY_CACHE: Dict[str, Dict[str, Any]] = {}
+_PERFORMANCE_CACHE: Dict[str, Dict[str, Any]] = {}
+_DIARY_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _daily_regime_label(gate_state: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -104,11 +107,46 @@ def _state_space_refresh_loop() -> None:
         time.sleep(max(60, interval))
 
 
+def _chart_precompute_loop() -> None:
+    interval = int(os.getenv("DASHBOARD_CHART_PRECOMPUTE_SEC", "12"))
+    symbol = DEFAULT_SYMBOL
+    hours = 24 * 14
+    max_points = 5000
+    cache_key = f"{_normalize_symbol(symbol)}:{hours}:{max_points}"
+    while True:
+        try:
+            result = api_dashboard_chart(symbol=symbol, hours=hours, max_points=max_points)
+            if isinstance(result, dict) and result.get("ok"):
+                _cache_put(_CHART_CACHE, cache_key, result)
+                log_throttled(
+                    log,
+                    logging.INFO,
+                    "chart_precompute_ok",
+                    float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
+                    "chart precompute done: %d bars, key=%s",
+                    len(result.get("bars", [])),
+                    cache_key,
+                )
+        except Exception as e:
+            log_throttled(
+                log,
+                logging.WARNING,
+                "chart_precompute_fail",
+                float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
+                "chart precompute failed: %s",
+                e,
+            )
+        time.sleep(max(5, interval))
+
+
 @asynccontextmanager
 async def _lifespan(a: FastAPI):
     t = threading.Thread(target=_state_space_refresh_loop, daemon=True, name="ss-refresh")
     t.start()
     log.info("state space refresh thread started (interval=%ss)", os.getenv("DASHBOARD_SS_REFRESH_SEC", "300"))
+    tc = threading.Thread(target=_chart_precompute_loop, daemon=True, name="chart-precompute")
+    tc.start()
+    log.info("chart precompute thread started (interval=%ss)", os.getenv("DASHBOARD_CHART_PRECOMPUTE_SEC", "12"))
     _start_renko_cache_updater_if_enabled()
     from quant.execution.tv_signal_executor import start_tv_executor
     start_tv_executor()
@@ -837,23 +875,6 @@ def api_dashboard_chart(
         confidence_out = live_conf if live_conf is not None else latest.get("confidence")
 
         regime_score_data = build_regime_scores(symbol=symbol, hours=int(max(1, hours)), _rows=regime_rows)
-        equity = build_equity_curve(
-            max_points=int(max(100, max_points)),
-            symbol=symbol,
-            venue="kucoin",
-            live_only=True,
-            include_reconstructed=False,
-            allow_file_fallback=allow_file_fallback,
-            allow_fill_reconstruction=False,
-            _trades_df=None,
-        )
-        equity_real = load_real_equity_history(max_points=int(max(100, max_points)))
-        equity_kraken = load_kraken_equity_history(max_points=int(max(100, max_points)))
-        kraken_metrics = load_kraken_metrics()
-        equity_combined = build_combined_equity(
-            kucoin_points=equity_real.get("points", []),
-            kraken_points_usd=equity_kraken.get("points", []),
-        )
         diary = build_trading_diary(
             max_points=int(max(100, max_points)),
             symbol=symbol,
@@ -862,7 +883,24 @@ def api_dashboard_chart(
             include_reconstructed=False,
             allow_file_fallback=allow_file_fallback,
             allow_fill_reconstruction=False,
-            _trades_df=None,
+            _trades_df=trades_df,
+        )
+        equity = build_equity_curve(
+            max_points=int(max(100, max_points)),
+            symbol=symbol,
+            venue="kucoin",
+            live_only=True,
+            include_reconstructed=False,
+            allow_file_fallback=allow_file_fallback,
+            allow_fill_reconstruction=False,
+            _trades_df=trades_df,
+        )
+        equity_real = load_real_equity_history(max_points=int(max(100, max_points)))
+        equity_kraken = load_kraken_equity_history(max_points=int(max(100, max_points)))
+        kraken_metrics = load_kraken_metrics()
+        equity_combined = build_combined_equity(
+            kucoin_points=equity_real.get("points", []),
+            kraken_points_usd=equity_kraken.get("points", []),
         )
 
         equity_components = [
@@ -1029,9 +1067,13 @@ def api_dashboard_chart(
 
 @app.get("/api/dashboard/strategy")
 def api_dashboard_strategy(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
+    cache_key = _normalize_symbol(symbol)
+    cached = _cache_get(_STRATEGY_CACHE, cache_key)
+    if cached is not None:
+        return cached
     try:
         out = load_dashboard_strategy(symbol=symbol)
-        return {
+        result = {
             "ok": True,
             "symbol": out.get("symbol", symbol),
             "strategy_label": out.get("strategy_label"),
@@ -1039,6 +1081,8 @@ def api_dashboard_strategy(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
             "source": out.get("source", "unknown"),
             "ts": out.get("ts", _now_utc_iso()),
         }
+        _cache_put(_STRATEGY_CACHE, cache_key, result)
+        return result
     except Exception as e:
         return {
             "ok": False,
@@ -1056,9 +1100,13 @@ def api_dashboard_performance(
     symbol: str = DEFAULT_SYMBOL,
     venue: str = "kucoin",
 ) -> Dict[str, Any]:
+    cache_key = f"{_normalize_symbol(symbol)}:{venue}"
+    cached = _cache_get(_PERFORMANCE_CACHE, cache_key)
+    if cached is not None:
+        return cached
     try:
         out = build_dashboard_performance(symbol=symbol, venue=venue)
-        return {
+        result = {
             "ok": True,
             "symbol": out.get("symbol", symbol),
             "venue": out.get("venue", venue),
@@ -1074,6 +1122,8 @@ def api_dashboard_performance(
             "source": out.get("source", "unknown"),
             "ts": _now_utc_iso(),
         }
+        _cache_put(_PERFORMANCE_CACHE, cache_key, result)
+        return result
     except Exception as e:
         return {
             "ok": False,
@@ -1194,6 +1244,10 @@ def api_dashboard_diary(
     include_reconstructed: int = 0,
     max_points: int = 500,
 ) -> Dict[str, Any]:
+    cache_key = f"{_normalize_symbol(symbol)}:{venue}:{include_reconstructed}:{max_points}"
+    cached = _cache_get(_DIARY_CACHE, cache_key)
+    if cached is not None:
+        return cached
     try:
         include_reco = int(include_reconstructed) == 1
         allow_file_fallback = str(os.getenv("DASHBOARD_TRADE_ALLOW_FILE_FALLBACK", "0")).strip().lower() in (
@@ -1211,7 +1265,9 @@ def api_dashboard_diary(
             allow_file_fallback=allow_file_fallback,
             allow_fill_reconstruction=include_reco,
         )
-        return {"ok": True, "entries": diary.get("entries", []), "source": diary.get("source"), "ts": _now_utc_iso()}
+        result = {"ok": True, "entries": diary.get("entries", []), "source": diary.get("source"), "ts": _now_utc_iso()}
+        _cache_put(_DIARY_CACHE, cache_key, result)
+        return result
     except Exception as e:
         return {"ok": False, "entries": [], "source": "none", "error": str(e), "ts": _now_utc_iso()}
 

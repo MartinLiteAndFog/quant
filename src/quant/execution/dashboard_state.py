@@ -215,24 +215,23 @@ def load_renko_bars(max_points: int = 5000, _df: Optional[pd.DataFrame] = None) 
     df = _df if _df is not None else _read_renko_df()
     if df.empty:
         return []
-    df = df.tail(int(max(1, max_points)))
-    out: List[Dict[str, Any]] = []
+    df = df.tail(int(max(1, max_points))).copy()
+    ts_epoch = df["ts"].map(lambda t: int(pd.Timestamp(t).timestamp()))
+    mono: List[int] = []
     last_t = -1
-    for _, r in df.iterrows():
-        t_i = int(pd.Timestamp(r["ts"]).timestamp())
+    for t_i in ts_epoch:
         if t_i <= last_t:
             t_i = last_t + 1
         last_t = t_i
-        out.append(
-            {
-                "time": t_i,
-                "open": float(r["open"]),
-                "high": float(r["high"]),
-                "low": float(r["low"]),
-                "close": float(r["close"]),
-            }
-        )
-    return out
+        mono.append(t_i)
+    df["_time"] = mono
+    df["_open"] = df["open"].astype(float)
+    df["_high"] = df["high"].astype(float)
+    df["_low"] = df["low"].astype(float)
+    df["_close"] = df["close"].astype(float)
+    return df[["_time", "_open", "_high", "_low", "_close"]].rename(
+        columns={"_time": "time", "_open": "open", "_high": "high", "_low": "low", "_close": "close"}
+    ).to_dict("records")
 
 
 def load_renko_health(_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
@@ -800,20 +799,17 @@ def load_live_fill_markers(symbol: str, limit: int = 100, start_ts: Optional[int
     if "client_oid" in src_df.columns:
         src_df = src_df[src_df["client_oid"].map(lambda x: _fill_row_allowed(str(x or "")))]
 
-    out: List[Dict[str, Any]] = []
-    for _, r in src_df.iterrows():
-        side = str(r.get("side", "")).lower()
-        sz = float(r.get("size", 0) or 0)
-        px = float(r.get("price", 0) or 0)
-        out.append(
-            {
-                "time": int(r.get("time", 0)),
-                "position": "belowBar" if side == "buy" else "aboveBar",
-                "shape": "arrowUp" if side == "buy" else "arrowDown",
-                "color": "#2ecc71" if side == "buy" else "#f7768e",
-                "text": f"fill {side} {sz:g} @ {px:.3f}",
-            }
-        )
+    w = src_df.copy()
+    w["side"] = w["side"].fillna("").astype(str).str.lower()
+    w["size"] = pd.to_numeric(w["size"], errors="coerce").fillna(0.0)
+    w["price"] = pd.to_numeric(w["price"], errors="coerce").fillna(0.0)
+    is_buy = w["side"] == "buy"
+    w["time"] = w["time"].astype(int)
+    w["position"] = is_buy.map({True: "belowBar", False: "aboveBar"})
+    w["shape"] = is_buy.map({True: "arrowUp", False: "arrowDown"})
+    w["color"] = is_buy.map({True: "#2ecc71", False: "#f7768e"})
+    w["text"] = "fill " + w["side"] + " " + w["size"].map(lambda v: f"{v:g}") + " @ " + w["price"].map(lambda v: f"{v:.3f}")
+    out = w[["time", "position", "shape", "color", "text"]].to_dict("records")
     return sorted(out, key=lambda x: int(x["time"]))
 
 

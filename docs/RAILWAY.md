@@ -118,6 +118,39 @@ debugging
 
 operational reasoning
 
+### DATABOT service (data pipeline)
+
+Typical responsibility:
+- Produce raw market data (Renko bricks) for all trading bots
+- Write to Redis (`renko:{SYM}:latest`, `renko:{SYM}:events` stream)
+- Write to Postgres (`live_renko_bricks` table)
+- Provide health endpoint for monitoring
+
+Typical start command:
+
+```bash
+python -m databot.main
+```
+
+Uses `Dockerfile.databot` instead of the main `Dockerfile`.
+
+Required environment variables:
+- `KUCOIN_FUTURES_API_KEY`
+- `KUCOIN_FUTURES_API_SECRET`
+- `KUCOIN_FUTURES_PASSPHRASE`
+- `REDIS_URL`
+- `POSTGRES_URL` or `DATABASE_URL`
+- `DATABOT_SYMBOLS` (default: `SOL-USDT`, comma-separated for multi-symbol)
+- `DATABOT_RENKO_BOX` (default: `0.1`)
+- `DATABOT_RENKO_DAYS_BACK` (default: `14`)
+- `DATABOT_POLL_SEC` (default: `60`)
+
+Notes:
+- DATABOT runs alongside the existing quant service during migration
+- Once verified, disable the embedded Renko updater in the quant service by setting `ENABLE_DASHBOARD_RENKO_UPDATER=0`
+- DATABOT does NOT compute gates or signals — those remain with strategy services
+- `kraken_bot.py` is deprecated; use `live_executor_2.py` for Kraken execution
+
 5. Environment variables
 
 Set secrets and runtime variables in Railway Variables, not in committed files.
@@ -180,6 +213,7 @@ Operational note:
 - recommended setting: `LIVE_GATE_PRIMARY=on` so `gate_on` continues to mean countertrend
 
 Renko updater note:
+- **DATABOT** is the preferred Renko producer going forward (see [DATABOT service (data pipeline)](#databot-service-data-pipeline) above)
 - the service running the Renko updater should still keep its local `DASHBOARD_RENKO_PARQUET` cache for existing readers
 - but it must also have `POSTGRES_URL` so it can mirror the Renko bricks into `live_renko_bricks` for the cron gate builder
 
