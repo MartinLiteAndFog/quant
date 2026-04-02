@@ -217,6 +217,18 @@ Renko updater note:
 - the service running the Renko updater should still keep its local `DASHBOARD_RENKO_PARQUET` cache for existing readers
 - but it must also have `POSTGRES_URL` so it can mirror the Renko bricks into `live_renko_bricks` for the cron gate builder
 
+#### Phase A verification
+
+After DATABOT is deployed and has run at least one successful refresh, you can sanity-check Redis + Postgres (and optionally the HTTP health endpoint) from your laptop or a Railway shell:
+
+```bash
+python scripts/verify_databot_phase_a.py
+```
+
+Set **`REDIS_URL`** and **`POSTGRES_URL`** (or **`DATABASE_URL`**) to the same values the DATABOT service uses. Optionally set **`DATABOT_HEALTH_URL`** to the service’s public or private base URL; the script calls `/health` unless the URL already ends with `/health`. Optionally override symbols with **`PHASE_A_SYMBOLS`** (comma-separated); otherwise it follows **`DATABOT_SYMBOLS`**, then **`DASHBOARD_SYMBOL`**, then defaults to `SOL-USDT`.
+
+**PASS** means: for every symbol, Redis has a non-empty `renko:{SYM}:latest` payload (canonical symbol without hyphens, e.g. `SOLUSDT`) and Postgres has at least one row in `live_renko_bricks` for that symbol. If **`DATABOT_HEALTH_URL`** is set, the script also requires a successful JSON response with `service: databot` (HTTP 200); `status: degraded` still counts as pass for the HTTP check but you should inspect the JSON `pipelines` field.
+
 6. Public domain
 
 In Railway:
