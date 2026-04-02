@@ -45,5 +45,10 @@ class DatabotConfig:
 
 
 def _parse_symbols() -> List[str]:
-    raw = os.getenv("DATABOT_SYMBOLS", os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"))
+    # If DATABOT_SYMBOLS is set but empty on Railway, getenv returns "" — treat as unset.
+    raw = os.getenv("DATABOT_SYMBOLS", "").strip()
+    if not raw:
+        raw = os.getenv("DASHBOARD_SYMBOL", "SOL-USDT").strip()
+    if not raw:
+        return ["SOL-USDT"]
     return [s.strip() for s in raw.split(",") if s.strip()]
