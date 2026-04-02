@@ -6,6 +6,14 @@ RUN npm ci --no-audit
 COPY frontend/ ./
 RUN npm run build
 
+# Stage 1b — Build Svelte dashboard
+FROM node:20-slim AS dashboard
+WORKDIR /app/dashboard
+COPY dashboard/package.json dashboard/package-lock.json* ./
+RUN npm ci --no-audit
+COPY dashboard/ ./
+RUN npm run build
+
 # Stage 2 — Python runtime
 FROM python:3.12-slim
 WORKDIR /app
@@ -20,6 +28,9 @@ COPY data/regimes/pc_3axis_gate_latest.csv ./data/regimes/pc_3axis_gate_latest.c
 RUN pip install --no-cache-dir .
 
 COPY --from=frontend /app/frontend/dist /app/frontend/dist
+COPY --from=dashboard /app/dashboard/dist /app/dashboard/dist
+
+ENV DASHBOARD2_DIST=/app/dashboard/dist
 
 EXPOSE 8080
 CMD ["python", "-c", "import os, uvicorn; port = int(os.environ.get('PORT', '8080')); print('Starting on 0.0.0.0:' + str(port)); uvicorn.run('quant.execution.webhook_server:app', host='0.0.0.0', port=port)"]
