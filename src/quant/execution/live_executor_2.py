@@ -2349,8 +2349,12 @@ def run_once(
         long_existing = oms.find_stop_order_by_kind(symbol, "flat_entry_long")
         short_existing = oms.find_stop_order_by_kind(symbol, "flat_entry_short")
 
-        suppress_long = (state.last_trade_side == "long")
-        suppress_short = (state.last_trade_side == "short")
+        effective_last_trade_side = state.last_trade_side
+        if effective_last_trade_side is None and sig_now_v != 0:
+            effective_last_trade_side = "long" if sig_now_v > 0 else "short"
+            state.last_trade_side = effective_last_trade_side
+        suppress_long = (effective_last_trade_side == "long")
+        suppress_short = (effective_last_trade_side == "short")
 
         if suppress_long:
             if long_existing:
