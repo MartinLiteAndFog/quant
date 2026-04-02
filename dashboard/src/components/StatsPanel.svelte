@@ -1,145 +1,126 @@
 <script>
   import { chartStore, statusStore } from '../lib/stores.js';
+  import { liveRegimeScore } from '../lib/chartHelpers.js';
+  import { scoreToColor } from '../lib/colors.js';
 
-  const EM = '\u2014';
-
-  /** @param {unknown} n */
-  function numOk(n) {
-    const x = Number(n);
-    return Number.isFinite(x);
+  function fmtNum(v) {
+    if (v == null || !Number.isFinite(Number(v))) return '-';
+    return Number(v).toFixed(4);
   }
 
-  /** @param {unknown} n @param {number} places */
-  function fmtNum(n, places = 4) {
-    if (!numOk(n)) return EM;
-    return Number(n).toFixed(places);
+  function tickerText(st) {
+    if (!st?.ticker) return st?.ticker_error || '-';
+    const t = st.ticker;
+    const b = typeof t.bid === 'number' ? t.bid.toFixed(4) : t.bid;
+    const a = typeof t.ask === 'number' ? t.ask.toFixed(4) : t.ask;
+    const m = t.mid != null ? (typeof t.mid === 'number' ? t.mid.toFixed(4) : t.mid) : null;
+    return m != null ? `${m} (bid ${b} / ask ${a})` : `${b} / ${a}`;
   }
 
-  /** @param {unknown} n */
-  function fmtPrice(n) {
-    if (!numOk(n)) return EM;
-    const x = Math.abs(Number(n));
-    const d = x >= 100 ? 2 : x >= 1 ? 3 : 4;
-    return Number(n).toFixed(d);
+  function positionText(pos) {
+    if (pos?.position == null) return pos?.error || '-';
+    const lev = (pos.leverage != null && Number.isFinite(Number(pos.leverage)))
+      ? ' x' + Number(pos.leverage).toFixed(1) : '';
+    return String(pos.position) + lev;
   }
 
-  /** @param {unknown} n */
-  function fmtMoney(n) {
-    if (!numOk(n)) return EM;
-    return `$${Number(n).toFixed(2)}`;
+  function notionalText(pos, st) {
+    if (pos?.position == null || !st?.ticker?.mid) return '-';
+    const mult = Number(pos.contract_multiplier || 1);
+    const notional = Math.abs(Number(pos.position)) * mult * Number(st.ticker.mid);
+    return Number.isFinite(notional) ? notional.toFixed(2) + ' USDT' : '-';
   }
 
-  /** @param {unknown} n */
-  function fmtSignedPct(n) {
-    if (!numOk(n)) return EM;
-    const v = Number(n);
-    const sign = v > 0 ? '+' : '';
-    return `${sign}${v.toFixed(2)}%`;
+  function capitalText(st) {
+    const bal = st?.balance;
+    if (bal?.equity != null) return Number(bal.equity).toFixed(2) + ' USDT';
+    return '-';
   }
 
-  /** @param {unknown} n */
-  function pctClass(n) {
-    if (!numOk(n)) return '';
-    const v = Number(n);
-    if (v > 0) return 'pos';
-    if (v < 0) return 'neg';
+  function apiStatusText(st) {
+    return st?.api_configured ? 'configured' : 'missing';
+  }
+
+  function apiStatusClass(st) {
+    return st?.api_configured ? 'ok' : 'err';
+  }
+
+  function exitModeText(payload) {
+    if (!payload?.levels) return '-';
+    const levels = payload.levels;
+    const sl = Number(levels.sl);
+    const ttp = Number(levels.ttp);
+    const hasSl = Number.isFinite(sl);
+    const hasTtp = Number.isFinite(ttp);
+    if (hasTtp) return 'TTP (trailing)';
+    if (hasSl) return 'SL (stop loss)';
+    return '-';
+  }
+
+  function exitModeClass(payload) {
+    if (!payload?.levels) return '';
+    const ttp = Number(payload.levels.ttp);
+    const sl = Number(payload.levels.sl);
+    if (Number.isFinite(ttp)) return 'ok';
+    if (Number.isFinite(sl)) return 'err';
     return '';
   }
 
-  /** @param {unknown} n */
-  function fmtWinrate(n) {
-    if (!numOk(n)) return EM;
-    return `${Number(n).toFixed(2)}%`;
-  }
-
-  /** @param {unknown} side @param {unknown} qty */
-  function kucoinPositionLabel(side, qty) {
-    const q = Number(qty);
-    const flatQty = !Number.isFinite(q) || Math.abs(q) < 1e-12;
-    if (side == null || side === '') {
-      return flatQty ? 'Flat' : EM;
+  function barTimeText(payload) {
+    let barTs = null;
+    const levels = payload?.levels;
+    if (levels?.entry_bar_ts != null && Number.isFinite(Number(levels.entry_bar_ts))) {
+      barTs = Number(levels.entry_bar_ts);
+    } else if (payload?.open_position?.entry_time != null && Number.isFinite(Number(payload.open_position.entry_time))) {
+      barTs = Number(payload.open_position.entry_time);
     }
-    const s = String(side).toLowerCase();
-    if (s === 'none' || s === 'flat') return 'Flat';
-    if (flatQty) return 'Flat';
-    const label =
-      s === 'long' || s === 'buy' || s === 'l' ? 'Long' : s === 'short' || s === 'sell' || s === 's' ? 'Short' : null;
-    if (!label) return 'Flat';
-    const abs = Math.abs(q);
-    const qStr = abs >= 100 ? abs.toFixed(0) : abs >= 10 ? abs.toFixed(1) : abs.toFixed(2);
-    return `${label} ${qStr}`;
+    if (barTs == null) return '-';
+    const d = new Date(barTs * 1000);
+    const yy = d.getUTCFullYear();
+    const mo = String(d.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(d.getUTCDate()).padStart(2, '0');
+    const hh = String(d.getUTCHours()).padStart(2, '0');
+    const mm = String(d.getUTCMinutes()).padStart(2, '0');
+    return `${yy}-${mo}-${dd} ${hh}:${mm} UTC`;
   }
 
-  /** @param {Record<string, unknown> | null | undefined} km */
-  function krakenPositionLabel(km) {
-    if (!km || typeof km !== 'object') return EM;
-    const pos = km.position;
-    if (typeof pos === 'string' && pos.trim()) return pos.trim();
-    const size = Number(km.venue_pos_size ?? km.size_rem);
-    if (!Number.isFinite(size) || size === 0) return 'Flat';
-    const sideN = Number(km.venue_pos_side ?? km.pos_side);
-    let label = 'Flat';
-    if (sideN >= 1) label = 'Long';
-    else if (sideN <= -1) label = 'Short';
-    else label = size > 0 ? 'Long' : 'Short';
-    const abs = Math.abs(size);
-    const qStr = abs >= 100 ? abs.toFixed(0) : abs >= 10 ? abs.toFixed(1) : abs.toFixed(2);
-    return `${label} ${qStr}`;
+  function confidenceText(payload) {
+    const conf = payload?.confidence == null ? null : Number(payload.confidence);
+    if (conf == null) return '-';
+    return conf.toFixed(3);
   }
 
-  /** @param {Record<string, unknown> | null | undefined} km */
-  function krakenPrice(km) {
-    if (!km || typeof km !== 'object') return EM;
-    const p = km.price ?? km.mark_price;
-    return fmtPrice(p);
-  }
-
-  /** @param {Record<string, unknown> | null | undefined} km */
-  function krakenBalance(km) {
-    if (!km || typeof km !== 'object') return EM;
-    const b = km.balance ?? km.equity_usd ?? km.wallet_usd;
-    return fmtMoney(b);
-  }
-
-  /** @param {unknown} side */
-  function capitalizeSide(side) {
-    if (side == null || side === '') return EM;
-    if (typeof side === 'number' && Number.isFinite(side)) {
-      if (side > 0) return 'Long';
-      if (side < 0) return 'Short';
-      return 'Flat';
+  function confidenceColor(payload) {
+    const conf = payload?.confidence == null ? null : Number(payload.confidence);
+    if (conf == null) return 'inherit';
+    const score = liveRegimeScore(payload);
+    if (Number.isFinite(score)) {
+      return score >= 0 ? '#9ece6a' : '#f7768e';
     }
-    const s = String(side).toLowerCase();
-    if (s === 'long' || s === '1') return 'Long';
-    if (s === 'short' || s === '-1') return 'Short';
-    if (s === 'flat' || s === '0') return 'Flat';
-    return s.charAt(0).toUpperCase() + s.slice(1);
-  }
-
-  /** @param {unknown} n */
-  function fmtInt(n) {
-    if (n == null || n === '') return EM;
-    const x = Number(n);
-    if (!Number.isFinite(x)) return EM;
-    return String(Math.round(x));
+    const rs = String(payload.regime_state || '').toLowerCase();
+    if (rs === 'trend') {
+      return conf >= 0.7 ? '#9ece6a' : (conf >= 0.5 ? '#e0af68' : '#f7768e');
+    }
+    return conf >= 0.7 ? '#f7768e' : (conf >= 0.5 ? '#e0af68' : '#9ece6a');
   }
 </script>
 
 <div class="panel">
-  <div class="row"><span class="label">Ticker (KuCoin)</span><span class="mono">{fmtPrice($chartStore?.bars?.at(-1)?.close)}</span></div>
-  <div class="row"><span class="label">Ticker (Kraken)</span><span class="mono">{krakenPrice($chartStore?.kraken_metrics)}</span></div>
-  <div class="row"><span class="label">Position</span><span class="mono">{kucoinPositionLabel($statusStore?.position?.side, $statusStore?.position?.position)}</span></div>
-  <div class="row"><span class="label">Notional (est)</span><span class="mono">{fmtMoney($statusStore?.status?.balance?.equity)}</span></div>
+  <div class="row"><span class="label">API (KuCoin)</span><span class={apiStatusClass($statusStore?.status)}>{apiStatusText($statusStore?.status)}</span></div>
+  <div class="row"><span class="label">Ticker</span><span class="mono">{tickerText($statusStore?.status)}</span></div>
+  <div class="row"><span class="label">Position</span><span class="mono">{positionText($statusStore?.position)}</span></div>
+  <div class="row"><span class="label">Notional (est)</span><span class="mono">{notionalText($statusStore?.position, $statusStore?.status)}</span></div>
   <hr />
-  <div class="row"><span class="label">Capital</span><span class="mono ok">{fmtMoney($statusStore?.status?.balance?.equity)}</span></div>
-  <div class="row"><span class="label">Regime</span><span>{$chartStore?.day_regime_state ?? $chartStore?.regime_state ?? EM}</span></div>
-  <div class="row"><span class="label">Confidence</span><span class="mono confidence">{fmtSignedPct($statusStore?.performance?.pnl_pct)}</span></div>
-  <div class="row"><span class="label">Bar time</span><span class="mono">{EM}</span></div>
-  <div class="row"><span class="label">Exit mode</span><span>{$chartStore?.levels?.mode ?? EM}</span></div>
-  <div class="row"><span class="label">SL</span><span class="mono">{fmtNum($chartStore?.levels?.sl, 4)}</span></div>
-  <div class="row"><span class="label">TTP</span><span class="mono">{fmtNum($chartStore?.levels?.ttp, 4)}</span></div>
-  <div class="row"><span class="label">TP1</span><span class="mono">{fmtNum($chartStore?.levels?.tp1, 4)}</span></div>
-  <div class="row"><span class="label">TP2</span><span class="mono">{fmtNum($chartStore?.levels?.tp2, 4)}</span></div>
+  <div class="row"><span class="label">Capital</span><span class="mono ok">{capitalText($statusStore?.status)}</span></div>
+  <div class="row"><span class="label">Regime</span><span>{$chartStore?.day_regime_state ?? $chartStore?.regime_state ?? '-'}</span></div>
+  <div class="row"><span class="label">Confidence</span><span class="confidence-pill" style:color={confidenceColor($chartStore)}>{confidenceText($chartStore)}</span></div>
+  <div class="row"><span class="label">Bar time</span><span class="mono">{barTimeText($chartStore)}</span></div>
+  <div class="row"><span class="label">Exit mode</span><span class={exitModeClass($chartStore)}>{exitModeText($chartStore)}</span></div>
+  <div class="row"><span class="label">SL</span><span class="mono">{fmtNum($chartStore?.levels?.sl)}</span></div>
+  <div class="row"><span class="label">TTP</span><span class="mono">{fmtNum($chartStore?.levels?.ttp)}</span></div>
+  <div class="row"><span class="label">TP1</span><span class="mono">{fmtNum($chartStore?.levels?.tp1)}</span></div>
+  <div class="row"><span class="label">TP2</span><span class="mono">{fmtNum($chartStore?.levels?.tp2)}</span></div>
+  <p class="hint">{$statusStore?.status?.hint ?? ''}</p>
 </div>
 
 <style>
@@ -166,8 +147,18 @@
     color: var(--green);
   }
 
-  .confidence {
+  .err {
+    color: var(--red);
+  }
+
+  .confidence-pill {
     font-weight: 700;
+  }
+
+  .hint {
+    color: var(--muted);
+    font-size: 0.85rem;
+    margin-top: 0.5rem;
   }
 
   hr {
