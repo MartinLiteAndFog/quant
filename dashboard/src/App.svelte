@@ -138,7 +138,15 @@
     gap: 0;
   }
   .stats-panel { grid-column: 1; grid-row: 1; overflow-y: auto; }
-  .chart-area { grid-column: 2; grid-row: 1; display: flex; flex-direction: column; min-height: 0; }
+  .chart-area {
+    grid-column: 2;
+    grid-row: 1;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    border-left: 1px solid var(--border, #2a3040);
+    border-right: 1px solid var(--border, #2a3040);
+  }
   .right-panel { grid-column: 3; grid-row: 1; display: flex; flex-direction: column; }
   .equity-bar { grid-column: 1 / -1; grid-row: 2; }
 
