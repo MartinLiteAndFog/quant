@@ -43,21 +43,23 @@ class TvSignalExecutorTests(unittest.TestCase):
             updated_at=0.0,
         )
 
-    def test_parse_tv_signal_rejects_unknown_side(self) -> None:
-        with self.assertRaisesRegex(ValueError, "invalid side"):
-            tv.parse_tv_signal({"action": "sl", "side": "hold"}, default_symbol="SOL-USDT")
+    def test_parse_tv_signal_allows_non_entry_side_labels(self) -> None:
+        signal = tv.parse_tv_signal({"action": "sl", "side": "hold"}, default_symbol="SOL-USDT")
+        self.assertEqual(signal.action, "sl")
+        self.assertEqual(signal.side, "hold")
+        self.assertEqual(signal.symbol, "SOL-USDT")
 
-    def test_sl_buy_rejected_when_live_position_is_long(self) -> None:
+    def test_sl_buy_allowed_when_live_position_is_long(self) -> None:
         signal = TVSignal(action="sl", side="buy", symbol="SOL-USDT")
         cache = self._cache(position=3.0, current_side="long")
 
         with patch.object(tv, "_get_cache", return_value=cache):
             result = tv.execute_tv_signal(signal, self.config)
 
-        self.assertFalse(result["ok"])
+        self.assertTrue(result["ok"])
         self.assertEqual(result["action"], "sl")
-        self.assertIn("side_mismatch", result["reason"])
-        self.assertIn("expected_sell_to_close_long", result["reason"])
+        self.assertEqual(result["reason"], "dry_run")
+        self.assertEqual(result["qty"], 3)
 
     def test_sl_sell_allowed_when_live_position_is_long(self) -> None:
         signal = TVSignal(action="sl", side="sell", symbol="SOL-USDT")
