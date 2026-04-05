@@ -99,9 +99,21 @@ class TvSignalExecutorTests(unittest.TestCase):
         broker = _EntryBroker()
         signal = TVSignal(action="entry", side="sell", symbol="SOL-USDT")
         cache = self._cache(position=0.0, current_side="flat")
+        live_config = TVExecConfig(
+            symbol=self.config.symbol,
+            pos_pct=self.config.pos_pct,
+            leverage=self.config.leverage,
+            order_leverage=self.config.order_leverage,
+            tp1_close_pct=self.config.tp1_close_pct,
+            dry_run=False,
+            gate_mode=self.config.gate_mode,
+            cache_sec=self.config.cache_sec,
+            cache_max_age_sec=self.config.cache_max_age_sec,
+            emergency_sl_pct=0.0,
+        )
 
-        with patch.object(tv, "_broker", broker), patch.object(tv, "_get_cache", return_value=cache):
-            result = tv.execute_tv_signal(signal, self.config)
+        with patch.object(tv, "_broker", broker), patch.object(tv, "_get_cache", return_value=cache), patch.object(tv, "_refresh_position_in_cache", return_value=None):
+            result = tv.execute_tv_signal(signal, live_config)
 
         self.assertTrue(result["ok"])
         self.assertEqual(broker.cancel_calls, ["SOL-USDT"])

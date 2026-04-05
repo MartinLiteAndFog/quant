@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from fastapi import Request
 
+import quant.execution.webhook_server as ws
 from quant.execution.webhook_server import tv_execute_webhook
 
 
@@ -37,15 +38,24 @@ class TvExecuteWebhookTests(unittest.TestCase):
         request = _json_request({"action": "entry", "side": "buy", "symbol": "SOL-USDT"})
 
         async def _run():
+            from quant.execution.tv_signal_executor import TVSignal
+
+            class _Cfg:
+                symbol = "SOL-USDT"
+
+                @classmethod
+                def from_env(cls):
+                    return cls()
+
+            def _raise_execute(*args, **kwargs):
+                raise RuntimeError("KuCoin API error: insufficient margin")
+
             with patch("quant.execution.webhook_server._auth_required", return_value=False), \
                  patch("quant.execution.tv_signal_executor._ready.is_set", return_value=True), \
-                 patch("quant.execution.webhook_server.parse_tv_signal") as parse_mock, \
-                 patch("quant.execution.webhook_server.execute_tv_signal", side_effect=RuntimeError("KuCoin API error: insufficient margin")), \
+                 patch("quant.execution.tv_signal_executor.parse_tv_signal", return_value=TVSignal(action="entry", side="buy", symbol="SOL-USDT")), \
+                 patch("quant.execution.tv_signal_executor.execute_tv_signal", side_effect=_raise_execute), \
+                 patch("quant.execution.tv_signal_executor.TVExecConfig", _Cfg), \
                  patch("asyncio.get_event_loop") as loop_mock:
-                from quant.execution.tv_signal_executor import TVSignal
-
-                parse_mock.return_value = TVSignal(action="entry", side="buy", symbol="SOL-USDT")
-
                 class _Loop:
                     async def run_in_executor(self, executor, fn, *args):
                         return fn(*args)
