@@ -1128,6 +1128,7 @@ def load_kraken_metrics() -> Dict[str, Any]:
 
 def load_kraken_metrics_from_action_events(symbol: str = "SOL-USDT") -> Dict[str, Any]:
     try:
+        symbol_norm = _normalize_symbol_token(symbol)
         sql = """
             select
                 ts,
@@ -1137,11 +1138,12 @@ def load_kraken_metrics_from_action_events(symbol: str = "SOL-USDT") -> Dict[str
                 payload_json
             from action_events
             where venue = 'kraken'
+              and replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
             order by ts desc
             limit 1
         """
         with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(sql)
+            cur.execute(sql, {"symbol_norm": symbol_norm})
             row = cur.fetchone()
 
         if not row:

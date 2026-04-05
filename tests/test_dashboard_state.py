@@ -14,6 +14,7 @@ from quant.execution.dashboard_state import (
     build_combined_equity,
     build_regime_overlay,
     load_kraken_equity_history,
+    load_kraken_metrics_from_action_events,
     load_kraken_metrics,
     load_active_levels,
     load_dashboard_strategy,
@@ -221,6 +222,50 @@ class DashboardStateTests(unittest.TestCase):
         h = load_kraken_equity_history(max_points=100)
         self.assertEqual(float(m.get("equity_usd", 0.0)), 1000.0)
         self.assertEqual(len(h.get("points", [])), 2)
+
+    def test_load_kraken_metrics_from_action_events_filters_by_symbol(self) -> None:
+        executed: dict[str, object] = {}
+
+        class _Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, sql, params=None):
+                executed["sql"] = sql
+                executed["params"] = params
+
+            def fetchone(self):
+                return (
+                    "2026-02-20T00:00:00Z",
+                    "short",
+                    -1,
+                    "TTP",
+                    {"payload_json": {"live_pos": -5}, "entry_px": 100.0},
+                )
+
+        class _Conn:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def cursor(self):
+                return _Cursor()
+
+        with (
+            patch("quant.execution.dashboard_state.get_conn", return_value=_Conn()),
+            patch("quant.execution.dashboard_state.load_kraken_equity_history", return_value={"points": []}),
+        ):
+            metrics = load_kraken_metrics_from_action_events(symbol="SOL-USDT")
+
+        self.assertEqual(metrics.get("mode"), "TTP")
+        self.assertEqual(metrics.get("venue_pos_side"), -1)
+        self.assertIn("symbol_norm", str(executed.get("sql")))
+        self.assertEqual(executed.get("params"), {"symbol_norm": "SOLUSDT"})
 
     def test_kraken_equity_loader_accepts_legacy_timestamp_and_equity_columns(self) -> None:
         equity_path = self.tmp_path / "kraken_equity_legacy.csv"
