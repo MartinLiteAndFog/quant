@@ -434,7 +434,7 @@ class LiveExecutor2TtpTests(unittest.TestCase):
     def test_pending_follow_entry_reenters_without_waiting_for_terminal_confirmation(self) -> None:
         """Flip: pending follow entry armed while in position fires market entry when flat."""
         state = ExecutorState(
-            latched_exit_engine="flip",
+            latched_exit_engine="tp2",
             pending_follow_entry=True,
             pending_follow_entry_side="short",
             pending_follow_entry_reason="flip_to_short",
@@ -444,6 +444,7 @@ class LiveExecutor2TtpTests(unittest.TestCase):
         state.pending_follow_entry_source_side = "long"  # type: ignore[attr-defined]
         broker = _FlatBroker()
         oms = _FlatOms()
+        action_events: list[dict] = []
 
         with (
             patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
@@ -454,7 +455,7 @@ class LiveExecutor2TtpTests(unittest.TestCase):
             patch("quant.execution.live_executor_2._latest_signal", return_value=None),
             patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
             patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
-            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", side_effect=lambda **kwargs: action_events.append(kwargs)),
             patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
             patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
             patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
@@ -475,6 +476,11 @@ class LiveExecutor2TtpTests(unittest.TestCase):
         self.assertFalse(state.pending_follow_entry)
         self.assertEqual(len(oms.enter_market_calls), 1)
         self.assertEqual(oms.enter_market_calls[0][1], "short")
+        self.assertEqual(state.latched_exit_engine, "flip")
+        self.assertEqual(state.open_leg_mode, "flip")
+        self.assertEqual(len(action_events), 1)
+        self.assertEqual(action_events[0]["engine_action"], "follow_entry_after_close")
+        self.assertEqual(action_events[0]["engine_mode_after"], "TTP")
 
     def test_opposite_imba_cross_syncs_short_exit_and_flip_entry_orders(self) -> None:
         state = ExecutorState(

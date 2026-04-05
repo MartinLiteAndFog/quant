@@ -2253,7 +2253,9 @@ def run_once(
                 )
                 if _ok(res):
                     details = _details(res)
+                    follow_entry_mode = "TTP" if str(desired_exit_engine) == "flip" else str(terminal.get("mode") or "")
                     _clear_pending_follow_entry(state)
+                    state.latched_exit_engine = str(desired_exit_engine)
                     state.open_leg_mode = str(desired_exit_engine)
                     state.open_leg_id = str(terminal.get("leg_id") or "") or None
                     state.open_leg_side = str(pending_side)
@@ -2283,6 +2285,33 @@ def run_once(
                         status=_mode(res) or "fill",
                         reject_reason=None,
                         payload_json={"action": "follow_entry_after_close", "result": details, "event_name": event_name},
+                    )
+                    state.n_actions += 1
+                    _append_action_event(
+                        strategy="live_executor_2",
+                        symbol=symbol,
+                        ts_iso=_now_iso(),
+                        seq=int(state.n_actions),
+                        engine_action="follow_entry_after_close",
+                        action_side=pending_side,
+                        reason_code=event_name,
+                        position_before=0,
+                        position_after=(1 if pending_side == "long" else -1),
+                        engine_mode_before=follow_entry_mode,
+                        engine_mode_after=follow_entry_mode,
+                        blocked=False,
+                        block_reason=None,
+                        payload_json={
+                            "terminal_pos": 0,
+                            "current_side": current_side,
+                            "want_side": pending_side,
+                            "qty": float(qty),
+                            "mid": float(mid),
+                            "event_name": event_name,
+                            "follow_entry": True,
+                            "gate": gate,
+                            "desired_exit_engine": str(desired_exit_engine),
+                        },
                     )
 
                     fresh_equity = _resolve_equity(broker)
