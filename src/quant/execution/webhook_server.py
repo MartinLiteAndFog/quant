@@ -2739,7 +2739,16 @@ async def tv_execute_webhook(
 
     import asyncio
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, execute_tv_signal, signal, config)
+    try:
+        result = await loop.run_in_executor(None, execute_tv_signal, signal, config)
+    except Exception as e:
+        return {
+            "ok": False,
+            "action": signal.action,
+            "symbol": signal.symbol,
+            "reason": str(e),
+            "error_type": type(e).__name__,
+        }
 
     return result
 
