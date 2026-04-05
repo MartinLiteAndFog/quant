@@ -89,6 +89,8 @@ def parse_tv_signal(payload: Dict[str, Any], default_symbol: str = "") -> TVSign
         raise ValueError(f"invalid action '{action}', must be one of {VALID_ACTIONS}")
 
     side = str(payload.get("side", "")).strip().lower()
+    if side and side not in VALID_SIDES:
+        raise ValueError(f"invalid side '{side}', must be one of {VALID_SIDES}")
     if action in ("entry", "flip") and side not in VALID_SIDES:
         raise ValueError(f"action '{action}' requires side (buy|sell), got '{side}'")
 
@@ -102,6 +104,22 @@ def parse_tv_signal(payload: Dict[str, Any], default_symbol: str = "") -> TVSign
         sym = default_symbol or "SOL-USDT"
 
     return TVSignal(action=action, side=side, symbol=sym)
+
+
+def _close_side_for_position(position_side: str) -> str:
+    return "sell" if position_side == "long" else "buy"
+
+
+def _validate_exit_signal_side(action: str, signal_side: str, position_side: str) -> Optional[str]:
+    if position_side not in ("long", "short") or not signal_side:
+        return None
+    expected_side = _close_side_for_position(position_side)
+    if signal_side == expected_side:
+        return None
+    return (
+        f"side_mismatch:action={action}:expected_{expected_side}"
+        f"_to_close_{position_side}:got_{signal_side}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -566,11 +584,16 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
         if close_qty <= 0:
             return {"ok": True, "action": "exit", "reason": "already_flat"}
 
+        side_error = _validate_exit_signal_side(signal.action, signal.side, side)
+        if side_error is not None:
+            log.warning("tv_executor reject exit signal: %s", side_error)
+            return {"ok": False, "action": "exit", "reason": side_error}
+
         if config.dry_run:
             log.warning("tv_executor DRY_RUN exit %s qty=%d", side, close_qty)
             return {"ok": True, "action": "exit", "reason": "dry_run", "qty": close_qty}
 
-        close_side = "sell" if side == "long" else "buy"
+        close_side = _close_side_for_position(side)
         oid = _place_market(broker, signal.symbol, close_side, close_qty, reduce_only=True, action_label="exit")
 
         _refresh_position_in_cache(broker, config)
@@ -598,11 +621,16 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
         if close_qty > abs(int(pos)):
             close_qty = abs(int(pos))
 
+        side_error = _validate_exit_signal_side(signal.action, signal.side, side)
+        if side_error is not None:
+            log.warning("tv_executor reject tp1 signal: %s", side_error)
+            return {"ok": False, "action": "tp1", "reason": side_error}
+
         if config.dry_run:
             log.warning("tv_executor DRY_RUN tp1 %s qty=%d", side, close_qty)
             return {"ok": True, "action": "tp1", "reason": "dry_run", "qty": close_qty}
 
-        close_side = "sell" if side == "long" else "buy"
+        close_side = _close_side_for_position(side)
         oid = _place_market(broker, signal.symbol, close_side, close_qty, reduce_only=True, action_label="tp1")
 
         _refresh_position_in_cache(broker, config)
@@ -626,11 +654,16 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
         if close_qty <= 0:
             return {"ok": True, "action": "tp2", "reason": "already_flat"}
 
+        side_error = _validate_exit_signal_side(signal.action, signal.side, side)
+        if side_error is not None:
+            log.warning("tv_executor reject tp2 signal: %s", side_error)
+            return {"ok": False, "action": "tp2", "reason": side_error}
+
         if config.dry_run:
             log.warning("tv_executor DRY_RUN tp2 %s qty=%d", side, close_qty)
             return {"ok": True, "action": "tp2", "reason": "dry_run", "qty": close_qty}
 
-        close_side = "sell" if side == "long" else "buy"
+        close_side = _close_side_for_position(side)
         oid = _place_market(broker, signal.symbol, close_side, close_qty, reduce_only=True, action_label="tp2")
 
         _refresh_position_in_cache(broker, config)
@@ -654,6 +687,11 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
         if close_qty <= 0:
             return {"ok": True, "action": "sl", "reason": "already_flat"}
 
+        side_error = _validate_exit_signal_side(signal.action, signal.side, side)
+        if side_error is not None:
+            log.warning("tv_executor reject sl signal: %s", side_error)
+            return {"ok": False, "action": "sl", "reason": side_error}
+
         if config.dry_run:
             log.warning("tv_executor DRY_RUN sl %s qty=%d", side, close_qty)
             return {"ok": True, "action": "sl", "reason": "dry_run", "qty": close_qty}
@@ -668,7 +706,7 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
         except Exception:
             pass
 
-        close_side = "sell" if side == "long" else "buy"
+        close_side = _close_side_for_position(side)
         oid = _place_market(broker, signal.symbol, close_side, close_qty, reduce_only=True, action_label="sl")
 
         _refresh_position_in_cache(broker, config)

@@ -1,0 +1,76 @@
+from __future__ import annotations
+
+import unittest
+from unittest.mock import patch
+
+import quant.execution.tv_signal_executor as tv
+from quant.execution.tv_signal_executor import TVCache, TVExecConfig, TVSignal
+
+
+class TvSignalExecutorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.config = TVExecConfig(
+            symbol="SOL-USDT",
+            pos_pct=0.5,
+            leverage=10.0,
+            tp1_close_pct=0.5,
+            dry_run=True,
+            gate_mode="countertrend",
+            cache_sec=10.0,
+            cache_max_age_sec=60.0,
+            emergency_sl_pct=0.023,
+        )
+        self._orig_broker = tv._broker
+        tv._broker = object()
+
+    def tearDown(self) -> None:
+        tv._broker = self._orig_broker
+
+    @staticmethod
+    def _cache(*, position: float, current_side: str) -> TVCache:
+        return TVCache(
+            position=position,
+            current_side=current_side,
+            equity=1000.0,
+            mid_price=100.0,
+            bid=99.5,
+            ask=100.5,
+            contract_multiplier=1.0,
+            qty=10,
+            gate_on=0,
+            gate_allows_entry=True,
+            gate_source="test",
+            updated_at=0.0,
+        )
+
+    def test_parse_tv_signal_rejects_unknown_side(self) -> None:
+        with self.assertRaisesRegex(ValueError, "invalid side"):
+            tv.parse_tv_signal({"action": "sl", "side": "hold"}, default_symbol="SOL-USDT")
+
+    def test_sl_buy_rejected_when_live_position_is_long(self) -> None:
+        signal = TVSignal(action="sl", side="buy", symbol="SOL-USDT")
+        cache = self._cache(position=3.0, current_side="long")
+
+        with patch.object(tv, "_get_cache", return_value=cache):
+            result = tv.execute_tv_signal(signal, self.config)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["action"], "sl")
+        self.assertIn("side_mismatch", result["reason"])
+        self.assertIn("expected_sell_to_close_long", result["reason"])
+
+    def test_sl_sell_allowed_when_live_position_is_long(self) -> None:
+        signal = TVSignal(action="sl", side="sell", symbol="SOL-USDT")
+        cache = self._cache(position=3.0, current_side="long")
+
+        with patch.object(tv, "_get_cache", return_value=cache):
+            result = tv.execute_tv_signal(signal, self.config)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "sl")
+        self.assertEqual(result["reason"], "dry_run")
+        self.assertEqual(result["qty"], 3)
+
+
+if __name__ == "__main__":
+    unittest.main()
