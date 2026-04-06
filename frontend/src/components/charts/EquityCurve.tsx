@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   AreaChart,
   Area,
@@ -13,6 +13,7 @@ import type {
   EquityComponent,
   TradeEquityPoint,
   DashboardEquityMode,
+  TimeRange,
 } from "../../types/chart";
 
 interface EquityCurveProps {
@@ -20,9 +21,9 @@ interface EquityCurveProps {
   components?: EquityComponent[];
   totalEquity?: { time: number; equity: number }[];
   tradeEquity?: TradeEquityPoint[];
+  range: TimeRange;
+  onRangeChange: (range: TimeRange) => void;
 }
-
-type TimeRange = "24h" | "7d" | "30d" | "all";
 
 const RANGE_SEC: Record<TimeRange, number | null> = {
   "24h": 24 * 3600,
@@ -176,8 +177,9 @@ export default function EquityCurve({
   components = [],
   totalEquity,
   tradeEquity = [],
+  range,
+  onRangeChange,
 }: EquityCurveProps) {
-  const [range, setRange] = useState<TimeRange>("7d");
 
   const { chartData, keys } = useMemo(() => {
     if (mode === "trade") {
@@ -247,7 +249,7 @@ export default function EquityCurve({
             <button
               key={value}
               type="button"
-              onClick={() => setRange(value)}
+              onClick={() => onRangeChange(value)}
               className={`rounded px-2 py-1 text-xs font-medium transition-colors ${
                 range === value
                   ? "bg-zinc-700 text-zinc-100"

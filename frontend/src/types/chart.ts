@@ -123,6 +123,8 @@ export interface TradeEquityPoint {
 
 export type DashboardEquityMode = "account" | "trade";
 
+export type TimeRange = "24h" | "7d" | "30d" | "all";
+
 export interface DiaryEntry {
   time: number;
   pnl_pct: number;

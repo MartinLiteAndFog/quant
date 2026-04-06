@@ -37,14 +37,14 @@ export interface DashboardPerformanceResponse {
   ts?: string;
 }
 
-export function useChartData(symbol: string, hours: number) {
+export function useChartData(symbol: string, hours: number, maxPoints = 4000) {
   return useQuery({
-    queryKey: ["chart", symbol, hours],
+    queryKey: ["chart", symbol, hours, maxPoints],
     queryFn: () =>
       apiFetch<ChartResponse>("/api/dashboard/chart", {
         symbol,
         hours: String(hours),
-        max_points: "3000",
+        max_points: String(maxPoints),
       }),
     refetchInterval: 4000,
   });

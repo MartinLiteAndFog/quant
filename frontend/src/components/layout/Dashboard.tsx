@@ -9,7 +9,7 @@ import {
 import PriceChart from "../charts/PriceChart";
 import EquityCurve from "../charts/EquityCurve";
 import { Sidebar } from "./Sidebar";
-import type { DashboardEquityMode } from "../../types/chart";
+import type { DashboardEquityMode, TimeRange } from "../../types/chart";
 
 function ChartSkeleton() {
   return (
@@ -33,13 +33,21 @@ function EquitySkeleton() {
   );
 }
 
+const RANGE_PARAMS: Record<TimeRange, { hours: number; maxPoints: number }> = {
+  "24h": { hours: 24, maxPoints: 2000 },
+  "7d": { hours: 24 * 7, maxPoints: 3000 },
+  "30d": { hours: 24 * 30, maxPoints: 5000 },
+  all: { hours: 24 * 120, maxPoints: 10000 },
+};
+
 export default function Dashboard() {
   const [equityMode, setEquityMode] = useState<DashboardEquityMode>("account");
+  const [equityRange, setEquityRange] = useState<TimeRange>("7d");
 
   const symbol = "SOL-USDT";
-  const hours = 168;
+  const { hours, maxPoints } = RANGE_PARAMS[equityRange];
 
-  const chartQuery = useChartData(symbol, hours);
+  const chartQuery = useChartData(symbol, hours, maxPoints);
   const statusQuery = useStatus();
   const positionQuery = usePosition();
   const strategyQuery = useDashboardStrategy(symbol);
@@ -133,6 +141,8 @@ export default function Dashboard() {
                   equityMode === "account" ? accountEquity.totalEquity : []
                 }
                 tradeEquity={equityMode === "trade" ? tradeEquity : []}
+                range={equityRange}
+                onRangeChange={setEquityRange}
               />
             )}
           </div>
