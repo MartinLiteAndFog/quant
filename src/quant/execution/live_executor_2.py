@@ -1073,6 +1073,8 @@ def _ttp_reenter_handoff_action(
         return None
 
     ttp_px = _coerce_float(term.get("ttp"))
+    leg_mode = str(state.open_leg_mode or "").strip().lower()
+    recorded_leg_side = str(state.open_leg_side or "").strip().lower()
     if current_side in ("long", "short") and ttp_px is not None and float(mid) > 0:
         crossed = (
             (current_side == "long" and float(mid) <= float(ttp_px))
@@ -1087,11 +1089,40 @@ def _ttp_reenter_handoff_action(
             )
 
     ctx = _ttp_reenter_handoff_context(state)
+    if (
+        ctx is None
+        and current_side == "flat"
+        and leg_mode == "flip"
+        and recorded_leg_side in ("long", "short")
+        and ttp_px is not None
+        and float(mid) > 0
+    ):
+        crossed = (
+            (recorded_leg_side == "long" and float(mid) <= float(ttp_px))
+            or (recorded_leg_side == "short" and float(mid) >= float(ttp_px))
+        )
+        if crossed:
+            _arm_ttp_reenter_handoff(
+                state,
+                prior_side=recorded_leg_side,
+                target_side=("short" if recorded_leg_side == "long" else "long"),
+                source_ts=source_ts,
+            )
+            ctx = _ttp_reenter_handoff_context(state)
     if ctx is None:
         return None
 
     prior_side = str(ctx["prior_side"] or "")
     target_side = str(ctx["target_side"] or "")
+
+    if (
+        current_side == "flat"
+        and leg_mode == "flip"
+        and recorded_leg_side in ("long", "short")
+        and prior_side != recorded_leg_side
+    ):
+        _clear_ttp_reenter_handoff(state)
+        return None
 
     if current_side in ("long", "short") and current_side == target_side:
         _clear_ttp_reenter_handoff(state)
@@ -2253,7 +2284,9 @@ def run_once(
                 )
                 if _ok(res):
                     details = _details(res)
+                    follow_entry_mode = "TTP" if str(desired_exit_engine) == "flip" else str(terminal.get("mode") or "")
                     _clear_pending_follow_entry(state)
+                    state.latched_exit_engine = str(desired_exit_engine)
                     state.open_leg_mode = str(desired_exit_engine)
                     state.open_leg_id = str(terminal.get("leg_id") or "") or None
                     state.open_leg_side = str(pending_side)
@@ -2283,6 +2316,33 @@ def run_once(
                         status=_mode(res) or "fill",
                         reject_reason=None,
                         payload_json={"action": "follow_entry_after_close", "result": details, "event_name": event_name},
+                    )
+                    state.n_actions += 1
+                    _append_action_event(
+                        strategy="live_executor_2",
+                        symbol=symbol,
+                        ts_iso=_now_iso(),
+                        seq=int(state.n_actions),
+                        engine_action="follow_entry_after_close",
+                        action_side=pending_side,
+                        reason_code=event_name,
+                        position_before=0,
+                        position_after=(1 if pending_side == "long" else -1),
+                        engine_mode_before=follow_entry_mode,
+                        engine_mode_after=follow_entry_mode,
+                        blocked=False,
+                        block_reason=None,
+                        payload_json={
+                            "terminal_pos": 0,
+                            "current_side": current_side,
+                            "want_side": pending_side,
+                            "qty": float(qty),
+                            "mid": float(mid),
+                            "event_name": event_name,
+                            "follow_entry": True,
+                            "gate": gate,
+                            "desired_exit_engine": str(desired_exit_engine),
+                        },
                     )
 
                     fresh_equity = _resolve_equity(broker)
