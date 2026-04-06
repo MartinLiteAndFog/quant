@@ -70,6 +70,22 @@ class TvExecuteWebhookTests(unittest.TestCase):
         self.assertEqual(result["error_type"], "RuntimeError")
         self.assertIn("insufficient margin", result["reason"])
 
+    def test_pre_execution_exception_returns_structured_error(self) -> None:
+        request = _json_request({"action": "entry", "side": "sell", "symbol": "SOL-USDT"})
+
+        async def _run():
+            with patch("quant.execution.webhook_server._auth_required", return_value=False), \
+                 patch("quant.execution.tv_signal_executor._ready.is_set", return_value=True), \
+                 patch("quant.execution.tv_signal_executor.TVExecConfig.from_env", side_effect=RuntimeError("config exploded")):
+                return await tv_execute_webhook(request)
+
+        result = asyncio.run(_run())
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["action"], "entry")
+        self.assertEqual(result["symbol"], "SOL-USDT")
+        self.assertEqual(result["error_type"], "RuntimeError")
+        self.assertIn("config exploded", result["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()
