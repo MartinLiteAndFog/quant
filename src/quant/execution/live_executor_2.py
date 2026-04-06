@@ -1073,6 +1073,8 @@ def _ttp_reenter_handoff_action(
         return None
 
     ttp_px = _coerce_float(term.get("ttp"))
+    leg_mode = str(state.open_leg_mode or "").strip().lower()
+    recorded_leg_side = str(state.open_leg_side or "").strip().lower()
     if current_side in ("long", "short") and ttp_px is not None and float(mid) > 0:
         crossed = (
             (current_side == "long" and float(mid) <= float(ttp_px))
@@ -1087,11 +1089,40 @@ def _ttp_reenter_handoff_action(
             )
 
     ctx = _ttp_reenter_handoff_context(state)
+    if (
+        ctx is None
+        and current_side == "flat"
+        and leg_mode == "flip"
+        and recorded_leg_side in ("long", "short")
+        and ttp_px is not None
+        and float(mid) > 0
+    ):
+        crossed = (
+            (recorded_leg_side == "long" and float(mid) <= float(ttp_px))
+            or (recorded_leg_side == "short" and float(mid) >= float(ttp_px))
+        )
+        if crossed:
+            _arm_ttp_reenter_handoff(
+                state,
+                prior_side=recorded_leg_side,
+                target_side=("short" if recorded_leg_side == "long" else "long"),
+                source_ts=source_ts,
+            )
+            ctx = _ttp_reenter_handoff_context(state)
     if ctx is None:
         return None
 
     prior_side = str(ctx["prior_side"] or "")
     target_side = str(ctx["target_side"] or "")
+
+    if (
+        current_side == "flat"
+        and leg_mode == "flip"
+        and recorded_leg_side in ("long", "short")
+        and prior_side != recorded_leg_side
+    ):
+        _clear_ttp_reenter_handoff(state)
+        return None
 
     if current_side in ("long", "short") and current_side == target_side:
         _clear_ttp_reenter_handoff(state)
