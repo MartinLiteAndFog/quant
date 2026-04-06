@@ -620,80 +620,6 @@ def _append_closed_trade(
         log.warning("kraken postgres closed trade failed: %s", e)
 
 
-def _record_ttp_external_exit(
-    state: ExecutorState,
-    *,
-    symbol: str,
-    prior_side: str,
-    terminal: Optional[Dict[str, Any]],
-    ttp_px: Optional[float],
-    event_name: str,
-    action: str,
-    execution_seq: int,
-    qty: float,
-    exit_details: Dict[str, Any],
-    prior_entry_px: Optional[float] = None,
-    prior_entry_bar_ts: Any = None,
-) -> None:
-    position_before = 1 if prior_side == "long" else (-1 if prior_side == "short" else 0)
-    order_action = "sell" if prior_side == "long" else "buy"
-    event_side = str(exit_details.get("side") or order_action).strip().lower() or order_action
-    event_qty = _coerce_float(exit_details.get("qty"))
-    event_price = _coerce_float(exit_details.get("price"))
-
-    _append_execution_event(
-        strategy="live_executor_2",
-        symbol=symbol,
-        ts_iso=_now_iso(),
-        seq=int(execution_seq),
-        execution_kind="fill",
-        order_action=event_side,
-        reason_code=event_name,
-        position_before=position_before,
-        position_after=0,
-        order_id=str(exit_details.get("order_id") or "") or None,
-        client_oid=str(exit_details.get("client_id") or "") or None,
-        side=event_side,
-        qty=(float(event_qty) if event_qty is not None else float(qty)),
-        price=(float(event_price) if event_price is not None else ttp_px),
-        reduce_only=True,
-        status="fill",
-        reject_reason=None,
-        payload_json={
-            "action": action,
-            "source": "ttp_external_exit",
-            "result": exit_details,
-        },
-    )
-
-    _append_closed_trade(
-        symbol=symbol,
-        current_side=prior_side,
-        terminal=terminal,
-        details=exit_details,
-        event_name=event_name,
-        action=action,
-        position_before=position_before,
-        position_after=0,
-        seq=int(execution_seq),
-        qty_default=float(qty),
-        exit_px_fallback=ttp_px,
-        prior_entry_px=prior_entry_px,
-        prior_entry_bar_ts=prior_entry_bar_ts,
-    )
-
-    state.open_leg_mode = None
-    state.open_leg_id = None
-    state.open_leg_side = None
-    state.open_leg_entry_bar_ts = None
-    state.ttp_reenter_exit_recorded = True
-
-
-def _new_ttp_reenter_leg_id(side: str, source_ts: Optional[str] = None) -> str:
-    seed = str(source_ts or _now_iso()).replace("-", "").replace(":", "").replace(".", "")
-    return f"ttp_reenter:{side}:{seed}:{int(time.time() * 1000)}"
-
-
 def _resolve_ttp_trail_pct() -> float:
     raw = os.getenv("LIVE_FLIP_TTP_TRAIL_PCT", os.getenv("LIVE_TTP_TRAIL_PCT", "0.012"))
     try:
@@ -858,15 +784,6 @@ class ExecutorState:
     pending_follow_entry_source_ts: Optional[str] = None
     pending_follow_entry_expires_at: Optional[str] = None
 
-    ttp_reenter_pending: bool = False
-    ttp_reenter_prior_side: Optional[str] = None
-    ttp_reenter_target_side: Optional[str] = None
-    ttp_reenter_source_ts: Optional[str] = None
-    ttp_reenter_expires_at: Optional[str] = None
-    ttp_reenter_exit_recorded: bool = False
-    ttp_reenter_cooldown_until: Optional[str] = None
-    ttp_reenter_last_attempt_key: Optional[str] = None
-
 
 def _read_state(path: Path) -> ExecutorState:
     if not path.exists():
@@ -907,14 +824,6 @@ def _read_state(path: Path) -> ExecutorState:
             pending_follow_entry_reason=d.get("pending_follow_entry_reason"),
             pending_follow_entry_source_ts=d.get("pending_follow_entry_source_ts"),
             pending_follow_entry_expires_at=d.get("pending_follow_entry_expires_at"),
-            ttp_reenter_pending=bool(d.get("ttp_reenter_pending", False)),
-            ttp_reenter_prior_side=d.get("ttp_reenter_prior_side"),
-            ttp_reenter_target_side=d.get("ttp_reenter_target_side"),
-            ttp_reenter_source_ts=d.get("ttp_reenter_source_ts"),
-            ttp_reenter_expires_at=d.get("ttp_reenter_expires_at"),
-            ttp_reenter_exit_recorded=bool(d.get("ttp_reenter_exit_recorded", False)),
-            ttp_reenter_cooldown_until=d.get("ttp_reenter_cooldown_until"),
-            ttp_reenter_last_attempt_key=d.get("ttp_reenter_last_attempt_key"),
         )
     except Exception:
         return ExecutorState()
@@ -969,166 +878,18 @@ def _pending_follow_entry_is_active(state: ExecutorState) -> bool:
         return False
 
     return True
-
-
-def _clear_ttp_reenter_handoff(state: ExecutorState) -> None:
-    state.ttp_reenter_pending = False
-    state.ttp_reenter_prior_side = None
-    state.ttp_reenter_target_side = None
-    state.ttp_reenter_source_ts = None
-    state.ttp_reenter_expires_at = None
-    state.ttp_reenter_exit_recorded = False
-    state.ttp_reenter_cooldown_until = None
-    state.ttp_reenter_last_attempt_key = None
-
-
-def _arm_ttp_reenter_handoff(
-    state: ExecutorState,
-    *,
-    prior_side: str,
-    target_side: str,
-    source_ts: Optional[str] = None,
-) -> None:
-    prior = str(prior_side or "").strip().lower()
-    target = str(target_side or "").strip().lower()
-    if prior not in ("long", "short") or target not in ("long", "short") or prior == target:
-        _clear_ttp_reenter_handoff(state)
-        return
-
-    ttl_sec = max(1.0, float(os.getenv("LIVE_EXECUTOR_2_TTP_HANDOFF_TTL_SEC", "20")))
-    expires_at = _now_utc() + pd.Timedelta(seconds=ttl_sec)
-
-    state.ttp_reenter_pending = True
-    state.ttp_reenter_prior_side = prior
-    state.ttp_reenter_target_side = target
-    state.ttp_reenter_source_ts = str(source_ts) if source_ts is not None else None
-    state.ttp_reenter_expires_at = expires_at.isoformat()
-    state.ttp_reenter_exit_recorded = False
-
-
-def _ttp_reenter_handoff_context(state: ExecutorState) -> Optional[Dict[str, Optional[str]]]:
-    if not bool(state.ttp_reenter_pending):
-        return None
-
-    prior = str(state.ttp_reenter_prior_side or "").strip().lower()
-    target = str(state.ttp_reenter_target_side or "").strip().lower()
-    if prior not in ("long", "short") or target not in ("long", "short") or prior == target:
-        _clear_ttp_reenter_handoff(state)
-        return None
-
-    expires_at = _safe_ts(state.ttp_reenter_expires_at)
-    if expires_at is not None and _now_utc() > expires_at:
-        _clear_ttp_reenter_handoff(state)
-        return None
-
-    source_ts = str(state.ttp_reenter_source_ts or "").strip() or None
-    handoff_key = f"{prior}:{target}:{source_ts or ''}"
-    return {
-        "prior_side": prior,
-        "target_side": target,
-        "source_ts": source_ts,
-        "key": handoff_key,
-    }
-
-
-def _ttp_reenter_attempt_allowed(state: ExecutorState, handoff_key: str) -> bool:
-    key = str(handoff_key or "").strip()
-    if not key:
-        return True
-    if str(state.ttp_reenter_last_attempt_key or "").strip() != key:
-        return True
-
-    cooldown_until = _safe_ts(state.ttp_reenter_cooldown_until)
-    if cooldown_until is not None and _now_utc() < cooldown_until:
-        return False
-    return True
-
-
-def _mark_ttp_reenter_attempt(
-    state: ExecutorState,
-    handoff_key: str,
-    *,
-    cooldown_sec: Optional[float] = None,
-) -> None:
-    ttl = cooldown_sec
-    if ttl is None:
-        ttl = float(os.getenv("LIVE_EXECUTOR_2_TTP_REENTER_COOLDOWN_SEC", "1.0"))
-    ttl = max(0.05, float(ttl))
-
-    state.ttp_reenter_last_attempt_key = str(handoff_key or "")
-    state.ttp_reenter_cooldown_until = (_now_utc() + pd.Timedelta(seconds=ttl)).isoformat()
-
-
-def _ttp_reenter_handoff_action(
-    state: ExecutorState,
-    *,
-    current_side: str,
-    mid: float,
-    terminal: Optional[Dict[str, Any]],
-    source_ts: Optional[str] = None,
-) -> Optional[Dict[str, Optional[str]]]:
-    term = dict(terminal or {})
-    if str(term.get("mode") or "").strip().upper() != "TTP":
-        _clear_ttp_reenter_handoff(state)
-        return None
-
-    ttp_px = _coerce_float(term.get("ttp"))
-    if current_side in ("long", "short") and ttp_px is not None and float(mid) > 0:
-        crossed = (
-            (current_side == "long" and float(mid) <= float(ttp_px))
-            or (current_side == "short" and float(mid) >= float(ttp_px))
-        )
-        if crossed:
-            _arm_ttp_reenter_handoff(
-                state,
-                prior_side=current_side,
-                target_side=("short" if current_side == "long" else "long"),
-                source_ts=source_ts,
-            )
-
-    ctx = _ttp_reenter_handoff_context(state)
-    if ctx is None:
-        return None
-
-    prior_side = str(ctx["prior_side"] or "")
-    target_side = str(ctx["target_side"] or "")
-
-    if current_side in ("long", "short") and current_side == target_side:
-        _clear_ttp_reenter_handoff(state)
-        return None
-    if current_side in ("long", "short") and current_side != prior_side:
-        _clear_ttp_reenter_handoff(state)
-        return None
-    if current_side not in ("flat", prior_side):
-        return None
-
-    return {
-        "action": f"ttp_confirm_reenter_{target_side}",
-        "prior_side": prior_side,
-        "target_side": target_side,
-        "source_ts": ctx.get("source_ts"),
-        "key": ctx.get("key"),
-    }
-
-
 def _derive_action_event_fields(
     *,
     action: str,
     current_side: str,
     want_side: Optional[str],
     terminal_pos: int,
-    ttp_prior_side: Optional[str] = None,
 ) -> Tuple[str, int, int]:
     action_side = want_side if want_side is not None else current_side
     position_before = 1 if current_side == "long" else (-1 if current_side == "short" else 0)
     position_after = 1 if terminal_pos > 0 else (-1 if terminal_pos < 0 else 0)
 
-    if action in ("ttp_confirm_reenter_short", "ttp_confirm_reenter_long"):
-        prior_side = str(ttp_prior_side or current_side or "").strip().lower()
-        action_side = "short" if action.endswith("short") else "long"
-        position_before = 1 if prior_side == "long" else (-1 if prior_side == "short" else 0)
-        position_after = 1 if action_side == "long" else -1
-    elif action == "tp1_partial":
+    if action == "tp1_partial":
         action_side = current_side
         position_after = position_before
     elif action.startswith("exit_"):
@@ -1526,9 +1287,12 @@ def _sync_kraken_stop_loss(
     def _resolved_native_stop_price() -> Optional[float]:
         if terminal is None:
             return None
+        mode = str(terminal.get("mode") or "").strip().upper()
         base_stop = _coerce_float(terminal.get("sl"))
         if base_stop is None:
             base_stop = _coerce_float(terminal.get("ttp"))
+        if mode == "WAIT":
+            return base_stop
 
         imba_levels = terminal.get("imba_levels")
         if not isinstance(imba_levels, dict):
@@ -2180,12 +1944,6 @@ def run_once(
 
     event_name = str(ev.get("event", "")) if ev is not None else "none"
     sig_side_now = "long" if sig_now_v > 0 else ("short" if sig_now_v < 0 else None)
-    ttp_source_ts = (
-        pd.Timestamp(ev["ts"]).isoformat()
-        if ev is not None and "ts" in ev
-        else (str(terminal.get("entry_bar_ts") or "").strip() or _now_iso())
-    )
-
     def _ok(res: Any) -> bool:
         if isinstance(res, dict):
             return bool(res.get("ok", False))
@@ -2222,14 +1980,6 @@ def run_once(
         effective_terminal_mode = "TTP"
     terminal = dict(terminal or {})
     terminal["mode"] = effective_terminal_mode
-
-    ttp_handoff = _ttp_reenter_handoff_action(
-        state,
-        current_side=current_side,
-        mid=float(mid),
-        terminal=terminal,
-        source_ts=ttp_source_ts,
-    )
 
     if current_side == "flat":
         oms.cancel_orders_by_kind(symbol, "opposite_imba_short")
@@ -2415,12 +2165,11 @@ def run_once(
             len(flat_entry_results),
         )
 
-        if ttp_handoff is None:
-            state.last_terminal_sig = terminal_sig
-            state.last_action = "sync_flat_entries"
-            state.last_gate_on = int(gate_on)
-            state.last_live_side = current_side
-            return state
+        state.last_terminal_sig = terminal_sig
+        state.last_action = "sync_flat_entries"
+        state.last_gate_on = int(gate_on)
+        state.last_live_side = current_side
+        return state
 
 
     if current_side == "long":
@@ -2519,89 +2268,93 @@ def run_once(
         )
         return True
 
-    def _sync_ttp_flip_orders(*, live_qty: float, ttp_price: Optional[float]) -> int:
-        changed = 0
-        if current_side == "long":
-            changed += int(_sync_stop_entry_order(
-                kind="ttp_flip_entry_short",
-                side="short",
-                qty=live_qty,
-                stop_price=_ttp_flip_entry_stop_price(
-                    target_side="short",
-                    barrier_price=ttp_price,
-                ),
-            ))
-            oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_long")
-        else:
-            changed += int(_sync_stop_entry_order(
-                kind="ttp_flip_entry_long",
-                side="long",
-                qty=live_qty,
-                stop_price=_ttp_flip_entry_stop_price(
-                    target_side="long",
-                    barrier_price=ttp_price,
-                ),
-            ))
-            oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_short")
-        return changed
-
-    def _sync_opposite_imba_flip_orders(*, live_qty: float) -> int:
-        """Live opposite-IMBA bracket: exit at barrier + stop-entry for opposite side (TP2/WAIT)."""
+    def _sync_paired_barrier_orders(
+        *,
+        live_qty: float,
+        barrier_price: Optional[float],
+        exit_kind_long: str,
+        exit_kind_short: str,
+        entry_kind_long: str,
+        entry_kind_short: str,
+        project_flip_qty: bool,
+    ) -> int:
         changed = 0
         if current_side == "long":
             changed += int(
                 _sync_stop_order(
-                    kind="opposite_imba_short",
+                    kind=exit_kind_short,
                     side="long",
                     qty=live_qty,
-                    stop_price=imba_short_barrier,
+                    stop_price=barrier_price,
                     reduce_only=True,
                 )
             )
-            flip_entry_px = _ttp_flip_entry_stop_price(target_side="short", barrier_price=imba_short_barrier)
-            flip_qty = _qty_from_equity_pct(
-                equity=_projected_equity_at_price(equity, live_qty, "long", float(mid), float(imba_short_barrier or mid), leverage),
-                pos_pct=pos_pct, leverage=leverage,
-                mid_price=float(flip_entry_px or imba_short_barrier or mid),
-                contract_multiplier=contract_multiplier,
-            ) if imba_short_barrier is not None else 0.0
+            flip_entry_px = _ttp_flip_entry_stop_price(target_side="short", barrier_price=barrier_price)
+            flip_qty = float(live_qty)
+            if project_flip_qty:
+                flip_qty = _qty_from_equity_pct(
+                    equity=_projected_equity_at_price(
+                        equity,
+                        live_qty,
+                        "long",
+                        float(mid),
+                        float(barrier_price or mid),
+                        leverage,
+                    ),
+                    pos_pct=pos_pct,
+                    leverage=leverage,
+                    mid_price=float(flip_entry_px or barrier_price or mid),
+                    contract_multiplier=contract_multiplier,
+                ) if barrier_price is not None else 0.0
             changed += int(
                 _sync_stop_entry_order(
-                    kind="opposite_imba_flip_entry_short",
+                    kind=entry_kind_short,
                     side="short",
                     qty=flip_qty,
                     stop_price=flip_entry_px,
                 )
             )
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_long")
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_long")
+            if exit_kind_long != exit_kind_short:
+                oms.cancel_orders_by_kind(symbol, exit_kind_long)
+            oms.cancel_orders_by_kind(symbol, entry_kind_long)
         else:
             changed += int(
                 _sync_stop_order(
-                    kind="opposite_imba_long",
+                    kind=exit_kind_long,
                     side="short",
                     qty=live_qty,
-                    stop_price=imba_long_barrier,
+                    stop_price=barrier_price,
                     reduce_only=True,
                 )
             )
-            flip_entry_px = _ttp_flip_entry_stop_price(target_side="long", barrier_price=imba_long_barrier)
-            flip_qty = _qty_from_equity_pct(
-                equity=_projected_equity_at_price(equity, live_qty, "short", float(mid), float(imba_long_barrier or mid), leverage),
-                pos_pct=pos_pct, leverage=leverage,
-                mid_price=float(flip_entry_px or imba_long_barrier or mid),
-                contract_multiplier=contract_multiplier,
-            ) if imba_long_barrier is not None else 0.0
+            flip_entry_px = _ttp_flip_entry_stop_price(target_side="long", barrier_price=barrier_price)
+            flip_qty = float(live_qty)
+            if project_flip_qty:
+                flip_qty = _qty_from_equity_pct(
+                    equity=_projected_equity_at_price(
+                        equity,
+                        live_qty,
+                        "short",
+                        float(mid),
+                        float(barrier_price or mid),
+                        leverage,
+                    ),
+                    pos_pct=pos_pct,
+                    leverage=leverage,
+                    mid_price=float(flip_entry_px or barrier_price or mid),
+                    contract_multiplier=contract_multiplier,
+                ) if barrier_price is not None else 0.0
             changed += int(
                 _sync_stop_entry_order(
-                    kind="opposite_imba_flip_entry_long",
+                    kind=entry_kind_long,
                     side="long",
                     qty=flip_qty,
                     stop_price=flip_entry_px,
                 )
             )
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_short")
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_short")
+            if exit_kind_long != exit_kind_short:
+                oms.cancel_orders_by_kind(symbol, exit_kind_short)
+            oms.cancel_orders_by_kind(symbol, entry_kind_short)
         return changed
 
     leg_mode = str(state.open_leg_mode or "").strip().lower()
@@ -2681,7 +2434,17 @@ def run_once(
             )
         )
 
-        changed += _sync_opposite_imba_flip_orders(live_qty=live_qty)
+        changed += _sync_paired_barrier_orders(
+            live_qty=live_qty,
+            barrier_price=(
+                imba_short_barrier if current_side == "long" else imba_long_barrier
+            ),
+            exit_kind_long="opposite_imba_long",
+            exit_kind_short="opposite_imba_short",
+            entry_kind_long="opposite_imba_flip_entry_long",
+            entry_kind_short="opposite_imba_flip_entry_short",
+            project_flip_qty=True,
+        )
 
         log.info(
             "executor tp2-state synced symbol=%s side=%s qty=%s sl=%s tp1=%s tp2=%s changed=%s",
@@ -2706,26 +2469,7 @@ def run_once(
                 log.warning("wait SL rejected: short but sl=%.4f <= mid=%.4f (stale terminal)", float(sl_px), float(mid))
                 sl_px = None
 
-        imba_levels = terminal.get("imba_levels") if isinstance(terminal, dict) else None
-        opposite_supersedes_sl = _opposite_imba_supersedes_stop(
-            terminal_pos=(1 if current_side == "long" else -1),
-            base_stop=sl_px,
-            imba_levels=imba_levels if isinstance(imba_levels, dict) else None,
-        )
-
         changed = 0
-        if opposite_supersedes_sl:
-            oms.cancel_orders_by_kind(symbol, "wait_sl")
-        else:
-            changed += int(
-                _sync_stop_order(
-                    kind="wait_sl",
-                    side=current_side,
-                    qty=live_qty,
-                    stop_price=sl_px,
-                    reduce_only=True,
-                )
-            )
 
         oms.cancel_orders_by_kind(symbol, "tp2_sl")
         oms.cancel_orders_by_kind(symbol, "tp2_tp1")
@@ -2733,16 +2477,20 @@ def run_once(
         oms.cancel_orders_by_kind(symbol, "ttp_exit")
         oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_short")
         oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_long")
-
-        changed += _sync_opposite_imba_flip_orders(live_qty=live_qty)
+        oms.cancel_orders_by_kind(symbol, "wait_sl")
+        oms.cancel_orders_by_kind(symbol, "opposite_imba_short")
+        oms.cancel_orders_by_kind(symbol, "opposite_imba_long")
+        oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_short")
+        oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_long")
 
         log.info(
-            "executor wait-state synced symbol=%s side=%s qty=%s sl=%s changed=%s",
+            "executor wait-state synced symbol=%s side=%s qty=%s sl=%s changed=%s native_only=%s",
             symbol,
             current_side,
             live_qty,
             sl_px,
             changed,
+            True,
         )
 
     elif str(effective_terminal_mode or "").strip().upper() == "TTP" and current_side in ("long", "short") and abs(float(pos)) > 1e-12:
@@ -2758,13 +2506,6 @@ def run_once(
                 ttp_px = None
 
         changed = 0
-        changed += int(_sync_stop_order(
-            kind="ttp_exit",
-            side=current_side,
-            qty=live_qty,
-            stop_price=ttp_px,
-            reduce_only=True,
-        ))
 
         oms.cancel_orders_by_kind(symbol, "tp2_sl")
         oms.cancel_orders_by_kind(symbol, "tp2_tp1")
@@ -2775,7 +2516,15 @@ def run_once(
         oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_short")
         oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_long")
 
-        changed += _sync_ttp_flip_orders(live_qty=live_qty, ttp_price=ttp_px)
+        changed += _sync_paired_barrier_orders(
+            live_qty=live_qty,
+            barrier_price=ttp_px,
+            exit_kind_long="ttp_exit",
+            exit_kind_short="ttp_exit",
+            entry_kind_long="ttp_flip_entry_long",
+            entry_kind_short="ttp_flip_entry_short",
+            project_flip_qty=False,
+        )
 
         log.info(
             "executor ttp-state synced symbol=%s side=%s qty=%s ttp=%s changed=%s",
@@ -2786,32 +2535,15 @@ def run_once(
             changed,
         )
 
-    if wait_same_side_imba_confirmed and ttp_handoff is None and current_side in ("long", "short"):
+    if wait_same_side_imba_confirmed and current_side in ("long", "short"):
         state.last_terminal_sig = terminal_sig
         state.last_action = "sync_wait_to_ttp_orders"
         state.last_gate_on = int(gate_on)
         state.last_live_side = current_side
         return state
 
-    ttp_prior_side: Optional[str] = None
-    ttp_target_side: Optional[str] = None
-    ttp_handoff_key: Optional[str] = None
-
     action = "hold"
-    if ttp_handoff is not None:
-        ttp_prior_side = str(ttp_handoff.get("prior_side") or "").strip().lower() or None
-        ttp_target_side = str(ttp_handoff.get("target_side") or "").strip().lower() or None
-        ttp_handoff_key = str(ttp_handoff.get("key") or "").strip() or None
-        if ttp_handoff_key is None or _ttp_reenter_attempt_allowed(state, ttp_handoff_key):
-            action = str(ttp_handoff["action"])
-        else:
-            log.info(
-                "executor ttp reenter cooldown active symbol=%s key=%s until=%s",
-                symbol,
-                ttp_handoff_key,
-                state.ttp_reenter_cooldown_until,
-            )
-    elif leg_mode == "tp2" and current_side in ("long", "short"):
+    if leg_mode == "tp2" and current_side in ("long", "short"):
         action = "hold"
     elif terminal_mode == "WAIT" and current_side in ("long", "short"):
         action = "hold"
@@ -2870,7 +2602,6 @@ def run_once(
         current_side=current_side,
         want_side=want_side,
         terminal_pos=terminal_pos,
-        ttp_prior_side=ttp_prior_side,
     )
 
     state.n_actions += 1
@@ -2918,11 +2649,6 @@ def run_once(
         exp_action = "entry"
         exp_qty = float(qty)
         exp_note = f"executor action={action} event={event_name} current={current_side}"
-    elif action in ("ttp_confirm_reenter_short", "ttp_confirm_reenter_long") and ttp_target_side in ("long", "short"):
-        exp_side = str(ttp_target_side)
-        exp_action = "entry"
-        exp_qty = float(qty_effective)
-        exp_note = f"executor action={action} event={event_name} current={ttp_prior_side or current_side}"
     elif action == "tp1_partial" and current_side in ("long", "short") and tp1_partial_qty > 0:
         exp_side = current_side
         exp_action = "exit_tp"
@@ -3326,139 +3052,6 @@ def run_once(
                     },
                     force=True,
                 )
-
-        elif action in ("ttp_confirm_reenter_short", "ttp_confirm_reenter_long"):
-            prior_side = str(ttp_prior_side or current_side or "").strip().lower()
-            reenter_side = str(ttp_target_side or ("short" if action.endswith("short") else "long")).strip().lower()
-            ttp_px = _coerce_float(terminal.get("ttp"))
-            confirm_checks = max(1, int(os.getenv("LIVE_EXECUTOR_2_TTP_CONFIRM_CHECKS", "3")))
-            confirm_sleep = max(0.05, float(os.getenv("LIVE_EXECUTOR_2_TTP_CONFIRM_SLEEP_SEC", "0.20")))
-            if ttp_handoff_key is not None:
-                _mark_ttp_reenter_attempt(state, ttp_handoff_key)
-
-            pos_after_ttp = float(broker.get_position(symbol))
-            checks_used = 1
-            while abs(pos_after_ttp) > 1e-12 and checks_used < confirm_checks:
-                time.sleep(confirm_sleep)
-                pos_after_ttp = float(broker.get_position(symbol))
-                checks_used += 1
-
-            if abs(pos_after_ttp) > 1e-12:
-                log.error(
-                    "executor ttp confirm failed symbol=%s current_side=%s reenter_side=%s ttp=%s pos_after=%s checks=%s",
-                    symbol,
-                    prior_side,
-                    reenter_side,
-                    ttp_px,
-                    pos_after_ttp,
-                    checks_used,
-                )
-                target_side_for_verify = None
-                target_qty_for_verify = 0.0
-            else:
-                if not bool(state.ttp_reenter_exit_recorded):
-                    ttp_exit_qty = abs(float(pos)) if abs(float(pos)) > 1e-12 else max(0.0, float(qty_effective))
-                    exit_details = {
-                        "order_id": f"ttp-exit:{symbol}:{int(time.time() * 1000)}",
-                        "price": ttp_px,
-                        "qty": ttp_exit_qty,
-                    }
-                    state.n_executions += 1
-                    _record_ttp_external_exit(
-                        state,
-                        symbol=symbol,
-                        prior_side=prior_side,
-                        terminal=terminal,
-                        ttp_px=ttp_px,
-                        event_name="ttp_external_exit",
-                        action=action,
-                        execution_seq=int(state.n_executions),
-                        qty=ttp_exit_qty,
-                        exit_details=exit_details,
-                        prior_entry_px=_prior_entry_px,
-                        prior_entry_bar_ts=_prior_entry_bar_ts,
-                    )
-
-                fresh_bid, fresh_ask = broker.get_best_bid_ask(symbol)
-                fresh_mid = (fresh_bid + fresh_ask) / 2.0 if (fresh_bid and fresh_ask) else (fresh_ask or fresh_bid or mid or 0.0)
-                fresh_equity = _resolve_equity(broker)
-                reenter_qty = _qty_from_equity_pct(
-                    equity=fresh_equity,
-                    pos_pct=pos_pct,
-                    leverage=leverage,
-                    mid_price=float(fresh_mid),
-                    contract_multiplier=contract_multiplier,
-                )
-
-                if reenter_qty <= 0:
-                    log.error(
-                        "executor ttp reenter aborted qty=0 symbol=%s side=%s equity=%s mid=%s",
-                        symbol,
-                        reenter_side,
-                        fresh_equity,
-                        fresh_mid,
-                    )
-                    target_side_for_verify = None
-                    target_qty_for_verify = 0.0
-                else:
-                    res = oms.enter_market(symbol=symbol, side=reenter_side, qty=float(reenter_qty))
-                    log.info(
-                        "executor ttp reenter result=%s side=%s qty=%s checks=%s",
-                        res,
-                        reenter_side,
-                        reenter_qty,
-                        checks_used,
-                    )
-                    target_side_for_verify = reenter_side
-                    target_qty_for_verify = float(reenter_qty)
-                    if _ok(res):
-                        details = _details(res)
-                        _clear_ttp_reenter_handoff(state)
-                        state.open_leg_mode = str(exit_engine)
-                        state.open_leg_id = _new_ttp_reenter_leg_id(reenter_side, source_ts=ttp_source_ts)
-                        state.open_leg_side = str(reenter_side)
-                        state.last_trade_side = None
-                        state.open_leg_entry_bar_ts = _now_iso()
-
-                        state.n_executions += 1
-                        _append_execution_event(
-                            strategy="live_executor_2",
-                            symbol=symbol,
-                            ts_iso=_now_iso(),
-                            seq=int(state.n_executions),
-                            execution_kind="fill",
-                            order_action=_execution_side("buy" if reenter_side == "long" else "sell", details),
-                            reason_code="ttp_reenter",
-                            position_before=(1 if prior_side == "long" else -1 if prior_side == "short" else 0),
-                            position_after=(1 if reenter_side == "long" else -1),
-                            order_id=str(details.get("order_id") or "") or None,
-                            client_oid=str(details.get("client_id") or "") or None,
-                            side=_execution_side("buy" if reenter_side == "long" else "sell", details),
-                            qty=_execution_qty(float(reenter_qty), details),
-                            price=_execution_price(details),
-                            reduce_only=False,
-                            status=_mode(res) or "fill",
-                            reject_reason=None,
-                            payload_json={"action": action, "result": details, "event_name": event_name},
-                        )
-
-                        fresh_equity = _resolve_equity(broker)
-                        _append_equity_snapshot(
-                            ts_iso=_now_iso(),
-                            equity=fresh_equity,
-                            position_qty=float(reenter_qty),
-                            position_side=(1 if reenter_side == "long" else -1),
-                            payload={
-                                "equity_usd": float(fresh_equity) if fresh_equity is not None else None,
-                                "symbol": symbol,
-                                "position": float(reenter_qty),
-                                "side": reenter_side,
-                                "gate_on": gate_on,
-                                "source": "post_ttp_reenter_fill",
-                                "event_name": event_name,
-                            },
-                            force=True,
-                        )
 
         elif action.startswith("scale_") and want_side is not None:
             add_qty = max(0.0, float(qty_effective) - abs(float(pos)))
