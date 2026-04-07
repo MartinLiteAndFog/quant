@@ -1293,6 +1293,8 @@ def _sync_kraken_stop_loss(
             base_stop = _coerce_float(terminal.get("ttp"))
         if mode == "WAIT":
             return base_stop
+        if mode == "TTP":
+            return None
 
         imba_levels = terminal.get("imba_levels")
         if not isinstance(imba_levels, dict):
