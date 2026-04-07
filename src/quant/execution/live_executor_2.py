@@ -1984,12 +1984,35 @@ def run_once(
     terminal["mode"] = effective_terminal_mode
 
     if current_side == "flat":
+        keep_ttp_flip_kind: Optional[str] = None
+        keep_ttp_flip_side: Optional[str] = None
+        prev_side = str(state.last_live_side or "").strip().lower()
+        if prev_side in ("long", "short"):
+            preferred_kind = "ttp_flip_entry_short" if prev_side == "long" else "ttp_flip_entry_long"
+            preferred_side = "short" if prev_side == "long" else "long"
+            preferred_row = oms.find_stop_order_by_kind(symbol, preferred_kind)
+            if preferred_row is not None:
+                if sig_side_now in ("long", "short") and sig_side_now != preferred_side:
+                    log.info(
+                        "executor cancelling stale ttp follow-entry kind=%s symbol=%s signal_side=%s preferred_side=%s",
+                        preferred_kind,
+                        symbol,
+                        sig_side_now,
+                        preferred_side,
+                    )
+                    oms.cancel_orders_by_kind(symbol, preferred_kind)
+                else:
+                    keep_ttp_flip_kind = preferred_kind
+                    keep_ttp_flip_side = preferred_side
+
         oms.cancel_orders_by_kind(symbol, "opposite_imba_short")
         oms.cancel_orders_by_kind(symbol, "opposite_imba_long")
         oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_short")
         oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_long")
-        oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_short")
-        oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_long")
+        if keep_ttp_flip_kind != "ttp_flip_entry_short":
+            oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_short")
+        if keep_ttp_flip_kind != "ttp_flip_entry_long":
+            oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_long")
 
         if _pending_follow_entry_is_active(state):
             pending_side = str(state.pending_follow_entry_side or "").strip().lower()
@@ -2073,6 +2096,23 @@ def run_once(
                     pending_side,
                     state.pending_follow_entry_reason,
                 )
+
+        if keep_ttp_flip_kind is not None:
+            oms.cancel_orders_by_kind(symbol, "flat_entry_long")
+            oms.cancel_orders_by_kind(symbol, "flat_entry_short")
+            log.info(
+                "executor flat-after-ttp: keeping flip follow-entry order kind=%s side=%s symbol=%s prev_side=%s signal_side=%s",
+                keep_ttp_flip_kind,
+                keep_ttp_flip_side,
+                symbol,
+                state.last_live_side,
+                sig_side_now,
+            )
+            state.last_terminal_sig = terminal_sig
+            state.last_action = "hold_ttp_flip_follow_entry"
+            state.last_gate_on = int(gate_on)
+            state.last_live_side = current_side
+            return state
 
         flat_entry_results = []
 
