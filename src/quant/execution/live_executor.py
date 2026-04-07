@@ -986,6 +986,22 @@ def _sync_tp2_leg_runtime(
             and live_qty_abs > 1e-12
             and (tp1_hit_unconsumed or tp1_done_without_hit_consumed)
         )
+        remembered_remaining_abs = _coerce_float(state.tp2_remaining_qty_abs)
+        # Recovery path: if TP1 is marked done but live position never reduced,
+        # re-arm one partial close to reconcile the exchange size.
+        tp1_done_needs_size_reconcile = (
+            not should_trigger_live_tp1_partial
+            and not state.tp2_tp1_pending
+            and state.tp2_tp1_done
+            and current_side == term_side
+            and live_qty_abs > 1e-12
+            and term_size_rem is not None
+            and 0.0 < float(term_size_rem) < 1.0
+            and remembered_remaining_abs is not None
+            and remembered_remaining_abs > 1e-12
+            and live_qty_abs > (float(remembered_remaining_abs) + max(1.0, live_qty_abs * 0.01))
+        )
+        should_trigger_live_tp1_partial = should_trigger_live_tp1_partial or tp1_done_needs_size_reconcile
         if should_trigger_live_tp1_partial:
             # TP2 replay marks TP1 as done immediately, but live execution still
             # needs to send the real partial close once.
