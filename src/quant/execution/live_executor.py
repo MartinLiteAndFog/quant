@@ -1043,12 +1043,29 @@ def run_once(
     gate_countertrend_on = int(gate.get("gate_countertrend_on", 0) or 0)
     gate_trend_on = int(gate.get("gate_trend_on", 0) or 0)
     gate_on = int(gate.get("gate_on", 0) or 0)
+    sig_now = _latest_signal(signals_root=signals_root, symbol=symbol)
+    sig_now_v = int(sig_now["signal"]) if sig_now is not None else 0
+    sig_now_ts = _safe_ts(sig_now["ts"]) if sig_now is not None else None
+    last_signal_ts = _safe_ts(state.last_signal_ts)
 
     desired_exit_engine = "flip" if gate_countertrend_on == 1 else "tp2"
     if gate_countertrend_on != 1 and gate_trend_on != 1:
         desired_exit_engine = "flip" if gate_on == 1 else "tp2"
 
+    prev_latched_exit_engine = str(state.latched_exit_engine or "").strip().lower()
+    regime_overwrite_for_open_trade = (
+        abs(float(pos)) > 1e-12
+        and sig_now_ts is not None
+        and (last_signal_ts is None or sig_now_ts > last_signal_ts)
+        and prev_latched_exit_engine in ("flip", "tp2")
+        and prev_latched_exit_engine != str(desired_exit_engine).strip().lower()
+    )
+
     if abs(float(pos)) <= 1e-12:
+        state.latched_exit_engine = desired_exit_engine
+    elif regime_overwrite_for_open_trade:
+        # On each fresh IMBA signal, overwrite the running trade's origin regime
+        # with today's regime selection.
         state.latched_exit_engine = desired_exit_engine
     elif not state.latched_exit_engine:
         state.latched_exit_engine = desired_exit_engine
@@ -1090,9 +1107,6 @@ def run_once(
     terminal_pos = int(terminal.get("pos", 0)) if terminal else 0
     terminal_sig = f"{terminal_pos}|{terminal.get('mode', '')}|{terminal.get('entry_px', '')}|{terminal.get('ttp', '')}|{terminal.get('sl', '')}"
     
-    sig_now = _latest_signal(signals_root=signals_root, symbol=symbol)
-    sig_now_v = int(sig_now["signal"]) if sig_now is not None else 0
-
     flat_latch_active = False
     flat_latch_ts = _safe_ts(state.flat_until_new_signal_ts)
     if flat_latch_ts is not None:
@@ -1206,6 +1220,17 @@ def run_once(
     want_side = "long" if terminal_pos > 0 else ("short" if terminal_pos < 0 else None)
     if flat_latch_active and current_side == "flat":
         want_side = None
+    if regime_overwrite_for_open_trade and current_side in ("long", "short"):
+        if want_side != current_side:
+            log.info(
+                "executor regime overwrite keeps running trade symbol=%s current_side=%s wanted=%s desired_exit_engine=%s",
+                symbol,
+                current_side,
+                want_side,
+                desired_exit_engine,
+            )
+        # Do not flatten just because the regime changed on a fresh IMBA signal.
+        want_side = current_side
 
     tp2_leg_active = (
         exit_engine == "tp2"
@@ -1274,7 +1299,27 @@ def run_once(
 
 
     event_name = str(ev.get("event", "")) if ev is not None else "none"
+    ev_note = str(ev.get("note", "")) if ev is not None and hasattr(ev, "get") else ""
     ts_iso = _now_iso()
+
+    tp2_imba_flip_reentry = (
+        exit_engine == "tp2"
+        and action in ("flip_to_long", "flip_to_short")
+        and event_name == "entry"
+        and "flip:" in ev_note.lower()
+    )
+    if tp2_imba_flip_reentry:
+        # A TP2 opposite-signal flip has already produced a new leg; release
+        # the latch so the next loop can re-align to the current gate regime.
+        log.info(
+            "executor unlatch after imba flip symbol=%s prev_latch=%s desired=%s action=%s note=%s",
+            symbol,
+            state.latched_exit_engine,
+            desired_exit_engine,
+            action,
+            ev_note,
+        )
+        state.latched_exit_engine = None
 
     event_sig = _event_sig(ev) if ev is not None else f"none|{terminal_sig}"
     if event_sig == state.last_event_sig and action == "hold":

@@ -343,6 +343,127 @@ class LiveExecutorTests(unittest.TestCase):
         self.assertEqual(st.last_action, "enter_short")
         mock_gate.assert_called_once()
 
+    @patch(
+        "quant.execution.live_executor.get_live_gate_state",
+        return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0, "source": "forced_countertrend"},
+    )
+    @patch("quant.execution.live_executor._latest_backtest_event")
+    def test_new_imba_signal_overwrites_open_trade_regime_without_forced_flatten(
+        self, mock_latest_backtest, mock_gate
+    ) -> None:
+        ev = {
+            "ts": pd.Timestamp("2026-02-25T10:00:00Z"),
+            "event": "signal_exit",
+            "side": -1,
+            "seq": 9,
+            "note": "Opposite signal -> close",
+        }
+        terminal = {
+            "pos": -1,
+            "side": "short",
+            "mode": "TTP",
+            "entry_px": 99.5,
+            "sl": 101.0,
+            "ttp": 98.0,
+            "tp1": None,
+            "tp2": None,
+            "be_px": None,
+            "be_armed": False,
+            "tp1_done": False,
+            "size_rem": 1.0,
+            "entry_bar_ts": pd.Timestamp("2026-02-25T10:00:00Z"),
+            "leg_id": "flip-leg",
+            "tp1_frac": 0.5,
+            "tp1_hit_ts": None,
+            "tp1_hit_px": None,
+            "best_fav": None,
+        }
+        mock_latest_backtest.return_value = (ev, terminal)
+
+        broker = _DummyBroker(pos=10.0, bid=99.9, ask=100.1, equity=1000.0)
+        oms = _DummyOms()
+        st = ExecutorState(latched_exit_engine="tp2", last_signal_ts="2026-02-25T09:59:00+00:00")
+
+        st = run_once(
+            broker=broker,
+            oms=oms,
+            symbol="SOL-USDT",
+            signals_root=self.signals_root,
+            state=st,
+            live_enabled=True,
+            dry_run=True,
+            leverage=1.0,
+        )
+
+        self.assertEqual(st.latched_exit_engine, "flip")
+        self.assertEqual(st.last_action, "hold")
+        self.assertEqual(len(oms.flip_calls), 0)
+        self.assertEqual(len(oms.exit_calls), 0)
+        mock_gate.assert_called_once()
+
+    @patch(
+        "quant.execution.live_executor.get_live_gate_state",
+        return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0, "source": "forced_countertrend"},
+    )
+    @patch("quant.execution.live_executor.run_follow_tp2_state_machine")
+    def test_tp2_imba_flip_overwrites_regime_without_flatten(self, mock_tp2, mock_gate) -> None:
+        terminal = {
+            "pos": -1,
+            "side": "short",
+            "mode": "TP2",
+            "entry_px": 99.0,
+            "sl": 101.0,
+            "tp1": 95.0,
+            "tp2": 90.0,
+            "be_px": None,
+            "be_armed": False,
+            "tp1_done": False,
+            "size_rem": 1.0,
+            "entry_bar_ts": pd.Timestamp("2026-02-25T10:02:00Z"),
+            "leg_id": "flip-leg-1",
+            "tp1_frac": 0.5,
+            "tp1_hit_ts": None,
+            "tp1_hit_px": None,
+            "ttp": None,
+            "best_fav": None,
+        }
+        events_df = pd.DataFrame(
+            [
+                {
+                    "ts": pd.Timestamp("2026-02-25T10:02:00Z"),
+                    "event": "entry",
+                    "side": -1,
+                    "price": 99.0,
+                    "pnl_pct": 0.0,
+                    "note": "Flip: open opposite on same bar",
+                    "seq": 7,
+                    "size": 1.0,
+                }
+            ]
+        )
+        mock_tp2.return_value = (pd.Series([0]), events_df, terminal)
+
+        broker = _DummyBroker(pos=10.0, bid=99.9, ask=100.1)
+        oms = _DummyOms()
+        st = ExecutorState(latched_exit_engine="tp2")
+
+        st = run_once(
+            broker=broker,
+            oms=oms,
+            symbol="SOL-USDT",
+            signals_root=self.signals_root,
+            state=st,
+            live_enabled=True,
+            dry_run=True,
+            leverage=1.0,
+        )
+
+        self.assertEqual(st.last_action, "hold")
+        self.assertEqual(st.latched_exit_engine, "flip")
+        self.assertEqual(len(oms.flip_calls), 0)
+        self.assertEqual(len(oms.exit_calls), 0)
+        mock_gate.assert_called_once()
+
     def test_apply_live_ttp_guard_short_does_not_loosen(self) -> None:
         terminal = {"side": "short", "mode": "TTP", "ttp": 83.50}
         out = _apply_live_ttp_guard(
