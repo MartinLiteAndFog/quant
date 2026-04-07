@@ -972,6 +972,31 @@ def _sync_tp2_leg_runtime(
         state.tp2_tp1_hit_px = float(term_tp1_hit_px)
 
     if term_tp1_done:
+        tp1_hit_unconsumed = (
+            term_tp1_hit_ts_iso is not None
+            and term_tp1_hit_ts_iso != state.tp2_last_consumed_tp1_hit_ts
+        )
+        tp1_done_without_hit_consumed = (
+            term_tp1_hit_ts_iso is None
+            and not state.tp2_tp1_done
+        )
+        should_trigger_live_tp1_partial = (
+            not state.tp2_tp1_pending
+            and current_side == term_side
+            and live_qty_abs > 1e-12
+            and (tp1_hit_unconsumed or tp1_done_without_hit_consumed)
+        )
+        if should_trigger_live_tp1_partial:
+            # TP2 replay marks TP1 as done immediately, but live execution still
+            # needs to send the real partial close once.
+            state.tp2_tp1_done = False
+            state.tp2_tp1_pending = True
+            if term_size_rem is not None:
+                state.tp2_size_rem = max(0.0, min(1.0, float(term_size_rem)))
+            if term_tp1_hit_ts_iso is not None:
+                state.tp2_tp1_hit_ts = term_tp1_hit_ts_iso
+            return
+
         state.tp2_tp1_done = True
         state.tp2_tp1_pending = False
         if term_size_rem is not None:

@@ -45,6 +45,7 @@ class _DummyOms:
         self.enter_calls = []
         self.flip_calls = []
         self.exit_calls = []
+        self.tp1_partial_calls = []
 
     def enter(self, symbol: str, side: str, qty: float):
         self.enter_calls.append((symbol, side, float(qty)))
@@ -63,6 +64,10 @@ class _DummyOms:
 
     def exit_sl(self, symbol: str, side: str, qty: float):
         self.exit_calls.append((symbol, side, float(qty)))
+        return _Res(True)
+
+    def partial_tp1_market(self, symbol: str, side: str, qty: float):
+        self.tp1_partial_calls.append((symbol, side, float(qty)))
         return _Res(True)
 
 
@@ -400,6 +405,71 @@ class LiveExecutorTests(unittest.TestCase):
         self.assertEqual(len(oms.flip_calls), 0)
         self.assertEqual(len(oms.exit_calls), 0)
         mock_gate.assert_called_once()
+
+    @patch(
+        "quant.execution.live_executor.get_live_gate_state",
+        return_value={"gate_on": 0, "gate_countertrend_on": 0, "gate_trend_on": 1, "source": "forced_trend"},
+    )
+    @patch("quant.execution.live_executor.run_follow_tp2_state_machine")
+    def test_tp1_done_terminal_still_triggers_live_partial_once(self, mock_tp2, mock_gate) -> None:
+        terminal = {
+            "pos": 1,
+            "side": "long",
+            "mode": "TP2",
+            "entry_px": 99.0,
+            "sl": 97.0,
+            "tp1": 103.0,
+            "tp2": 108.0,
+            "be_px": 99.0,
+            "be_armed": True,
+            "tp1_done": True,
+            "size_rem": 0.5,
+            "entry_bar_ts": pd.Timestamp("2026-02-25T10:02:00Z"),
+            "leg_id": "tp2-leg-1",
+            "tp1_frac": 0.5,
+            "tp1_hit_ts": pd.Timestamp("2026-02-25T10:04:00Z"),
+            "tp1_hit_px": 103.0,
+            "ttp": None,
+            "best_fav": None,
+        }
+        events_df = pd.DataFrame(
+            [
+                {
+                    "ts": pd.Timestamp("2026-02-25T10:04:00Z"),
+                    "event": "tp1_hit",
+                    "side": 1,
+                    "price": 103.0,
+                    "pnl_pct": 0.0,
+                    "note": "TP1 hit",
+                    "seq": 9,
+                    "size": 0.5,
+                }
+            ]
+        )
+        mock_tp2.return_value = (pd.Series([0]), events_df, terminal)
+
+        broker = _DummyBroker(pos=10.0, bid=100.0, ask=100.0)
+        oms = _DummyOms()
+        st = ExecutorState(latched_exit_engine="tp2")
+
+        st = run_once(
+            broker=broker,
+            oms=oms,
+            symbol="SOL-USDT",
+            signals_root=self.signals_root,
+            state=st,
+            live_enabled=True,
+            dry_run=False,
+            leverage=1.0,
+        )
+
+        self.assertEqual(st.last_action, "tp1_partial")
+        self.assertEqual(len(oms.tp1_partial_calls), 1)
+        self.assertEqual(oms.tp1_partial_calls[0][0], "SOL-USDT")
+        self.assertEqual(oms.tp1_partial_calls[0][1], "long")
+        self.assertGreater(oms.tp1_partial_calls[0][2], 0.0)
+        self.assertTrue(st.tp2_tp1_done)
+        self.assertFalse(st.tp2_tp1_pending)
 
     @patch(
         "quant.execution.live_executor.get_live_gate_state",
