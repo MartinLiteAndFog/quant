@@ -15,6 +15,7 @@ import pandas as pd
 
 from quant.execution.execution_state import read_execution_state, write_execution_state
 from quant.execution.kraken_futures import KrakenFuturesClient
+from quant.execution.kraken_wait_control import reconcile_wait_mode_pin
 from quant.execution.CHOPgate import get_live_gate_state
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
 from quant.execution.event_builders import build_action_event, build_execution_event
@@ -1621,6 +1622,16 @@ def run_once(
     mid = (bid + ask) / 2.0 if (bid and ask) else (ask or bid or 0.0)
     pos = float(broker.get_position(symbol))
     current_side = "long" if pos > 0 else ("short" if pos < 0 else "flat")
+    wait_mode_pinned, wait_mode_pin = reconcile_wait_mode_pin(symbol, current_side)
+
+    if wait_mode_pinned:
+        log.info(
+            "executor wait-mode pin active symbol=%s side=%s reason=%s actor=%s",
+            symbol,
+            current_side,
+            wait_mode_pin.get("reason") if isinstance(wait_mode_pin, dict) else None,
+            wait_mode_pin.get("actor") if isinstance(wait_mode_pin, dict) else None,
+        )
 
     # Snapshot entry data of the current open trade BEFORE flip engine overwrites it
     _prior_state = read_execution_state()
@@ -1844,6 +1855,8 @@ def run_once(
                     "short_barrier": imba_short_barrier,
                 },
                 "gate": gate,
+                "wait_mode_pinned": bool(wait_mode_pinned),
+                "wait_mode_pin": wait_mode_pin,
             })
             log.debug("executor wrote state=%s", state_payload)
         except Exception as e:
@@ -1866,6 +1879,8 @@ def run_once(
     terminal["strategy"] = exit_engine
     terminal["exit_engine"] = exit_engine
     terminal["latched_exit_engine"] = state.latched_exit_engine
+    terminal["wait_mode_pinned"] = bool(wait_mode_pinned)
+    terminal["wait_mode_pin"] = wait_mode_pin
     terminal["imba_levels"] = {
         "ts": imba_barrier_ts,
         "long_barrier": imba_long_barrier,
@@ -1977,6 +1992,7 @@ def run_once(
         and current_side in ("long", "short")
         and sig_side_now == current_side
         and _coerce_float(terminal.get("ttp")) is not None
+        and not wait_mode_pinned
     )
     if wait_same_side_imba_confirmed:
         effective_terminal_mode = "TTP"
