@@ -23,6 +23,8 @@ def _normalize_side(side: Optional[str]) -> Optional[str]:
     s = str(side or "").strip().lower()
     if not s:
         return None
+    if s == "flat":
+        return None
     if s in ("buy", "long"):
         return "long"
     if s in ("sell", "short"):
