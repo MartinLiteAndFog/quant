@@ -1,6 +1,7 @@
 <script>
   import { onMount, onDestroy } from 'svelte';
   import { createChart, CrosshairMode } from 'lightweight-charts';
+  import { palette } from '../lib/colors.js';
   import {
     BRICK_BASE_TS,
     buildTimeMapFromBars,
@@ -84,15 +85,37 @@
 
   onMount(() => {
     chart = createChart(chartEl, {
-      layout: { background: { color: '#000000' }, textColor: '#e0e0e8' },
-      rightPriceScale: { borderColor: '#111118' },
-      grid: {
-        vertLines: { color: '#111118' },
-        horzLines: { color: '#111118' },
+      layout: {
+        background: { color: palette.bg },
+        textColor: palette.textDim,
+        fontFamily: 'system-ui, -apple-system, sans-serif',
+        fontSize: 11,
       },
-      crosshair: { mode: CrosshairMode.Magnet },
+      rightPriceScale: {
+        borderColor: palette.border,
+        scaleMargins: { top: 0.08, bottom: 0.08 },
+      },
+      grid: {
+        vertLines: { color: palette.grid, style: 1 },
+        horzLines: { color: palette.grid, style: 1 },
+      },
+      crosshair: {
+        mode: CrosshairMode.Magnet,
+        vertLine: {
+          color: 'rgba(136, 146, 166, 0.3)',
+          width: 1,
+          style: 2,
+          labelBackgroundColor: palette.bgPanel,
+        },
+        horzLine: {
+          color: 'rgba(136, 146, 166, 0.3)',
+          width: 1,
+          style: 2,
+          labelBackgroundColor: palette.bgPanel,
+        },
+      },
       timeScale: {
-        borderColor: '#111118',
+        borderColor: palette.border,
         timeVisible: false,
         secondsVisible: false,
         tickMarkFormatter: tickMarkFormat,
@@ -102,44 +125,99 @@
       },
     });
 
+    /* ── Candlestick series ─────────────────────── */
     candle = chart.addCandlestickSeries({
-      upColor: '#2ecc71',
-      downColor: '#f7768e',
-      borderDownColor: '#f7768e',
-      borderUpColor: '#2ecc71',
-      wickDownColor: '#f7768e',
-      wickUpColor: '#2ecc71',
+      upColor: palette.green,
+      downColor: palette.red,
+      borderDownColor: palette.red,
+      borderUpColor: palette.green,
+      wickDownColor: 'rgba(248, 113, 113, 0.6)',
+      wickUpColor: 'rgba(52, 211, 153, 0.6)',
     });
 
+    /* ── Level lines: SL, TTP, Entry, TP1, TP2 ── */
     slSeries = chart.addLineSeries({
-      color: '#f7768e', lineWidth: 2, title: 'SL',
-      lastValueVisible: true, priceLineVisible: false,
+      color: palette.red,
+      lineWidth: 2,
+      lineStyle: 0,
+      title: 'SL',
+      lastValueVisible: true,
+      priceLineVisible: false,
     });
+
     ttpSeries = chart.addLineSeries({
-      color: '#e0af68', lineWidth: 2, lineStyle: 1, lineType: 1,
-      title: 'TTP', lastValueVisible: true, priceLineVisible: false,
+      color: palette.amber,
+      lineWidth: 2,
+      lineStyle: 2,  /* dashed */
+      lineType: 1,
+      title: 'TTP',
+      lastValueVisible: true,
+      priceLineVisible: false,
     });
+
     entrySeries = chart.addLineSeries({
-      color: '#ffffff', lineWidth: 1, lineStyle: 0, title: 'Entry',
-      lastValueVisible: true, priceLineVisible: false, crosshairMarkerVisible: false,
+      color: 'rgba(209, 213, 224, 0.5)',
+      lineWidth: 1,
+      lineStyle: 2,  /* dashed */
+      title: 'Entry',
+      lastValueVisible: true,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
     });
-    tp1Series = chart.addLineSeries({ color: '#7aa2f7', lineWidth: 2, title: 'TP1' });
-    tp2Series = chart.addLineSeries({ color: '#bb9af7', lineWidth: 2, title: 'TP2' });
+
+    tp1Series = chart.addLineSeries({
+      color: palette.blue,
+      lineWidth: 1,
+      lineStyle: 2,
+      title: 'TP1',
+      lastValueVisible: true,
+      priceLineVisible: false,
+    });
+
+    tp2Series = chart.addLineSeries({
+      color: palette.purple,
+      lineWidth: 1,
+      lineStyle: 3,  /* large dashed */
+      title: 'TP2',
+      lastValueVisible: true,
+      priceLineVisible: false,
+    });
+
+    /* ── Fibonacci levels ── */
     fibLongSeries = chart.addLineSeries({
-      color: '#2ecc71', lineWidth: 2, lineStyle: 0,
-      lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+      color: 'rgba(52, 211, 153, 0.35)',
+      lineWidth: 1,
+      lineStyle: 2,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
     });
     fibMidSeries = chart.addLineSeries({
-      color: '#ffffff', lineWidth: 1, lineStyle: 2,
-      lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+      color: 'rgba(209, 213, 224, 0.2)',
+      lineWidth: 1,
+      lineStyle: 3,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
     });
     fibShortSeries = chart.addLineSeries({
-      color: '#f7768e', lineWidth: 2, lineStyle: 0,
-      lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+      color: 'rgba(248, 113, 113, 0.35)',
+      lineWidth: 1,
+      lineStyle: 2,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
     });
+
+    /* ── Current price line ── */
     priceLineSeries = chart.addLineSeries({
-      color: '#9aa5b1', lineWidth: 1, title: 'Last', lineStyle: 2,
-      lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false,
+      color: 'rgba(154, 165, 177, 0.5)',
+      lineWidth: 1,
+      title: 'Last',
+      lineStyle: 3,
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
     });
 
     resizeObs = new ResizeObserver((entries) => {
@@ -217,7 +295,7 @@
       tradeSegmentSeries.length = 0;
       for (const seg of segments) {
         const ls = chart.addLineSeries({
-          color: seg.color || '#9aa5b1',
+          color: seg.color || palette.textDim,
           lineWidth: 2,
           title: seg.positive ? 'Trade +' : 'Trade -',
         });
@@ -248,7 +326,6 @@
 
 <div class="chart-container" bind:this={containerEl}>
   <div class="chart" bind:this={chartEl}></div>
-  <!-- TODO: brick fill overlay canvas (animated last-brick filling) -->
 </div>
 
 <style>
@@ -256,6 +333,8 @@
     flex: 1;
     position: relative;
     min-height: 0;
+    border-radius: 4px;
+    overflow: hidden;
   }
   .chart {
     position: absolute;
