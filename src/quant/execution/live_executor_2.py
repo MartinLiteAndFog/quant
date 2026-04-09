@@ -1987,10 +1987,27 @@ def run_once(
         keep_ttp_flip_kind: Optional[str] = None
         keep_ttp_flip_side: Optional[str] = None
         prev_side = str(state.last_live_side or "").strip().lower()
+        ttp_flip_short_row = oms.find_stop_order_by_kind(symbol, "ttp_flip_entry_short")
+        ttp_flip_long_row = oms.find_stop_order_by_kind(symbol, "ttp_flip_entry_long")
+        preferred_kind: Optional[str] = None
+        preferred_side: Optional[str] = None
+        preferred_row: Optional[Dict[str, Any]] = None
         if prev_side in ("long", "short"):
             preferred_kind = "ttp_flip_entry_short" if prev_side == "long" else "ttp_flip_entry_long"
             preferred_side = "short" if prev_side == "long" else "long"
-            preferred_row = oms.find_stop_order_by_kind(symbol, preferred_kind)
+            preferred_row = (
+                ttp_flip_short_row if preferred_kind == "ttp_flip_entry_short" else ttp_flip_long_row
+            )
+        elif ttp_flip_short_row is not None and ttp_flip_long_row is None:
+            preferred_kind = "ttp_flip_entry_short"
+            preferred_side = "short"
+            preferred_row = ttp_flip_short_row
+        elif ttp_flip_long_row is not None and ttp_flip_short_row is None:
+            preferred_kind = "ttp_flip_entry_long"
+            preferred_side = "long"
+            preferred_row = ttp_flip_long_row
+
+        if preferred_kind is not None and preferred_side is not None:
             if preferred_row is not None:
                 if sig_side_now in ("long", "short") and sig_side_now != preferred_side:
                     log.info(
@@ -2111,7 +2128,8 @@ def run_once(
             state.last_terminal_sig = terminal_sig
             state.last_action = "hold_ttp_flip_follow_entry"
             state.last_gate_on = int(gate_on)
-            state.last_live_side = current_side
+            # Keep remembering the source side while follow-entry order is active.
+            state.last_live_side = "long" if keep_ttp_flip_kind == "ttp_flip_entry_short" else "short"
             return state
 
         flat_entry_results = []
