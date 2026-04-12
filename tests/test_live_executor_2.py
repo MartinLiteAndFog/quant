@@ -1140,6 +1140,29 @@ class KrakenNativeStopSyncTests(unittest.TestCase):
         self.assertEqual(len(broker.place_calls), 1)
         self.assertEqual(broker.place_calls[0]["stop_price"], 79.831)
 
+    def test_sync_kraken_stop_loss_does_not_use_ttp_fallback_in_wait_mode(self) -> None:
+        broker = _NativeStopBroker(
+            pos=4.8,
+            open_stop_orders=[
+                {"order_id": "1", "client_id": "quant-sl-old", "stop_price": 99.0, "order_type": "stp", "side": "sell", "size": 4.8},
+            ],
+        )
+
+        _sync_kraken_stop_loss(
+            broker=broker,
+            symbol="SOL-USDT",
+            terminal={
+                "mode": "WAIT",
+                "sl": None,
+                "ttp": 99.0,
+            },
+            terminal_pos=1,
+            dry_run=False,
+        )
+
+        self.assertEqual(broker.cancel_calls, [("1", "quant-sl-old")])
+        self.assertEqual(len(broker.place_calls), 0)
+
     def test_sync_kraken_stop_loss_skips_ttp_mode_when_oms_ttp_orders_exist(self) -> None:
         broker = _NativeStopBroker(
             pos=4.8,

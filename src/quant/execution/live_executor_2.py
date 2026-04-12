@@ -1288,13 +1288,15 @@ def _sync_kraken_stop_loss(
         if terminal is None:
             return None
         mode = str(terminal.get("mode") or "").strip().upper()
+        if mode == "WAIT":
+            # WAIT mode must only carry the swing stop; never reuse a stale TTP.
+            return _coerce_float(terminal.get("sl"))
+        if mode == "TTP":
+            return None
+
         base_stop = _coerce_float(terminal.get("sl"))
         if base_stop is None:
             base_stop = _coerce_float(terminal.get("ttp"))
-        if mode == "WAIT":
-            return base_stop
-        if mode == "TTP":
-            return None
 
         imba_levels = terminal.get("imba_levels")
         if not isinstance(imba_levels, dict):
