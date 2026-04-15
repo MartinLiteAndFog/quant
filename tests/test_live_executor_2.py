@@ -893,11 +893,63 @@ class LiveExecutor2TtpTests(unittest.TestCase):
             )
 
         self.assertEqual(state.last_action, "hold_manual_live_position")
+        self.assertEqual(state.flat_latch_reason, "manual_live_position")
+        self.assertIsNotNone(state.flat_until_new_signal_ts)
         self.assertIn(("SOL-USDT", "ttp_flip_entry_short"), oms.cancel_calls)
         self.assertIn(("SOL-USDT", "ttp_flip_entry_long"), oms.cancel_calls)
         self.assertEqual(oms.enter_market_calls, [])
         self.assertEqual(oms.flatten_market_calls, [])
         self.assertNotIn("ttp_flip_entry_short", oms.open_orders)
+
+    def test_manual_observe_only_latch_ignores_stale_short_terminal_until_fresh_signal(self) -> None:
+        state = ExecutorState(
+            latched_exit_engine="flip",
+            last_live_side="long",
+            flat_until_new_signal_ts="2026-03-30T12:00:00+00:00",
+            flat_latch_reason="manual_live_position",
+        )
+        broker = _LiveBroker(pos=5.0, bid=100.0, ask=100.0)
+        oms = _LiveOms()
+        oms.open_orders = {
+            "ttp_flip_entry_short": {"stop_price": 98.901, "reduce_only": False},
+            "ttp_exit": {"stop_price": 99.0, "reduce_only": True},
+            "flat_entry_short": {"stop_price": 99.0, "reduce_only": False},
+        }
+
+        with (
+            patch("quant.execution.live_executor_2.get_live_gate_state", return_value={"gate_on": 1, "gate_countertrend_on": 1, "gate_trend_on": 0}),
+            patch("quant.execution.live_executor_2._load_renko_bars", return_value=pd.DataFrame({"ts": pd.to_datetime(["2026-03-30T12:00:00Z"], utc=True), "open": [100.0], "high": [100.0], "low": [100.0], "close": [100.0]})),
+            patch("quant.execution.live_executor_2._load_signals_df", return_value=pd.DataFrame()),
+            patch("quant.execution.live_executor_2._latest_backtest_event", return_value=({"ts": "2026-03-30T12:00:00Z", "event": "signal_flip_exit", "side": -1, "seq": 1}, {"mode": "TTP", "pos": -1, "side": "short", "ttp": 101.0, "entry_px": 100.0, "entry_bar_ts": "2026-03-30T11:00:00Z"})),
+            patch("quant.execution.live_executor_2.get_latest_imba_barriers", return_value={"ts": None, "long_barrier": 101.0, "short_barrier": 99.0}),
+            patch("quant.execution.live_executor_2._latest_signal", return_value={"ts": pd.Timestamp("2026-03-30T12:00:00Z"), "signal": -1}),
+            patch("quant.execution.live_executor_2.write_execution_state", return_value={}),
+            patch("quant.execution.live_executor_2._write_dashboard_levels", return_value=None),
+            patch("quant.execution.live_executor_2._append_action_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_execution_event", return_value=None),
+            patch("quant.execution.live_executor_2._append_equity_snapshot", return_value=None),
+            patch("quant.execution.live_executor_2._verify_execution_fill_ratio", return_value=None),
+            patch("quant.execution.live_executor_2._sync_kraken_stop_loss", return_value=None),
+            patch("quant.execution.live_executor_2.record_expected", return_value=None),
+        ):
+            state = run_once(
+                broker=broker,
+                oms=oms,
+                symbol="SOL-USDT",
+                signals_root=Path("unused"),
+                state=state,
+                live_enabled=True,
+                dry_run=False,
+                leverage=1.0,
+            )
+
+        self.assertEqual(state.last_action, "hold_manual_live_position")
+        self.assertEqual(state.flat_latch_reason, "manual_live_position")
+        self.assertEqual(oms.enter_market_calls, [])
+        self.assertEqual(oms.flatten_market_calls, [])
+        self.assertIn(("SOL-USDT", "ttp_flip_entry_short"), oms.cancel_calls)
+        self.assertIn(("SOL-USDT", "ttp_exit"), oms.cancel_calls)
+        self.assertIn(("SOL-USDT", "flat_entry_short"), oms.cancel_calls)
 
     def test_wait_branch_cancels_stale_ttp_flip_entry_orders(self) -> None:
         state = ExecutorState(

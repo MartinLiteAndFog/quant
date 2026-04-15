@@ -1791,6 +1791,22 @@ def run_once(
         else:
             flat_latch_active = True
 
+    manual_observe_latch_active = (
+        flat_latch_active
+        and str(state.flat_latch_reason or "").strip().lower() == "manual_live_position"
+        and current_side in ("long", "short")
+    )
+
+    if terminal_pos == 0 and current_side in ("long", "short") and not manual_observe_latch_active:
+        state.flat_until_new_signal_ts = (
+            sig_now["ts"].isoformat()
+            if sig_now is not None and sig_now.get("ts") is not None
+            else _now_iso()
+        )
+        state.flat_latch_reason = "manual_live_position"
+        flat_latch_active = True
+        manual_observe_latch_active = True
+
     if terminal_pos == 0 and not flat_latch_active:
         if current_side == "long" and sig_now_v > 0:
             log.warning(
@@ -1985,7 +2001,43 @@ def run_once(
     terminal = dict(terminal or {})
     terminal["mode"] = effective_terminal_mode
 
-    manual_live_position_override = terminal_pos == 0 and current_side in ("long", "short")
+    if manual_observe_latch_active and current_side in ("long", "short"):
+        oms.cancel_orders_by_kind(symbol, "flat_entry_long")
+        oms.cancel_orders_by_kind(symbol, "flat_entry_short")
+        oms.cancel_orders_by_kind(symbol, "wait_sl")
+        oms.cancel_orders_by_kind(symbol, "tp2_sl")
+        oms.cancel_orders_by_kind(symbol, "tp2_tp1")
+        oms.cancel_orders_by_kind(symbol, "tp2_tp2")
+        oms.cancel_orders_by_kind(symbol, "ttp_exit")
+        oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_short")
+        oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_long")
+        oms.cancel_orders_by_kind(symbol, "opposite_imba_short")
+        oms.cancel_orders_by_kind(symbol, "opposite_imba_long")
+        oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_short")
+        oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_long")
+        _clear_pending_follow_entry(state)
+
+        if live_enabled and (not dry_run):
+            _sync_kraken_stop_loss(
+                broker=broker,
+                symbol=symbol,
+                terminal=None,
+                terminal_pos=0,
+                dry_run=dry_run,
+            )
+
+        log.warning(
+            "executor manual observe-only latch active: preserving live position until fresh signal symbol=%s side=%s terminal_pos=%s gate_on=%s",
+            symbol,
+            current_side,
+            terminal_pos,
+            gate_on,
+        )
+        state.last_terminal_sig = terminal_sig
+        state.last_action = "hold_manual_live_position"
+        state.last_gate_on = int(gate_on)
+        state.last_live_side = current_side
+        return state
 
     if current_side == "flat":
         keep_ttp_flip_kind: Optional[str] = None
@@ -2570,28 +2622,6 @@ def run_once(
                 ttp_px = None
 
         changed = 0
-
-        if manual_live_position_override:
-            oms.cancel_orders_by_kind(symbol, "ttp_exit")
-            oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_short")
-            oms.cancel_orders_by_kind(symbol, "ttp_flip_entry_long")
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_short")
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_long")
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_short")
-            oms.cancel_orders_by_kind(symbol, "opposite_imba_flip_entry_long")
-            _clear_pending_follow_entry(state)
-            log.warning(
-                "executor manual live position override: cancelling stale automated orders symbol=%s side=%s terminal_pos=%s event=%s",
-                symbol,
-                current_side,
-                terminal_pos,
-                event_name,
-            )
-            state.last_terminal_sig = terminal_sig
-            state.last_action = "hold_manual_live_position"
-            state.last_gate_on = int(gate_on)
-            state.last_live_side = current_side
-            return state
 
         oms.cancel_orders_by_kind(symbol, "tp2_sl")
         oms.cancel_orders_by_kind(symbol, "tp2_tp1")
