@@ -1427,6 +1427,25 @@ def _write_dashboard_levels(
                 sl = None
                 ttp = None
 
+    tp2_leg_state = terminal.get("tp2_leg_state") if isinstance(terminal.get("tp2_leg_state"), dict) else {}
+    flat_latch_reason = (
+        terminal.get("flat_latch_reason")
+        if terminal.get("flat_latch_reason") is not None
+        else tp2_leg_state.get("flat_latch_reason")
+    )
+    manual_hold_active = (
+        bool(live_pos is not None and abs(float(live_pos)) > 1e-12)
+        and str(flat_latch_reason or "").strip().lower() == "manual_live_position"
+    )
+    if manual_hold_active:
+        entry_px = None
+        entry_bar_ts = None
+        sl = None
+        ttp = None
+        tp1 = None
+        tp2 = None
+        mode = "MANUAL_HOLD"
+
     rows: List[Dict[str, Any]] = []
     if entry_px is not None:
         rows.append({"kind": "entry", "px": entry_px, "side": side, "mode": mode})
@@ -1438,7 +1457,16 @@ def _write_dashboard_levels(
         rows.append({"kind": "tp1", "px": tp1, "side": side, "mode": mode})
     if tp2 is not None:
         rows.append({"kind": "tp2", "px": tp2, "side": side, "mode": mode})
-    rows.append({"kind": "meta", "be_armed": be_armed, "tp1_done": tp1_done, "side": side, "mode": mode})
+    rows.append(
+        {
+            "kind": "meta",
+            "be_armed": be_armed,
+            "tp1_done": tp1_done,
+            "side": side,
+            "mode": mode,
+            "manual_hold": manual_hold_active,
+        }
+    )
 
     base = Path("/data/live")
     try:

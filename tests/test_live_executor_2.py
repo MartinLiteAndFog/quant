@@ -9,6 +9,7 @@ import pandas as pd
 from quant.execution.live_executor_2 import (
     ExecutorState,
     _sync_kraken_stop_loss,
+    _write_dashboard_levels,
     run_once,
 )
 
@@ -950,6 +951,44 @@ class LiveExecutor2TtpTests(unittest.TestCase):
         self.assertIn(("SOL-USDT", "ttp_flip_entry_short"), oms.cancel_calls)
         self.assertIn(("SOL-USDT", "ttp_exit"), oms.cancel_calls)
         self.assertIn(("SOL-USDT", "flat_entry_short"), oms.cancel_calls)
+
+    def test_manual_observe_only_dashboard_levels_hide_stale_flip_markers(self) -> None:
+        captured: dict = {}
+
+        def fake_write_execution_state(payload):
+            captured["payload"] = payload
+            return {}
+
+        with patch("quant.execution.live_executor_2.write_execution_state", side_effect=fake_write_execution_state):
+            _write_dashboard_levels(
+                symbol="SOL-USDT",
+                terminal={
+                    "strategy": "flip",
+                    "exit_engine": "flip",
+                    "latched_exit_engine": "flip",
+                    "mode": "TTP",
+                    "side": "short",
+                    "entry_px": 100.0,
+                    "ttp": 101.0,
+                    "sl": None,
+                    "tp2_leg_state": {
+                        "flat_latch_reason": "manual_live_position",
+                        "flat_latch_active": True,
+                    },
+                },
+                live_pos=5.0,
+                equity=1000.0,
+                bid=100.0,
+                ask=100.0,
+                mid=100.0,
+            )
+
+        payload = captured["payload"]
+        self.assertEqual(payload["side"], "long")
+        self.assertEqual(payload["mode"], "MANUAL_HOLD")
+        self.assertIsNone(payload["entry_px"])
+        self.assertIsNone(payload["sl"])
+        self.assertIsNone(payload["ttp"])
 
     def test_wait_branch_cancels_stale_ttp_flip_entry_orders(self) -> None:
         state = ExecutorState(
