@@ -985,7 +985,7 @@ class LiveExecutor2TtpTests(unittest.TestCase):
 
         payload = captured["payload"]
         self.assertEqual(payload["side"], "long")
-        self.assertEqual(payload["mode"], "MANUAL_HOLD")
+        self.assertEqual(payload["mode"], "WAIT")
         self.assertIsNone(payload["entry_px"])
         self.assertIsNone(payload["sl"])
         self.assertIsNone(payload["ttp"])

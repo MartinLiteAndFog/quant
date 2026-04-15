@@ -1444,7 +1444,7 @@ def _write_dashboard_levels(
         ttp = None
         tp1 = None
         tp2 = None
-        mode = "MANUAL_HOLD"
+        mode = "WAIT"
 
     rows: List[Dict[str, Any]] = []
     if entry_px is not None:
