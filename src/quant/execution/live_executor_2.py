@@ -2018,8 +2018,12 @@ def run_once(
     def _execution_price(details: Dict[str, Any]) -> Optional[float]:
         return _coerce_float(details.get("price"))
     effective_terminal_mode = str(terminal_mode)
+    # Safety guard: do not auto-promote WAIT -> TTP unless explicitly enabled.
+    # In production this can otherwise arm paired flip stops prematurely.
+    wait_to_ttp_on_same_side_imba = _truthy(os.getenv("LIVE_WAIT_TO_TTP_ON_SAME_SIDE_IMBA", "0"))
     wait_same_side_imba_confirmed = (
-        terminal_mode == "WAIT"
+        wait_to_ttp_on_same_side_imba
+        and terminal_mode == "WAIT"
         and current_side in ("long", "short")
         and sig_side_now == current_side
         and _coerce_float(terminal.get("ttp")) is not None
