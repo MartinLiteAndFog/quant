@@ -44,6 +44,7 @@ from quant.execution.dashboard_state import (
 )
 
 from quant.execution.CHOPgate import get_live_gate_state
+from quant.execution.kraken_wait_control import clear_wait_mode_pin, set_wait_mode_pin
 from quant.execution.dashboard_statespace import (
     load_state_space_trajectory,
     compute_recent_density,
@@ -685,6 +686,52 @@ async def api_manual_order(
         return {"ok": True, "result": result, "ts": _now_utc_iso()}
     except Exception as e:
         return {"ok": False, "symbol": symbol, "action": action, "error": str(e), "ts": _now_utc_iso()}
+
+
+@app.post("/api/kraken/wait-mode")
+async def api_kraken_wait_mode(
+    request: Request,
+    x_webhook_token: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    if _auth_required():
+        _check_token(x_webhook_token)
+
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+    symbol = str(payload.get("symbol") or DEFAULT_SYMBOL)
+    enabled_raw = payload.get("enabled", True)
+    if isinstance(enabled_raw, str):
+        enabled = enabled_raw.strip().lower() not in ("0", "false", "no", "off")
+    else:
+        enabled = bool(enabled_raw)
+
+    ttl_sec_raw = payload.get("ttl_sec")
+    ttl_sec = None
+    if ttl_sec_raw not in (None, ""):
+        try:
+            ttl_sec = int(ttl_sec_raw)
+        except Exception:
+            raise HTTPException(status_code=400, detail="ttl_sec must be an integer")
+
+    try:
+        if enabled:
+            result = set_wait_mode_pin(
+                symbol=symbol,
+                side=payload.get("side"),
+                reason=str(payload.get("reason") or "manual_wait_mode"),
+                actor="api",
+                ttl_sec=ttl_sec,
+            )
+        else:
+            result = clear_wait_mode_pin(symbol)
+        return {"ok": True, **result, "enabled": bool(enabled), "ts": _now_utc_iso()}
+    except Exception as e:
+        return {"ok": False, "symbol": symbol, "enabled": bool(enabled), "error": str(e), "ts": _now_utc_iso()}
 
 
 @app.get("/api/regime/latest")
