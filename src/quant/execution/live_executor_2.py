@@ -2531,9 +2531,16 @@ def run_once(
         return changed
 
     leg_mode = str(state.open_leg_mode or "").strip().lower()
+    leg_side = str(state.open_leg_side or "").strip().lower()
+    tp2_leg_side_matches_live = (
+        leg_mode == "tp2"
+        and leg_side in ("long", "short")
+        and current_side in ("long", "short")
+        and leg_side == current_side
+    )
 
     if (
-        leg_mode == "tp2"
+        tp2_leg_side_matches_live
         and str(effective_terminal_mode or "").strip().upper() != "TTP"
         and current_side in ("long", "short")
         and abs(float(pos)) > 1e-12
