@@ -1656,6 +1656,10 @@ def run_once(
     _prior_state = read_execution_state()
     _prior_entry_px = _coerce_float(_prior_state.get("entry_px"))
     _prior_entry_bar_ts = _prior_state.get("entry_bar_ts")
+    _prior_exec_side = str(_prior_state.get("side") or "").strip().lower()
+    _prior_exec_mode = str(_prior_state.get("mode") or "").strip().upper()
+    _prior_exec_engine = str(_prior_state.get("exit_engine") or _prior_state.get("strategy") or "").strip().lower()
+    _prior_exec_pos = abs(_coerce_float(_prior_state.get("position")) or 0.0)
 
     if (
         _pending_follow_entry_is_active(state)
@@ -1704,12 +1708,31 @@ def run_once(
     if gate_countertrend_on != 1 and gate_trend_on != 1:
         desired_exit_engine = "flip" if gate_on == 1 else "tp2"
 
-    persisted_tp2_live = (
+    persisted_tp2_leg_live = (
         bool(state.tp2_leg_id)
         and str(state.tp2_leg_side or "").strip().lower() in ("long", "short")
         and current_side in ("long", "short")
         and current_side == str(state.tp2_leg_side or "").strip().lower()
         and abs(float(pos)) > 1e-12
+    )
+    persisted_open_leg_tp2_live = (
+        str(state.open_leg_mode or "").strip().lower() == "tp2"
+        and str(state.open_leg_side or "").strip().lower() in ("long", "short")
+        and current_side in ("long", "short")
+        and current_side == str(state.open_leg_side or "").strip().lower()
+        and abs(float(pos)) > 1e-12
+    )
+    persisted_exec_state_tp2_live = (
+        current_side in ("long", "short")
+        and _prior_exec_side == current_side
+        and _prior_exec_pos > 1e-12
+        and (_prior_exec_engine == "tp2" or _prior_exec_mode == "TP2")
+        and abs(float(pos)) > 1e-12
+    )
+    persisted_tp2_live = (
+        persisted_tp2_leg_live
+        or persisted_open_leg_tp2_live
+        or persisted_exec_state_tp2_live
     )
 
     if abs(float(pos)) <= 1e-12:
@@ -1722,6 +1745,8 @@ def run_once(
         state.latched_exit_engine = "tp2"
 
     if persisted_tp2_live:
+        # A live TP2 leg must stay TP2 even if the flip latch is stale or
+        # the replay forgets the TP2 leg_id during reconciliation.
         state.latched_exit_engine = "tp2"
 
     exit_engine = str(state.latched_exit_engine or desired_exit_engine)
