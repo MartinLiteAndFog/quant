@@ -639,15 +639,16 @@ async def api_manual_order(
     request: Request,
     x_webhook_token: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
-    if _auth_required():
-        _check_token(x_webhook_token)
-
     try:
         payload = await request.json()
     except Exception:
         raise HTTPException(status_code=400, detail="invalid json")
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be a JSON object")
+    if _auth_required():
+        # Keep parity with /webhook/tv-execute so dashboard-triggered manual actions
+        # can authenticate with the same webhook secret via header or JSON body.
+        _check_token(x_webhook_token or payload.get("token"))
 
     symbol = str(payload.get("symbol") or DEFAULT_SYMBOL)
     action = str(payload.get("action") or "").strip()
@@ -1470,6 +1471,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         <div class="fills-row head"><span>time (UTC)</span><span>side</span><span>qty</span><span>price</span><span>reason</span></div>
       </div>
       <div style="margin-top:0.55rem;font-size:0.8rem;color:var(--muted);font-weight:600;">Manual orders</div>
+      <input id="manual-token" class="mono" type="password" placeholder="webhook token">
       <div class="manual-grid">
         <select id="manual-action" class="mono">
           <option value="cancel_short" selected>cancel_short</option>
@@ -1544,6 +1546,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const uiRefreshMs = Math.max(1000, Number(qs.get('refresh_ms') || uiRefreshMsDefault));
     const ssRefreshMs = Math.max(5000, Number(qs.get('statespace_refresh_ms') || ssRefreshMsDefault));
     const chartMode = (qs.get('mode') || 'brick').toLowerCase();
+    const manualTokenStorageKey = 'dashboard.manualWebhookToken';
     const brickBaseTs = 1704067200;
     const chart = LightweightCharts.createChart(chartEl, {
       layout: { background: { color: '#1e2333' }, textColor: '#d9def7' },
@@ -1636,6 +1639,33 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         .replace(/>/g, '&gt;')
         .replace(/"/g, '&quot;')
         .replace(/'/g, '&#39;');
+    }
+
+    function readStoredManualToken() {
+      try {
+        return String(window.localStorage.getItem(manualTokenStorageKey) || '').trim();
+      } catch (e) {
+        return '';
+      }
+    }
+
+    function persistManualToken(token) {
+      try {
+        if (token) {
+          window.localStorage.setItem(manualTokenStorageKey, token);
+        } else {
+          window.localStorage.removeItem(manualTokenStorageKey);
+        }
+      } catch (e) {}
+    }
+
+    function readManualToken() {
+      const manualTokenEl = document.getElementById('manual-token');
+      const fieldToken = manualTokenEl ? String(manualTokenEl.value || '').trim() : '';
+      if (fieldToken) return fieldToken;
+      const queryToken = String(qs.get('token') || '').trim();
+      if (queryToken) return queryToken;
+      return readStoredManualToken();
     }
 
     function scoreToColor(score, alpha) {
@@ -2534,6 +2564,7 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     async function sendManualOrder(actionOverride) {
       const actionEl = document.getElementById('manual-action');
       const qtyEl = document.getElementById('manual-qty');
+      const manualTokenEl = document.getElementById('manual-token');
       const resultEl = document.getElementById('manual-result');
       if (!actionEl || !qtyEl || !resultEl) return;
       const action = String(actionOverride || actionEl.value || '').trim();
@@ -2550,8 +2581,12 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         return;
       }
       const headers = { 'Content-Type': 'application/json' };
-      const tok = String(qs.get('token') || '').trim();
-      if (tok) headers['x-webhook-token'] = tok;
+      if (manualTokenEl) persistManualToken(String(manualTokenEl.value || '').trim());
+      const tok = readManualToken();
+      if (tok) {
+        headers['x-webhook-token'] = tok;
+        payload.token = tok;
+      }
       resultEl.textContent = 'sending...';
       try {
         const data = await fetch('/api/manual/order', {
@@ -2638,6 +2673,16 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       pullStartY = null;
       pullTriggered = false;
     }, { passive: true });
+    const manualTokenEl = document.getElementById('manual-token');
+    if (manualTokenEl) {
+      const initialManualToken = String(qs.get('token') || '').trim() || readStoredManualToken();
+      if (initialManualToken) {
+        manualTokenEl.value = initialManualToken;
+        persistManualToken(initialManualToken);
+      }
+      manualTokenEl.addEventListener('input', () => persistManualToken(String(manualTokenEl.value || '').trim()));
+      manualTokenEl.addEventListener('change', () => persistManualToken(String(manualTokenEl.value || '').trim()));
+    }
     document.getElementById('manual-send').addEventListener('click', () => sendManualOrder(null));
     document.getElementById('manual-cancel-short').addEventListener('click', () => sendManualOrder('cancel_short'));
     document.getElementById('manual-cancel-long').addEventListener('click', () => sendManualOrder('cancel_long'));

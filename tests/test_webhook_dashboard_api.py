@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pandas as pd
+from fastapi.testclient import TestClient
 
 import quant.execution.webhook_server as ws
 from quant.execution.webhook_server import api_dashboard_chart, api_regime_latest, api_dashboard_statespace, api_status, dashboard, api_gate_solusd
@@ -138,6 +139,7 @@ class WebhookDashboardApiTests(unittest.TestCase):
         ws._CHART_CACHE.clear()
         os.environ.pop("DASHBOARD_API_CACHE_SEC", None)
         os.environ.pop("KUCOIN_FUTURES_API_KEY", None)
+        os.environ.pop("WEBHOOK_TOKEN", None)
         self.tmp.cleanup()
 
     def test_chart_payload_shape(self) -> None:
@@ -285,10 +287,29 @@ class WebhookDashboardApiTests(unittest.TestCase):
         html = dashboard()
         self.assertIn("const uiRefreshMsDefault = 2500;", html)
         self.assertIn("const ssRefreshMsDefault = 12000;", html)
+        self.assertIn("id=\"manual-token\"", html)
         self.assertIn("id=\"manual-action\"", html)
         self.assertIn("/api/manual/order", html)
         self.assertIn("visibilitychange", html)
         self.assertIn("refreshNow(", html)
+
+    def test_manual_order_accepts_token_from_json_body(self) -> None:
+        os.environ["WEBHOOK_TOKEN"] = "LeoVeKetem"
+        client = TestClient(ws.app)
+
+        with patch("quant.execution.webhook_server._kucoin_broker", return_value=object()), patch(
+            "quant.execution.manual_orders.execute_manual_action",
+            return_value={"ok": True, "action": "cancel_short"},
+        ) as exec_mock:
+            resp = client.post(
+                "/api/manual/order",
+                json={"action": "cancel_short", "token": "LeoVeKetem"},
+            )
+
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertTrue(body.get("ok"))
+        exec_mock.assert_called_once()
 
     def test_chart_response_is_cached(self) -> None:
         """Second call within TTL should return cached response."""
