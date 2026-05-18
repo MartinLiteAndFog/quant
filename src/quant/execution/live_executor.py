@@ -23,6 +23,8 @@ from quant.execution.event_store import (
     insert_execution_event,
     upsert_closed_trade,
 )
+from quant.execution.trade_counter import classify_action_event
+from quant.execution.trade_decisions_store import upsert_trade_decision
 from quant.strategies.flip_engine import FlipParams, run_flip_state_machine
 from quant.strategies.follow_tp2_engine import TP2Params, run_follow_tp2_state_machine
 from quant.strategies.signal_io import read_signals_jsonl
@@ -179,6 +181,16 @@ def _append_action_event(
         )
     except Exception as e:
         log.warning("kucoin postgres action event failed: %s", e)
+
+    # Best-effort: classify this action_events row as a trade decision and
+    # persist it. Idempotent: decision_id is deterministic and the upsert is
+    # a no-op on conflict. See quant.execution.trade_counter for the rules.
+    try:
+        decision = classify_action_event(event)
+        if decision is not None:
+            upsert_trade_decision(decision.to_db_row())
+    except Exception as e:
+        log.warning("kucoin trade decision upsert failed: %s", e)
 
 
 def _append_execution_event(
