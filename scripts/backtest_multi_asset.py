@@ -54,6 +54,34 @@ def load_csv_gz(pair: str, data_dir: str = "data", start_date: str = "2024-01-01
     return df[["ts", "open", "high", "low", "close"]]
 
 
+def load_yfinance(ticker: str, period: str = "2y", interval: str = "1h",
+                  start_date: str = "2024-01-01") -> pd.DataFrame:
+    """Download OHLCV via yfinance for traditional assets (forex, futures, etc.)."""
+    import yfinance as yf
+
+    print(f"  Downloading {ticker} via yfinance ({period} / {interval}) ...")
+    data = yf.download(ticker, period=period, interval=interval, progress=False)
+
+    if isinstance(data.columns, pd.MultiIndex):
+        data.columns = data.columns.droplevel(1)
+
+    df = data.reset_index()
+    ts_col = "Datetime" if "Datetime" in df.columns else "Date"
+    df = df.rename(columns={
+        ts_col: "ts", "Open": "open", "High": "high",
+        "Low": "low", "Close": "close",
+    })
+    df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
+    for c in ["open", "high", "low", "close"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.dropna(subset=["ts", "close"]).sort_values("ts").reset_index(drop=True)
+    if start_date:
+        cutoff = pd.to_datetime(start_date, utc=True)
+        df = df[df["ts"] >= cutoff].reset_index(drop=True)
+    print(f"  Got {len(df)} bars: {df['ts'].iloc[0]} -> {df['ts'].iloc[-1]}")
+    return df[["ts", "open", "high", "low", "close"]]
+
+
 # ---- Regime indicators (same as renko_runner.py) ----
 def _true_range(df):
     h, l, c = df["high"].astype(float), df["low"].astype(float), df["close"].astype(float)
@@ -293,13 +321,21 @@ def run_backtest(
     data_dir: str = "data",
     quiet: bool = False,
     start_date: str = "2024-01-01",
+    **kwargs,
 ) -> dict:
     t0 = time.time()
 
     # Load data
-    ohlcv = load_csv_gz(pair, data_dir, start_date=start_date)
+    yf_ticker = kwargs.get("yf_ticker", None)
+    yf_period = kwargs.get("yf_period", "2y")
+    yf_interval = kwargs.get("yf_interval", "1h")
+    if yf_ticker:
+        ohlcv = load_yfinance(yf_ticker, period=yf_period, interval=yf_interval,
+                              start_date=start_date)
+    else:
+        ohlcv = load_csv_gz(pair, data_dir, start_date=start_date)
     if not quiet:
-        print(f"[{pair}] Loaded {len(ohlcv)} 1m bars, {ohlcv.ts.iloc[0]} -> {ohlcv.ts.iloc[-1]}")
+        print(f"[{pair}] Loaded {len(ohlcv)} bars, {ohlcv.ts.iloc[0]} -> {ohlcv.ts.iloc[-1]}")
 
     # Build Renko
     bricks = renko_from_close(ohlcv, box=box)
@@ -451,10 +487,139 @@ def sweep_boxes(pair, boxes, **kwargs):
     return results
 
 
+TRADFI_ASSETS = {
+    "EURUSD": {
+        "yf_ticker": "EURUSD=X",
+        "box": 0.0015,        # ~15 pips
+        "imba_sl_abs": 0.003,
+        "fee_bps": 2.0,
+        "ttp_trail_pct": 0.005,
+        "tp1_pct": 0.006,
+        "tp2_pct": 0.014,
+        "min_sl_pct": 0.008,
+        "max_sl_pct": 0.020,
+        "tp2_min_sl_pct": 0.012,
+        "tp2_max_sl_pct": 0.035,
+    },
+    "NQ_NASDAQ": {
+        "yf_ticker": "NQ=F",
+        "box": 60.0,
+        "imba_sl_abs": 120.0,
+        "fee_bps": 4.0,
+        "ttp_trail_pct": 0.008,
+        "tp1_pct": 0.010,
+        "tp2_pct": 0.022,
+        "min_sl_pct": 0.012,
+        "max_sl_pct": 0.028,
+        "tp2_min_sl_pct": 0.015,
+        "tp2_max_sl_pct": 0.050,
+    },
+    "USDJPY": {
+        "yf_ticker": "JPY=X",
+        "box": 0.30,           # ~30 pips
+        "imba_sl_abs": 0.60,
+        "fee_bps": 2.0,
+        "ttp_trail_pct": 0.005,
+        "tp1_pct": 0.006,
+        "tp2_pct": 0.014,
+        "min_sl_pct": 0.008,
+        "max_sl_pct": 0.020,
+        "tp2_min_sl_pct": 0.012,
+        "tp2_max_sl_pct": 0.035,
+    },
+}
+
+
+def run_tradfi_backtest():
+    """Run Flip + TP2 with CHOP gate on EUR/USD, Nasdaq, USD/JPY via yfinance."""
+    os.chdir(Path(__file__).resolve().parent.parent)
+
+    print("\n" + "=" * 70)
+    print("  TRADFI MULTI-ASSET BACKTEST: Flip + TP2 with CHOP gate")
+    print("  Assets: EUR/USD, Nasdaq (NQ=F), USD/JPY")
+    print("=" * 70)
+
+    all_results = []
+    for name, cfg in TRADFI_ASSETS.items():
+        print(f"\n{'─'*60}")
+        print(f"  {name}")
+        print(f"{'─'*60}")
+        try:
+            r = run_backtest(
+                pair=name,
+                box=cfg["box"],
+                ttp_trail_pct=cfg["ttp_trail_pct"],
+                min_sl_pct=cfg["min_sl_pct"],
+                max_sl_pct=cfg["max_sl_pct"],
+                tp1_pct=cfg["tp1_pct"],
+                tp2_pct=cfg["tp2_pct"],
+                tp2_min_sl_pct=cfg["tp2_min_sl_pct"],
+                tp2_max_sl_pct=cfg["tp2_max_sl_pct"],
+                fee_bps=cfg["fee_bps"],
+                imba_sl_abs=cfg["imba_sl_abs"],
+                regime_mode="chop_adx_er",
+                run_id=f"tradfi_{name}",
+                start_date="2024-01-01",
+                yf_ticker=cfg["yf_ticker"],
+                yf_period="2y",
+                yf_interval="1h",
+            )
+            all_results.append(r)
+        except Exception as e:
+            print(f"  ERROR: {e}")
+            import traceback
+            traceback.print_exc()
+            all_results.append({"pair": name, "error": str(e)})
+
+    # Summary table
+    print("\n" + "=" * 90)
+    print("  SUMMARY")
+    print("=" * 90)
+    fmt = "  {:<12s} {:>6s} {:>8s} {:>8s} {:>6s} {:>7s}  |  {:>8s} {:>8s} {:>6s} {:>7s}  |  {:>8s} {:>8s} {:>6s}"
+    print(fmt.format(
+        "ASSET", "BRICKS", "FLIP_RET", "FLIP_DD", "FL_TR", "FL_WR",
+        "TP2_RET", "TP2_DD", "TP_TR", "TP_WR",
+        "COMB_RET", "COMB_DD", "C_TR",
+    ))
+    print("  " + "─" * 88)
+
+    for r in all_results:
+        if "error" in r:
+            print(f"  {r['pair']:<12s} ERROR: {r['error']}")
+            continue
+        fe = r.get("flip_engine", {})
+        te = r.get("tp2_engine", {})
+        ce = r.get("combined", {})
+        print(fmt.format(
+            r["pair"],
+            str(r.get("bricks", "?")),
+            f"{fe.get('total_return_pct', 0):+.1f}%",
+            f"{fe.get('max_dd_pct', 0):.1f}%",
+            str(fe.get("trades", 0)),
+            f"{fe.get('win_rate', 0):.0f}%",
+            f"{te.get('total_return_pct', 0):+.1f}%",
+            f"{te.get('max_dd_pct', 0):.1f}%",
+            str(te.get("trades", 0)),
+            f"{te.get('win_rate', 0):.0f}%",
+            f"{ce.get('total_return_pct', 0):+.1f}%",
+            f"{ce.get('max_dd_pct', 0):.1f}%",
+            str(ce.get("trades", 0)),
+        ))
+
+    # Save
+    out_dir = Path("data/runs/tradfi_summary")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    with open(out_dir / "all_results.json", "w") as f:
+        json.dump(all_results, f, indent=2, default=str)
+    print(f"\n  Full results saved to {out_dir / 'all_results.json'}")
+    print()
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--pair", required=True)
-    ap.add_argument("--box", type=float, required=True)
+    ap.add_argument("--pair", default=None, help="Single pair (csv.gz mode)")
+    ap.add_argument("--box", type=float, default=None)
+    ap.add_argument("--tradfi", action="store_true", help="Run EUR/USD, NQ, USD/JPY via yfinance")
     ap.add_argument("--ttp-trail-pct", type=float, default=0.012)
     ap.add_argument("--min-sl-pct", type=float, default=0.015)
     ap.add_argument("--max-sl-pct", type=float, default=0.030)
@@ -469,11 +634,18 @@ if __name__ == "__main__":
     args = ap.parse_args()
 
     os.chdir(Path(__file__).resolve().parent.parent)
-    run_backtest(
-        pair=args.pair, box=args.box,
-        ttp_trail_pct=args.ttp_trail_pct,
-        min_sl_pct=args.min_sl_pct, max_sl_pct=args.max_sl_pct,
-        tp1_pct=args.tp1_pct, tp2_pct=args.tp2_pct, tp1_frac=args.tp1_frac,
-        tp2_min_sl_pct=args.tp2_min_sl_pct, tp2_max_sl_pct=args.tp2_max_sl_pct,
-        fee_bps=args.fee_bps, run_id=args.run_id, data_dir=args.data_dir,
-    )
+
+    if args.tradfi:
+        run_tradfi_backtest()
+    elif args.pair and args.box:
+        run_backtest(
+            pair=args.pair, box=args.box,
+            ttp_trail_pct=args.ttp_trail_pct,
+            min_sl_pct=args.min_sl_pct, max_sl_pct=args.max_sl_pct,
+            tp1_pct=args.tp1_pct, tp2_pct=args.tp2_pct, tp1_frac=args.tp1_frac,
+            tp2_min_sl_pct=args.tp2_min_sl_pct, tp2_max_sl_pct=args.tp2_max_sl_pct,
+            fee_bps=args.fee_bps, run_id=args.run_id, data_dir=args.data_dir,
+        )
+    else:
+        print("Usage: --tradfi  OR  --pair PAIR --box BOX")
+        ap.print_help()
