@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import numpy as np
 import pandas as pd
 
 from quant.execution.CHOPgate import get_live_gate_state
@@ -22,6 +24,26 @@ _LAST_REFRESH_TS: Optional[pd.Timestamp] = None
 _LAST_REFRESH_ERROR: Optional[str] = None
 _LAST_FILLS_REFRESH_TS: Optional[pd.Timestamp] = None
 _LAST_FILLS_REFRESH_ERROR: Optional[str] = None
+
+
+# In-process result caches keyed by query parameters. Each entry stores the
+# wall-clock timestamp at which it was produced, plus the cached value. Keep
+# TTLs short so the dashboard remains responsive to live trades while still
+# absorbing the bulk of repeated requests within the same refresh tick.
+_RENKO_DF_CACHE: Dict[str, Any] = {"path": None, "mtime": None, "ts": 0.0, "df": None}
+_CLOSED_TRADES_CACHE: Dict[str, Dict[str, Any]] = {}
+_REGIME_HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
+_EQUITY_HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
+
+
+def _cache_ttl_env(env_key: str, default_sec: float) -> float:
+    raw = os.getenv(env_key)
+    if raw:
+        try:
+            return float(raw)
+        except Exception:
+            pass
+    return float(default_sec)
 
 
 def _to_ts_iso(ts_like: Any) -> Optional[str]:
@@ -160,6 +182,20 @@ def _read_renko_df() -> pd.DataFrame:
     if not p.exists():
         return pd.DataFrame()
     try:
+        st = p.stat()
+        cache_path = _RENKO_DF_CACHE.get("path")
+        cache_mtime = _RENKO_DF_CACHE.get("mtime")
+        cache_size = _RENKO_DF_CACHE.get("size")
+        if (
+            isinstance(_RENKO_DF_CACHE.get("df"), pd.DataFrame)
+            and str(cache_path) == str(p)
+            and cache_mtime == st.st_mtime
+            and cache_size == st.st_size
+        ):
+            return _RENKO_DF_CACHE["df"]
+    except Exception:
+        st = None
+    try:
         df = pd.read_parquet(p)
     except Exception:
         return pd.DataFrame()
@@ -172,7 +208,14 @@ def _read_renko_df() -> pd.DataFrame:
     if not need.issubset(set(df.columns)):
         return pd.DataFrame()
     df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
-    return df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+    df = df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+    if st is not None:
+        _RENKO_DF_CACHE["path"] = str(p)
+        _RENKO_DF_CACHE["mtime"] = st.st_mtime
+        _RENKO_DF_CACHE["size"] = st.st_size
+        _RENKO_DF_CACHE["ts"] = time.time()
+        _RENKO_DF_CACHE["df"] = df
+    return df
 
 
 def _refresh_renko_cache_if_needed(existing_df: pd.DataFrame) -> pd.DataFrame:
@@ -215,23 +258,43 @@ def load_renko_bars(max_points: int = 5000, _df: Optional[pd.DataFrame] = None) 
     df = _df if _df is not None else _read_renko_df()
     if df.empty:
         return []
-    df = df.tail(int(max(1, max_points))).copy()
-    ts_epoch = df["ts"].map(lambda t: int(pd.Timestamp(t).timestamp()))
-    mono: List[int] = []
-    last_t = -1
-    for t_i in ts_epoch:
-        if t_i <= last_t:
-            t_i = last_t + 1
-        last_t = t_i
-        mono.append(t_i)
-    df["_time"] = mono
-    df["_open"] = df["open"].astype(float)
-    df["_high"] = df["high"].astype(float)
-    df["_low"] = df["low"].astype(float)
-    df["_close"] = df["close"].astype(float)
-    return df[["_time", "_open", "_high", "_low", "_close"]].rename(
-        columns={"_time": "time", "_open": "open", "_high": "high", "_low": "low", "_close": "close"}
-    ).to_dict("records")
+    df = df.tail(int(max(1, max_points)))
+    # Vectorized epoch (seconds) conversion.
+    try:
+        ts_int = (
+            pd.to_datetime(df["ts"], utc=True, errors="coerce").astype("int64")
+            // 1_000_000_000
+        ).to_numpy(dtype="int64")
+    except Exception:
+        ts_int = (
+            df["ts"]
+            .map(lambda t: int(pd.Timestamp(t).timestamp()))
+            .to_numpy(dtype="int64")
+        )
+
+    if ts_int.size:
+        # Equivalent to:
+        #   last = -1
+        #   for i, t in enumerate(ts_int):
+        #       t = max(t, last + 1); last = t; mono[i] = t
+        # Vectorized via the substitution g[i] = mono[i] - i, which yields
+        # g[i] = cummax(ts_int[i] - i), and then mono[i] = g[i] + i.
+        import numpy as np
+
+        idx = np.arange(ts_int.size, dtype="int64")
+        adjusted = ts_int - idx
+        ts_int = np.maximum.accumulate(adjusted) + idx
+
+    out = pd.DataFrame(
+        {
+            "time": ts_int,
+            "open": df["open"].astype(float).to_numpy(),
+            "high": df["high"].astype(float).to_numpy(),
+            "low": df["low"].astype(float).to_numpy(),
+            "close": df["close"].astype(float).to_numpy(),
+        }
+    )
+    return out.to_dict("records")
 
 
 def load_renko_health(_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
@@ -287,6 +350,22 @@ def load_closed_trades_from_postgres(
     strategy_whitelist: Optional[List[str]] = None,
     exclude_exit_events: Optional[List[str]] = None,
 ) -> pd.DataFrame:
+    # Short-lived in-process cache to absorb back-to-back identical reads
+    # (e.g. chart endpoint + diary + performance all fanning out).
+    ttl = _cache_ttl_env("DASHBOARD_CLOSED_TRADES_CACHE_SEC", 4.0)
+    if ttl > 0:
+        sw = ",".join(sorted(strategy_whitelist)) if strategy_whitelist else ""
+        ee = ",".join(sorted(exclude_exit_events)) if exclude_exit_events else ""
+        cache_key = f"{venue or ''}|{symbol or ''}|{int(max_points)}|{sw}|{ee}"
+        entry = _CLOSED_TRADES_CACHE.get(cache_key)
+        now = time.time()
+        if entry is not None and (now - float(entry.get("ts", 0.0))) <= ttl:
+            cached_df = entry.get("df")
+            if isinstance(cached_df, pd.DataFrame):
+                return cached_df.copy()
+    else:
+        cache_key = None
+
     try:
         symbol_norm = _normalize_symbol_token(symbol) if symbol is not None else None
         if venue is None and symbol is None:
@@ -339,39 +418,30 @@ def load_closed_trades_from_postgres(
             rows = cur.fetchall()
 
         if not rows:
-            return pd.DataFrame()
+            out = pd.DataFrame()
+        else:
+            out = pd.DataFrame(
+                rows,
+                columns=[
+                    "trade_id",
+                    "venue",
+                    "symbol",
+                    "entry_ts",
+                    "exit_ts",
+                    "side",
+                    "qty",
+                    "entry_price",
+                    "exit_price",
+                    "pnl_pct",
+                    "exit_event",
+                    "strategy",
+                    "strategy_instance",
+                ],
+            )
 
-        return pd.DataFrame(
-            rows,
-            columns=[
-                "trade_id",
-                "venue",
-                "symbol",
-                "entry_ts",
-                "exit_ts",
-                "side",
-                "qty",
-                "entry_price",
-                "exit_price",
-                "pnl_pct",
-                "exit_event",
-                "strategy",
-                "strategy_instance",
-            ],
-        )
-        if out.empty:
-            return out
-
-        if strategy_whitelist:
-            allowed = {str(s).strip() for s in strategy_whitelist if str(s).strip()}
-            if allowed and "strategy" in out.columns:
-                out = out[out["strategy"].astype(str).isin(allowed)]
-
-        if exclude_exit_events:
-            deny = {str(s).strip().lower() for s in exclude_exit_events if str(s).strip()}
-            if deny and "exit_event" in out.columns:
-                out = out[~out["exit_event"].astype(str).str.lower().isin(deny)]
-        return out.reset_index(drop=True)
+        if cache_key is not None:
+            _CLOSED_TRADES_CACHE[cache_key] = {"ts": time.time(), "df": out}
+        return out.copy() if not out.empty else out
     except Exception:
         return pd.DataFrame()
 
@@ -539,6 +609,39 @@ def _reconstruct_trades_from_execution_fills_df(
     return entries[-int(max(1, max_points)) :]
 
 
+_LONG_TOKENS = frozenset({"long", "l", "buy", "1"})
+_SHORT_TOKENS = frozenset({"short", "s", "sell", "-1"})
+
+
+def _side_value_to_int(v: Any) -> int:
+    if v is None:
+        return 0
+    if isinstance(v, str):
+        s = v.strip().lower()
+        if s in _LONG_TOKENS:
+            return 1
+        if s in _SHORT_TOKENS:
+            return -1
+        return 0
+    try:
+        if pd.isna(v):
+            return 0
+    except Exception:
+        pass
+    try:
+        x = int(v)
+    except Exception:
+        try:
+            x = int(float(v))
+        except Exception:
+            return 0
+    if x > 0:
+        return 1
+    if x < 0:
+        return -1
+    return 0
+
+
 def load_trade_markers(
     max_points: int = 5000,
     _trades_df: Optional[pd.DataFrame] = None,
@@ -560,160 +663,120 @@ def load_trade_markers(
     if "entry_ts" not in df.columns:
         return []
 
+    df = df.copy()
     df["entry_ts"] = pd.to_datetime(df["entry_ts"], utc=True, errors="coerce")
     df = df.dropna(subset=["entry_ts"]).sort_values("entry_ts").tail(int(max(1, max_points)))
-
-    markers: List[Dict[str, Any]] = []
-    for _, r in df.iterrows():
-        side_raw = r.get("side") if "side" in df.columns else 0
-        if pd.isna(side_raw):
-            side = 0
-        elif isinstance(side_raw, str):
-            s = side_raw.strip().lower()
-            side = 1 if s in ("long", "l", "buy", "1") else (-1 if s in ("short", "s", "sell", "-1") else 0)
-        else:
-            side = int(side_raw)
-
-        entry_px_col = next(
-            (c for c in ("entry_px", "entry_price", "price_entry", "entry") if c in df.columns), None
-        )
-        exit_px_col = next(
-            (c for c in ("exit_px", "exit_price", "price_exit", "exit") if c in df.columns), None
-        )
-        pnl_cols = [c for c in ("pnl_pct", "pnl", "pnl_abs", "net_pnl") if c in df.columns]
-        pnl_col = pnl_cols[0] if pnl_cols else None
-
-        epx_str = ""
-        if entry_px_col and pd.notna(r.get(entry_px_col)):
-            try:
-                epx_str = f" @ {float(r[entry_px_col]):.3f}"
-            except Exception:
-                pass
-
-        markers.append(
-            {
-                "time": int(pd.Timestamp(r["entry_ts"]).timestamp()),
-                "position": "belowBar" if side >= 0 else "aboveBar",
-                "shape": "arrowUp" if side >= 0 else "arrowDown",
-                "color": "#2ecc71" if side >= 0 else "#f39c12",
-                "text": f"{'LONG' if side >= 0 else 'SHORT'}{epx_str}",
-            }
-        )
-
-        if "exit_ts" in df.columns and pd.notna(r.get("exit_ts")):
-            exit_ts = pd.to_datetime(r["exit_ts"], utc=True, errors="coerce")
-            if pd.notna(exit_ts):
-                # determine PnL for exit color
-                pnl_positive = True
-                if pnl_col and pd.notna(r.get(pnl_col)):
-                    pnl_positive = float(r[pnl_col]) >= 0.0
-                elif entry_px_col and exit_px_col and pd.notna(r.get(entry_px_col)) and pd.notna(r.get(exit_px_col)):
-                    try:
-                        pnl_positive = ((float(r[exit_px_col]) - float(r[entry_px_col])) * (1 if side >= 0 else -1)) >= 0.0
-                    except Exception:
-                        pass
-
-                exit_event = str(r.get("exit_event", "exit"))
-                pnl_str = ""
-                if pnl_col and pd.notna(r.get(pnl_col)):
-                    try:
-                        pnl_val = float(r[pnl_col])
-                        pnl_str = f" {pnl_val:+.2f}%"
-                    except Exception:
-                        pass
-                xpx_str = ""
-                if exit_px_col and pd.notna(r.get(exit_px_col)):
-                    try:
-                        xpx_str = f" @ {float(r[exit_px_col]):.3f}"
-                    except Exception:
-                        pass
-
-                markers.append(
-                    {
-                        "time": int(pd.Timestamp(exit_ts).timestamp()),
-                        "position": "aboveBar" if side >= 0 else "belowBar",
-                        "shape": "square",
-                        "color": "#2ecc71" if pnl_positive else "#f7768e",
-                        "text": f"{exit_event}{xpx_str}{pnl_str}",
-                    }
-                )
-
-    return markers
-
-
-def load_trade_segments(
-    max_points: int = 2000,
-    _trades_df: Optional[pd.DataFrame] = None,
-) -> List[Dict[str, Any]]:
-    if _trades_df is not None:
-        df = _trades_df
-    else:
-        df = load_closed_trades_from_postgres(
-            venue="kucoin",
-            symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
-            max_points=max_points,
-        )
-        if df.empty:
-            df = _read_trades_df()
     if df.empty:
         return []
 
-    if "entry_ts" not in df.columns and "ts" in df.columns:
-        df = df.rename(columns={"ts": "entry_ts"})
-    if "entry_ts" not in df.columns or "exit_ts" not in df.columns:
-        return []
+    cols = set(df.columns)
+    entry_px_col = next(
+        (c for c in ("entry_px", "entry_price", "price_entry", "entry") if c in cols),
+        None,
+    )
+    exit_px_col = next(
+        (c for c in ("exit_px", "exit_price", "price_exit", "exit") if c in cols),
+        None,
+    )
+    pnl_col = next(
+        (c for c in ("pnl_pct", "pnl", "pnl_abs", "net_pnl") if c in cols),
+        None,
+    )
+    has_exit = "exit_ts" in cols
 
-    df["entry_ts"] = pd.to_datetime(df["entry_ts"], utc=True, errors="coerce")
-    df["exit_ts"] = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
-    df = df.dropna(subset=["entry_ts", "exit_ts"]).sort_values("entry_ts").tail(int(max(1, max_points)))
+    side_series = df["side"] if "side" in cols else pd.Series(0, index=df.index)
+    side_int = side_series.map(_side_value_to_int).astype("int64").to_numpy()
 
-    entry_candidates = ["entry_px", "entry_price", "price_entry", "entry"]
-    exit_candidates = ["exit_px", "exit_price", "price_exit", "exit"]
-    entry_col = next((c for c in entry_candidates if c in df.columns), None)
-    exit_col = next((c for c in exit_candidates if c in df.columns), None)
-    if not entry_col or not exit_col:
-        return []
+    entry_ts_int = (
+        df["entry_ts"].astype("int64") // 1_000_000_000
+    ).to_numpy(dtype="int64")
 
-    side_col = "side" if "side" in df.columns else None
-    pnl_cols = [c for c in ("pnl_pct", "pnl", "pnl_abs", "net_pnl") if c in df.columns]
-    pnl_col = pnl_cols[0] if pnl_cols else None
+    if entry_px_col:
+        entry_px_num = pd.to_numeric(df[entry_px_col], errors="coerce").to_numpy()
+    else:
+        entry_px_num = None
+    if exit_px_col:
+        exit_px_num = pd.to_numeric(df[exit_px_col], errors="coerce").to_numpy()
+    else:
+        exit_px_num = None
+    if pnl_col:
+        pnl_num = pd.to_numeric(df[pnl_col], errors="coerce").to_numpy()
+    else:
+        pnl_num = None
 
-    segs: List[Dict[str, Any]] = []
-    for _, r in df.iterrows():
-        try:
-            epx = float(r[entry_col])
-            xpx = float(r[exit_col])
-        except Exception:
-            continue
-        if not pd.notna(epx) or not pd.notna(xpx):
-            continue
+    if has_exit:
+        exit_ts_series = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
+        exit_ts_int = (exit_ts_series.astype("int64") // 1_000_000_000).to_numpy(
+            dtype="int64"
+        )
+        exit_ts_valid = exit_ts_series.notna().to_numpy()
+        exit_event_series = (
+            df.get("exit_event", pd.Series(["exit"] * len(df), index=df.index))
+            .fillna("exit")
+            .astype(str)
+            .to_numpy()
+        )
+    else:
+        exit_ts_int = None
+        exit_ts_valid = None
+        exit_event_series = None
 
-        if side_col and pd.notna(r.get(side_col)):
-            side_raw = r.get(side_col)
-            if isinstance(side_raw, str):
-                s = side_raw.strip().lower()
-                side = 1 if s in ("long", "l", "buy", "1") else (-1 if s in ("short", "s", "sell", "-1") else 1)
-            else:
-                side = int(side_raw)
-        else:
-            side = 1
+    markers: List[Dict[str, Any]] = []
+    n = len(df)
+    for i in range(n):
+        side_i = int(side_int[i])
+        epx_str = ""
+        if entry_px_num is not None:
+            ep = entry_px_num[i]
+            if ep == ep:  # not NaN
+                epx_str = f" @ {float(ep):.3f}"
 
-        if pnl_col and pd.notna(r.get(pnl_col)):
-            pnl_positive = float(r[pnl_col]) >= 0.0
-        else:
-            pnl_positive = ((xpx - epx) * (1 if side >= 0 else -1)) >= 0.0
-
-        segs.append(
+        markers.append(
             {
-                "from_time": int(pd.Timestamp(r["entry_ts"]).timestamp()),
-                "to_time": int(pd.Timestamp(r["exit_ts"]).timestamp()),
-                "from_price": float(epx),
-                "to_price": float(xpx),
-                "positive": bool(pnl_positive),
-                "color": "#2ecc71" if pnl_positive else "#f7768e",
+                "time": int(entry_ts_int[i]),
+                "position": "belowBar" if side_i >= 0 else "aboveBar",
+                "shape": "arrowUp" if side_i >= 0 else "arrowDown",
+                "color": "#2ecc71" if side_i >= 0 else "#f39c12",
+                "text": ("LONG" if side_i >= 0 else "SHORT") + epx_str,
             }
         )
-    return segs
+
+        if has_exit and exit_ts_valid is not None and exit_ts_valid[i]:
+            pnl_positive = True
+            if pnl_num is not None:
+                p = pnl_num[i]
+                if p == p:
+                    pnl_positive = float(p) >= 0.0
+            elif entry_px_num is not None and exit_px_num is not None:
+                ep = entry_px_num[i]
+                xp = exit_px_num[i]
+                if ep == ep and xp == xp:
+                    pnl_positive = (
+                        (float(xp) - float(ep)) * (1 if side_i >= 0 else -1)
+                    ) >= 0.0
+
+            pnl_str = ""
+            if pnl_num is not None:
+                p = pnl_num[i]
+                if p == p:
+                    pnl_str = f" {float(p):+.2f}%"
+            xpx_str = ""
+            if exit_px_num is not None:
+                xp = exit_px_num[i]
+                if xp == xp:
+                    xpx_str = f" @ {float(xp):.3f}"
+
+            markers.append(
+                {
+                    "time": int(exit_ts_int[i]),
+                    "position": "aboveBar" if side_i >= 0 else "belowBar",
+                    "shape": "square",
+                    "color": "#2ecc71" if pnl_positive else "#f7768e",
+                    "text": f"{exit_event_series[i]}{xpx_str}{pnl_str}",
+                }
+            )
+
+    return markers
 
 
 def _refresh_fills_cache_if_needed(symbol: str, fills_path: Path) -> None:
@@ -1027,313 +1090,6 @@ def load_real_equity_history(max_points: int = 500) -> Dict[str, Any]:
     return {"points": [], "source": "none"}
 
 
-def _latest_equity_value_from_history(history: Dict[str, Any]) -> Optional[float]:
-    if not isinstance(history, dict):
-        return None
-    pts = history.get("points", [])
-    if not isinstance(pts, list) or not pts:
-        return None
-    try:
-        eq = pd.to_numeric(pts[-1].get("equity"), errors="coerce")
-        if pd.notna(eq):
-            return float(eq)
-    except Exception:
-        pass
-    return None
-
-
-def _extract_first_numeric(obj: Any, paths: List[List[str]]) -> Optional[float]:
-    for path in paths:
-        cur = obj
-        ok = True
-        for key in path:
-            if not isinstance(cur, dict) or key not in cur:
-                ok = False
-                break
-            cur = cur.get(key)
-        if not ok:
-            continue
-        val = pd.to_numeric(cur, errors="coerce")
-        if pd.notna(val):
-            return float(val)
-    return None
-
-
-def load_kraken_metrics() -> Dict[str, Any]:
-     
-    equity_hist = load_kraken_equity_history(max_points=1)
-    latest_points = equity_hist.get("points") or []
-    if latest_points:
-        latest = latest_points[-1] or {}
-        snap_payload = latest.get("payload_json") or {}
-        if isinstance(snap_payload, str):
-            try:
-                snap_payload = json.loads(snap_payload)
-            except Exception:
-                snap_payload = {}
-        if not isinstance(snap_payload, dict):
-            snap_payload = {}
-
-        snap_pos_qty = pd.to_numeric(snap_payload.get("position_qty"), errors="coerce")
-        snap_pos_side = pd.to_numeric(snap_payload.get("position_side"), errors="coerce")
-
-        if pd.notna(snap_pos_qty):
-            venue_pos_side = 0
-            if pd.notna(snap_pos_side):
-                venue_pos_side = int(snap_pos_side)
-            elif float(snap_pos_qty) > 0:
-                side_raw = str(snap_payload.get("side") or "").strip().lower()
-                if side_raw in ("long", "buy", "1"):
-                    venue_pos_side = 1
-                elif side_raw in ("short", "sell", "-1"):
-                    venue_pos_side = -1
-
-            latest_equity = _latest_equity_value_from_history(equity_hist)
-
-            return {
-                "ts": _to_ts_iso(latest.get("time")),
-                "equity_usd": latest_equity,
-                "wallet_usd": latest_equity,
-                "upnl_usd": None,
-                "mark_price": None,
-                "target_size": None,
-                "gate_on": None,
-                "gate_source": "postgres_snapshot",
-                "engine": "flip",
-                "mode": snap_payload.get("mode"),
-                "pos_side": venue_pos_side,
-                "entry_px": None,
-                "best_fav": None,
-                "size_rem": float(snap_pos_qty),
-                "tp1_done": False,
-                "signal": None,
-                "signal_ts": None,
-                "venue_pos_side": venue_pos_side,
-                "venue_pos_size": float(snap_pos_qty),
-                "dry_run": None,
-            }
-
-    pg_live = load_kraken_metrics_from_action_events(symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"))
-    if pg_live:
-        return pg_live
-
-    p = _env_path("KRAKEN_METRICS_JSON", _live_default("kraken/metrics.json"))
-    if not p.exists():
-        return {}
-    try:
-        obj = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    return obj if isinstance(obj, dict) else {}
-
-def load_kraken_metrics_from_action_events(symbol: str = "SOL-USDT") -> Dict[str, Any]:
-    try:
-        sql = """
-            select
-                ts,
-                action_side,
-                position_after,
-                engine_mode_after,
-                payload_json
-            from action_events
-            where venue = 'kraken'
-            order by ts desc
-            limit 1
-        """
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(sql)
-            row = cur.fetchone()
-
-        if not row:
-            return {}
-
-        ts, action_side, position_after, engine_mode_after, payload_json = row
-
-        payload = payload_json or {}
-        if isinstance(payload, str):
-            try:
-                payload = json.loads(payload)
-            except Exception:
-                payload = {}
-        if not isinstance(payload, dict):
-            payload = {}
-
-        inner_payload = payload.get("payload_json", {})
-        if isinstance(inner_payload, str):
-            try:
-                inner_payload = json.loads(inner_payload)
-            except Exception:
-                inner_payload = {}
-        if not isinstance(inner_payload, dict):
-            inner_payload = {}
-
-        pos_num = pd.to_numeric(inner_payload.get("live_pos"), errors="coerce")
-        
-        venue_pos_side = 0
-        if pd.notna(pos_num):
-            if float(pos_num) > 0:
-                venue_pos_side = 1
-            elif float(pos_num) < 0:
-                venue_pos_side = -1
-        else:
-            s = str(action_side or "").strip().lower()
-            if s in ("long", "buy", "1"):
-                venue_pos_side = 1
-            elif s in ("short", "sell", "-1"):
-                venue_pos_side = -1
-
-        entry_px = pd.to_numeric(payload.get("entry_px"), errors="coerce")
-        best_fav = pd.to_numeric(payload.get("best_fav"), errors="coerce")
-
-        eq_hist = load_kraken_equity_history(max_points=1)
-        latest_equity = _latest_equity_value_from_history(eq_hist)
-
-        return {
-            "ts": _to_ts_iso(ts),
-            "equity_usd": latest_equity,
-            "wallet_usd": latest_equity,
-            "upnl_usd": None,
-            "mark_price": None,
-            "target_size": None,
-            "gate_on": None,
-            "gate_source": "action_events",
-            "engine": "flip",
-            "mode": engine_mode_after or payload.get("mode"),
-            "pos_side": venue_pos_side,
-            "entry_px": float(entry_px) if pd.notna(entry_px) else None,
-            "best_fav": float(best_fav) if pd.notna(best_fav) else None,
-            "size_rem": float(pos_num) if pd.notna(pos_num) else 0.0,
-            "tp1_done": False,
-            "signal": None,
-            "signal_ts": None,
-            "venue_pos_side": venue_pos_side,
-            "venue_pos_size": float(pos_num) if pd.notna(pos_num) else 0.0,
-            "dry_run": None,
-        }
-    except Exception:
-        return {}
-
-def load_kraken_equity_history(max_points: int = 500) -> Dict[str, Any]:
-    pg = load_equity_history_from_postgres(
-        venue="kraken",
-        account="main",
-        max_points=max_points,
-    )
-    if pg.get("points"):
-        return pg
-
-    p = _env_path("KRAKEN_EQUITY_CSV", _live_default("kraken/equity.csv"))
-
-    pts: List[Dict[str, Any]] = []
-    source = "none"
-
-    if p.exists():
-        try:
-            df = pd.read_csv(p)
-            if not df.empty:
-                df = df.copy()
-                if "ts" not in df.columns:
-                    for c in ("time", "timestamp", "datetime"):
-                        if c in df.columns:
-                            df["ts"] = df[c]
-                            break
-                if "equity_usd" not in df.columns:
-                    for c in ("equity", "portfolio_value", "portfolioValue", "value"):
-                        if c in df.columns:
-                            df["equity_usd"] = df[c]
-                            break
-                if {"ts", "equity_usd"}.issubset(set(df.columns)):
-                    df["ts"] = df["ts"].map(_epoch_seconds_from_any)
-                    df["equity_usd"] = pd.to_numeric(df["equity_usd"], errors="coerce")
-                    df = (
-                        df.dropna(subset=["ts", "equity_usd"])
-                        .sort_values("ts")
-                        .drop_duplicates(subset=["ts"], keep="last")
-                    )
-                    if not df.empty:
-                        pts = [
-                            {"time": int(r["ts"]), "equity": float(r["equity_usd"])}
-                            for _, r in df.iterrows()
-                        ]
-                        source = "kraken_equity_snapshots_usd"
-        except Exception:
-            pts = []
-            source = "none"
-
-    redis_url = os.getenv("REDIS_URL", "").strip()
-    if redis_url:
-        try:
-            import redis as redis_lib
-
-            r = redis_lib.from_url(redis_url, decode_responses=True)
-            raw = r.get("kraken:equity:latest")
-            if raw:
-                obj = json.loads(raw)
-                ts_i = _epoch_seconds_from_any(obj.get("ts"))
-                eq = pd.to_numeric(obj.get("equity_usd"), errors="coerce")
-                if ts_i is not None and pd.notna(eq):
-                    latest_pt = {"time": int(ts_i), "equity": float(eq)}
-                    if not pts:
-                        pts = [latest_pt]
-                        source = "kraken_equity_redis_latest"
-                    else:
-                        last_ts = int(pts[-1]["time"])
-                        if int(ts_i) > last_ts:
-                            pts.append(latest_pt)
-                            source = "kraken_equity_snapshots_usd+redis_latest"
-        except Exception:
-            pass
-
-    if not pts:
-        return {"points": [], "source": "none"}
-
-    pts = sorted(pts, key=lambda x: int(x["time"]))
-    if len(pts) > int(max(1, max_points)):
-        pts = pts[-int(max(1, max_points)) :]
-    return {"points": pts, "source": source}
-
-
-def build_combined_equity(
-    kucoin_points: List[Dict[str, Any]],
-    kraken_points_usd: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    if not kucoin_points and not kraken_points_usd:
-        return {"points": [], "source": "none"}
-
-    usdt_per_usd = float(os.getenv("DASHBOARD_USDT_PER_USD", "1.0") or 1.0)
-
-    k1 = pd.DataFrame(kucoin_points or [])
-    k2 = pd.DataFrame(kraken_points_usd or [])
-    if k1.empty and k2.empty:
-        return {"points": [], "source": "none"}
-
-    if k1.empty:
-        k1 = pd.DataFrame(columns=["time", "equity"])
-    if k2.empty:
-        k2 = pd.DataFrame(columns=["time", "equity"])
-
-    k1["time"] = pd.to_numeric(k1.get("time"), errors="coerce")
-    k1["equity"] = pd.to_numeric(k1.get("equity"), errors="coerce")
-    k1 = k1.dropna(subset=["time", "equity"]).sort_values("time")
-
-    k2["time"] = pd.to_numeric(k2.get("time"), errors="coerce")
-    k2["equity"] = pd.to_numeric(k2.get("equity"), errors="coerce") * float(usdt_per_usd)
-    k2 = k2.dropna(subset=["time", "equity"]).sort_values("time")
-
-    if k1.empty and k2.empty:
-        return {"points": [], "source": "none"}
-
-    t1 = set(int(x) for x in k1["time"].tolist()) if not k1.empty else set()
-    t2 = set(int(x) for x in k2["time"].tolist()) if not k2.empty else set()
-    all_times = sorted(t1 | t2)
-    rows: List[Dict[str, Any]] = []
-    for t in all_times:
-        e1 = float(k1[k1["time"] <= t]["equity"].iloc[-1]) if (not k1.empty and (k1["time"] <= t).any()) else 0.0
-        e2 = float(k2[k2["time"] <= t]["equity"].iloc[-1]) if (not k2.empty and (k2["time"] <= t).any()) else 0.0
-        rows.append({"time": int(t), "equity": float(e1 + e2)})
-    return {"points": rows, "source": "kucoin_usdt_plus_kraken_usd_to_usdt"}
-
-
 def load_active_levels() -> Dict[str, Any]:
     p = _env_path("DASHBOARD_LEVELS_JSON", _live_default("execution_state.json"))
     if not p.exists():
@@ -1527,63 +1283,118 @@ def _aggregate_logical_trades(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     w["qty_w"] = w["qty_raw"].where(w["qty_raw"].notna() & (w["qty_raw"] > 0), 1.0)
-    w["entry_anchor"] = w["entry_ts"].map(
-        lambda ts: (int(pd.Timestamp(ts).timestamp()) if pd.notna(ts) else pd.NA)
-    ).astype("Int64")
+    # Use a sentinel int for "missing entry anchor" so we can do vectorized
+    # equality checks instead of paired-None comparisons in a Python loop.
+    _NO_ANCHOR_SENTINEL = -1
+    dt_entry = pd.to_datetime(w["entry_ts"], utc=True, errors="coerce")
+    entry_anchor_int = (
+        (dt_entry.astype("int64") // 1_000_000_000)
+        .where(dt_entry.notna(), _NO_ANCHOR_SENTINEL)
+        .astype("int64")
+    )
+    w["entry_anchor"] = entry_anchor_int
 
-    group_ids: List[int] = []
-    cur_gid = -1
-    prev_side: Optional[int] = None
-    prev_anchor: Optional[int] = None
-    for _, r in w.iterrows():
-        side_i = int(r["side_sign"])
-        anchor_i = None if pd.isna(r["entry_anchor"]) else int(r["entry_anchor"])
-        is_new = (
-            prev_side is None
-            or side_i != prev_side
-            or (anchor_i is not None and prev_anchor is not None and anchor_i != prev_anchor)
-            or (anchor_i is None and prev_anchor is not None)
-            or (anchor_i is not None and prev_anchor is None)
+    side_arr = w["side_sign"].astype("int64").to_numpy()
+    anchor_arr = entry_anchor_int.to_numpy(dtype="int64")
+    if side_arr.size == 0:
+        w["logical_gid"] = []
+    else:
+        side_changed = np.empty(side_arr.size, dtype=bool)
+        side_changed[0] = True
+        side_changed[1:] = (
+            (side_arr[1:] != side_arr[:-1])
+            | (anchor_arr[1:] != anchor_arr[:-1])
         )
-        if is_new:
-            cur_gid += 1
-        group_ids.append(cur_gid)
-        prev_side = side_i
-        prev_anchor = anchor_i
-    w["logical_gid"] = group_ids
+        w["logical_gid"] = np.cumsum(side_changed.astype("int64")) - 1
 
-    out_rows: List[Dict[str, Any]] = []
-    for gid, g in w.groupby("logical_gid", sort=True):
-        g = g.sort_values("exit_ts")
-        qty_w = pd.to_numeric(g["qty_w"], errors="coerce").fillna(1.0)
-        wsum = float(qty_w.sum())
-        if not (wsum > 0):
-            wsum = float(len(g))
-            qty_w = pd.Series([1.0] * len(g), index=g.index)
-        pnl_pct = float((pd.to_numeric(g["pnl_pct_num"], errors="coerce").fillna(0.0) * qty_w).sum() / wsum)
+    # Vectorized aggregation: precompute per-row contributions then a single
+    # groupby.sum over the logical_gid column. Avoids a Python-level groupby
+    # iteration that becomes the dominant cost when there are thousands of
+    # logical trades.
+    qty_w = pd.to_numeric(w["qty_w"], errors="coerce").fillna(1.0).astype("float64")
+    pnl_num = pd.to_numeric(w["pnl_pct_num"], errors="coerce").fillna(0.0).astype("float64")
+    entry_num = pd.to_numeric(w["entry_price_num"], errors="coerce").astype("float64")
+    exit_num = pd.to_numeric(w["exit_price_num"], errors="coerce").astype("float64")
+    qty_raw_num = pd.to_numeric(w["qty_raw"], errors="coerce").astype("float64")
 
-        qty_sum = pd.to_numeric(g["qty_raw"], errors="coerce")
-        qty_out = float(qty_sum.sum()) if qty_sum.notna().any() else None
-        entry_price = pd.to_numeric(g["entry_price_num"], errors="coerce")
-        exit_price = pd.to_numeric(g["exit_price_num"], errors="coerce")
-        entry_out = float((entry_price.fillna(0.0) * qty_w).sum() / wsum) if entry_price.notna().any() else None
-        exit_out = float((exit_price.fillna(0.0) * qty_w).sum() / wsum) if exit_price.notna().any() else None
+    work = pd.DataFrame(
+        {
+            "logical_gid": w["logical_gid"].astype("int64"),
+            "qty_w": qty_w,
+            "pnl_x_qw": pnl_num * qty_w,
+            "entry_x_qw": entry_num.fillna(0.0) * qty_w,
+            "exit_x_qw": exit_num.fillna(0.0) * qty_w,
+            "qty_raw": qty_raw_num,
+            "qty_raw_notna": qty_raw_num.notna().astype("int64"),
+            "entry_notna": entry_num.notna().astype("int64"),
+            "exit_notna": exit_num.notna().astype("int64"),
+            "entry_ts": w["entry_ts"],
+            "exit_ts": w["exit_ts"],
+            "side_sign": w["side_sign"].astype("int64"),
+            "row_idx": np.arange(len(w), dtype="int64"),
+        }
+    )
 
-        out_rows.append(
-            {
-                "logical_trade_id": f"lt_{int(gid)}",
-                "entry_ts": g["entry_ts"].dropna().min() if g["entry_ts"].notna().any() else g["exit_ts"].iloc[0],
-                "exit_ts": g["exit_ts"].max(),
-                "side": "long" if int(g["side_sign"].iloc[-1]) >= 0 else "short",
-                "qty": qty_out,
-                "entry_price": entry_out,
-                "exit_price": exit_out,
-                "pnl_pct": pnl_pct,
-                "slice_count": int(len(g)),
-            }
-        )
+    grouped_sum = work.groupby("logical_gid", sort=True).agg(
+        qty_w_sum=("qty_w", "sum"),
+        pnl_x_qw_sum=("pnl_x_qw", "sum"),
+        entry_x_qw_sum=("entry_x_qw", "sum"),
+        exit_x_qw_sum=("exit_x_qw", "sum"),
+        qty_raw_sum=("qty_raw", "sum"),
+        qty_raw_any=("qty_raw_notna", "max"),
+        entry_any=("entry_notna", "max"),
+        exit_any=("exit_notna", "max"),
+        entry_ts_min=("entry_ts", "min"),
+        exit_ts_max=("exit_ts", "max"),
+        last_row_idx=("row_idx", "max"),
+        slice_count=("row_idx", "count"),
+    )
 
-    return pd.DataFrame(out_rows).sort_values("exit_ts").reset_index(drop=True)
+    n_groups = len(grouped_sum)
+    if n_groups == 0:
+        return pd.DataFrame()
+
+    # Weighted means; fall back to simple count when total weight is zero.
+    qty_w_sum = grouped_sum["qty_w_sum"].to_numpy()
+    use_count_fallback = qty_w_sum <= 0
+    effective_w = np.where(use_count_fallback, grouped_sum["slice_count"].to_numpy(), qty_w_sum).astype("float64")
+    effective_w = np.where(effective_w == 0, 1.0, effective_w)
+
+    pnl_pct = grouped_sum["pnl_x_qw_sum"].to_numpy() / effective_w
+    entry_price = grouped_sum["entry_x_qw_sum"].to_numpy() / effective_w
+    exit_price = grouped_sum["exit_x_qw_sum"].to_numpy() / effective_w
+
+    last_row_idx = grouped_sum["last_row_idx"].to_numpy().astype("int64")
+    side_sign_last = w["side_sign"].astype("int64").to_numpy()[last_row_idx]
+    side_strs = np.where(side_sign_last >= 0, "long", "short")
+
+    qty_raw_any = grouped_sum["qty_raw_any"].astype(bool).to_numpy()
+    entry_any = grouped_sum["entry_any"].astype(bool).to_numpy()
+    exit_any = grouped_sum["exit_any"].astype(bool).to_numpy()
+
+    qty_out_arr = np.where(qty_raw_any, grouped_sum["qty_raw_sum"].to_numpy(), np.nan)
+    entry_out_arr = np.where(entry_any, entry_price, np.nan)
+    exit_out_arr = np.where(exit_any, exit_price, np.nan)
+
+    # Fall back to exit_ts when entry_ts_min is NaT (group had no valid entry_ts).
+    entry_ts_filled = grouped_sum["entry_ts_min"].fillna(grouped_sum["exit_ts_max"])
+
+    out_df = pd.DataFrame(
+        {
+            "logical_trade_id": [
+                f"lt_{int(gid)}" for gid in grouped_sum.index.to_list()
+            ],
+            "entry_ts": entry_ts_filled.to_numpy(),
+            "exit_ts": grouped_sum["exit_ts_max"].to_numpy(),
+            "side": side_strs,
+            "qty": qty_out_arr,
+            "entry_price": entry_out_arr,
+            "exit_price": exit_out_arr,
+            "pnl_pct": pnl_pct.astype("float64"),
+            "slice_count": grouped_sum["slice_count"].astype("int64").to_numpy(),
+        }
+    )
+    return out_df.sort_values("exit_ts").reset_index(drop=True)
 
 
 def build_trading_diary(
@@ -1599,6 +1410,8 @@ def build_trading_diary(
     out: List[Dict[str, Any]] = []
     symbol_eff = str(symbol or os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"))
     venue_eff = str(venue or "kucoin")
+    if venue_eff.lower() != "kucoin":
+        return {"entries": [], "source": "unsupported_venue"}
 
     if live_only and _trades_df is None:
         fills_df = load_execution_fills_from_postgres(
@@ -1624,7 +1437,7 @@ def build_trading_diary(
             df = df[df["venue"].astype(str) == venue_eff]
         if live_only:
             if "strategy" in df.columns:
-                live_map = {"kucoin": {"live_executor"}, "kraken": {"live_executor_2"}}
+                live_map = {"kucoin": {"live_executor"}}
                 allowed = live_map.get(venue_eff.lower(), set())
                 if allowed:
                     df = df[df["strategy"].astype(str).isin(allowed)]
@@ -1633,7 +1446,7 @@ def build_trading_diary(
     else:
         strategy_whitelist = None
         if live_only:
-            live_map = {"kucoin": ["live_executor"], "kraken": ["live_executor_2"]}
+            live_map = {"kucoin": ["live_executor"]}
             strategy_whitelist = live_map.get(venue_eff.lower())
         df = load_closed_trades_from_postgres(
             venue=venue_eff,
@@ -1653,7 +1466,7 @@ def build_trading_diary(
                 df = df[df["venue"].astype(str) == venue_eff]
             if live_only:
                 if "strategy" in df.columns:
-                    live_map = {"kucoin": {"live_executor"}, "kraken": {"live_executor_2"}}
+                    live_map = {"kucoin": {"live_executor"}}
                     allowed = live_map.get(venue_eff.lower(), set())
                     if allowed:
                         df = df[df["strategy"].astype(str).isin(allowed)]
@@ -1854,52 +1667,87 @@ def build_regime_overlay(
     df = pd.DataFrame(rows)
     df["ts"] = pd.to_datetime(df["ts"], utc=True, errors="coerce")
     df = df.dropna(subset=["ts"]).sort_values("ts").reset_index(drop=True)
+    if df.empty:
+        return {"spans": [], "points": [], "latest": None}
+
     df["gate_on"] = pd.to_numeric(df["gate_on"], errors="coerce").fillna(0).astype(int)
-    df["confidence"] = pd.to_numeric(df.get("confidence"), errors="coerce").fillna(0.0).clip(0.0, 1.0)
+    df["confidence"] = (
+        pd.to_numeric(df.get("confidence"), errors="coerce")
+        .fillna(0.0)
+        .clip(0.0, 1.0)
+    )
 
-    spans: List[Dict[str, Any]] = []
-    if len(df):
-        cur_gate = int(df.loc[0, "gate_on"])
-        cur_conf = float(df.loc[0, "confidence"])
-        start = pd.Timestamp(df.loc[0, "ts"])
-        for i in range(1, len(df)):
-            gate_i = int(df.loc[i, "gate_on"])
-            conf_i = float(df.loc[i, "confidence"])
-            ts_i = pd.Timestamp(df.loc[i, "ts"])
-            if gate_i != cur_gate:
-                spans.append(
-                    {
-                        "from": int(start.timestamp()),
-                        "to": int(ts_i.timestamp()),
-                        "gate_on": cur_gate,
-                        "confidence": cur_conf,
-                    }
-                )
-                start = ts_i
-                cur_gate = gate_i
-                cur_conf = conf_i
-            else:
-                cur_conf = max(cur_conf, conf_i)
+    ts_int = (df["ts"].astype("int64") // 1_000_000_000).to_numpy(dtype="int64")
+    gate_arr = df["gate_on"].to_numpy(dtype="int64")
+    conf_arr = df["confidence"].to_numpy(dtype="float64")
+    regime_state_arr = (
+        df["regime_state"].fillna("").astype(str).to_numpy()
+        if "regime_state" in df.columns
+        else None
+    )
 
-        to_ts = max(pd.Timestamp(df.iloc[-1]["ts"]), end_ts)
-        spans.append(
+    # Group consecutive equal-gate runs vectorially.
+    n = gate_arr.size
+    end_ts_int = int(max(int(ts_int[-1]), int(end_ts.timestamp())))
+    if n == 1:
+        spans = [
             {
-                "from": int(start.timestamp()),
-                "to": int(to_ts.timestamp()),
-                "gate_on": cur_gate,
-                "confidence": cur_conf,
+                "from": int(ts_int[0]),
+                "to": end_ts_int,
+                "gate_on": int(gate_arr[0]),
+                "confidence": float(conf_arr[0]),
             }
-        )
+        ]
+    else:
+        change_mask = gate_arr[1:] != gate_arr[:-1]
+        change_idx = list(map(int, change_mask.nonzero()[0] + 1))
+        boundaries = [0, *change_idx, n]
+        spans = []
+        for k in range(len(boundaries) - 1):
+            start_i = boundaries[k]
+            stop_i = boundaries[k + 1]
+            from_ts = int(ts_int[start_i])
+            if stop_i < n:
+                to_ts = int(ts_int[stop_i])
+            else:
+                to_ts = end_ts_int
+            spans.append(
+                {
+                    "from": from_ts,
+                    "to": to_ts,
+                    "gate_on": int(gate_arr[start_i]),
+                    "confidence": float(conf_arr[start_i:stop_i].max()),
+                }
+            )
 
-    points = [
-        {
-            "time": int(pd.Timestamp(r["ts"]).timestamp()),
-            "confidence": float(r["confidence"]),
-            "gate_on": int(r["gate_on"]),
-            "regime_state": str(r.get("regime_state") or ""),
-        }
-        for _, r in df.iterrows()
-    ]
+    # ``points`` is consumed by the legacy dashboard HTML and tests; build it
+    # using zip() over numpy arrays which is ~10x faster than DataFrame.iterrows.
+    if regime_state_arr is None:
+        points = [
+            {
+                "time": int(t),
+                "confidence": float(c),
+                "gate_on": int(g),
+                "regime_state": "",
+            }
+            for t, c, g in zip(ts_int.tolist(), conf_arr.tolist(), gate_arr.tolist())
+        ]
+    else:
+        points = [
+            {
+                "time": int(t),
+                "confidence": float(c),
+                "gate_on": int(g),
+                "regime_state": str(rs),
+            }
+            for t, c, g, rs in zip(
+                ts_int.tolist(),
+                conf_arr.tolist(),
+                gate_arr.tolist(),
+                regime_state_arr.tolist(),
+            )
+        ]
+
     latest = points[-1] if points else None
     return {"spans": spans, "points": points, "latest": latest}
 
@@ -1961,13 +1809,24 @@ def build_regime_scores(symbol: str, hours: int = 24 * 14, _rows: Optional[List[
     if not rows:
         return {"scores": [], "forecast": []}
 
-    scores = []
-    for r in rows:
-        ts = pd.to_datetime(r.get("ts"), utc=True, errors="coerce")
-        rs = pd.to_numeric(r.get("regime_score"), errors="coerce")
-        if pd.notna(ts) and pd.notna(rs):
-            scores.append({"time": int(ts.timestamp()), "score": round(float(rs), 4)})
+    df = pd.DataFrame(rows)
+    if "ts" not in df.columns or "regime_score" not in df.columns:
+        return {"scores": [], "forecast": []}
+    df = pd.DataFrame(
+        {
+            "ts": pd.to_datetime(df["ts"], utc=True, errors="coerce"),
+            "regime_score": pd.to_numeric(df["regime_score"], errors="coerce"),
+        }
+    ).dropna()
+    if df.empty:
+        return {"scores": [], "forecast": []}
 
+    ts_int = (df["ts"].astype("int64") // 1_000_000_000).to_numpy(dtype="int64")
+    score_round = df["regime_score"].astype(float).round(4).to_numpy()
+    scores = [
+        {"time": int(t), "score": float(s)}
+        for t, s in zip(ts_int.tolist(), score_round.tolist())
+    ]
     return {"scores": scores, "forecast": []}
 
 
@@ -2119,6 +1978,9 @@ def _performance_trade_frame(
     venue: str,
     max_points: int,
 ) -> tuple[pd.DataFrame, str]:
+    if str(venue or "").lower() != "kucoin":
+        return pd.DataFrame(), "unsupported_venue"
+
     df = load_closed_trades_from_postgres(
         venue=venue,
         symbol=symbol,
@@ -2152,8 +2014,6 @@ def _performance_trade_frame(
     if "strategy" in df.columns:
         if venue == "kucoin":
             df = df[df["strategy"].astype(str) == "live_executor"]
-        elif venue == "kraken":
-            df = df[df["strategy"].astype(str) == "live_executor_2"]
 
     df = df.reset_index(drop=True)
     logical_df = _aggregate_logical_trades(df)

@@ -322,6 +322,10 @@ def _events_root() -> Path:
     return Path("data/events")
 
 
+def _kraken_tracking_enabled() -> bool:
+    return _truthy(os.getenv("KRAKEN_TRADE_TRACKING_ENABLED", "0"))
+
+
 _EQUITY_SNAPSHOT_BASE_INTERVAL_SEC = float(
     os.getenv("LIVE_EXECUTOR_2_SNAPSHOT_BASE_SEC", "60")
 )
@@ -338,6 +342,8 @@ def _append_equity_snapshot(
     force: bool = False,
 ) -> None:
     global _LAST_EQUITY_SNAPSHOT_TS
+    if not _kraken_tracking_enabled():
+        return
 
     try:
         eq = float(equity) if equity is not None else None
@@ -396,6 +402,9 @@ def _append_action_event(
     block_reason: Optional[str] = None,
     payload_json: Optional[Dict[str, Any]] = None,
 ) -> None:
+    if not _kraken_tracking_enabled():
+        return
+
     event = build_action_event(
         strategy=strategy,
         symbol=symbol.replace("-", ""),
@@ -478,6 +487,9 @@ def _append_execution_event(
     reject_reason: Optional[str] = None,
     payload_json: Optional[Dict[str, Any]] = None,
 ) -> None:
+    if not _kraken_tracking_enabled():
+        return
+
     event = build_execution_event(
         strategy=strategy,
         symbol=symbol.replace("-", ""),
@@ -560,6 +572,9 @@ def _append_closed_trade(
     prior_entry_px: Optional[float] = None,
     prior_entry_bar_ts: Any = None,
 ) -> None:
+    if not _kraken_tracking_enabled():
+        return
+
     entry_px_realized = _coerce_float(prior_entry_px) or _coerce_float((terminal or {}).get("entry_px"))
     exit_px_realized = _resolve_trade_exit_price(details, exit_px_fallback)
     qty_realized = _coerce_float(details.get("qty", qty_default))

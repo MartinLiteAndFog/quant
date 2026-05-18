@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 import pandas as pd
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 import uvicorn
@@ -21,7 +22,6 @@ import uvicorn
 from quant.execution.dashboard_state import (
     _read_renko_df,
     _read_trades_df,
-    build_combined_equity,
     build_dashboard_performance,
     build_equity_curve,
     build_fibo_levels,
@@ -34,12 +34,9 @@ from quant.execution.dashboard_state import (
     load_fills_cache_rows,
     load_latest_expected_entry,
     load_live_fill_markers,
-    load_kraken_equity_history,
-    load_kraken_metrics,
     load_real_equity_history,
     load_renko_bars,
     load_renko_health,
-    load_trade_segments,
     load_trade_markers,
 )
 
@@ -48,6 +45,11 @@ from quant.execution.dashboard_statespace import (
     load_state_space_trajectory,
     compute_recent_density,
     refresh_state_space_cache,
+)
+from quant.execution.trade_decisions_store import (
+    backfill_trade_decisions_from_action_events,
+    count_trade_decisions,
+    list_recent_trade_decisions,
 )
 from quant.regime import RegimeStore, get_live_gate_confidence
 from ..utils.log import get_logger, log_throttled
@@ -59,6 +61,7 @@ _CHART_CACHE: Dict[str, Dict[str, Any]] = {}
 _STRATEGY_CACHE: Dict[str, Dict[str, Any]] = {}
 _PERFORMANCE_CACHE: Dict[str, Dict[str, Any]] = {}
 _DIARY_CACHE: Dict[str, Dict[str, Any]] = {}
+_TRADE_COUNT_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _daily_regime_label(gate_state: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -107,35 +110,81 @@ def _state_space_refresh_loop() -> None:
         time.sleep(max(60, interval))
 
 
+def _chart_precompute_keys() -> list[tuple[int, int]]:
+    """Return ``(hours, max_points)`` pairs that the precompute thread should warm.
+
+    These mirror the frontend `RANGE_PARAMS` defaults so that the cache hits the
+    actual queries the dashboard issues, not just an arbitrary background key.
+    """
+    raw = (os.getenv("DASHBOARD_CHART_PRECOMPUTE_KEYS") or "").strip()
+    pairs: list[tuple[int, int]] = []
+    if raw:
+        for token in raw.split(","):
+            t = token.strip()
+            if not t:
+                continue
+            try:
+                h_s, mp_s = t.split(":")
+                pairs.append((int(h_s), int(mp_s)))
+            except Exception:
+                continue
+    if not pairs:
+        # Defaults align with frontend RANGE_PARAMS in
+        # frontend/src/components/layout/Dashboard.tsx.
+        pairs = [
+            (24, 2000),
+            (24 * 7, 3000),
+            (24 * 30, 5000),
+            (24 * 120, 10000),
+        ]
+    # Always keep the legacy "warm everything" key around as well so callers
+    # that ask for that specific shape still get a cache hit.
+    pairs.append((24 * 14, 5000))
+    seen: set[tuple[int, int]] = set()
+    out: list[tuple[int, int]] = []
+    for p in pairs:
+        if p in seen:
+            continue
+        seen.add(p)
+        out.append(p)
+    return out
+
+
 def _chart_precompute_loop() -> None:
     interval = int(os.getenv("DASHBOARD_CHART_PRECOMPUTE_SEC", "12"))
     symbol = DEFAULT_SYMBOL
-    hours = 24 * 14
-    max_points = 5000
-    cache_key = f"{_normalize_symbol(symbol)}:{hours}:{max_points}"
+    pairs = _chart_precompute_keys()
     while True:
-        try:
-            result = api_dashboard_chart(symbol=symbol, hours=hours, max_points=max_points)
-            if isinstance(result, dict) and result.get("ok"):
-                _cache_put(_CHART_CACHE, cache_key, result)
+        for hours, max_points in pairs:
+            cache_key = f"{_normalize_symbol(symbol)}:{hours}:{max_points}"
+            try:
+                # Force a fresh compute by purging the entry so api_dashboard_chart
+                # repopulates the cache instead of returning whatever may already
+                # be there. Keeps cache "warm" with up-to-date precompute output.
+                _CHART_CACHE.pop(cache_key, None)
+                result = api_dashboard_chart(
+                    symbol=symbol, hours=hours, max_points=max_points
+                )
+                if isinstance(result, dict) and result.get("ok"):
+                    log_throttled(
+                        log,
+                        logging.INFO,
+                        f"chart_precompute_ok:{hours}:{max_points}",
+                        float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
+                        "chart precompute done: %d bars, key=%s",
+                        len(result.get("bars", [])),
+                        cache_key,
+                    )
+            except Exception as e:
                 log_throttled(
                     log,
-                    logging.INFO,
-                    "chart_precompute_ok",
+                    logging.WARNING,
+                    f"chart_precompute_fail:{hours}:{max_points}",
                     float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
-                    "chart precompute done: %d bars, key=%s",
-                    len(result.get("bars", [])),
+                    "chart precompute failed key=%s err=%s",
                     cache_key,
+                    e,
                 )
-        except Exception as e:
-            log_throttled(
-                log,
-                logging.WARNING,
-                "chart_precompute_fail",
-                float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
-                "chart precompute failed: %s",
-                e,
-            )
         time.sleep(max(5, interval))
 
 
@@ -154,6 +203,10 @@ async def _lifespan(a: FastAPI):
 
 
 app = FastAPI(title="quant-webhook", version="0.1.0", lifespan=_lifespan)
+
+# Gzip dashboard JSON payloads (chart payload is typically tens to hundreds of KB).
+# Default minimum_size avoids compressing tiny health/status responses.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 DEFAULT_SYMBOL = os.getenv("DASHBOARD_SYMBOL", "SOL-USDT")
 
@@ -262,28 +315,48 @@ def _truthy(v: Optional[str]) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
-def _cache_ttl_sec() -> float:
-    try:
-        return float(os.getenv("DASHBOARD_API_CACHE_SEC", "8"))
-    except Exception:
-        return 8.0
+def _cache_ttl_sec(env_key: Optional[str] = None, default: float = 8.0) -> float:
+    """Resolve a cache TTL.
+
+    Honor a per-endpoint env override (``env_key``) when set, otherwise fall back
+    to the global ``DASHBOARD_API_CACHE_SEC`` if defined, otherwise ``default``.
+    """
+    if env_key:
+        raw = os.getenv(env_key)
+        if raw:
+            try:
+                return float(raw)
+            except Exception:
+                pass
+    raw_global = os.getenv("DASHBOARD_API_CACHE_SEC")
+    if raw_global:
+        try:
+            return float(raw_global)
+        except Exception:
+            pass
+    return float(default)
 
 
-def _cache_get(cache: Dict[str, Dict[str, Any]], key: str) -> Optional[Dict[str, Any]]:
+def _cache_get(
+    cache: Dict[str, Dict[str, Any]],
+    key: str,
+    ttl_sec: Optional[float] = None,
+) -> Optional[Dict[str, Any]]:
     e = cache.get(key)
     if not isinstance(e, dict):
         return None
     t = float(e.get("_ts", 0.0) or 0.0)
-    if (time.time() - t) > max(0.5, _cache_ttl_sec()):
+    effective_ttl = ttl_sec if ttl_sec is not None else _cache_ttl_sec()
+    if (time.time() - t) > max(0.05, float(effective_ttl)):
         return None
     v = e.get("value")
     if isinstance(v, dict):
-        return dict(v)
+        return v
     return None
 
 
 def _cache_put(cache: Dict[str, Dict[str, Any]], key: str, value: Dict[str, Any]) -> None:
-    cache[key] = {"_ts": time.time(), "value": dict(value)}
+    cache[key] = {"_ts": time.time(), "value": value}
 
 
 def _read_live_gate_from_redis() -> Optional[Dict[str, Any]]:
@@ -575,7 +648,11 @@ def _kucoin_broker():
 @app.get("/api/status")
 def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
     cache_key = _normalize_symbol(symbol)
-    cached = _cache_get(_STATUS_CACHE, cache_key)
+    cached = _cache_get(
+        _STATUS_CACHE,
+        cache_key,
+        ttl_sec=_cache_ttl_sec("DASHBOARD_STATUS_CACHE_SEC", 4.0),
+    )
     if cached is not None:
         return cached
 
@@ -607,7 +684,11 @@ def api_status(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
 @app.get("/api/position")
 def api_position(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
     cache_key = _normalize_symbol(symbol)
-    cached = _cache_get(_POSITION_CACHE, cache_key)
+    cached = _cache_get(
+        _POSITION_CACHE,
+        cache_key,
+        ttl_sec=_cache_ttl_sec("DASHBOARD_POSITION_CACHE_SEC", 4.0),
+    )
     if cached is not None:
         return cached
 
@@ -713,7 +794,11 @@ def api_dashboard_chart(
     max_points: int = 3000,
 ) -> Dict[str, Any]:
     cache_key = f"{_normalize_symbol(symbol)}:{hours}:{max_points}"
-    cached = _cache_get(_CHART_CACHE, cache_key)
+    cached = _cache_get(
+        _CHART_CACHE,
+        cache_key,
+        ttl_sec=_cache_ttl_sec("DASHBOARD_CHART_CACHE_SEC", 4.0),
+    )
     if cached is not None:
         return cached
     try:
@@ -849,7 +934,6 @@ def api_dashboard_chart(
         if len(markers) > int(max(100, max_points)):
             markers = markers[-int(max(100, max_points)):]
 
-        segments = load_trade_segments(max_points=int(max(100, max_points)), _trades_df=trades_df)
         fibo = build_fibo_levels(max_points=int(max(100, max_points)), _df=renko_df)
         renko_health = load_renko_health(_df=renko_df)
         regime_store = RegimeStore()
@@ -897,12 +981,6 @@ def api_dashboard_chart(
             _trades_df=trades_df,
         )
         equity_real = load_real_equity_history(max_points=int(max(100, max_points)))
-        equity_kraken = load_kraken_equity_history(max_points=int(max(100, max_points)))
-        kraken_metrics = load_kraken_metrics()
-        equity_combined = build_combined_equity(
-            kucoin_points=equity_real.get("points", []),
-            kraken_points_usd=equity_kraken.get("points", []),
-        )
 
         equity_components = [
             {
@@ -911,13 +989,6 @@ def api_dashboard_chart(
                 "kind": "account_equity",
                 "points": equity_real.get("points", []),
                 "source": equity_real.get("source"),
-            },
-            {
-                "key": "kraken",
-                "label": "Kraken",
-                "kind": "account_equity",
-                "points": equity_kraken.get("points", []),
-                "source": equity_kraken.get("source"),
             },
         ]
 
@@ -962,7 +1033,10 @@ def api_dashboard_chart(
                     regime_forecast.append({"time": forecast_ts, "score": score})
 
         _newest_bar_ts = int(bars[-1]["time"]) if bars else None
-        _marker_times = sorted([int(m.get("time", 0)) for m in markers])
+        # ``markers`` is already sorted by time above; just slice the tail.
+        _marker_newest_5_times = (
+            [int(m.get("time", 0)) for m in markers[-5:]] if markers else []
+        )
         _debug = {
             "renko_bars_count": len(bars),
             "oldest_bar_ts": oldest_bar_ts,
@@ -971,7 +1045,7 @@ def api_dashboard_chart(
             "markers_from_live_fills": len(markers_live),
             "markers_total_after_merge": len(markers),
             "live_entry_marker": live_entry_marker,
-            "marker_newest_5_times": _marker_times[-5:] if _marker_times else [],
+            "marker_newest_5_times": _marker_newest_5_times,
             "levels_keys": sorted(levels.keys()) if isinstance(levels, dict) else None,
             "levels_side": levels.get("side") if isinstance(levels, dict) else None,
             "levels_entry_bar_ts": levels.get("entry_bar_ts") if isinstance(levels, dict) else None,
@@ -999,7 +1073,7 @@ def api_dashboard_chart(
             "day_regime_state": day_regime_state,
             "gate_confidence": live_gc,
             "gate_confidence_error": live_gc_error,
-            "segments": segments,
+            "segments": [],
             "fibo": fibo,
             "renko_health": renko_health,
             "regime_scores": regime_score_data.get("scores", []),
@@ -1008,18 +1082,18 @@ def api_dashboard_chart(
             "equity_source": equity.get("source"),
             "equity_real": equity_real.get("points", []),
             "equity_real_source": equity_real.get("source"),
-            "equity_kraken": equity_kraken.get("points", []),
-            "equity_kraken_source": equity_kraken.get("source"),
-            "equity_combined": equity_combined.get("points", []),
-            "equity_combined_source": equity_combined.get("source"),
-            "equity_total": equity_combined.get("points", []),
-            "equity_total_source": equity_combined.get("source"),
+            "equity_kraken": [],
+            "equity_kraken_source": "none",
+            "equity_combined": [],
+            "equity_combined_source": "none",
+            "equity_total": equity_real.get("points", []),
+            "equity_total_source": equity_real.get("source"),
             "equity_components": equity_components,
             "equity_live": [],
             "equity_live_source": "deprecated_use_equity_components",
             "equity_realized": [],
             "equity_realized_source": "deprecated_use_equity_components",
-            "kraken_metrics": kraken_metrics,
+            "kraken_metrics": {},
             "diary_entries": diary.get("entries", []),
             "diary_source": diary.get("source"),
             "open_position": open_position,
@@ -1069,7 +1143,11 @@ def api_dashboard_chart(
 @app.get("/api/dashboard/strategy")
 def api_dashboard_strategy(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
     cache_key = _normalize_symbol(symbol)
-    cached = _cache_get(_STRATEGY_CACHE, cache_key)
+    cached = _cache_get(
+        _STRATEGY_CACHE,
+        cache_key,
+        ttl_sec=_cache_ttl_sec("DASHBOARD_STRATEGY_CACHE_SEC", 10.0),
+    )
     if cached is not None:
         return cached
     try:
@@ -1102,11 +1180,23 @@ def api_dashboard_performance(
     venue: str = "kucoin",
 ) -> Dict[str, Any]:
     cache_key = f"{_normalize_symbol(symbol)}:{venue}"
-    cached = _cache_get(_PERFORMANCE_CACHE, cache_key)
+    cached = _cache_get(
+        _PERFORMANCE_CACHE,
+        cache_key,
+        ttl_sec=_cache_ttl_sec("DASHBOARD_PERFORMANCE_CACHE_SEC", 30.0),
+    )
     if cached is not None:
         return cached
     try:
         out = build_dashboard_performance(symbol=symbol, venue=venue)
+        # Decision count: every entry / flip with its own SL/TP counts here,
+        # independent of whether the trade has fully closed. See
+        # quant.execution.trade_counter for the classification rules.
+        try:
+            decision_count = int(count_trade_decisions(venue=venue, symbol=symbol))
+        except Exception as count_err:
+            log.warning("trade decision count failed: %s", count_err)
+            decision_count = None
         result = {
             "ok": True,
             "symbol": out.get("symbol", symbol),
@@ -1120,6 +1210,7 @@ def api_dashboard_performance(
             "trade_count": out.get("trade_count", 0),
             "winning_trade_count": out.get("winning_trade_count", 0),
             "losing_trade_count": out.get("losing_trade_count", 0),
+            "trade_decision_count": decision_count,
             "source": out.get("source", "unknown"),
             "ts": _now_utc_iso(),
         }
@@ -1139,7 +1230,82 @@ def api_dashboard_performance(
             "trade_count": 0,
             "winning_trade_count": 0,
             "losing_trade_count": 0,
+            "trade_decision_count": None,
             "source": "error",
+            "error": str(e),
+            "ts": _now_utc_iso(),
+        }
+
+
+@app.get("/api/dashboard/trade_count")
+def api_dashboard_trade_count(
+    symbol: str = DEFAULT_SYMBOL,
+    venue: str = "kucoin",
+    recent_limit: int = 50,
+    backfill: int = 0,
+) -> Dict[str, Any]:
+    """Return the count of trade decisions plus the most recent ones.
+
+    A "trade decision" is any directional position-opening event with its own
+    SL/TP: an entry from flat or a flip to the opposite direction. Scale-ins,
+    partial closes and exits are explicitly NOT counted here. See
+    :mod:`quant.execution.trade_counter` for the authoritative rules.
+
+    Set ``backfill=1`` to re-derive ``trade_decisions`` rows from existing
+    ``action_events`` history first (idempotent, safe to call repeatedly).
+    """
+
+    cache_key = f"{_normalize_symbol(symbol)}:{venue}:{int(recent_limit)}:{int(backfill)}"
+    cached = _cache_get(
+        _TRADE_COUNT_CACHE,
+        cache_key,
+        ttl_sec=_cache_ttl_sec("DASHBOARD_TRADE_COUNT_CACHE_SEC", 30.0),
+    )
+    if cached is not None:
+        return cached
+    try:
+        backfill_info: Optional[Dict[str, Any]] = None
+        if int(backfill) == 1:
+            try:
+                backfill_info = backfill_trade_decisions_from_action_events(
+                    venue=venue, symbol=symbol
+                )
+            except Exception as be:
+                log.warning("trade_decisions backfill failed: %s", be)
+                backfill_info = {"error": str(be)}
+
+        total = int(count_trade_decisions(venue=venue, symbol=symbol))
+        entries = int(
+            count_trade_decisions(venue=venue, symbol=symbol, decision_kind="entry")
+        )
+        flips = int(
+            count_trade_decisions(venue=venue, symbol=symbol, decision_kind="flip")
+        )
+        recent = list_recent_trade_decisions(
+            venue=venue, symbol=symbol, limit=int(max(1, min(500, recent_limit)))
+        )
+        result = {
+            "ok": True,
+            "symbol": symbol,
+            "venue": venue,
+            "total": total,
+            "entries": entries,
+            "flips": flips,
+            "recent": recent,
+            "backfill": backfill_info,
+            "ts": _now_utc_iso(),
+        }
+        _cache_put(_TRADE_COUNT_CACHE, cache_key, result)
+        return result
+    except Exception as e:
+        return {
+            "ok": False,
+            "symbol": symbol,
+            "venue": venue,
+            "total": 0,
+            "entries": 0,
+            "flips": 0,
+            "recent": [],
             "error": str(e),
             "ts": _now_utc_iso(),
         }
@@ -1246,7 +1412,11 @@ def api_dashboard_diary(
     max_points: int = 500,
 ) -> Dict[str, Any]:
     cache_key = f"{_normalize_symbol(symbol)}:{venue}:{include_reconstructed}:{max_points}"
-    cached = _cache_get(_DIARY_CACHE, cache_key)
+    cached = _cache_get(
+        _DIARY_CACHE,
+        cache_key,
+        ttl_sec=_cache_ttl_sec("DASHBOARD_DIARY_CACHE_SEC", 30.0),
+    )
     if cached is not None:
         return cached
     try:
@@ -1283,7 +1453,7 @@ def api_dashboard_fills(symbol: str = DEFAULT_SYMBOL, max_points: int = 500) -> 
 
 
 @app.get("/api/equity/events")
-def api_equity_events(range: str = "7d", venue: str = "") -> Dict[str, Any]:
+def api_equity_events(range: str = "7d", venue: str = "kucoin") -> Dict[str, Any]:
     """Event-based equity curve from Postgres equity_snapshots + execution_events."""
     try:
         from quant.execution.event_store import get_conn
@@ -1616,8 +1786,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     const fibMidSeries = chart.addLineSeries({ color: '#ffffff', lineWidth: 1, lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     const fibShortSeries = chart.addLineSeries({ color: '#f7768e', lineWidth: 2, lineStyle: 0, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
     const priceLineSeries = chart.addLineSeries({ color: '#9aa5b1', lineWidth: 1, title: 'Last', lineStyle: 2, lastValueVisible: false, priceLineVisible: false, crosshairMarkerVisible: false });
-    const tradeSegmentSeries = [];
-
     let latestPayload = null;
     let timeMap = null;
     let timeAxis = [];
@@ -1626,7 +1794,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
     let hasFittedOnce = false;
     const bgImages = { xy: null, xz: null, yz: null };
     let ssPayload = null;
-    let lastSegmentsSig = '';
     let tickInFlight = false;
     let refreshInFlight = false;
     let pullStartY = null;
@@ -1921,10 +2088,8 @@ DASHBOARD_HTML = """<!DOCTYPE html>
           latestByKey[c.key] = last && Number.isFinite(Number(last.equity)) ? Number(last.equity) : null;
         }
         const ku = latestByKey.kucoin;
-        const kr = latestByKey.kraken;
         const kuTxt = Number.isFinite(ku) ? ku.toFixed(2) : '-';
-        const krTxt = Number.isFinite(kr) ? kr.toFixed(2) : '-';
-        metaEl.textContent = `KuCoin: ${kuTxt}  Kraken: ${krTxt}`;
+        metaEl.textContent = `KuCoin: ${kuTxt}`;
       }
 
       if (components.some((c) => c.points.length >= 1)) {
@@ -1982,7 +2147,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
 
           const compPalette = {
             kucoin: 'rgba(122,162,247,0.32)',
-            kraken: 'rgba(255,158,100,0.38)',
             default: 'rgba(158,206,106,0.28)',
           };
 
@@ -2231,13 +2395,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
       }).filter(Boolean);
     }
 
-    function mapSegmentForChart(seg) {
-      const t0 = mapTimeForChart(seg.from_time);
-      const t1 = mapTimeForChart(seg.to_time);
-      if (t0 == null || t1 == null) return [];
-      return [{ time: t0, value: Number(seg.from_price) }, { time: t1, value: Number(seg.to_price) }];
-    }
-
     function buildUnifiedExitLine(bars, levels) {
       if (!Array.isArray(bars) || !bars.length || !levels) return { data: [], mode: 'none' };
       const sl = Number(levels.sl);
@@ -2417,19 +2574,6 @@ DASHBOARD_HTML = """<!DOCTYPE html>
         priceLineSeries.setData([{ time: bars[0].time, value: livePx }, { time: lastBar.time, value: livePx }]);
       } else {
         priceLineSeries.setData([]);
-      }
-
-      const segments = Array.isArray(payload.segments) ? payload.segments : [];
-      const segSig = JSON.stringify(segments.map((s) => [s.from_time, s.to_time, s.from_price, s.to_price, s.color, !!s.positive]));
-      if (segSig !== lastSegmentsSig) {
-        for (const s of tradeSegmentSeries) chart.removeSeries(s);
-        tradeSegmentSeries.length = 0;
-        for (const seg of segments) {
-          const ls = chart.addLineSeries({ color: seg.color || '#9aa5b1', lineWidth: 2, title: seg.positive ? 'Trade +' : 'Trade -' });
-          ls.setData(mapSegmentForChart(seg));
-          tradeSegmentSeries.push(ls);
-        }
-        lastSegmentsSig = segSig;
       }
 
       const exitModeEl = document.getElementById('exit-mode');

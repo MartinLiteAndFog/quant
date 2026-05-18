@@ -62,15 +62,6 @@ export interface ChartRegime {
   latest?: RegimeLatest;
 }
 
-export interface ChartSegment {
-  from_time: number;
-  to_time: number;
-  from_price: number;
-  to_price: number;
-  color: string;
-  positive: boolean;
-}
-
 export interface FiboLine {
   time?: number;
   value?: number;
@@ -147,29 +138,6 @@ export interface OpenPosition {
   tp2?: number;
 }
 
-export interface KrakenMetrics {
-  ts?: string;
-  equity_usd?: number;
-  wallet_usd?: number;
-  upnl_usd?: number;
-  mark_price?: number;
-  target_size?: number;
-  gate_on?: number;
-  gate_source?: string;
-  engine?: string;
-  mode?: string;
-  pos_side?: number;
-  entry_px?: number;
-  best_fav?: number;
-  size_rem?: number;
-  tp1_done?: boolean;
-  signal?: number;
-  signal_ts?: string;
-  venue_pos_side?: number;
-  venue_pos_size?: number;
-  dry_run?: boolean;
-}
-
 export interface ChartResponse {
   ok: boolean;
   symbol: string;
@@ -183,7 +151,6 @@ export interface ChartResponse {
   regime_state?: string;
   gate_confidence?: number | null;
   gate_confidence_error?: string | null;
-  segments: ChartSegment[];
   fibo: ChartFibo;
   renko_health?: RenkoHealth;
   regime_scores: RegimeScorePoint[];
@@ -203,7 +170,6 @@ export interface ChartResponse {
   equity_live_source?: string;
   equity_realized?: EquityPoint[];
   equity_realized_source?: string;
-  kraken_metrics?: KrakenMetrics;
   diary_entries: DiaryEntry[];
   diary_source?: string;
   open_position?: OpenPosition | null;

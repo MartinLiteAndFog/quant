@@ -81,7 +81,9 @@ export function useDashboardStrategy(symbol: string = "SOL-USDT") {
       apiFetch<DashboardStrategyResponse>("/api/dashboard/strategy", {
         symbol,
       }),
-    refetchInterval: 4000,
+    // Strategy / regime label changes on day-gate boundaries; 10s is plenty.
+    refetchInterval: 10000,
+    staleTime: 10000,
   });
 }
 
@@ -96,7 +98,11 @@ export function useDashboardPerformance(
         symbol,
         venue,
       }),
-    refetchInterval: 10000,
+    // Performance metrics aggregate hundreds of closed trades; they only
+    // change once a trade closes. Refetch at a relaxed cadence aligned with
+    // the backend cache TTL.
+    refetchInterval: 30000,
+    staleTime: 30000,
   });
 }
 
@@ -115,7 +121,7 @@ export function useEquityEvents(range: string) {
   return useQuery({
     queryKey: ["equityEvents", range],
     queryFn: () =>
-      apiFetch<EquityEventsResponse>("/api/equity/events", { range }),
+      apiFetch<EquityEventsResponse>("/api/equity/events", { range, venue: "kucoin" }),
     refetchInterval: 30000,
   });
 }

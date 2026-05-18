@@ -11,10 +11,7 @@ import pandas as pd
 
 import quant.execution.dashboard_state as ds
 from quant.execution.dashboard_state import (
-    build_combined_equity,
     build_regime_overlay,
-    load_kraken_equity_history,
-    load_kraken_metrics,
     load_active_levels,
     load_dashboard_strategy,
     load_fills_cache_rows,
@@ -200,53 +197,6 @@ class DashboardStateTests(unittest.TestCase):
         row = next(r for r in rows if r.get("client_oid") == "manual-flatten-short-001")
         self.assertEqual(row.get("reason"), "manual_flatten_short")
 
-    def test_kraken_metrics_and_equity_loaders(self) -> None:
-        metrics_path = self.tmp_path / "kraken_metrics.json"
-        equity_path = self.tmp_path / "kraken_equity.csv"
-        os.environ["KRAKEN_METRICS_JSON"] = str(metrics_path)
-        os.environ["KRAKEN_EQUITY_CSV"] = str(equity_path)
-
-        metrics_path.write_text(
-            json.dumps({"ts": "2026-02-20T00:00:00Z", "equity_usd": 1000.0, "wallet_usd": 990.0, "upnl_usd": 10.0}),
-            encoding="utf-8",
-        )
-        pd.DataFrame(
-            [
-                {"ts": int(pd.Timestamp("2026-02-20T00:00:00Z").timestamp()), "equity_usd": 1000.0},
-                {"ts": int(pd.Timestamp("2026-02-20T01:00:00Z").timestamp()), "equity_usd": 1010.0},
-            ]
-        ).to_csv(equity_path, index=False)
-
-        m = load_kraken_metrics()
-        h = load_kraken_equity_history(max_points=100)
-        self.assertEqual(float(m.get("equity_usd", 0.0)), 1000.0)
-        self.assertEqual(len(h.get("points", [])), 2)
-
-    def test_kraken_equity_loader_accepts_legacy_timestamp_and_equity_columns(self) -> None:
-        equity_path = self.tmp_path / "kraken_equity_legacy.csv"
-        os.environ["KRAKEN_EQUITY_CSV"] = str(equity_path)
-        pd.DataFrame(
-            [
-                {"time": "2026-02-20T00:00:00Z", "equity": 1000.0},
-                {"time": "2026-02-20T01:00:00Z", "equity": 1015.0},
-            ]
-        ).to_csv(equity_path, index=False)
-
-        h = load_kraken_equity_history(max_points=100)
-        pts = h.get("points", [])
-        self.assertEqual(len(pts), 2)
-        self.assertEqual(int(pts[0]["time"]), int(pd.Timestamp("2026-02-20T00:00:00Z").timestamp()))
-        self.assertAlmostEqual(float(pts[1]["equity"]), 1015.0, places=6)
-
-    def test_build_combined_equity(self) -> None:
-        kucoin = [{"time": 100, "equity": 200.0}, {"time": 200, "equity": 210.0}]
-        kraken = [{"time": 100, "equity": 300.0}, {"time": 300, "equity": 320.0}]
-        out = build_combined_equity(kucoin_points=kucoin, kraken_points_usd=kraken)
-        pts = out.get("points", [])
-        self.assertTrue(len(pts) >= 2)
-        self.assertEqual(int(pts[0]["time"]), 100)
-        self.assertAlmostEqual(float(pts[0]["equity"]), 500.0, places=6)
-
     @patch("quant.execution.dashboard_state.get_live_gate_state", create=True)
     def test_load_dashboard_strategy_prefers_daily_gate_regime_label(self, mock_gate_state) -> None:
         mock_gate_state.return_value = {
@@ -310,9 +260,6 @@ class DashboardStateTests(unittest.TestCase):
 
         markers = ds.load_trade_markers(max_points=100, _trades_df=df)
         self.assertGreater(len(markers), 0)
-
-        segments = ds.load_trade_segments(max_points=100, _trades_df=df)
-        self.assertGreater(len(segments), 0)
 
         diary = ds.build_trading_diary(max_points=100, _trades_df=df)
         self.assertGreater(len(diary.get("entries", [])), 0)
@@ -536,7 +483,7 @@ class DashboardStateTests(unittest.TestCase):
         mock_load_trades.return_value = pd.DataFrame(
             {
                 "trade_id": ["a1", "a2", "b1", "c1"],
-                "venue": ["kraken", "kraken", "kraken", "kraken"],
+                "venue": ["kucoin", "kucoin", "kucoin", "kucoin"],
                 "symbol": ["SOL-USDT", "SOL-USDT", "SOL-USDT", "SOL-USDT"],
                 "entry_ts": [
                     pd.Timestamp("2026-03-20T10:00:00Z"),
@@ -556,11 +503,11 @@ class DashboardStateTests(unittest.TestCase):
                 "exit_price": [102.0, 104.0, 104.0, 110.0],
                 "pnl_pct": [2.0, 4.0, -1.0, 0.0],
                 "exit_event": ["tp1", "tp2", "sl_exit", "be_exit"],
-                "strategy": ["live_executor_2", "live_executor_2", "live_executor_2", "live_executor_2"],
+                "strategy": ["live_executor", "live_executor", "live_executor", "live_executor"],
             }
         )
 
-        perf = ds.build_dashboard_performance(symbol="SOL-USDT", venue="kraken", max_points=100)
+        perf = ds.build_dashboard_performance(symbol="SOL-USDT", venue="kucoin", max_points=100)
         self.assertEqual(int(perf["trade_count"]), 3)
         self.assertEqual(int(perf["winning_trade_count"]), 1)
         self.assertEqual(int(perf["losing_trade_count"]), 1)

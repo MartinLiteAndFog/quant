@@ -124,23 +124,6 @@ export function mapLineForChart(points, timeMap, barsRaw, brickBaseTs = BRICK_BA
 }
 
 /**
- * @param {{ from_time?: unknown, to_time?: unknown, from_price?: unknown, to_price?: unknown }} seg
- * @param {Map<number, number>|null|undefined} timeMap
- * @param {unknown} barsRaw
- * @param {number} [brickBaseTs]
- * @returns {{ time: number, value: number }[]}
- */
-export function mapSegmentForChart(seg, timeMap, barsRaw, brickBaseTs = BRICK_BASE_TS) {
-  const t0 = mapTimeForChart(seg.from_time, timeMap, barsRaw, brickBaseTs);
-  const t1 = mapTimeForChart(seg.to_time, timeMap, barsRaw, brickBaseTs);
-  if (t0 == null || t1 == null) return [];
-  return [
-    { time: t0, value: Number(seg.from_price) },
-    { time: t1, value: Number(seg.to_price) },
-  ];
-}
-
-/**
  * @param {unknown} bars
  * @param {unknown} levels
  * @param {Map<number, number>|null|undefined} timeMap

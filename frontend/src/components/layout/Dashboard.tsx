@@ -51,7 +51,7 @@ export default function Dashboard() {
   const statusQuery = useStatus();
   const positionQuery = usePosition();
   const strategyQuery = useDashboardStrategy(symbol);
-  const performanceQuery = useDashboardPerformance(symbol, "kraken");
+  const performanceQuery = useDashboardPerformance(symbol);
 
   const chartData = chartQuery.data;
   const status = statusQuery.data ?? null;
@@ -60,16 +60,23 @@ export default function Dashboard() {
   const performance = performanceQuery.data ?? null;
 
   const chartLevels = chartData?.levels;
+  const equityComponents = chartData?.equity_components;
+  const equityTotal = chartData?.equity_total;
+  const equityCurve = chartData?.equity_curve;
 
+  // Key memos on the leaf arrays (which only change when the actual equity
+  // payload changes) instead of the whole `chartData` object — that way
+  // refetch ticks that only update bars/markers/levels won't cause downstream
+  // re-renders of the equity chart.
   const accountEquity = useMemo(
     () => ({
-      components: chartData?.equity_components ?? [],
-      totalEquity: chartData?.equity_total ?? [],
+      components: equityComponents ?? [],
+      totalEquity: equityTotal ?? [],
     }),
-    [chartData]
+    [equityComponents, equityTotal]
   );
 
-  const tradeEquity = useMemo(() => chartData?.equity_curve ?? [], [chartData]);
+  const tradeEquity = useMemo(() => equityCurve ?? [], [equityCurve]);
 
   return (
     <div className="relative min-h-screen bg-black text-zinc-100">
@@ -84,7 +91,6 @@ export default function Dashboard() {
                   <PriceChart
                     bars={chartData?.bars ?? []}
                     markers={chartData?.markers}
-                    segments={chartData?.segments}
                     levels={chartData?.levels}
                     ttpTrailPct={chartData?.ttp_trail_pct}
                     fibo={chartData?.fibo}
@@ -155,7 +161,6 @@ export default function Dashboard() {
             strategy={strategy}
             performance={performance}
             chartLevels={chartLevels}
-            krakenMetrics={chartData?.kraken_metrics}
           />
         </div>
       </div>

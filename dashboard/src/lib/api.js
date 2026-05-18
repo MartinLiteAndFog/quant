@@ -27,5 +27,5 @@ export function fetchStatespace(windowHours = 8) {
 }
 
 export function fetchEquityEvents(range = '7d') {
-  return fetchJson(`/api/equity/events?range=${range}`);
+  return fetchJson(`/api/equity/events?range=${range}&venue=kucoin`);
 }

@@ -10,9 +10,7 @@
   ];
 
   const KU_FILL = 'rgba(122, 162, 247, 0.3)';
-  const KR_FILL = 'rgba(255, 158, 100, 0.35)';
   const KU_LINE = 'rgb(122, 162, 247)';
-  const KR_LINE = 'rgb(255, 158, 100)';
 
   /** @type {HTMLCanvasElement | undefined} */
   let canvasEl;
@@ -212,28 +210,25 @@
 
     const comps = Array.isArray(data?.equity_components) ? data.equity_components : [];
     let kuPts = [];
-    let krPts = [];
     for (const c of comps) {
       const key = String(c?.key || '').toLowerCase();
       const pts = sortedSeries(c?.points);
       if (key === 'kucoin') kuPts = pts;
-      if (key === 'kraken') krPts = pts;
     }
 
     const n = points.length;
     const xs = points.map((_, i) => (n <= 1 ? w / 2 : (i / (n - 1)) * w));
 
     const kuStack = points.map((p) => locfAt(kuPts, p.time));
-    const krStack = points.map((p) => locfAt(krPts, p.time));
 
     const totals = points.map((p, i) => {
       const t = p.equity;
-      const sum = kuStack[i] + krStack[i];
+      const sum = kuStack[i];
       if (sum > 0 && Math.abs(t - sum) / sum > 0.15) return t;
       return sum > 0 ? sum : t;
     });
 
-    const yMinData = Math.min(0, ...totals, ...kuStack, ...krStack, ...points.map((p) => p.equity));
+    const yMinData = Math.min(0, ...totals, ...kuStack, ...points.map((p) => p.equity));
     const yMaxData = Math.max(...totals, ...points.map((p) => p.equity), 1e-9);
     const pad = (yMaxData - yMinData) * 0.06 || 1;
     const minE = yMinData - pad;
@@ -245,11 +240,8 @@
     const xsf = xs;
     const yKu0 = kuStack.map(() => yMap(0));
     const yKu1 = kuStack.map((v) => yMap(v));
-    const yKr0 = kuStack.map((k, i) => yMap(k));
-    const yKr1 = kuStack.map((k, i) => yMap(k + krStack[i]));
 
     fillBetween(ctx, xsf, yKu0, yKu1, KU_FILL);
-    fillBetween(ctx, xsf, yKr0, yKr1, KR_FILL);
 
     const lineYs = points.map((p) => yMap(p.equity));
     const firstEq = points[0].equity;
@@ -266,7 +258,7 @@
       pctClass = '';
     }
 
-    venueLabel = `KuCoin: ${fmtMoney(kuPts.length ? kuPts[kuPts.length - 1].equity : 0)} | Kraken: ${fmtMoney(krPts.length ? krPts[krPts.length - 1].equity : 0)}`;
+    venueLabel = `KuCoin: ${fmtMoney(kuPts.length ? kuPts[kuPts.length - 1].equity : 0)}`;
 
     hitPoints = points.map((p, i) => ({
       cx: xs[i],
@@ -316,8 +308,6 @@
     }
 
     const kuKey = [...byVenue.keys()].find((k) => k.includes('kucoin')) || 'kucoin';
-    const krKey = [...byVenue.keys()].find((k) => k.includes('kraken')) || 'kraken';
-
     const allTs = new Set();
     for (const arr of byVenue.values()) {
       for (const row of arr) allTs.add(row.t);
@@ -328,7 +318,7 @@
       let yOff = 0;
       for (const [venue, arr] of byVenue) {
         if (!arr.length) continue;
-        const color = venue.includes('kucoin') ? KU_LINE : venue.includes('kraken') ? KR_LINE : '#888';
+        const color = venue.includes('kucoin') ? KU_LINE : '#888';
         const cy = h / 2 + yOff;
         yOff += 14;
         ctx.fillStyle = color;
@@ -337,8 +327,7 @@
         ctx.fill();
       }
       const kuLast = (byVenue.get(kuKey) || []).at(-1)?.eq ?? 0;
-      const krLast = (byVenue.get(krKey) || []).at(-1)?.eq ?? 0;
-      venueLabel = `KuCoin: ${fmtMoney(kuLast)} | Kraken: ${fmtMoney(krLast)}`;
+      venueLabel = `KuCoin: ${fmtMoney(kuLast)}`;
       pctText = '';
       pctClass = '';
       hitPoints = [];
@@ -365,17 +354,14 @@
     }
 
     const kuSeries = seriesForVenue(kuKey);
-    const krSeries = seriesForVenue(krKey);
 
-    const totals = uniqueTs.map((_, i) => kuSeries[i] + krSeries[i]);
-    const ys = [...totals, ...kuSeries, ...krSeries];
+    const totals = uniqueTs.map((_, i) => kuSeries[i]);
+    const ys = [...totals, ...kuSeries];
     const yMap = yScale(ys, h);
 
     const kuYs = kuSeries.map((v) => yMap(v));
-    const krYs = krSeries.map((v) => yMap(v));
 
     strokeLine(ctx, xs, kuYs, KU_LINE);
-    strokeLine(ctx, xs, krYs, KR_LINE);
 
     const firstT = totals[0];
     const lastT = totals[totals.length - 1];
@@ -389,8 +375,7 @@
     }
 
     const kuLast = kuSeries[kuSeries.length - 1] ?? 0;
-    const krLast = krSeries[krSeries.length - 1] ?? 0;
-    venueLabel = `KuCoin: ${fmtMoney(kuLast)} | Kraken: ${fmtMoney(krLast)}`;
+    venueLabel = `KuCoin: ${fmtMoney(kuLast)}`;
 
     hitPoints = uniqueTs.map((t, i) => ({
       cx: xs[i],

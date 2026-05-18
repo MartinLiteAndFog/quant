@@ -7,7 +7,6 @@
     mapBarsForChart,
     mapMarkersForChart,
     mapLineForChart,
-    mapSegmentForChart,
     buildTTPTrail,
     levelLineData,
     levelLineFromEntry,
@@ -21,10 +20,6 @@
   let chart = null;
   let candle, slSeries, ttpSeries, entrySeries, tp1Series, tp2Series;
   let fibLongSeries, fibMidSeries, fibShortSeries, priceLineSeries;
-
-  /** @type {import('lightweight-charts').ISeriesApi<'Line'>[]} */
-  let tradeSegmentSeries = [];
-  let lastSegmentsSig = '';
 
   let barsRawRef = [];
   let hasFittedOnce = false;
@@ -206,25 +201,6 @@
       ]);
     } else {
       priceLineSeries.setData([]);
-    }
-
-    const segments = data.segments || [];
-    const segSig = JSON.stringify(
-      segments.map((s) => [s.from_time, s.to_time, s.from_price, s.to_price, s.color, !!s.positive])
-    );
-    if (segSig !== lastSegmentsSig) {
-      for (const s of tradeSegmentSeries) chart.removeSeries(s);
-      tradeSegmentSeries.length = 0;
-      for (const seg of segments) {
-        const ls = chart.addLineSeries({
-          color: seg.color || '#9aa5b1',
-          lineWidth: 2,
-          title: seg.positive ? 'Trade +' : 'Trade -',
-        });
-        ls.setData(mapSegmentForChart(seg, timeMap, barsRaw));
-        tradeSegmentSeries.push(ls);
-      }
-      lastSegmentsSig = segSig;
     }
 
     if (!hasFittedOnce) {

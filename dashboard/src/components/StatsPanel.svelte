@@ -45,7 +45,6 @@
   $: pos = $statusStore?.position ?? null;
   $: perf = $statusStore?.performance ?? null;
   $: chart = $chartStore;
-  $: kr = chart?.kraken_metrics ?? null;
   $: levels = chart?.levels ?? null;
   $: terminal = levels?.terminal ?? null;
 
@@ -57,13 +56,6 @@
   $: kucoinSizeNum = Number(levels?.live_pos ?? pos?.position ?? NaN);
   $: kucoinHasPos = Number.isFinite(kucoinSizeNum) && kucoinSizeNum !== 0;
   $: kucoinDisplaySize = Number.isFinite(kucoinSizeNum) ? Math.abs(kucoinSizeNum) / 10 : 0;
-
-  $: krakenEquity = kr?.equity_usd ?? null;
-  $: krakenSide = kr?.venue_pos_side ?? kr?.pos_side ?? null;
-  $: krakenSizeNum = Number(kr?.venue_pos_size ?? kr?.size_rem ?? NaN);
-  $: krakenMode = kr?.mode ?? null;
-  $: krakenMark = kr?.mark_price ?? null;
-  $: krakenHasPos = Number.isFinite(krakenSizeNum) && krakenSizeNum !== 0;
 
   $: entryPx = terminal?.entry_px ?? levels?.entry_px ?? null;
   $: sl = terminal?.sl ?? levels?.sl ?? null;
@@ -79,28 +71,14 @@
   <!-- STATUS -->
   <div class="card">
     <h3 class="card-title">Status</h3>
-    <div class="dual-col">
-      <div>
-        <div class="venue-header">
-          <span class="dot blue"></span>
-          <span class="venue-name">KuCoin</span>
-        </div>
-        <div class="venue-detail">
-          <div>Price: <span class="dim">{fmt(kucoinPrice, 4)}</span></div>
-          <div>Regime: <span class="dim">{strategyLabel}</span></div>
-        </div>
+    <div>
+      <div class="venue-header">
+        <span class="dot blue"></span>
+        <span class="venue-name">KuCoin</span>
       </div>
-      <div>
-        <div class="venue-header">
-          <span class="dot amber"></span>
-          <span class="venue-name">Kraken</span>
-        </div>
-        <div class="venue-detail">
-          <div>Price: <span class="dim">{fmt(krakenMark, 4)}</span></div>
-          {#if krakenMode}
-            <div>Mode: <span class="dim">{krakenMode}</span></div>
-          {/if}
-        </div>
+      <div class="venue-detail">
+        <div>Price: <span class="dim">{fmt(kucoinPrice, 4)}</span></div>
+        <div>Regime: <span class="dim">{strategyLabel}</span></div>
       </div>
     </div>
   </div>
@@ -108,32 +86,17 @@
   <!-- POSITION -->
   <div class="card">
     <h3 class="card-title">Position</h3>
-    <div class="dual-col">
-      <div>
-        <div class="venue-header">
-          <span class="dot blue"></span>
-          <span class="venue-name">KuCoin</span>
-        </div>
-        <div class="pos-value">
-          {#if kucoinHasPos}
-            <span class="side-{sideColor(kucoinSide)}">{sideLabel(kucoinSide)} {kucoinDisplaySize.toFixed(1)}</span>
-          {:else}
-            <span class="flat">Flat</span>
-          {/if}
-        </div>
+    <div>
+      <div class="venue-header">
+        <span class="dot blue"></span>
+        <span class="venue-name">KuCoin</span>
       </div>
-      <div>
-        <div class="venue-header">
-          <span class="dot amber"></span>
-          <span class="venue-name">Kraken</span>
-        </div>
-        <div class="pos-value">
-          {#if krakenHasPos}
-            <span class="side-{sideColor(String(krakenSide))}">{sideLabel(krakenSide)} {Math.abs(krakenSizeNum).toFixed(1)}</span>
-          {:else}
-            <span class="flat">Flat</span>
-          {/if}
-        </div>
+      <div class="pos-value">
+        {#if kucoinHasPos}
+          <span class="side-{sideColor(kucoinSide)}">{sideLabel(kucoinSide)} {kucoinDisplaySize.toFixed(1)}</span>
+        {:else}
+          <span class="flat">Flat</span>
+        {/if}
       </div>
     </div>
   </div>
@@ -141,32 +104,17 @@
   <!-- CAPITAL -->
   <div class="card">
     <h3 class="card-title">Capital</h3>
-    <div class="dual-col">
-      <div>
-        <div class="venue-header">
-          <span class="dot blue"></span>
-          <span class="venue-name">KuCoin</span>
-        </div>
-        <div class="pos-value">
-          {#if kucoinEquity != null}
-            <span class={kucoinEquity >= 0 ? 'green' : 'red'}>${fmt(kucoinEquity)}</span>
-          {:else}
-            <span class="flat">—</span>
-          {/if}
-        </div>
+    <div>
+      <div class="venue-header">
+        <span class="dot blue"></span>
+        <span class="venue-name">KuCoin</span>
       </div>
-      <div>
-        <div class="venue-header">
-          <span class="dot amber"></span>
-          <span class="venue-name">Kraken</span>
-        </div>
-        <div class="pos-value">
-          {#if krakenEquity != null}
-            <span class={krakenEquity >= 0 ? 'green' : 'red'}>${fmt(krakenEquity)}</span>
-          {:else}
-            <span class="flat">—</span>
-          {/if}
-        </div>
+      <div class="pos-value">
+        {#if kucoinEquity != null}
+          <span class={kucoinEquity >= 0 ? 'green' : 'red'}>${fmt(kucoinEquity)}</span>
+        {:else}
+          <span class="flat">—</span>
+        {/if}
       </div>
     </div>
   </div>
@@ -244,12 +192,6 @@
     color: #a1a1aa;
   }
 
-  .dual-col {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.75rem;
-  }
-
   .venue-header {
     display: flex;
     align-items: center;
@@ -263,7 +205,6 @@
     border-radius: 50%;
   }
   .dot.blue { background: #3b82f6; }
-  .dot.amber { background: #f59e0b; }
 
   .venue-name {
     font-size: 10px;

@@ -7,9 +7,15 @@ import "./index.css";
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
-      refetchOnWindowFocus: true,
+      // Avoid refetch storms when the user toggles back to the tab — let the
+      // existing refetchInterval drive cadence instead.
+      refetchOnWindowFocus: false,
       retry: 1,
-      staleTime: 2000,
+      // Match the backend chart cache TTL so we don't issue an immediate fresh
+      // request on every component remount.
+      staleTime: 4000,
+      // Keep gc generous so range/equityMode toggles don't refetch instantly.
+      gcTime: 5 * 60 * 1000,
     },
   },
 });

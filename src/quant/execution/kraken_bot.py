@@ -38,6 +38,10 @@ def _truthy(v: Optional[str]) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _kraken_tracking_enabled() -> bool:
+    return _truthy(os.getenv("KRAKEN_TRADE_TRACKING_ENABLED", "0"))
+
+
 def _live_default(rel_path: str) -> str:
     if Path("/data").exists():
         return str(Path("/data/live/kraken") / rel_path)
@@ -55,11 +59,15 @@ def _fetch_json(url: str, timeout_s: int = 4) -> Dict[str, Any]:
 
 
 def _publish_metrics(path: Path, row: Dict[str, Any]) -> None:
+    if not _kraken_tracking_enabled():
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(row, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
 def _append_equity(path: Path, ts: str, equity_usd: float) -> None:
+    if not _kraken_tracking_enabled():
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     ts_i = int(pd.Timestamp(ts).timestamp())
     snap = pd.DataFrame([{"ts": ts_i, "equity_usd": float(equity_usd)}])
@@ -99,6 +107,9 @@ def _append_execution_event(
     position_after: int,
     source_signal_ts: str,
 ) -> None:
+    if not _kraken_tracking_enabled():
+        return
+
     event: ExecutionEvent = build_execution_event(
         strategy=strategy,
         symbol=symbol,
@@ -160,6 +171,9 @@ def _append_action_event(
     block_reason: Optional[str] = None,
     payload_json: Optional[Dict[str, Any]] = None,
 ) -> None:
+    if not _kraken_tracking_enabled():
+        return
+
     event = build_action_event (
         strategy=strategy,
         symbol=symbol,
@@ -777,28 +791,29 @@ def run_once(
     )
 
     _append_equity(equity_path, ts=_now_iso(), equity_usd=equity_usd)
-    try:
-        insert_equity_snapshot(
-            {
-                "ts": _now_iso(),
-                "strategy": "kraken_bot",
-                "symbol": symbol,
-                "venue": "kraken",
-                "equity": float(equity_usd),
-                "cash": None,
-                "position_qty": float(new_state.size_rem or 0.0),
-                "position_side": int(new_state.pos_side),
-                "payload_json": {
-                    "mark": float(mark),
-                    "gate_on": int(gate_on),
-                    "signal": int(signal_value),
-                    "signal_ts": signal_ts,
-                    "stop_sync": stop_res,
-                },
-            }
-        )
-    except Exception as e:
-        log.warning("kraken postgres equity snapshot failed: %s", e)
+    if _kraken_tracking_enabled():
+        try:
+            insert_equity_snapshot(
+                {
+                    "ts": _now_iso(),
+                    "strategy": "kraken_bot",
+                    "symbol": symbol,
+                    "venue": "kraken",
+                    "equity": float(equity_usd),
+                    "cash": None,
+                    "position_qty": float(new_state.size_rem or 0.0),
+                    "position_side": int(new_state.pos_side),
+                    "payload_json": {
+                        "mark": float(mark),
+                        "gate_on": int(gate_on),
+                        "signal": int(signal_value),
+                        "signal_ts": signal_ts,
+                        "stop_sync": stop_res,
+                    },
+                }
+            )
+        except Exception as e:
+            log.warning("kraken postgres equity snapshot failed: %s", e)
 
     _publish_metrics(
         metrics_path,
@@ -1399,28 +1414,29 @@ def run_once(
     )
 
     _append_equity(equity_path, ts=_now_iso(), equity_usd=equity_usd)
-    try:
-        insert_equity_snapshot(
-            {
-                "ts": _now_iso(),
-                "strategy": "kraken_bot",
-                "symbol": symbol,
-                "venue": "kraken",
-                "equity": float(equity_usd),
-                "cash": None,
-                "position_qty": float(new_state.size_rem or 0.0),
-                "position_side": int(new_state.pos_side),
-                "payload_json": {
-                    "mark": float(mark),
-                    "gate_on": int(gate_on),
-                    "signal": int(signal_value),
-                    "signal_ts": signal_ts,
-                    "stop_sync": stop_res,
-                },
-            }
-        )
-    except Exception as e:
-        log.warning("kraken postgres equity snapshot failed: %s", e)
+    if _kraken_tracking_enabled():
+        try:
+            insert_equity_snapshot(
+                {
+                    "ts": _now_iso(),
+                    "strategy": "kraken_bot",
+                    "symbol": symbol,
+                    "venue": "kraken",
+                    "equity": float(equity_usd),
+                    "cash": None,
+                    "position_qty": float(new_state.size_rem or 0.0),
+                    "position_side": int(new_state.pos_side),
+                    "payload_json": {
+                        "mark": float(mark),
+                        "gate_on": int(gate_on),
+                        "signal": int(signal_value),
+                        "signal_ts": signal_ts,
+                        "stop_sync": stop_res,
+                    },
+                }
+            )
+        except Exception as e:
+            log.warning("kraken postgres equity snapshot failed: %s", e)
 
     _publish_metrics(
         metrics_path,

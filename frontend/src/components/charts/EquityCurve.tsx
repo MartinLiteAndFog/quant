@@ -34,10 +34,9 @@ const RANGE_SEC: Record<TimeRange, number | null> = {
 
 const COMPONENT_COLORS: Record<string, { fill: string; stroke: string }> = {
   kucoin: { fill: "#3b82f6", stroke: "#3b82f6" },
-  kraken: { fill: "#f59e0b", stroke: "#f59e0b" },
 };
 
-const DEFAULT_COLORS = ["#3b82f6", "#f59e0b", "#22c55e", "#a855f7"];
+const DEFAULT_COLORS = ["#3b82f6", "#22c55e", "#a855f7"];
 
 function getColorForKey(key: string, index: number) {
   return COMPONENT_COLORS[key] ?? {

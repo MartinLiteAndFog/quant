@@ -10,7 +10,6 @@ import {
 import type {
   ChartBar,
   ChartMarker,
-  ChartSegment,
   ChartLevels,
   ChartFibo,
   FiboLine,
@@ -19,7 +18,6 @@ import type {
 interface PriceChartProps {
   bars: ChartBar[];
   markers?: ChartMarker[];
-  segments?: ChartSegment[];
   levels?: ChartLevels;
   ttpTrailPct?: number;
   fibo?: ChartFibo;
@@ -156,7 +154,6 @@ function fiboToPoints(points: FiboLine[] | undefined): LinePoint[] {
 export default function PriceChart({
   bars,
   markers = [],
-  segments = [],
   levels,
   ttpTrailPct = 0.012,
   fibo,
@@ -166,6 +163,7 @@ export default function PriceChart({
   const chartRef = useRef<IChartApi | null>(null);
   const candlestickRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const overlaySeriesRef = useRef<ISeriesApi<"Line">[]>([]);
+  const livePriceSeriesRef = useRef<ISeriesApi<"Line"> | null>(null);
   const fittedRef = useRef(false);
 
   useEffect(() => {
@@ -216,10 +214,12 @@ export default function PriceChart({
       chartRef.current = null;
       candlestickRef.current = null;
       overlaySeriesRef.current = [];
+      livePriceSeriesRef.current = null;
       fittedRef.current = false;
     };
   }, []);
 
+  // Update bars + markers when those change.
   useEffect(() => {
     const chart = chartRef.current;
     const candlestickSeries = candlestickRef.current;
@@ -249,6 +249,15 @@ export default function PriceChart({
         text: m.text,
       }))
     );
+  }, [bars, markers]);
+
+  // Rebuild overlay series only when bars / levels / ttpTrailPct / fibo change.
+  // Critically livePrice is NOT in this dep list — that lets the live ticker
+  // refresh (every few seconds) without tearing down and re-creating SL / TP /
+  // fibo / entry overlay line series.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
 
     for (const s of overlaySeriesRef.current) {
       try {
@@ -378,9 +387,28 @@ export default function PriceChart({
         }
       }
     }
+  }, [bars, levels, ttpTrailPct, fibo]);
 
-    if (livePrice != null && isFinite(livePrice) && bars.length >= 2) {
-      const s = chart.addLineSeries({
+  // Cheap, dedicated effect for the live-price line so a ticker tick doesn't
+  // ripple through the overlay series rebuild above.
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    if (livePrice == null || !isFinite(livePrice) || bars.length < 2) {
+      if (livePriceSeriesRef.current) {
+        try {
+          chart.removeSeries(livePriceSeriesRef.current);
+        } catch {
+          // already removed
+        }
+        livePriceSeriesRef.current = null;
+      }
+      return;
+    }
+
+    if (!livePriceSeriesRef.current) {
+      livePriceSeriesRef.current = chart.addLineSeries({
         color: "#9aa5b1",
         lineWidth: 1,
         lineStyle: LineStyle.Dashed,
@@ -388,29 +416,13 @@ export default function PriceChart({
         priceLineVisible: false,
         crosshairMarkerVisible: false,
       });
-      s.setData([
-        { time: bars[0].time as UTCTimestamp, value: livePrice },
-        { time: bars[bars.length - 1].time as UTCTimestamp, value: livePrice },
-      ]);
-      overlaySeriesRef.current.push(s);
     }
 
-    for (const seg of segments) {
-      const s = chart.addLineSeries({
-        color: seg.color,
-        lineWidth: 3,
-        lineStyle: seg.positive ? LineStyle.Solid : LineStyle.Dashed,
-        priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false,
-      });
-      s.setData([
-        { time: seg.from_time as UTCTimestamp, value: seg.from_price },
-        { time: seg.to_time as UTCTimestamp, value: seg.to_price },
-      ]);
-      overlaySeriesRef.current.push(s);
-    }
-  }, [bars, markers, segments, levels, ttpTrailPct, fibo, livePrice]);
+    livePriceSeriesRef.current.setData([
+      { time: bars[0].time as UTCTimestamp, value: livePrice },
+      { time: bars[bars.length - 1].time as UTCTimestamp, value: livePrice },
+    ]);
+  }, [bars, livePrice]);
 
   return <div ref={containerRef} className="h-full w-full" />;
 }

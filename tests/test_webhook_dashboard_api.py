@@ -32,6 +32,7 @@ class WebhookDashboardApiTests(unittest.TestCase):
         os.environ["GATE_CONF_HORIZONS_MINUTES"] = "5,30,120,240"
         os.environ["GATE_CONF_CACHE_SEC"] = "0"
         os.environ["GATE_CONF_NOW_MODE"] = "last_ts"
+        os.environ["DASHBOARD_TRADE_ALLOW_FILE_FALLBACK"] = "1"
 
         renko = pd.DataFrame(
             {
@@ -45,7 +46,15 @@ class WebhookDashboardApiTests(unittest.TestCase):
         renko.to_parquet(root / "renko.parquet", index=False)
         pd.DataFrame(
             [
-                {"entry_ts": "2026-02-20T00:00:00Z", "exit_ts": "2026-02-20T01:00:00Z", "side": 1, "exit_event": "tp_exit"}
+                {
+                    "entry_ts": "2026-02-20T00:00:00Z",
+                    "exit_ts": "2026-02-20T01:00:00Z",
+                    "side": 1,
+                    "entry_price": 100.0,
+                    "exit_price": 101.0,
+                    "pnl_pct": 1.0,
+                    "exit_event": "tp_exit",
+                }
             ]
         ).to_parquet(root / "trades.parquet", index=False)
         # Include open position snapshot to exercise dashboard fallback marker.
@@ -153,9 +162,18 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIn("gate_confidence", body)
         self.assertIn("gate_confidence_error", body)
         self.assertIn("open_position", body)
-        self.assertIn("equity_kraken", body)
-        self.assertIn("equity_combined", body)
-        self.assertIn("kraken_metrics", body)
+        self.assertEqual(body.get("segments"), [])
+        self.assertEqual(body.get("kraken_metrics"), {})
+        self.assertEqual(body.get("equity_kraken"), [])
+        self.assertEqual(body.get("equity_kraken_source"), "none")
+        self.assertEqual(body.get("equity_combined"), [])
+        self.assertEqual(body.get("equity_combined_source"), "none")
+        self.assertEqual(body.get("equity_total"), body.get("equity_real"))
+        self.assertEqual(body.get("equity_total_source"), body.get("equity_real_source"))
+        self.assertEqual(
+            [c.get("key") for c in body.get("equity_components", [])],
+            ["kucoin"],
+        )
 
     @patch("quant.execution.webhook_server.get_live_gate_state")
     def test_chart_payload_exposes_day_regime_separately_from_trade_regime(self, mock_gate_state) -> None:

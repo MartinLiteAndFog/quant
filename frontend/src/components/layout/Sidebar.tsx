@@ -1,9 +1,9 @@
+import { memo } from "react";
 import type { ReactNode } from "react";
 import type {
   StatusResponse,
   PositionResponse,
   ChartLevels,
-  KrakenMetrics,
 } from "../../types/chart";
 import type {
   DashboardStrategyResponse,
@@ -16,7 +16,6 @@ export interface SidebarProps {
   strategy: DashboardStrategyResponse | null;
   performance: DashboardPerformanceResponse | null;
   chartLevels?: ChartLevels;
-  krakenMetrics?: KrakenMetrics;
 }
 
 function SectionCard({
@@ -34,10 +33,6 @@ function SectionCard({
       {children}
     </div>
   );
-}
-
-function DualColumn({ children }: { children: ReactNode }) {
-  return <div className="grid grid-cols-2 gap-3">{children}</div>;
 }
 
 function VenueHeader({ name, accent }: { name: string; accent: string }) {
@@ -91,13 +86,12 @@ function sideLabel(side: number | string | null | undefined): string {
   return side;
 }
 
-export function Sidebar({
+function SidebarBase({
   status,
   position,
   strategy,
   performance,
   chartLevels,
-  krakenMetrics,
 }: SidebarProps) {
   const kucoinPrice = status?.ticker?.last ?? status?.ticker?.mid ?? null;
   const kucoinEquity = status?.balance?.equity ?? null;
@@ -111,111 +105,56 @@ export function Sidebar({
     ? Math.abs(kucoinSizeNum) / 10
     : 0;
 
-  const kr = krakenMetrics;
-  const krakenEquity = kr?.equity_usd ?? null;
-  const krakenSide = kr?.venue_pos_side ?? kr?.pos_side ?? null;
-  const krakenSizeNum = Number(kr?.venue_pos_size ?? kr?.size_rem ?? NaN);
-  const krakenMode = kr?.mode ?? null;
-  const krakenMark = kr?.mark_price ?? null;
-  const krakenHasPos = Number.isFinite(krakenSizeNum) && krakenSizeNum !== 0;
-
   const strategyLabel = strategy?.strategy_label ?? "—";
 
   return (
     <aside className="flex w-80 flex-col gap-3 overflow-y-auto">
       <SectionCard title="Status">
-        <DualColumn>
-          <div>
-            <VenueHeader name="KuCoin" accent="bg-blue-500" />
-            <div className="space-y-0.5 font-mono text-xs text-zinc-100">
-              <div>
-                Price: <span className="text-zinc-300">{fmt(kucoinPrice, 4)}</span>
-              </div>
-              <div>
-                Regime: <span className="text-zinc-300">{strategyLabel}</span>
-              </div>
+        <div>
+          <VenueHeader name="KuCoin" accent="bg-blue-500" />
+          <div className="space-y-0.5 font-mono text-xs text-zinc-100">
+            <div>
+              Price: <span className="text-zinc-300">{fmt(kucoinPrice, 4)}</span>
+            </div>
+            <div>
+              Regime: <span className="text-zinc-300">{strategyLabel}</span>
             </div>
           </div>
-          <div>
-            <VenueHeader name="Kraken" accent="bg-amber-500" />
-            <div className="space-y-0.5 font-mono text-xs text-zinc-100">
-              <div>
-                Price: <span className="text-zinc-300">{fmt(krakenMark, 4)}</span>
-              </div>
-              {krakenMode && (
-                <div>
-                  Mode: <span className="text-zinc-300">{krakenMode}</span>
-                </div>
-              )}
-            </div>
-          </div>
-        </DualColumn>
+        </div>
       </SectionCard>
 
       <SectionCard title="Position">
-        <DualColumn>
-          <div>
-            <VenueHeader name="KuCoin" accent="bg-blue-500" />
-            <div className="font-mono text-sm">
-              {kucoinHasPos ? (
-                <span className={sideColor(kucoinSide)}>
-                  {sideLabel(kucoinSide)} {kucoinDisplaySize.toFixed(1)}
-                </span>
-              ) : (
-                <span className="text-zinc-500">Flat</span>
-              )}
-            </div>
+        <div>
+          <VenueHeader name="KuCoin" accent="bg-blue-500" />
+          <div className="font-mono text-sm">
+            {kucoinHasPos ? (
+              <span className={sideColor(kucoinSide)}>
+                {sideLabel(kucoinSide)} {kucoinDisplaySize.toFixed(1)}
+              </span>
+            ) : (
+              <span className="text-zinc-500">Flat</span>
+            )}
           </div>
-          <div>
-            <VenueHeader name="Kraken" accent="bg-amber-500" />
-            <div className="font-mono text-sm">
-              {krakenHasPos ? (
-                <span className={sideColor(String(krakenSide))}>
-                  {sideLabel(krakenSide)} {Math.abs(krakenSizeNum).toFixed(1)}
-                </span>
-              ) : (
-                <span className="text-zinc-500">Flat</span>
-              )}
-            </div>
-          </div>
-        </DualColumn>
+        </div>
       </SectionCard>
 
       <SectionCard title="Capital">
-        <DualColumn>
-          <div>
-            <VenueHeader name="KuCoin" accent="bg-blue-500" />
-            <div className="font-mono text-sm">
-              {kucoinEquity != null ? (
-                <span
-                  className={
-                    kucoinEquity >= 0 ? "text-emerald-400" : "text-red-400"
-                  }
-                >
-                  ${fmt(kucoinEquity)}
-                </span>
-              ) : (
-                <span className="text-zinc-500">—</span>
-              )}
-            </div>
+        <div>
+          <VenueHeader name="KuCoin" accent="bg-blue-500" />
+          <div className="font-mono text-sm">
+            {kucoinEquity != null ? (
+              <span
+                className={
+                  kucoinEquity >= 0 ? "text-emerald-400" : "text-red-400"
+                }
+              >
+                ${fmt(kucoinEquity)}
+              </span>
+            ) : (
+              <span className="text-zinc-500">—</span>
+            )}
           </div>
-          <div>
-            <VenueHeader name="Kraken" accent="bg-amber-500" />
-            <div className="font-mono text-sm">
-              {krakenEquity != null ? (
-                <span
-                  className={
-                    krakenEquity >= 0 ? "text-emerald-400" : "text-red-400"
-                  }
-                >
-                  ${fmt(krakenEquity)}
-                </span>
-              ) : (
-                <span className="text-zinc-500">—</span>
-              )}
-            </div>
-          </div>
-        </DualColumn>
+        </div>
       </SectionCard>
 
       <SectionCard title="Performance">
@@ -326,3 +265,7 @@ export function Sidebar({
     </aside>
   );
 }
+
+// Memoize so chart-data refreshes that don't affect the sidebar's props don't
+// trigger a sidebar re-render.
+export const Sidebar = memo(SidebarBase);
