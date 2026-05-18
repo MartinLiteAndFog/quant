@@ -29,6 +29,7 @@ The event model is no longer only aspirational.
 - `execution_events`
 - `closed_trades`
 - `equity_snapshots`
+- `trade_decisions` (derived from `action_events`)
 
 ### Partially active / not yet fully live-wired
 - `signal_events`
@@ -125,8 +126,10 @@ Represents realized trade outcomes.
 Used for:
 - trading diary
 - trade markers
-- trade segments
 - post-trade analysis
+
+(Note: entry→exit trade-connector segments are no longer rendered on the
+dashboard.)
 
 ### `equity_snapshots`
 Represents durable equity/account snapshots.
@@ -135,6 +138,43 @@ Used for:
 - dashboard equity curves
 - venue/account equity history
 - later attribution from event chain to account evolution
+
+### `trade_decisions` (derived)
+
+Counts discrete directional position-opening decisions. Derived from
+`action_events`, so rebuilding the table from history always yields the same
+rows (every `decision_id` is deterministic).
+
+Schema: `src/quant/sql/002_trade_decisions.sql`.
+Classifier: `src/quant/execution/trade_counter.py`.
+Store/backfill: `src/quant/execution/trade_decisions_store.py`.
+
+Classification rules (authoritative):
+
+| `engine_action` | counted? | `decision_kind` |
+|-----------------|----------|-----------------|
+| `enter_long`    | yes      | `entry`         |
+| `enter_short`   | yes      | `entry`         |
+| `flip_to_long`  | yes      | `flip`          |
+| `flip_to_short` | yes      | `flip`          |
+| `scale_long` / `scale_short` | no | — (same-direction add, no new SL/TP) |
+| `tp1_partial` and any partial close | no | — (size reduction, keeps SL) |
+| `exit_long` / `exit_short` | no | — (ends lifecycle; trade already counted at entry/flip) |
+| `hold` | no | — |
+| any unrecognised label | no | — |
+| any row with `blocked = true` | no | — (SL/TP was never committed) |
+
+Idempotency: `decision_id = "td_" + sha1(source_action_event_id)[:16]`
+(falls back to a hash over `(venue, symbol, ts, seq, engine_action)` when
+there is no source event id). All write paths upsert by `decision_id`.
+
+API:
+- `GET /api/dashboard/trade_count?symbol=&venue=&recent_limit=&backfill=`
+- `GET /api/dashboard/performance` → adds `trade_decision_count`
+
+Backfill:
+- `python scripts/backfill_trade_decisions.py --venue kucoin --symbol SOL-USDT`
+- or one-shot via the API with `?backfill=1`
 
 ---
 

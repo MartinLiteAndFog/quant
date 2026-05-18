@@ -132,17 +132,27 @@ qty = floor(equity × LIVE_EXECUTOR_POS_PCT × LIVE_EXECUTOR_LEVERAGE
 
 Contract multiplier is fetched live from the broker — do not hardcode it.
 
-### 5. Kraken bot
+### 5. Kraken executors
 
-Main entrypoint: `quant.execution.kraken_bot`
+Main entrypoints:
+- `quant.execution.live_executor_2` — stop-order-native executor (current)
+- `quant.execution.kraken_bot` — legacy executor
 
 Responsibilities:
 - live Kraken execution path
-- event persistence
-- equity persistence
+- event persistence (gated, see below)
+- equity persistence (gated, see below)
 - bot state reconciliation
 
-Key file: `src/quant/execution/kraken_bot.py`
+Key files:
+- `src/quant/execution/live_executor_2.py`
+- `src/quant/execution/kraken_bot.py`
+
+**Kraken trade tracking is gated and OFF by default.** Equity snapshots,
+Kraken `action_events` / `execution_events`, and per-bot metrics/equity files
+are only written when `KRAKEN_TRADE_TRACKING_ENABLED=1` is set. With the flag
+unset the decision loops still run; they just skip the persistence
+side-effects. Use this when running Kraken in shadow / observe-only mode.
 
 ---
 
@@ -159,6 +169,8 @@ Already active in Postgres:
 - `execution_events` ✓
 - `closed_trades` ✓
 - `equity_snapshots` ✓
+- `trade_decisions` ✓ (derived from `action_events`; schema in
+  `src/quant/sql/002_trade_decisions.sql`)
 
 Not yet fully wired:
 - `signal_events`
@@ -211,6 +223,14 @@ LIVE_EXECUTOR_LEVERAGE=6               # leverage multiplier (sizing math)
 KUCOIN_FUTURES_ORDER_LEVERAGE=6        # leverage field sent to exchange per order
 ```
 
+### Kraken
+```
+KRAKEN_TRADE_TRACKING_ENABLED=0        # default 0; set to 1 to persist
+                                        # equity / action_events / execution_events
+                                        # / metrics from live_executor_2.py and
+                                        # kraken_bot.py
+```
+
 Note: `LIVE_EXECUTOR_LEVERAGE` and `KUCOIN_FUTURES_ORDER_LEVERAGE` are separate:
 - `LIVE_EXECUTOR_LEVERAGE` → used only in local sizing formula
 - `KUCOIN_FUTURES_ORDER_LEVERAGE` → sent to KuCoin in every order body; falls back to `LIVE_EXECUTOR_LEVERAGE` if unset
@@ -241,6 +261,30 @@ Preferred pattern:
 | Signal snapping causing terminal_pos oscillation | **FIXED** in f450c93 — exact match only |
 | `signal_events` Postgres insert failing | Still open — missing builder/store field alignment |
 | OMS not margin-aware | Still open — uses qty as-is, no shrink-retry on rejection |
+| Main dashboard performance/loading improvements | **In progress** — landing in a separate change |
+
+## Dashboard endpoints (current)
+
+- `/dashboard` — main UI
+- `/api/dashboard/chart` — KuCoin-focused chart payload. Kraken-only
+  compatibility fields (`equity_kraken`, `equity_combined`, `kraken_metrics`,
+  `equity_live`, `equity_realized`) and `segments` are kept as inert / empty.
+- `/api/dashboard/performance` — includes `trade_decision_count` (count of
+  countable trade decisions from `trade_decisions`)
+- `/api/dashboard/strategy`
+- `/api/dashboard/trade_count?symbol=&venue=&recent_limit=&backfill=` — total
+  trade decisions plus the most recent rows. `backfill=1` triggers an
+  idempotent backfill from `action_events` before counting.
+
+A first-time deploy after the trade-counter feature lands should either run:
+
+```bash
+PYTHONPATH=src python3 scripts/backfill_trade_decisions.py \
+  --venue kucoin --symbol SOL-USDT
+```
+
+or hit `/api/dashboard/trade_count?backfill=1` once to populate
+`trade_decisions` from historical `action_events`.
 
 ---
 

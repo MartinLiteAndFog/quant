@@ -131,8 +131,32 @@ A realized trade outcome with entry/exit timestamps and realized PnL information
 Closed trades are used by the dashboard for:
 - trading diary
 - trade markers
-- trade segments
 - post-trade analysis
+
+(Trade-connector segments between entry and exit markers were removed from
+the dashboard; only the markers themselves and the trading diary remain.)
+
+---
+
+## Trade decision
+A discrete directional position-opening event that carries its own SL/TP
+commitment.
+
+Counted:
+- entry from flat (`enter_long`, `enter_short`) — `decision_kind = entry`
+- flip to opposite direction (`flip_to_long`, `flip_to_short`) — `decision_kind = flip`
+
+Not counted:
+- `scale_long` / `scale_short` (same-direction add, no new SL/TP)
+- `tp1_partial` and other partial closes
+- `exit_long` / `exit_short` (the trade was already counted at entry / flip)
+- `hold`
+- any `blocked = true` action
+
+Persisted in `trade_decisions` (derived from `action_events`); classified by
+`src/quant/execution/trade_counter.py`. Exposed by
+`/api/dashboard/trade_count` and as `trade_decision_count` on
+`/api/dashboard/performance`.
 
 ---
 
@@ -193,12 +217,19 @@ Main file:
 ## Kraken bot
 The Kraken-side live execution loop.
 
+Two entrypoints exist:
+- `src/quant/execution/live_executor_2.py` — current, stop-order-native
+- `src/quant/execution/kraken_bot.py` — legacy
+
 Responsibilities include:
 - live bot state management
 - execution
-- event persistence
-- equity persistence
+- event persistence (gated)
+- equity persistence (gated)
 - reconciliation with venue state
 
-Main file:
-- `src/quant/execution/kraken_bot.py`
+**Kraken persistence is gated.** Equity snapshots, Kraken
+`action_events` / `execution_events` and per-bot metrics/equity files are only
+written when `KRAKEN_TRADE_TRACKING_ENABLED=1`. With the flag unset (the
+default), the decision loops still run; only the persistence side-effects are
+skipped.

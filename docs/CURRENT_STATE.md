@@ -39,7 +39,66 @@ Runtime JSONL/state files remain as operational traces but are no longer intende
 
 ---
 
-# Recent Changes (uncommitted)
+# Recent Changes
+
+## Dashboard cleanup (KuCoin-focused)
+
+- **Trade-connector segments removed.** `webhook_server.py` no longer calls
+  `load_trade_segments()`, and none of the dashboards
+  (`frontend/src/components/charts/PriceChart.tsx`,
+  `frontend/src/components/layout/Dashboard.tsx`,
+  `dashboard/src/components/PriceChart.svelte`, inline HTML/JS) render entry→exit
+  segments. The chart payload still includes `segments: []` as a one-release
+  no-op for backwards compatibility.
+- **Dashboard is now KuCoin-only.** Kraken loaders have been removed from
+  `dashboard_state.py`. The chart payload still contains
+  `equity_kraken`, `equity_combined`, `kraken_metrics`,
+  `equity_live`, `equity_realized` as inert / empty fields for backwards
+  compatibility.
+- **Kraken trade tracking is now gated.** Equity/event/metrics persistence in
+  `src/quant/execution/live_executor_2.py` and the legacy
+  `src/quant/execution/kraken_bot.py` is gated behind
+  `KRAKEN_TRADE_TRACKING_ENABLED=1` and defaults **OFF**. The decision loops
+  still run; they just skip the persistence side-effects when the flag is off.
+
+## Trade decision counter (new)
+
+A discrete count of directional position-opening decisions (each entry or flip
+gets its own SL/TP, so each is one decision).
+
+- New module: `src/quant/execution/trade_counter.py` — pure classifier
+- New module: `src/quant/execution/trade_decisions_store.py` — Postgres
+  upsert / count / list / backfill helpers
+- New SQL: `src/quant/sql/002_trade_decisions.sql` — idempotent table
+- New CLI: `scripts/backfill_trade_decisions.py`
+- `src/quant/execution/live_executor.py` writes a `trade_decisions` row on
+  every classified `action_events` row (best-effort; failures are logged and
+  swallowed).
+- New endpoint: `GET /api/dashboard/trade_count?symbol=&venue=&recent_limit=&backfill=`
+- `GET /api/dashboard/performance` now also returns `trade_decision_count`.
+
+Classification rules (see `docs/ARCHITECTURE.md#8-trade-decision-counter` for
+the authoritative table):
+
+- Counted: `enter_long`, `enter_short` (entry from flat), `flip_to_long`,
+  `flip_to_short` (flip)
+- Not counted: `scale_long`/`scale_short`, partial closes (`tp1_partial` etc.),
+  `exit_long`/`exit_short`, `hold`, unknown labels, anything with `blocked=true`
+- Idempotent: `decision_id = "td_" + sha1(source_action_event_id)[:16]`
+
+Backfill:
+
+```bash
+PYTHONPATH=src python3 scripts/backfill_trade_decisions.py \
+  --venue kucoin --symbol SOL-USDT
+```
+
+Or one-shot via the API: `GET /api/dashboard/trade_count?backfill=1`.
+
+## In progress
+
+- **Main dashboard performance/loading improvements.** Active work, not yet
+  landed; this document will be updated once it is verified.
 
 ## live_executor_2.py — Stop-order-native Kraken executor (major extension)
 
@@ -161,6 +220,13 @@ Key files:
 - `src/quant/execution/live_executor_2.py`
 - `src/quant/execution/kraken_futures.py`
 
+Key env vars:
+- `KRAKEN_TRADE_TRACKING_ENABLED` (default `0`) — set to `1` to enable
+  equity snapshot / action_event / execution_event / metrics persistence
+  from the Kraken executors. The decision loops in `live_executor_2.py` and
+  the legacy `kraken_bot.py` still run when this is off; only the
+  persistence side-effects are skipped.
+
 ## Event Persistence
 
 Primary durable storage: Postgres
@@ -170,6 +236,8 @@ Important tables:
 - `execution_events` ✓
 - `closed_trades` ✓
 - `equity_snapshots` ✓
+- `trade_decisions` ✓ (derived from `action_events`; see
+  `src/quant/sql/002_trade_decisions.sql`)
 - `signal_events` (JSONL only — Postgres path incomplete)
 
 ## Dashboard
@@ -178,7 +246,14 @@ Served by: `quant.execution.webhook_server`
 
 Main endpoint: `/dashboard`
 
-Provides: Renko chart, gate shading, fib levels (via `get_latest_imba_barriers`), trade markers, entry→exit segments, SL/TTP/TP overlays
+Provides: Renko chart, gate shading, fib levels (via `get_latest_imba_barriers`), trade markers, SL/TTP/TP overlays.
+
+Trade-connector segments (entry→exit lines) have been removed from the chart;
+the chart payload still contains `segments: []` as a one-release no-op.
+
+Trade decision count is exposed at:
+- `GET /api/dashboard/trade_count?symbol=&venue=&recent_limit=&backfill=`
+- `GET /api/dashboard/performance` → `trade_decision_count`
 
 Main files:
 - `src/quant/execution/dashboard_state.py`

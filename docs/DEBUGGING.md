@@ -185,9 +185,25 @@ Check:
 - whether dashboard reader is Postgres-first for that view
 - `closed_trades`
 - `equity_snapshots`
+- `trade_decisions` (for `/api/dashboard/trade_count` and
+  `trade_decision_count` on `/api/dashboard/performance`)
 - runtime cache freshness
 - `renko_health`
 - active level files only as secondary evidence
+
+Known intentional empties (do not treat as bugs):
+
+- the chart payload always returns `segments: []` (trade-connector lines were
+  removed from `dashboard_state.py` and from every frontend)
+- the chart payload returns empty `equity_kraken`, `equity_combined`,
+  `kraken_metrics`, `equity_live`, `equity_realized` — the dashboard is now
+  KuCoin-focused; these fields are kept only for backwards compatibility
+- `trade_decision_count` may be `null` on `/api/dashboard/performance` if the
+  count query failed (the endpoint logs `trade decision count failed`); the
+  chart and equity payloads are not affected
+
+> Main dashboard performance/loading improvements are **in progress** and may
+> change how some of these payloads are produced.
 
 Main code areas:
 - `dashboard_state.py`
@@ -235,14 +251,19 @@ Current note:
 ## For Kraken
 
 1. Check current venue position/state
-2. Check latest Kraken `execution_events`
-3. Check equity snapshots
+2. Check latest Kraken `execution_events` (only present if tracking enabled)
+3. Check equity snapshots (only present if tracking enabled)
 4. Check bot state reconciliation
 5. Only then inspect logs/runtime files
 
-Current note:
-- Kraken event and equity persistence are already active
-- in `--once` mode, failures should now raise with full stacktrace instead of only logging a warning
+Current notes:
+- Kraken trade tracking is **gated** behind `KRAKEN_TRADE_TRACKING_ENABLED=1`
+  (default `0`). If you see no Kraken equity snapshots / action_events /
+  execution_events, check that env var first — the decision loops in
+  `live_executor_2.py` and the legacy `kraken_bot.py` run either way, but
+  persistence is skipped when the gate is off.
+- In `--once` mode, failures should now raise with full stacktrace instead of
+  only logging a warning.
 
 ---
 
@@ -305,7 +326,8 @@ Strategy / execution:
 - `src/quant/execution/renko_cache_updater.py` — single Renko authority
 - `src/quant/execution/live_signal_worker.py`
 - `src/quant/execution/live_executor.py`
-- `src/quant/execution/kraken_bot.py`
+- `src/quant/execution/live_executor_2.py` (Kraken; persistence gated by `KRAKEN_TRADE_TRACKING_ENABLED`)
+- `src/quant/execution/kraken_bot.py` (legacy Kraken; same gate)
 - `src/quant/execution/oms.py`
 - `src/quant/execution/kucoin_futures.py`
 
@@ -313,6 +335,10 @@ Persistence / events:
 - `src/quant/execution/event_builders.py`
 - `src/quant/execution/event_store.py`
 - `src/quant/execution/event_types.py`
+- `src/quant/execution/trade_counter.py` — trade-decision classifier
+- `src/quant/execution/trade_decisions_store.py` — `trade_decisions` table helpers
+- `src/quant/sql/002_trade_decisions.sql`
+- `scripts/backfill_trade_decisions.py`
 
 Dashboard:
 - `src/quant/execution/dashboard_state.py`

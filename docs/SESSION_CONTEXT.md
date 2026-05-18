@@ -27,7 +27,8 @@ Renko source: `data/live/renko_latest.parquet` (written by `renko_cache_updater`
 - `src/quant/execution/kucoin_futures.py` — KuCoin API adapter
 
 ### Execution (Kraken)
-- `src/quant/execution/live_executor_2.py` — **active development target**: stop-order-native executor with TTP re-entry and pending follow-entry
+- `src/quant/execution/live_executor_2.py` — stop-order-native executor with TTP re-entry and pending follow-entry. Trade/equity/event persistence is gated behind `KRAKEN_TRADE_TRACKING_ENABLED=1` (default OFF).
+- `src/quant/execution/kraken_bot.py` — legacy executor, also gated behind `KRAKEN_TRADE_TRACKING_ENABLED=1`.
 - `src/quant/execution/kraken_futures.py` — Kraken API adapter (now supports `place_take_profit_market`, `place_trigger_entry_market`)
 
 ### Strategies
@@ -36,8 +37,19 @@ Renko source: `data/live/renko_latest.parquet` (written by `renko_cache_updater`
 - `src/quant/backtest/renko_runner.py` — backtest runner
 
 ### Dashboard
-- `src/quant/execution/webhook_server.py`
-- `src/quant/execution/dashboard_state.py` — `build_fibo_levels()` now delegates to `get_latest_imba_barriers()`
+- `src/quant/execution/webhook_server.py` — KuCoin-focused chart/equity/performance/strategy + new `/api/dashboard/trade_count`
+- `src/quant/execution/dashboard_state.py` — `build_fibo_levels()` delegates to `get_latest_imba_barriers()`; Kraken loaders removed; `load_trade_segments()` no longer called by `webhook_server.py`
+
+> Main dashboard performance/loading improvements are **in progress**; this
+> section may shift while that work lands.
+
+### Trade decision counter
+- `src/quant/execution/trade_counter.py` — classifier (entries + flips count; scale/partial/exit/blocked do not)
+- `src/quant/execution/trade_decisions_store.py` — Postgres upsert/count/list/backfill
+- `src/quant/sql/002_trade_decisions.sql` — `trade_decisions` table
+- `scripts/backfill_trade_decisions.py` — one-shot backfill CLI
+- `live_executor.py` upserts a `trade_decisions` row on every classified `action_events` row
+- API: `GET /api/dashboard/trade_count`; `GET /api/dashboard/performance` adds `trade_decision_count`
 
 ---
 
@@ -50,6 +62,14 @@ LIVE_EXECUTOR_LEVERAGE=6
 KUCOIN_FUTURES_ORDER_LEVERAGE=6
 LIVE_TRADING_ENABLED=1
 LIVE_EXECUTOR_DRY_RUN=0
+```
+
+## Key env vars (Kraken)
+
+```
+# 1 enables equity / action_events / execution_events / metrics persistence
+# from live_executor_2.py and the legacy kraken_bot.py. Default 0 (disabled).
+KRAKEN_TRADE_TRACKING_ENABLED=0
 ```
 
 ---
@@ -98,6 +118,7 @@ Postgres-first forensic system.
 | `execution_events` | ✓ active |
 | `closed_trades` | ✓ active |
 | `equity_snapshots` | ✓ active |
+| `trade_decisions` | ✓ active (derived from `action_events`) |
 | `signal_events` | JSONL only — Postgres path incomplete |
 
 ---

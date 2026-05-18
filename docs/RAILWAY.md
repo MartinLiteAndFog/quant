@@ -103,9 +103,12 @@ D. Kraken bot service (if deployed separately)
 
 Typical responsibility:
 
-run kraken_bot
-
-handle Kraken-side live execution and persistence
+- run `live_executor_2` (preferred) or the legacy `kraken_bot`
+- handle Kraken-side live execution
+- persistence (equity snapshots, action_events, execution_events, metrics) is
+  gated behind `KRAKEN_TRADE_TRACKING_ENABLED=1` (default OFF). Set this
+  variable on the Kraken service if you want those side effects; leave it
+  unset to run Kraken shadow / observe-only.
 
 Operational preference:
 separate services are usually better than one giant mixed process because they improve:
@@ -173,19 +176,19 @@ Common runtime variables
 
 Examples:
 
-PYTHONUNBUFFERED=1
+- `PYTHONUNBUFFERED=1`
+- `LIVE_TRADING_ENABLED`
+- `LIVE_EXECUTOR_DRY_RUN`
+- `LIVE_EXECUTOR_LEVERAGE`
+- `LIVE_EXECUTOR_SYMBOL_ALLOWLIST`
+- `SIGNALS_DIR`
+- `LIVE_EXECUTOR_STATE`
 
-LIVE_TRADING_ENABLED
+Kraken-specific:
 
-LIVE_EXECUTOR_DRY_RUN
-
-LIVE_EXECUTOR_LEVERAGE
-
-LIVE_EXECUTOR_SYMBOL_ALLOWLIST
-
-SIGNALS_DIR
-
-LIVE_EXECUTOR_STATE
+- `KRAKEN_TRADE_TRACKING_ENABLED` — `0` (default) disables Kraken equity /
+  event / metrics persistence in `live_executor_2.py` and `kraken_bot.py`; set
+  to `1` to enable.
 
 The exact set depends on the service.
 
@@ -239,17 +242,14 @@ enable/generate public domain for the web-facing service
 
 Typical public endpoints may include:
 
-/dashboard
-
-/health
-
-/api/status
-
-/api/dashboard/chart
-
-/api/gate/...
-
-/api/signals/latest/...
+- `/dashboard`
+- `/health`
+- `/api/status`
+- `/api/dashboard/chart` (KuCoin-focused; Kraken/segments fields kept as empty for backwards compatibility)
+- `/api/dashboard/performance` (includes `trade_decision_count`)
+- `/api/dashboard/trade_count` (`?symbol=&venue=&recent_limit=&backfill=`)
+- `/api/gate/...`
+- `/api/signals/latest/...`
 
 Only the web/API service should normally need public networking.
 
@@ -287,13 +287,12 @@ B. Durable forensic truth
 
 This is increasingly moving to Postgres:
 
-action_events
-
-execution_events
-
-closed_trades
-
-equity_snapshots
+- `action_events`
+- `execution_events`
+- `closed_trades`
+- `equity_snapshots`
+- `trade_decisions` (derived from `action_events`; see
+  `src/quant/sql/002_trade_decisions.sql`)
 
 This is the preferred long-term truth layer.
 

@@ -204,6 +204,28 @@ Previous bug (before f450c93): used `bal["available"]` (free margin) instead of 
 
 ---
 
+## 6.5 Kraken trade tracking is gated and OFF by default
+
+Kraken trade/equity/execution-event persistence in both
+`src/quant/execution/live_executor_2.py` and the legacy
+`src/quant/execution/kraken_bot.py` is now gated behind a single env var:
+
+```
+KRAKEN_TRADE_TRACKING_ENABLED=1   # default: 0 (disabled)
+```
+
+When unset (the default), the Kraken executors run their decision loops but
+skip:
+
+- equity snapshot inserts (`insert_equity_snapshot` / `_append_equity`)
+- Kraken `action_events` / `execution_events` writes
+- per-bot metrics JSON / equity CSV writes
+
+This reflects the operational reality that KuCoin is the primary live target
+and that Kraken-side persistence is currently opt-in.
+
+---
+
 ## 7. Persistence / forensic layer
 
 Main direction:
@@ -223,6 +245,8 @@ Current durable tables:
 - `execution_events`
 - `closed_trades`
 - `equity_snapshots`
+- `trade_decisions` — see `## 8. Trade decision counter` below; schema in
+  `src/quant/sql/002_trade_decisions.sql`
 
 Planned / partial:
 - `signal_events`
@@ -334,6 +358,44 @@ Main dashboard logic lives in:
 Current direction:
 - dashboard reads Postgres first where available
 - runtime files remain fallback / compatibility sources
+- **KuCoin-focused**: chart, equity, performance, strategy and trade-count
+  endpoints are produced from KuCoin live data; Kraken-only payload fields are
+  kept for backwards compatibility but are now empty (see below)
+
+> **In progress:** main dashboard performance/loading improvements. Some
+> internal data flows may shift while that work lands; this section will be
+> updated once it is verified.
+
+### KuCoin-focused, Kraken removed from dashboard loaders
+
+`dashboard_state.py` no longer contains Kraken loaders, and `webhook_server.py`
+no longer calls `load_trade_segments()`. The `/api/dashboard/chart` payload
+still contains the following Kraken/compatibility fields, but they are always
+empty / inert:
+
+- `equity_kraken: []` / `equity_kraken_source: "none"`
+- `equity_combined: []` / `equity_combined_source: "none"`
+- `equity_live: []` / `equity_live_source: "deprecated_use_equity_components"`
+- `equity_realized: []` / `equity_realized_source: "deprecated_use_equity_components"`
+- `kraken_metrics: {}`
+- `segments: []` (trade-connector segments are no longer produced or rendered)
+
+The `equity_components` field is the current per-source breakdown for the
+KuCoin equity stack; `equity_total` mirrors KuCoin real equity.
+
+### Trade-connector segments removed
+
+The entry→exit line segments that used to be drawn on the price chart are no
+longer produced by `dashboard_state.load_trade_segments()` (the function was
+removed from the call graph) and are no longer rendered by:
+
+- React: `frontend/src/components/charts/PriceChart.tsx`,
+  `frontend/src/components/layout/Dashboard.tsx`
+- Svelte: `dashboard/src/components/PriceChart.svelte`
+- the inline HTML/JS dashboard served by `webhook_server.py`
+
+The `segments: []` field is retained in the chart payload for one release as a
+backwards-compatibility no-op.
 
 ### Fib/IMBA barrier display (refactored)
 
@@ -346,13 +408,107 @@ Already moved to Postgres-first:
 - real equity history
 - trade markers
 - trading diary
-- trade segments
 - closed trades
+- trade decision counts (see below)
 
 Still operationally relevant:
 - active level/runtime execution state files
 - signal JSONL
 - live Renko parquet (`data/live/renko_latest.parquet`)
+
+---
+
+## 8. Trade decision counter
+
+A **trade decision** is a discrete directional position-opening event that
+carries its own SL/TP commitment. Every entry from flat and every flip to the
+opposite direction is one decision; scale-ins, partial closes and exits are
+not new decisions.
+
+The counter is derived from `action_events` so that it stays consistent with
+the rest of the forensic chain.
+
+### Files
+
+- `src/quant/execution/trade_counter.py` — pure classifier
+  (`classify_action_event`, `build_trade_decisions_from_action_events`,
+  `deterministic_decision_id`)
+- `src/quant/execution/trade_decisions_store.py` — Postgres helpers
+  (`upsert_trade_decision`, `count_trade_decisions`,
+  `list_recent_trade_decisions`, `backfill_trade_decisions_from_action_events`)
+- `src/quant/sql/002_trade_decisions.sql` — idempotent `CREATE TABLE` (also
+  re-asserted at runtime by `ensure_trade_decisions_schema()`)
+- `scripts/backfill_trade_decisions.py` — one-shot CLI backfill
+
+### Classification rules (authoritative)
+
+Counted (one row per event, with `decision_kind` set as shown):
+
+| `engine_action`   | `decision_kind` | Meaning                                  |
+|-------------------|-----------------|------------------------------------------|
+| `enter_long`      | `entry`         | flat → long (new SL/TP)                  |
+| `enter_short`     | `entry`         | flat → short (new SL/TP)                 |
+| `flip_to_long`    | `flip`          | short → long (new SL/TP on the new leg)  |
+| `flip_to_short`   | `flip`          | long → short (new SL/TP on the new leg)  |
+
+Not counted:
+
+- `scale_long` / `scale_short` — same-direction add, no new SL/TP
+- `tp1_partial` and any partial close — reduces size, keeps SL
+- `exit_long` / `exit_short` — ends the existing trade lifecycle, but the
+  trade was already counted at entry / flip time
+- `hold` — no-op
+- any unknown / unrecognised `engine_action`
+- any row with `blocked = true` — the SL/TP was never committed
+
+A flip is one decision (the new opposite-direction leg with its own SL/TP);
+the close-half of the flip is implicit and is not double-counted.
+
+### Idempotency
+
+Each decision id is deterministic:
+
+```
+decision_id = "td_" + sha1(source_action_event_id)[:16]
+```
+
+(when there is no source event id, a stable fallback hash over
+`(venue, symbol, ts, seq, engine_action)` is used instead). All write paths
+upsert by `decision_id`, so re-running the live executor or the backfill
+script over the same `action_events` history never produces duplicates.
+
+### Write path (live)
+
+`src/quant/execution/live_executor.py` calls `classify_action_event()` for
+each `action_events` row it writes and, if the row is countable, upserts the
+resulting `TradeDecision` via `upsert_trade_decision()`. Failures are logged
+and swallowed so the trade counter can never break execution.
+
+### Backfill
+
+To re-derive `trade_decisions` from existing `action_events` history at any
+time:
+
+```bash
+PYTHONPATH=src python3 scripts/backfill_trade_decisions.py \
+  --venue kucoin --symbol SOL-USDT
+```
+
+Or one-shot via the dashboard API:
+
+```
+GET /api/dashboard/trade_count?symbol=SOL-USDT&venue=kucoin&backfill=1
+```
+
+Both paths are idempotent.
+
+### API surface
+
+- `GET /api/dashboard/trade_count?symbol=&venue=&recent_limit=&backfill=`
+  → `{ total, entries, flips, recent: [...], backfill: ... }`
+- `GET /api/dashboard/performance` → existing payload plus
+  `trade_decision_count` (the same value as `trade_count.total` for the same
+  venue/symbol)
 
 ---
 

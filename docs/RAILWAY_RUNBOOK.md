@@ -85,15 +85,20 @@ The exact Railway service name may vary, but operationally this worker side does
 
 ## Kraken execution path
 
-If Kraken is deployed separately in Railway or another environment, the relevant live entrypoint is:
+If Kraken is deployed separately in Railway or another environment, the relevant live entrypoints are:
 
-- `quant.execution.kraken_bot`
+- `quant.execution.live_executor_2` (preferred, stop-order-native)
+- `quant.execution.kraken_bot` (legacy)
 
 Responsibilities:
 - Kraken live execution loop
-- event persistence
-- equity persistence
+- event persistence — gated behind `KRAKEN_TRADE_TRACKING_ENABLED=1` (default OFF)
+- equity persistence — gated behind `KRAKEN_TRADE_TRACKING_ENABLED=1`
 - state reconciliation with venue
+
+With `KRAKEN_TRADE_TRACKING_ENABLED` unset, the decision loops still run; only
+the equity / `action_events` / `execution_events` / metrics writes are
+skipped. This is the supported "Kraken shadow / observe-only" mode.
 
 ---
 
@@ -120,6 +125,8 @@ The following durable objects are already relevant in current operations:
 - `execution_events`
 - `closed_trades`
 - `equity_snapshots`
+- `trade_decisions` (derived from `action_events`; schema in
+  `src/quant/sql/002_trade_decisions.sql`)
 
 ### Verified current state
 
@@ -135,9 +142,19 @@ The following durable objects are already relevant in current operations:
 Several reads are already Postgres-first, especially around:
 - equity history
 - trade markers
-- trade segments
 - trading diary
 - closed trades
+- trade decision counts (`trade_decisions`; exposed via
+  `/api/dashboard/trade_count` and as `trade_decision_count` on
+  `/api/dashboard/performance`)
+
+Notes:
+- The dashboard is KuCoin-focused. Kraken-only chart payload fields
+  (`equity_kraken`, `equity_combined`, `kraken_metrics`, `equity_live`,
+  `equity_realized`) and the `segments` field are kept for backwards
+  compatibility but are now empty / inert.
+- Main dashboard performance/loading improvements are **in progress** and
+  will land in a separate change.
 
 ---
 
@@ -169,6 +186,14 @@ Set Railway variables per service as needed.
 - `PYTHONUNBUFFERED=1`
 
 Add Kraken credentials where the Kraken bot is deployed.
+
+## Kraken trade-tracking gate
+
+- `KRAKEN_TRADE_TRACKING_ENABLED` (default `0`) — when `1`, the Kraken
+  executors (`live_executor_2.py`, legacy `kraken_bot.py`) persist equity
+  snapshots, Kraken `action_events` / `execution_events` and per-bot
+  metrics/equity files. Leave unset (or `0`) to run Kraken in
+  shadow / observe-only mode without writing those side effects.
 
 ---
 
