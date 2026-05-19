@@ -21,6 +21,7 @@ The following are NOT counted as new decisions:
 
 from __future__ import annotations
 
+import time
 import unittest
 from typing import Any, Dict, List, Optional
 
@@ -703,6 +704,505 @@ class TradeCountApiTests(unittest.TestCase):
         self.assertTrue(seen_venues, "venue must be threaded through to the store")
         for v in seen_venues:
             self.assertEqual(v, "kraken")
+
+
+class BuildFromClosedTradesTests(unittest.TestCase):
+    """Cover the historical-tail backfill that derives ``trade_decisions``
+    directly from ``closed_trades``. This is the only path that recovers
+    legs that pre-date the ``action_events`` table — the regression behind
+    the "Performance card shows 2 trades but I have 77 closed legs" bug.
+    """
+
+    def _ct(
+        self,
+        *,
+        side: str,
+        entry_ts: str,
+        exit_ts: str,
+        trade_id: str = "t",
+        venue: str = "kucoin",
+        symbol: str = "SOL-USDT",
+        payload_json: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return {
+            "trade_id": trade_id,
+            "venue": venue,
+            "symbol": symbol,
+            "side": side,
+            "entry_ts": entry_ts,
+            "exit_ts": exit_ts,
+            "strategy": "live_executor",
+            "strategy_instance": "live_executor",
+            "payload_json": payload_json or {},
+        }
+
+    def test_three_sequential_same_direction_closes_yield_three_decisions(self) -> None:
+        # closed_trades semantics: each row is a closed leg. Three back-to-back
+        # long legs are three separate decisions (the trade was re-entered each
+        # time after the previous TP / SL closed it). They are NOT collapsed
+        # into "one big long position".
+        from quant.execution.trade_decisions_store import (
+            build_trade_decisions_from_closed_trades,
+        )
+
+        rows = [
+            self._ct(
+                side="long",
+                entry_ts="2025-03-01T10:00:00Z",
+                exit_ts="2025-03-01T11:00:00Z",
+                trade_id="t1",
+            ),
+            self._ct(
+                side="long",
+                entry_ts="2025-03-01T12:00:00Z",
+                exit_ts="2025-03-01T13:00:00Z",
+                trade_id="t2",
+            ),
+            self._ct(
+                side="long",
+                entry_ts="2025-03-01T14:00:00Z",
+                exit_ts="2025-03-01T15:00:00Z",
+                trade_id="t3",
+            ),
+        ]
+        decisions, stats = build_trade_decisions_from_closed_trades(rows)
+        self.assertEqual(len(decisions), 3)
+        self.assertEqual([d.decision_kind for d in decisions], ["entry", "entry", "entry"])
+        self.assertEqual([d.direction for d in decisions], ["long", "long", "long"])
+        self.assertEqual(stats["entries"], 3)
+        self.assertEqual(stats["flips"], 0)
+
+    def test_flip_pattern_yields_entry_then_flip(self) -> None:
+        from quant.execution.trade_decisions_store import (
+            build_trade_decisions_from_closed_trades,
+        )
+
+        rows = [
+            self._ct(
+                side="long",
+                entry_ts="2025-03-01T10:00:00Z",
+                exit_ts="2025-03-01T12:00:00Z",
+                trade_id="t1",
+            ),
+            # Second leg opens at the same instant the first closes — that's
+            # the flip pattern the live executor would have emitted.
+            self._ct(
+                side="short",
+                entry_ts="2025-03-01T12:00:00Z",
+                exit_ts="2025-03-01T13:30:00Z",
+                trade_id="t2",
+            ),
+        ]
+        decisions, stats = build_trade_decisions_from_closed_trades(rows)
+        self.assertEqual(len(decisions), 2)
+        self.assertEqual([d.decision_kind for d in decisions], ["entry", "flip"])
+        self.assertEqual([d.direction for d in decisions], ["long", "short"])
+        # The flip's engine_action must NOT be ``enter_short`` — that would
+        # break the contract the Performance card builds on top of.
+        self.assertEqual(decisions[1].engine_action, "flip_to_short")
+        self.assertEqual(stats["entries"], 1)
+        self.assertEqual(stats["flips"], 1)
+
+    def test_back_to_back_opposite_with_long_gap_is_not_a_flip(self) -> None:
+        # If the gap between the previous exit and the new entry exceeds the
+        # tolerance (~60s), classify as a fresh entry, not a flip.
+        from quant.execution.trade_decisions_store import (
+            build_trade_decisions_from_closed_trades,
+        )
+
+        rows = [
+            self._ct(
+                side="long",
+                entry_ts="2025-03-01T10:00:00Z",
+                exit_ts="2025-03-01T11:00:00Z",
+                trade_id="t1",
+            ),
+            self._ct(
+                side="short",
+                entry_ts="2025-03-01T15:00:00Z",  # 4h later -> independent re-entry
+                exit_ts="2025-03-01T16:00:00Z",
+                trade_id="t2",
+            ),
+        ]
+        decisions, stats = build_trade_decisions_from_closed_trades(rows)
+        self.assertEqual([d.decision_kind for d in decisions], ["entry", "entry"])
+        self.assertEqual(stats["flips"], 0)
+
+    def test_skips_rows_with_pre_2000_entry_ts(self) -> None:
+        # The old NaT->0 fills reconstructor left behind 1970-style sentinel
+        # entry_ts values. The backfill must skip those rather than emit
+        # 1970-dated decisions that pollute the chart.
+        from quant.execution.trade_decisions_store import (
+            build_trade_decisions_from_closed_trades,
+        )
+
+        rows = [
+            self._ct(
+                side="long",
+                entry_ts="1970-01-01T00:00:01Z",
+                exit_ts="2025-03-01T11:00:00Z",
+                trade_id="bogus",
+            ),
+            self._ct(
+                side="long",
+                entry_ts="2025-03-01T12:00:00Z",
+                exit_ts="2025-03-01T13:00:00Z",
+                trade_id="good",
+            ),
+        ]
+        decisions, stats = build_trade_decisions_from_closed_trades(rows)
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].payload.get("closed_trade_id"), "good")
+        self.assertEqual(stats["skipped_invalid_ts"], 1)
+
+    def test_falls_back_to_payload_opened_at_when_entry_ts_is_sentinel(self) -> None:
+        from quant.execution.trade_decisions_store import (
+            build_trade_decisions_from_closed_trades,
+        )
+
+        rows = [
+            self._ct(
+                side="long",
+                entry_ts="1970-01-01T00:00:00Z",
+                exit_ts="2025-03-01T11:00:00Z",
+                trade_id="t1",
+                payload_json={"opened_at": "2025-03-01T10:30:00Z"},
+            ),
+        ]
+        decisions, stats = build_trade_decisions_from_closed_trades(rows)
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(decisions[0].ts, "2025-03-01T10:30:00Z")
+        self.assertEqual(stats["skipped_invalid_ts"], 0)
+
+    def test_decision_ids_are_idempotent_under_repeated_input(self) -> None:
+        # Re-running the backfill over the same closed_trades rows must yield
+        # the same ids — that's what makes the upsert a no-op on conflict and
+        # safe to auto-trigger on every dashboard refresh.
+        from quant.execution.trade_decisions_store import (
+            build_trade_decisions_from_closed_trades,
+        )
+
+        rows = [
+            self._ct(
+                side="long",
+                entry_ts="2025-03-01T10:00:00Z",
+                exit_ts="2025-03-01T11:00:00Z",
+                trade_id="t1",
+            ),
+            self._ct(
+                side="short",
+                entry_ts="2025-03-01T12:00:00Z",
+                exit_ts="2025-03-01T13:00:00Z",
+                trade_id="t2",
+            ),
+        ]
+        first, _ = build_trade_decisions_from_closed_trades(rows)
+        second, _ = build_trade_decisions_from_closed_trades(rows)
+        self.assertEqual([d.decision_id for d in first], [d.decision_id for d in second])
+        # ids should be namespaced so they cannot collide with the action-event
+        # backfill, which emits ``td_<hash>``.
+        for d in first:
+            self.assertTrue(d.decision_id.startswith("td_ct_"))
+
+    def test_rows_with_invalid_side_are_skipped(self) -> None:
+        from quant.execution.trade_decisions_store import (
+            build_trade_decisions_from_closed_trades,
+        )
+
+        rows = [
+            self._ct(
+                side="",  # invalid
+                entry_ts="2025-03-01T10:00:00Z",
+                exit_ts="2025-03-01T11:00:00Z",
+                trade_id="t-bad",
+            ),
+            self._ct(
+                side="long",
+                entry_ts="2025-03-01T12:00:00Z",
+                exit_ts="2025-03-01T13:00:00Z",
+                trade_id="t-good",
+            ),
+        ]
+        decisions, stats = build_trade_decisions_from_closed_trades(rows)
+        self.assertEqual(len(decisions), 1)
+        self.assertEqual(stats["skipped_bad_side"], 1)
+
+
+class AutoBackfillTriggerTests(unittest.TestCase):
+    """Cover the auto-backfill helper that the dashboard endpoints invoke.
+
+    The user-visible regression that motivated this code path: after
+    switching the equity chart to the decision-based source, the chart
+    and Performance card collapsed to 2 trades because ``trade_decisions``
+    only had 2 rows. The auto-backfill makes the chart self-heal on the
+    next request when the spine looks suspiciously thin vs.
+    ``closed_trades``.
+    """
+
+    def setUp(self) -> None:
+        import quant.execution.webhook_server as ws
+
+        ws._BACKFILL_LAST_RUN.clear()
+        ws._PERFORMANCE_CACHE.clear()
+        ws._TRADE_COUNT_CACHE.clear()
+        ws._CHART_CACHE.clear()
+
+    def test_helper_fires_when_decision_spine_is_thin(self) -> None:
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        with patch.object(ws, "count_trade_decisions", return_value=2), \
+             patch.object(ws, "count_closed_trades", return_value=80), \
+             patch.object(ws, "latest_decision_ts", return_value=None), \
+             patch.object(ws, "latest_closed_trade_ts", return_value=None), \
+             patch.object(ws, "backfill_trade_decisions_from_action_events",
+                           return_value={"written": 0}) as ae_mock, \
+             patch.object(ws, "backfill_trade_decisions_from_closed_trades",
+                           return_value={"written": 78}) as ct_mock:
+            out = ws._maybe_auto_backfill_trade_decisions(
+                venue="kucoin", symbol="SOL-USDT"
+            )
+
+        self.assertIsNotNone(out)
+        assert out is not None
+        ae_mock.assert_called_once()
+        ct_mock.assert_called_once()
+        self.assertEqual(out["diagnosis"]["reason"], "ratio_below_threshold")
+
+    def test_helper_skips_when_spine_is_already_complete(self) -> None:
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        with patch.object(ws, "count_trade_decisions", return_value=80), \
+             patch.object(ws, "count_closed_trades", return_value=80), \
+             patch.object(ws, "latest_decision_ts",
+                           return_value="2026-05-19T12:00:00Z"), \
+             patch.object(ws, "latest_closed_trade_ts",
+                           return_value="2026-05-19T12:00:00Z"), \
+             patch.object(ws, "backfill_trade_decisions_from_action_events") as ae_mock, \
+             patch.object(ws, "backfill_trade_decisions_from_closed_trades") as ct_mock:
+            out = ws._maybe_auto_backfill_trade_decisions(
+                venue="kucoin", symbol="SOL-USDT"
+            )
+
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertEqual(out.get("skipped"), "not_needed")
+        ae_mock.assert_not_called()
+        ct_mock.assert_not_called()
+
+    def test_helper_fires_when_spine_is_stale(self) -> None:
+        # Spine has plenty of rows but the newest decision is days older
+        # than the newest closed_trade — newly closed legs need to be
+        # rolled into the spine.
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        with patch.object(ws, "count_trade_decisions", return_value=80), \
+             patch.object(ws, "count_closed_trades", return_value=80), \
+             patch.object(ws, "latest_decision_ts",
+                           return_value="2026-05-10T12:00:00Z"), \
+             patch.object(ws, "latest_closed_trade_ts",
+                           return_value="2026-05-19T12:00:00Z"), \
+             patch.object(ws, "backfill_trade_decisions_from_action_events",
+                           return_value={"written": 1}) as ae_mock, \
+             patch.object(ws, "backfill_trade_decisions_from_closed_trades",
+                           return_value={"written": 1}) as ct_mock:
+            out = ws._maybe_auto_backfill_trade_decisions(
+                venue="kucoin", symbol="SOL-USDT"
+            )
+
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertEqual(out["diagnosis"]["reason"], "decision_spine_stale")
+        ae_mock.assert_called_once()
+        ct_mock.assert_called_once()
+
+    def test_throttle_prevents_double_run_within_window(self) -> None:
+        # Two rapid back-to-back calls must result in exactly ONE invocation
+        # of each backfill — the throttle is the only thing protecting
+        # Postgres from chart polling.
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        with patch.object(ws, "count_trade_decisions", return_value=2), \
+             patch.object(ws, "count_closed_trades", return_value=80), \
+             patch.object(ws, "latest_decision_ts", return_value=None), \
+             patch.object(ws, "latest_closed_trade_ts", return_value=None), \
+             patch.object(ws, "backfill_trade_decisions_from_action_events",
+                           return_value={"written": 0}) as ae_mock, \
+             patch.object(ws, "backfill_trade_decisions_from_closed_trades",
+                           return_value={"written": 78}) as ct_mock:
+            first = ws._maybe_auto_backfill_trade_decisions(
+                venue="kucoin", symbol="SOL-USDT"
+            )
+            second = ws._maybe_auto_backfill_trade_decisions(
+                venue="kucoin", symbol="SOL-USDT"
+            )
+
+        self.assertEqual(ae_mock.call_count, 1)
+        self.assertEqual(ct_mock.call_count, 1)
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        assert second is not None
+        self.assertEqual(second.get("skipped"), "throttled")
+
+    def test_force_flag_bypasses_throttle_and_needed_check(self) -> None:
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        # Pretend the spine is up to date — would normally skip.
+        with patch.object(ws, "count_trade_decisions", return_value=80), \
+             patch.object(ws, "count_closed_trades", return_value=80), \
+             patch.object(ws, "latest_decision_ts",
+                           return_value="2026-05-19T12:00:00Z"), \
+             patch.object(ws, "latest_closed_trade_ts",
+                           return_value="2026-05-19T12:00:00Z"), \
+             patch.object(ws, "backfill_trade_decisions_from_action_events",
+                           return_value={"written": 0}) as ae_mock, \
+             patch.object(ws, "backfill_trade_decisions_from_closed_trades",
+                           return_value={"written": 0}) as ct_mock:
+            # Pre-populate the throttle dict so a non-forced call would skip.
+            ws._BACKFILL_LAST_RUN["kucoin:SOL-USDT"] = time.time()
+            out = ws._maybe_auto_backfill_trade_decisions(
+                venue="kucoin", symbol="SOL-USDT", force=True
+            )
+
+        ae_mock.assert_called_once()
+        ct_mock.assert_called_once()
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertTrue(out.get("forced"))
+
+    def test_helper_skips_non_kucoin_venues(self) -> None:
+        # Kraken is gated out at the source — we never want synthesized
+        # KuCoin decisions polluting a kraken venue spine, so the helper
+        # is a no-op for anything that isn't kucoin.
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        with patch.object(ws, "backfill_trade_decisions_from_action_events") as ae_mock, \
+             patch.object(ws, "backfill_trade_decisions_from_closed_trades") as ct_mock:
+            out = ws._maybe_auto_backfill_trade_decisions(
+                venue="kraken", symbol="ETH-USDT"
+            )
+
+        self.assertIsNone(out)
+        ae_mock.assert_not_called()
+        ct_mock.assert_not_called()
+
+    def test_performance_endpoint_triggers_auto_backfill_when_spine_thin(self) -> None:
+        # Integration: with 2 decisions / 80 closed_trades, hitting
+        # /api/dashboard/performance should auto-trigger the backfill chain
+        # and surface ``trade_count >= 70`` (allowing some pre-2000 skips).
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        ws._BACKFILL_LAST_RUN.clear()
+        ws._PERFORMANCE_CACHE.clear()
+
+        # 78 historical legs + 2 recent action-event decisions.
+        seeded_closed_trades = [
+            TradeDecision(
+                decision_id=f"td_ct_seed_{i}",
+                ts=f"2025-0{(i % 9) + 1}-01T10:00:00Z",
+                venue="kucoin",
+                symbol="SOL-USDT",
+                strategy="live_executor",
+                strategy_instance="live_executor",
+                decision_kind=DECISION_ENTRY,
+                direction="long" if i % 2 == 0 else "short",
+                position_before=0,
+                position_after=1,
+                engine_action="enter_long",
+                reason_code="ct",
+                source_action_event_id=None,
+                seq=None,
+                payload={},
+            )
+            for i in range(78)
+        ]
+
+        def _fake_backfill_ct(*, venue=None, symbol=None):
+            # Simulate the backfill writing 78 historical rows to the spine.
+            return {"read_rows": 80, "decisions": 78, "written": 78}
+
+        def _fake_payload(**kwargs):
+            # After the backfill the payload reflects the populated spine.
+            return {
+                "curve": {
+                    "points": [
+                        {
+                            "decision_id": d.decision_id,
+                            "side": d.direction,
+                            "entry_time": 1700000000 + i,
+                            "exit_time": 1700000600 + i,
+                            "entry_price": 100.0,
+                            "exit_price": 101.0,
+                            "pnl_pct": 1.0,
+                            "cum_pct": float(i + 1),
+                            "open": False,
+                            "time": 1700000600 + i,
+                            "source": "postgres:trade_decisions+closed_trades",
+                        }
+                        for i, d in enumerate(seeded_closed_trades)
+                    ],
+                    "source": "postgres:trade_decisions+closed_trades",
+                    "needs_backfill": False,
+                    "synthesized_count": 0,
+                    "decision_count": 78,
+                    "closed_trade_count": 78,
+                },
+                "performance": {
+                    "symbol": "SOL-USDT",
+                    "venue": "kucoin",
+                    "as_of": "2026-05-19T12:00:00Z",
+                    "window": "lifetime",
+                    "pnl_pct": 78.0,
+                    "winrate": 100.0,
+                    "monthly_growth": 0.0,
+                    "average_gain": 1.0,
+                    "trade_count": 78,
+                    "closed_decision_count": 78,
+                    "winning_trade_count": 78,
+                    "losing_trade_count": 0,
+                    "open_decision_count": 0,
+                    "cum_pct": 78.0,
+                    "source": "postgres:trade_decisions+closed_trades",
+                },
+                "needs_backfill": False,
+                "synthesized_count": 0,
+                "decision_count": 78,
+                "closed_trade_count": 78,
+            }
+
+        # Pre-backfill state: only 2 rows in the spine vs 80 in
+        # closed_trades — that's the exact regression the auto-backfill
+        # was added to recover from.
+        with patch.object(ws, "count_trade_decisions", return_value=2), \
+             patch.object(ws, "count_closed_trades", return_value=80), \
+             patch.object(ws, "latest_decision_ts", return_value=None), \
+             patch.object(ws, "latest_closed_trade_ts", return_value=None), \
+             patch.object(ws, "backfill_trade_decisions_from_action_events",
+                           return_value={"read_events": 5, "decisions": 2, "written": 2}) as ae_mock, \
+             patch.object(ws, "backfill_trade_decisions_from_closed_trades",
+                           side_effect=_fake_backfill_ct) as ct_mock, \
+             patch.object(ws, "build_decision_dashboard_payload",
+                           side_effect=_fake_payload):
+            res = ws.api_dashboard_performance(symbol="SOL-USDT", venue="kucoin")
+
+        self.assertTrue(res["ok"])
+        ae_mock.assert_called_once()
+        ct_mock.assert_called_once()
+        # >= 70 closed decisions, per the spec's integration assertion.
+        self.assertGreaterEqual(res["trade_count"], 70)
 
 
 class TradeDecisionDataclassTests(unittest.TestCase):

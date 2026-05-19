@@ -45,9 +45,17 @@ export interface DashboardPerformanceResponse {
   // stops referencing it directly.
   trade_decision_count?: number | null;
   cum_pct?: number | null;
-  // True when ``trade_decisions`` is empty but ``closed_trades`` has rows —
-  // the operator should run the ``backfill=1`` job on Railway.
+  // True when the persistent ``trade_decisions`` spine is still smaller
+  // than ``closed_trades`` after the auto-backfill ran (or when the
+  // auto-backfill couldn't run). In that mode the chart is patched up
+  // by in-memory ``td_ct_synth_*`` rows that don't survive a restart;
+  // the operator can force-persist them with ``?backfill=1`` on Railway.
   needs_backfill?: boolean;
+  // Count of in-memory synthesized rows in the latest chart payload.
+  // Non-zero means the spine is missing rows that the backend papered
+  // over with synthesized decisions — informational, surfaced via the
+  // amber hint in the Performance card.
+  synthesized_count?: number;
   source?: string;
   error?: string;
   ts?: string;

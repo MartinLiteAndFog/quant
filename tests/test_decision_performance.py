@@ -246,7 +246,13 @@ class BuildDecisionEquityCurveTests(unittest.TestCase):
             int(pd.Timestamp("2020-01-01", tz="UTC").timestamp()),
         )
 
-    def test_empty_decisions_with_legacy_closed_trades_flags_needs_backfill(self) -> None:
+    def test_empty_decisions_with_legacy_closed_trades_synthesizes_history(self) -> None:
+        # Spec part C: when the decision spine is smaller than the
+        # ``closed_trades`` count, the chart MUST NOT silently truncate.
+        # The builder synthesizes ``td_ct_synth_*`` decision points in
+        # memory so historical legs stay visible, and flags
+        # ``needs_backfill=True`` so the UI can offer the operator the
+        # explicit ``?backfill=1`` override that persists those rows.
         ct = pd.DataFrame(
             [
                 _ct(
@@ -265,8 +271,127 @@ class BuildDecisionEquityCurveTests(unittest.TestCase):
             decisions=[],
             closed_trades_df=ct,
         )
-        self.assertEqual(out["points"], [])
+        self.assertEqual(len(out["points"]), 1)
+        p = out["points"][0]
+        self.assertTrue(p["decision_id"].startswith("td_ct_synth_"))
+        self.assertEqual(p["side"], "long")
+        self.assertAlmostEqual(p["pnl_pct"], 1.0, places=4)
+        self.assertAlmostEqual(p["cum_pct"], 1.0, places=4)
+        self.assertEqual(p["source"], "synth:closed_trades")
         self.assertTrue(out["needs_backfill"])
+        self.assertEqual(out["synthesized_count"], 1)
+        self.assertEqual(out["decision_count"], 0)
+        self.assertEqual(out["closed_trade_count"], 1)
+
+    def test_partial_spine_synthesises_remaining_closed_trades(self) -> None:
+        # Spec part C: when the decision spine covers only a tiny fraction
+        # of the historical ``closed_trades``, the builder fills the gap
+        # in-memory with ``td_ct_synth_*`` rows so the chart and card both
+        # see the full history. The card's ``pnl_pct`` must equal the
+        # chart's final ``cum_pct`` after the merge.
+        decisions = [
+            _dec("d_recent", "2026-05-15T14:00:00Z", "long"),
+        ]
+        ct = pd.DataFrame(
+            [
+                # 1) Historical leg the spine doesn't cover.
+                _ct(
+                    entry_ts="2025-01-01T10:00:00Z",
+                    exit_ts="2025-01-01T11:00:00Z",
+                    side="long",
+                    entry_price=100.0,
+                    exit_price=104.0,
+                    pnl_pct=4.0,
+                    trade_id="hist_1",
+                ),
+                # 2) Second historical leg.
+                _ct(
+                    entry_ts="2025-02-01T10:00:00Z",
+                    exit_ts="2025-02-01T11:00:00Z",
+                    side="short",
+                    entry_price=120.0,
+                    exit_price=118.0,
+                    pnl_pct=1.5,
+                    trade_id="hist_2",
+                ),
+                # 3) Matches the recent decision in the spine.
+                _ct(
+                    entry_ts="2026-05-15T14:00:00Z",
+                    exit_ts="2026-05-15T15:30:00Z",
+                    side="long",
+                    entry_price=91.0,
+                    exit_price=92.0,
+                    pnl_pct=1.1,
+                    trade_id="recent",
+                ),
+            ]
+        )
+        out = build_decision_equity_curve(
+            symbol="SOL-USDT",
+            decisions=decisions,
+            closed_trades_df=ct,
+            open_side="",
+        )
+        pts = out["points"]
+        # 1 real decision + 2 synthesised historical legs == 3 points,
+        # ordered chronologically by entry time.
+        self.assertEqual(len(pts), 3)
+        self.assertTrue(pts[0]["decision_id"].startswith("td_ct_synth_"))
+        self.assertTrue(pts[1]["decision_id"].startswith("td_ct_synth_"))
+        self.assertEqual(pts[2]["decision_id"], "d_recent")
+        # Cumulative line must accumulate over the merged points so the
+        # chart's final cum_pct == card's pnl_pct.
+        self.assertAlmostEqual(pts[0]["cum_pct"], 4.0, places=4)
+        self.assertAlmostEqual(pts[1]["cum_pct"], 5.5, places=4)
+        self.assertAlmostEqual(pts[2]["cum_pct"], 6.6, places=4)
+        self.assertTrue(out["needs_backfill"])
+        self.assertEqual(out["synthesized_count"], 2)
+        self.assertEqual(out["decision_count"], 1)
+        self.assertEqual(out["closed_trade_count"], 3)
+
+    def test_synthesized_points_round_trip_through_performance_card(self) -> None:
+        # The user's clear intent: card and chart represent the SAME data.
+        # When synthesis kicks in, the card's aggregates must still cover
+        # the full point list — not just the spine subset.
+        decisions: List[Dict[str, Any]] = []
+        ct = pd.DataFrame(
+            [
+                _ct(
+                    entry_ts="2025-01-01T10:00:00Z",
+                    exit_ts="2025-01-01T11:00:00Z",
+                    side="long",
+                    entry_price=100.0,
+                    exit_price=103.0,
+                    pnl_pct=3.0,
+                    trade_id="hist_1",
+                ),
+                _ct(
+                    entry_ts="2025-01-02T10:00:00Z",
+                    exit_ts="2025-01-02T11:00:00Z",
+                    side="short",
+                    entry_price=120.0,
+                    exit_price=121.0,
+                    pnl_pct=-0.83,
+                    trade_id="hist_2",
+                ),
+            ]
+        )
+        payload = build_decision_dashboard_payload(
+            symbol="SOL-USDT",
+            decisions=decisions,
+            closed_trades_df=ct,
+            now=pd.Timestamp("2025-02-01T00:00:00Z"),
+        )
+        perf = payload["performance"]
+        chart_pts = payload["curve"]["points"]
+        self.assertEqual(len(chart_pts), 2)
+        self.assertEqual(perf["trade_count"], 2)
+        # 1 winner / 1 loser when synthesized rows are honoured.
+        self.assertEqual(perf["winning_trade_count"], 1)
+        self.assertEqual(perf["losing_trade_count"], 1)
+        self.assertAlmostEqual(perf["pnl_pct"], chart_pts[-1]["cum_pct"], places=4)
+        self.assertTrue(payload["needs_backfill"])
+        self.assertEqual(payload["synthesized_count"], 2)
 
     def test_unsupported_venue_returns_empty(self) -> None:
         out = build_decision_equity_curve(

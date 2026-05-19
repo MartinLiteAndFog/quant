@@ -48,7 +48,11 @@ from quant.execution.dashboard_statespace import (
 )
 from quant.execution.trade_decisions_store import (
     backfill_trade_decisions_from_action_events,
+    backfill_trade_decisions_from_closed_trades,
+    count_closed_trades,
     count_trade_decisions,
+    latest_closed_trade_ts,
+    latest_decision_ts,
     list_recent_trade_decisions,
 )
 from quant.execution.decision_performance import (
@@ -65,6 +69,158 @@ _STRATEGY_CACHE: Dict[str, Dict[str, Any]] = {}
 _PERFORMANCE_CACHE: Dict[str, Dict[str, Any]] = {}
 _DIARY_CACHE: Dict[str, Dict[str, Any]] = {}
 _TRADE_COUNT_CACHE: Dict[str, Dict[str, Any]] = {}
+
+# ---------------------------------------------------------------------------
+# Trade-decision auto-backfill throttle.
+#
+# The historical KuCoin ``closed_trades`` table predates ``trade_decisions``
+# and ``action_events``, so the decision spine has to be reconstructed once
+# from both sources before the chart + Performance card look complete. The
+# dashboard endpoints trigger that reconstruction on demand the first time
+# they're hit after a deploy (and any time a new closed leg shows up that
+# isn't represented in the spine), but only after a per-(venue,symbol)
+# throttle window has elapsed — we don't want every chart refresh hammering
+# Postgres with the same idempotent backfill.
+# ---------------------------------------------------------------------------
+_BACKFILL_LAST_RUN: Dict[str, float] = {}
+_BACKFILL_LOCK = threading.Lock()
+_BACKFILL_THROTTLE_SEC = float(os.getenv("DASHBOARD_BACKFILL_THROTTLE_SEC", "30"))
+# Trigger backfill when ``trade_decisions`` is less than this fraction of
+# ``closed_trades`` for the (venue, symbol).
+_BACKFILL_RATIO_THRESHOLD = float(os.getenv("DASHBOARD_BACKFILL_RATIO_THRESHOLD", "0.8"))
+# Trigger backfill when the newest decision is older than the newest
+# closed_trade by more than this many seconds (>= 1 day).
+_BACKFILL_STALENESS_SEC = float(os.getenv("DASHBOARD_BACKFILL_STALENESS_SEC", "86400"))
+
+
+def _trade_decision_backfill_needed(venue: str, symbol: str) -> Dict[str, Any]:
+    """Return diagnostics describing whether the decision spine needs to be
+    rebuilt for ``(venue, symbol)``.
+
+    Two trigger conditions:
+
+    1. ``trade_decisions`` row count is less than 80% of ``closed_trades``
+       row count for the same venue/symbol — the spine is missing the
+       historical long tail.
+    2. The most recent ``trade_decisions.ts`` lags the most recent
+       ``closed_trades.exit_ts`` by more than the staleness window
+       (default 1 day) — the spine isn't keeping up with newly closed
+       legs.
+    """
+
+    info: Dict[str, Any] = {
+        "decision_count": 0,
+        "closed_trade_count": 0,
+        "ratio": None,
+        "latest_decision_ts": None,
+        "latest_closed_trade_ts": None,
+        "reason": None,
+        "needed": False,
+    }
+    try:
+        dec_count = int(count_trade_decisions(venue=venue, symbol=symbol))
+    except Exception:
+        dec_count = 0
+    try:
+        ct_count = int(count_closed_trades(venue=venue, symbol=symbol))
+    except Exception:
+        ct_count = 0
+    info["decision_count"] = dec_count
+    info["closed_trade_count"] = ct_count
+
+    if ct_count <= 0:
+        return info
+
+    info["ratio"] = round(dec_count / ct_count, 4) if ct_count > 0 else None
+    if dec_count < int(_BACKFILL_RATIO_THRESHOLD * ct_count):
+        info["needed"] = True
+        info["reason"] = "ratio_below_threshold"
+        return info
+
+    try:
+        latest_dec = latest_decision_ts(venue=venue, symbol=symbol)
+        latest_ct = latest_closed_trade_ts(venue=venue, symbol=symbol)
+    except Exception:
+        latest_dec = None
+        latest_ct = None
+    info["latest_decision_ts"] = latest_dec
+    info["latest_closed_trade_ts"] = latest_ct
+
+    if latest_ct and not latest_dec:
+        info["needed"] = True
+        info["reason"] = "no_decisions_yet"
+        return info
+    if latest_ct and latest_dec:
+        try:
+            dec_dt = pd.to_datetime(latest_dec, utc=True, errors="coerce")
+            ct_dt = pd.to_datetime(latest_ct, utc=True, errors="coerce")
+            if pd.notna(dec_dt) and pd.notna(ct_dt):
+                if (ct_dt - dec_dt).total_seconds() > _BACKFILL_STALENESS_SEC:
+                    info["needed"] = True
+                    info["reason"] = "decision_spine_stale"
+        except Exception:
+            pass
+    return info
+
+
+def _maybe_auto_backfill_trade_decisions(
+    venue: str,
+    symbol: str,
+    *,
+    force: bool = False,
+) -> Optional[Dict[str, Any]]:
+    """Run the action-events + closed_trades backfill chain when the spine
+    looks incomplete. ``force=True`` skips both the throttle and the
+    needed-check — used by the explicit ``?backfill=1`` override.
+
+    Both backfills are idempotent: ids are deterministic and the upsert is
+    a no-op on conflict, so running them speculatively is safe.
+
+    Only the KuCoin venue is auto-backfilled — Kraken doesn't use this
+    spine and we explicitly never invent decisions for it.
+    """
+
+    if str(venue).lower() != "kucoin":
+        return None
+
+    key = f"{str(venue).lower()}:{_normalize_symbol(symbol)}"
+    now = time.time()
+    with _BACKFILL_LOCK:
+        last = float(_BACKFILL_LAST_RUN.get(key, 0.0) or 0.0)
+        if not force and (now - last) < _BACKFILL_THROTTLE_SEC:
+            return {"skipped": "throttled", "last_run_ts": last}
+        diagnosis: Optional[Dict[str, Any]] = None
+        if not force:
+            diagnosis = _trade_decision_backfill_needed(venue, symbol)
+            if not diagnosis.get("needed"):
+                return {"skipped": "not_needed", **diagnosis}
+        # Mark the timestamp BEFORE running the actual job so the throttle
+        # window is respected even if a concurrent request slips through
+        # the lock between releases.
+        _BACKFILL_LAST_RUN[key] = now
+
+    out: Dict[str, Any] = {
+        "venue": venue,
+        "symbol": symbol,
+        "ts": _now_utc_iso(),
+        "forced": bool(force),
+        "diagnosis": diagnosis,
+    }
+    try:
+        out["action_events"] = backfill_trade_decisions_from_action_events(
+            venue=venue, symbol=symbol
+        )
+    except Exception as be:
+        log.warning("trade_decisions backfill (action_events) failed: %s", be)
+        out["action_events"] = {"error": str(be)}
+    try:
+        out["closed_trades"] = backfill_trade_decisions_from_closed_trades(
+            venue=venue, symbol=symbol
+        )
+    except Exception as be:
+        log.warning("trade_decisions backfill (closed_trades) failed: %s", be)
+        out["closed_trades"] = {"error": str(be)}
+    return out
 
 
 def _daily_regime_label(gate_state: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -998,6 +1154,13 @@ def api_dashboard_chart(
             allow_fill_reconstruction=False,
             _trades_df=trades_df,
         )
+        # Auto-backfill the decision spine when it falls behind
+        # ``closed_trades`` for this venue/symbol. Idempotent + throttled,
+        # so the chart endpoint can call this on every refresh without
+        # hammering Postgres. This is what restores the historical KuCoin
+        # tail in the chart after a fresh deploy where ``trade_decisions``
+        # only carries the most recent rows.
+        _maybe_auto_backfill_trade_decisions(venue="kucoin", symbol=symbol)
         # Decision-based equity curve — same list that the Performance card
         # on the sidebar aggregates. Falls back to the legacy diary-driven
         # curve when ``trade_decisions`` is empty so the chart still renders
@@ -1006,6 +1169,7 @@ def api_dashboard_chart(
             symbol=symbol,
             venue="kucoin",
             max_points=int(max(100, max_points)),
+            closed_trades_df=trades_df,
         )
         decision_points = decision_payload["curve"]["points"]
         if decision_points:
@@ -1242,11 +1406,16 @@ def api_dashboard_performance(
     if cached is not None:
         return cached
     try:
-        if int(backfill) == 1:
-            try:
-                backfill_trade_decisions_from_action_events(venue=venue, symbol=symbol)
-            except Exception as be:
-                log.warning("trade_decisions backfill failed: %s", be)
+        # Two paths into the backfill machinery:
+        #   * ``backfill=1`` is an explicit operator override that always
+        #     runs and bypasses the throttle.
+        #   * Otherwise the auto-backfill helper inspects the spine vs.
+        #     ``closed_trades`` and only fires when it looks incomplete,
+        #     subject to a per-(venue, symbol) throttle so chart polling
+        #     doesn't hammer Postgres.
+        _maybe_auto_backfill_trade_decisions(
+            venue=venue, symbol=symbol, force=(int(backfill) == 1)
+        )
 
         payload = build_decision_dashboard_payload(
             symbol=symbol,
@@ -1287,6 +1456,12 @@ def api_dashboard_performance(
             "trade_decision_count": decision_count,
             "cum_pct": perf.get("cum_pct"),
             "needs_backfill": bool(payload.get("needs_backfill")),
+            # Number of in-memory synthesised rows merged into the
+            # decision spine for this payload. Non-zero means the
+            # persistent ``trade_decisions`` table is still missing
+            # rows that the chart is papering over until the operator
+            # runs ``?backfill=1`` on Railway.
+            "synthesized_count": int(payload.get("synthesized_count") or 0),
             "source": perf.get("source", "unknown"),
             "ts": _now_utc_iso(),
         }
@@ -1311,6 +1486,7 @@ def api_dashboard_performance(
             "trade_decision_count": None,
             "cum_pct": None,
             "needs_backfill": False,
+            "synthesized_count": 0,
             "source": "error",
             "error": str(e),
             "ts": _now_utc_iso(),

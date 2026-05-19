@@ -30,6 +30,7 @@ Notes
 
 from __future__ import annotations
 
+import hashlib
 from typing import Any, Dict, Iterable, List, Optional
 
 import pandas as pd
@@ -251,21 +252,19 @@ def build_decision_equity_curve(
             used.add(match_idx)
         matches.append(match_idx)
 
-    points: List[Dict[str, Any]] = []
-    cum = 0.0
-    last_idx = len(dec_rows) - 1
     src_label = "postgres:trade_decisions+closed_trades"
+    raw_points: List[Dict[str, Any]] = []
+    last_idx = len(dec_rows) - 1
     for idx, d in enumerate(dec_rows):
         entry_time = _ts_to_epoch_seconds(d["ts"])
         match_idx = matches[idx]
         if match_idx is not None:
             row = ct.iloc[match_idx]
             pnl_pct = float(row["pnl_pct"])
-            cum += pnl_pct
             exit_time = _ts_to_epoch_seconds(row["exit_ts"])
             entry_price = float(row["entry_price"]) if pd.notna(row["entry_price"]) else None
             exit_price = float(row["exit_price"]) if pd.notna(row["exit_price"]) else None
-            points.append(
+            raw_points.append(
                 {
                     "decision_id": d["decision_id"],
                     "side": d["direction"],
@@ -274,10 +273,15 @@ def build_decision_equity_curve(
                     "entry_price": entry_price,
                     "exit_price": exit_price,
                     "pnl_pct": round(pnl_pct, 4),
-                    "cum_pct": round(cum, 4),
                     "open": False,
                     "time": exit_time if exit_time is not None else entry_time,
                     "source": src_label,
+                    # Sort key: chart order is by the entry timestamp so a
+                    # synthesized older trade interleaves cleanly with the
+                    # spine. Entry time is what the user thinks of as "when
+                    # the trade started", which matches the chronological
+                    # order of decisions in the original action-event flow.
+                    "_sort_time": entry_time if entry_time is not None else exit_time,
                 }
             )
         else:
@@ -294,7 +298,7 @@ def build_decision_equity_curve(
                 is_open = (idx == last_idx) and (open_side_norm == d["direction"])
             else:  # detection returned None
                 is_open = (idx == last_idx)
-            points.append(
+            raw_points.append(
                 {
                     "decision_id": d["decision_id"],
                     "side": d["direction"],
@@ -303,25 +307,110 @@ def build_decision_equity_curve(
                     "entry_price": None,
                     "exit_price": None,
                     "pnl_pct": None,
-                    "cum_pct": round(cum, 4),
                     "open": bool(is_open),
                     "time": entry_time,
                     "source": src_label,
+                    "_sort_time": entry_time if entry_time is not None else 0,
                 }
             )
 
-    points = points[-int(max(1, max_points)):]
+    # Backfill the long tail in-memory. Any ``closed_trades`` row that was
+    # not consumed above is a historical leg the persistent backfill
+    # couldn't reconstruct (no valid entry_ts, no matching decision id,
+    # etc.). Rather than silently truncating the chart to whatever the
+    # spine happens to carry today, synthesize a decision row in-memory
+    # so the user sees the full history they actually have. The
+    # ``td_ct_synth_`` prefix marks provenance distinct from the
+    # persisted ``td_ct_`` backfill ids.
+    synth_label = "synth:closed_trades"
+    synthesized_points: List[Dict[str, Any]] = []
+    for i in range(len(ct)):
+        if i in used:
+            continue
+        row = ct.iloc[i]
+        exit_ts_i = row["exit_ts"]
+        if pd.isna(exit_ts_i):
+            continue
+        try:
+            pnl_pct = float(row["pnl_pct"])
+        except Exception:
+            continue
+        side_i = str(row["side"]).lower() or "long"
+        entry_ts_i = row.get("entry_ts")
+        entry_time = _ts_to_epoch_seconds(entry_ts_i) if entry_ts_i is not None else None
+        # If the persisted entry_ts is the sentinel, fall back to the exit
+        # ts for chart positioning so the bar still lands in the visible
+        # window. ``entry_time=None`` would leave the point ambiguous.
+        if entry_time is None:
+            entry_time = _ts_to_epoch_seconds(exit_ts_i)
+        exit_time = _ts_to_epoch_seconds(exit_ts_i)
+        entry_price = float(row["entry_price"]) if pd.notna(row["entry_price"]) else None
+        exit_price = float(row["exit_price"]) if pd.notna(row["exit_price"]) else None
+        trade_id_raw = row.get("trade_id") if "trade_id" in ct.columns else None
+        synth_seed = "|".join(
+            [
+                str(venue_eff),
+                str(symbol),
+                str(side_i),
+                str(entry_ts_i),
+                str(exit_ts_i),
+                str(trade_id_raw or ""),
+            ]
+        )
+        synth_id = "td_ct_synth_" + hashlib.sha1(synth_seed.encode("utf-8")).hexdigest()[:16]
+        synthesized_points.append(
+            {
+                "decision_id": synth_id,
+                "side": side_i,
+                "entry_time": entry_time,
+                "exit_time": exit_time,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "pnl_pct": round(pnl_pct, 4),
+                "open": False,
+                "time": exit_time if exit_time is not None else entry_time,
+                "source": synth_label,
+                "_sort_time": entry_time if entry_time is not None else exit_time,
+            }
+        )
 
-    needs_backfill = False
-    # Heuristic: the decision spine looks suspiciously empty next to the
-    # closed_trades history. The UI can prompt "run backfill on Railway".
-    if not dec_rows and not ct.empty:
-        needs_backfill = True
+    merged_points: List[Dict[str, Any]] = raw_points + synthesized_points
+    # Sort by entry chronology so synthesized historical legs interleave
+    # before the action-event spine. Tie-break puts closed legs ahead of
+    # open ones at the same instant so the open marker doesn't shadow a
+    # simultaneously-closed flip.
+    merged_points.sort(
+        key=lambda p: (int(p.get("_sort_time") or 0), 1 if p.get("open") else 0)
+    )
+
+    # Recompute the cumulative PnL after the merge so synthesized rows
+    # contribute to the chart's final ``cum_pct`` (and therefore the
+    # card's ``pnl_pct``).
+    cum = 0.0
+    for p in merged_points:
+        pnl = p.get("pnl_pct")
+        if pnl is not None and not p.get("open"):
+            cum += float(pnl)
+        p["cum_pct"] = round(cum, 4)
+        p.pop("_sort_time", None)
+
+    points = merged_points[-int(max(1, max_points)):]
+
+    # ``needs_backfill`` semantics, post-auto-backfill: true when the
+    # persistent spine is still smaller than ``closed_trades`` (the chart
+    # is being patched up by ``td_ct_synth_*`` rows that do not survive
+    # a restart). The UI uses this to surface the explicit operator
+    # ``?backfill=1`` button.
+    needs_backfill = bool(synthesized_points) or (not dec_rows and not ct.empty)
+    synthesized_count = len(synthesized_points)
 
     return {
         "points": points,
-        "source": src_label if dec_rows else "none",
+        "source": src_label if dec_rows else (synth_label if synthesized_points else "none"),
         "needs_backfill": needs_backfill,
+        "synthesized_count": synthesized_count,
+        "decision_count": len(dec_rows),
+        "closed_trade_count": int(len(ct)),
     }
 
 
@@ -424,4 +513,7 @@ def build_decision_dashboard_payload(
         "curve": curve,
         "performance": perf,
         "needs_backfill": bool(curve.get("needs_backfill")),
+        "synthesized_count": int(curve.get("synthesized_count") or 0),
+        "decision_count": int(curve.get("decision_count") or 0),
+        "closed_trade_count": int(curve.get("closed_trade_count") or 0),
     }
