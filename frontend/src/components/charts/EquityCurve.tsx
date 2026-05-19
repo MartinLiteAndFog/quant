@@ -63,9 +63,16 @@ function formatPrice(value: number | null | undefined): string {
   return num.toFixed(6);
 }
 
+// 2000-01-01T00:00:00Z. Anything older is treated as a missing timestamp so
+// the tooltip never prints "1/1/1970" when a legacy NaT->0 sentinel slips
+// through from postgres.
+const MIN_VALID_EPOCH_SEC = 946_684_800;
+
 function formatDateTime(seconds: number | null | undefined): string {
   if (seconds == null || !Number.isFinite(Number(seconds))) return "—";
-  const ms = Number(seconds) * 1000;
+  const num = Number(seconds);
+  if (num < MIN_VALID_EPOCH_SEC) return "—";
+  const ms = num * 1000;
   if (!Number.isFinite(ms)) return "—";
   return new Date(ms).toLocaleString();
 }
@@ -143,27 +150,35 @@ function _numOr(v: unknown, fallback?: number): number | undefined {
 
 function tradeEquityToData(
   tradeEquity: TradeEquityPoint[]
-): Record<string, number | string>[] {
+): Record<string, number | string | boolean>[] {
   return tradeEquity
     .filter(
       (pt) =>
         Number.isFinite(Number(pt.time)) && Number.isFinite(Number(pt.cum_pct))
     )
     .map((pt) => {
-      const row: Record<string, number | string> = {
+      const row: Record<string, number | string | boolean> = {
         time: Number(pt.time),
         cum_pct: Number(pt.cum_pct),
         pnl_pct: Number(pt.pnl_pct ?? 0),
       };
+      // Reject the 1970 sentinel here so even mis-typed payloads still
+      // render "—" in the tooltip rather than the unix epoch.
       const entryTime = _numOr(pt.entry_time);
+      if (entryTime !== undefined && entryTime >= MIN_VALID_EPOCH_SEC) {
+        row.entry_time = entryTime;
+      }
       const exitTime = _numOr(pt.exit_time, Number(pt.time));
+      if (exitTime !== undefined && exitTime >= MIN_VALID_EPOCH_SEC) {
+        row.exit_time = exitTime;
+      }
       const entryPrice = _numOr(pt.entry_price);
       const exitPrice = _numOr(pt.exit_price);
-      if (entryTime !== undefined) row.entry_time = entryTime;
-      if (exitTime !== undefined) row.exit_time = exitTime;
       if (entryPrice !== undefined) row.entry_price = entryPrice;
       if (exitPrice !== undefined) row.exit_price = exitPrice;
       if (pt.side) row.side = String(pt.side);
+      if (pt.open) row.open = true;
+      if (pt.decision_id) row.decision_id = String(pt.decision_id);
       return row;
     });
 }
@@ -184,7 +199,12 @@ function CustomTooltip({
   if (mode === "trade") {
     const point = payload[0]?.payload as Record<string, unknown> | undefined;
     const cumPct = Number(point?.cum_pct ?? payload[0]?.value ?? 0);
-    const pnlPct = Number(point?.pnl_pct ?? 0);
+    const isOpen = Boolean(point?.open);
+    const rawPnl = point?.pnl_pct;
+    const pnlPct =
+      rawPnl != null && Number.isFinite(Number(rawPnl))
+        ? Number(rawPnl)
+        : null;
     const sideRaw = point?.side != null ? String(point.side).toLowerCase() : "";
     const sideLabel = sideRaw ? sideRaw.toUpperCase() : null;
     const sideColor =
@@ -194,15 +214,21 @@ function CustomTooltip({
           ? "text-red-400"
           : "text-zinc-300";
     const entryTime =
-      point?.entry_time != null && Number.isFinite(Number(point.entry_time))
+      point?.entry_time != null &&
+      Number.isFinite(Number(point.entry_time)) &&
+      Number(point.entry_time) >= MIN_VALID_EPOCH_SEC
         ? Number(point.entry_time)
         : null;
-    const exitTime =
+    const exitTimeCandidate =
       point?.exit_time != null && Number.isFinite(Number(point.exit_time))
         ? Number(point.exit_time)
         : label != null
           ? Number(label)
           : null;
+    const exitTime =
+      exitTimeCandidate != null && exitTimeCandidate >= MIN_VALID_EPOCH_SEC
+        ? exitTimeCandidate
+        : null;
     const entryPrice =
       point?.entry_price != null && Number.isFinite(Number(point.entry_price))
         ? Number(point.entry_price)
@@ -211,36 +237,56 @@ function CustomTooltip({
       point?.exit_price != null && Number.isFinite(Number(point.exit_price))
         ? Number(point.exit_price)
         : null;
-    const duration = formatDuration(entryTime, exitTime);
-    const pnlColor = pnlPct >= 0 ? "text-emerald-400" : "text-red-400";
+    const duration = isOpen ? null : formatDuration(entryTime, exitTime);
+    const pnlColor =
+      pnlPct == null
+        ? "text-zinc-400"
+        : pnlPct >= 0
+          ? "text-emerald-400"
+          : "text-red-400";
 
     return (
       <div className="min-w-[220px] rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 shadow-lg">
         <div className="mb-1 flex items-center justify-between gap-3 text-xs">
           <span className="text-zinc-400">{dateStr}</span>
-          {sideLabel && (
-            <span className={`font-semibold ${sideColor}`}>{sideLabel}</span>
-          )}
+          <div className="flex items-center gap-2">
+            {isOpen && (
+              <span className="rounded bg-amber-700/30 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-300">
+                Open
+              </span>
+            )}
+            {sideLabel && (
+              <span className={`font-semibold ${sideColor}`}>{sideLabel}</span>
+            )}
+          </div>
         </div>
         <div className="space-y-0.5 border-t border-zinc-700 pt-1 text-xs">
-          <div className="flex justify-between gap-4">
-            <span className="text-zinc-400">Entry</span>
-            <span className="font-mono text-zinc-100">
-              {formatDateTime(entryTime)}
-              {entryPrice != null && (
-                <span className="ml-2 text-zinc-400">@ {formatPrice(entryPrice)}</span>
-              )}
-            </span>
-          </div>
-          <div className="flex justify-between gap-4">
-            <span className="text-zinc-400">Exit</span>
-            <span className="font-mono text-zinc-100">
-              {formatDateTime(exitTime)}
-              {exitPrice != null && (
-                <span className="ml-2 text-zinc-400">@ {formatPrice(exitPrice)}</span>
-              )}
-            </span>
-          </div>
+          {(entryTime != null || entryPrice != null) && (
+            <div className="flex justify-between gap-4">
+              <span className="text-zinc-400">Entry</span>
+              <span className="font-mono text-zinc-100">
+                {formatDateTime(entryTime)}
+                {entryPrice != null && (
+                  <span className="ml-2 text-zinc-400">
+                    @ {formatPrice(entryPrice)}
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
+          {!isOpen && (exitTime != null || exitPrice != null) && (
+            <div className="flex justify-between gap-4">
+              <span className="text-zinc-400">Exit</span>
+              <span className="font-mono text-zinc-100">
+                {formatDateTime(exitTime)}
+                {exitPrice != null && (
+                  <span className="ml-2 text-zinc-400">
+                    @ {formatPrice(exitPrice)}
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
           {duration && (
             <div className="flex justify-between gap-4">
               <span className="text-zinc-400">Duration</span>
@@ -250,7 +296,9 @@ function CustomTooltip({
         </div>
         <div className="mt-1 flex justify-between gap-4 border-t border-zinc-700 pt-1 text-sm">
           <span className="text-zinc-300">Trade</span>
-          <span className={`font-medium ${pnlColor}`}>{formatPct(pnlPct)}</span>
+          <span className={`font-medium ${pnlColor}`}>
+            {pnlPct == null ? "—" : formatPct(pnlPct)}
+          </span>
         </div>
         <div className="mt-0.5 flex justify-between gap-4 text-sm font-medium">
           <span className="text-zinc-300">Cumulative</span>

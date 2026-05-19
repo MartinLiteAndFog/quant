@@ -51,6 +51,9 @@ from quant.execution.trade_decisions_store import (
     count_trade_decisions,
     list_recent_trade_decisions,
 )
+from quant.execution.decision_performance import (
+    build_decision_dashboard_payload,
+)
 from quant.regime import RegimeStore, get_live_gate_confidence
 from ..utils.log import get_logger, log_throttled
 
@@ -995,16 +998,32 @@ def api_dashboard_chart(
             allow_fill_reconstruction=False,
             _trades_df=trades_df,
         )
-        equity = build_equity_curve(
-            max_points=int(max(100, max_points)),
+        # Decision-based equity curve — same list that the Performance card
+        # on the sidebar aggregates. Falls back to the legacy diary-driven
+        # curve when ``trade_decisions`` is empty so the chart still renders
+        # something for symbols that pre-date the decision spine.
+        decision_payload = build_decision_dashboard_payload(
             symbol=symbol,
             venue="kucoin",
-            live_only=True,
-            include_reconstructed=False,
-            allow_file_fallback=allow_file_fallback,
-            allow_fill_reconstruction=False,
-            _trades_df=trades_df,
+            max_points=int(max(100, max_points)),
         )
+        decision_points = decision_payload["curve"]["points"]
+        if decision_points:
+            equity = {
+                "trades": decision_points,
+                "source": decision_payload["curve"]["source"],
+            }
+        else:
+            equity = build_equity_curve(
+                max_points=int(max(100, max_points)),
+                symbol=symbol,
+                venue="kucoin",
+                live_only=True,
+                include_reconstructed=False,
+                allow_file_fallback=allow_file_fallback,
+                allow_fill_reconstruction=False,
+                _trades_df=trades_df,
+            )
         equity_real = load_real_equity_history(max_points=int(max(100, max_points)))
 
         equity_components = [
@@ -1203,8 +1222,18 @@ def api_dashboard_strategy(symbol: str = DEFAULT_SYMBOL) -> Dict[str, Any]:
 def api_dashboard_performance(
     symbol: str = DEFAULT_SYMBOL,
     venue: str = "kucoin",
+    backfill: int = 0,
 ) -> Dict[str, Any]:
-    cache_key = f"{_normalize_symbol(symbol)}:{venue}"
+    """Decision-based performance summary.
+
+    Every number returned here is derived from the exact same decision list
+    that powers the trade-mode equity curve, so the Performance card and the
+    chart can never disagree. ``backfill=1`` runs the idempotent
+    ``backfill_trade_decisions_from_action_events`` job for the requested
+    venue first so the spine is populated when Railway hasn't done it yet.
+    """
+
+    cache_key = f"{_normalize_symbol(symbol)}:{venue}:{int(backfill)}"
     cached = _cache_get(
         _PERFORMANCE_CACHE,
         cache_key,
@@ -1213,30 +1242,52 @@ def api_dashboard_performance(
     if cached is not None:
         return cached
     try:
-        out = build_dashboard_performance(symbol=symbol, venue=venue)
-        # Decision count: every entry / flip with its own SL/TP counts here,
-        # independent of whether the trade has fully closed. See
-        # quant.execution.trade_counter for the classification rules.
+        if int(backfill) == 1:
+            try:
+                backfill_trade_decisions_from_action_events(venue=venue, symbol=symbol)
+            except Exception as be:
+                log.warning("trade_decisions backfill failed: %s", be)
+
+        payload = build_decision_dashboard_payload(
+            symbol=symbol,
+            venue=venue,
+            max_points=int(os.getenv("DASHBOARD_DECISION_MAX_POINTS", "1000")),
+        )
+        perf = payload["performance"]
         try:
             decision_count = int(count_trade_decisions(venue=venue, symbol=symbol))
         except Exception as count_err:
             log.warning("trade decision count failed: %s", count_err)
-            decision_count = None
+            decision_count = perf.get("trade_count")
+
         result = {
             "ok": True,
-            "symbol": out.get("symbol", symbol),
-            "venue": out.get("venue", venue),
-            "as_of": out.get("as_of", _now_utc_iso()),
-            "window": out.get("window", "lifetime"),
-            "pnl_pct": out.get("pnl_pct"),
-            "winrate": out.get("winrate"),
-            "monthly_growth": out.get("monthly_growth"),
-            "average_gain": out.get("average_gain"),
-            "trade_count": out.get("trade_count", 0),
-            "winning_trade_count": out.get("winning_trade_count", 0),
-            "losing_trade_count": out.get("losing_trade_count", 0),
+            "symbol": perf.get("symbol", symbol),
+            "venue": perf.get("venue", venue),
+            "as_of": perf.get("as_of", _now_utc_iso()),
+            "window": perf.get("window", "lifetime"),
+            "pnl_pct": perf.get("pnl_pct"),
+            "winrate": perf.get("winrate"),
+            "monthly_growth": perf.get("monthly_growth"),
+            "average_gain": perf.get("average_gain"),
+            # ``trade_count`` is now the count of decisions (entries + flips,
+            # open or closed). ``closed_decision_count`` exposes the closed
+            # subset for completeness — the chart's cumulative line covers
+            # that subset. ``open_decision_count`` flags currently-running
+            # trades that don't contribute to wins / losses yet.
+            "trade_count": perf.get("trade_count", 0),
+            "closed_decision_count": perf.get("closed_decision_count", 0),
+            "winning_trade_count": perf.get("winning_trade_count", 0),
+            "losing_trade_count": perf.get("losing_trade_count", 0),
+            "open_decision_count": perf.get("open_decision_count", 0),
+            # Keep ``trade_decision_count`` as a back-compat alias for the
+            # old Sidebar API. Same value as ``trade_count`` in the
+            # decision-based world; the field will be retired once the
+            # frontend stops referencing it directly.
             "trade_decision_count": decision_count,
-            "source": out.get("source", "unknown"),
+            "cum_pct": perf.get("cum_pct"),
+            "needs_backfill": bool(payload.get("needs_backfill")),
+            "source": perf.get("source", "unknown"),
             "ts": _now_utc_iso(),
         }
         _cache_put(_PERFORMANCE_CACHE, cache_key, result)
@@ -1253,9 +1304,13 @@ def api_dashboard_performance(
             "monthly_growth": None,
             "average_gain": None,
             "trade_count": 0,
+            "closed_decision_count": 0,
             "winning_trade_count": 0,
             "losing_trade_count": 0,
+            "open_decision_count": 0,
             "trade_decision_count": None,
+            "cum_pct": None,
+            "needs_backfill": False,
             "source": "error",
             "error": str(e),
             "ts": _now_utc_iso(),

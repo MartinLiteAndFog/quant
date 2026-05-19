@@ -1521,17 +1521,29 @@ def build_trading_diary(
         else:
             rows_df = _aggregate_logical_trades(rows_df).tail(int(max(1, max_points)))
 
+        # Reject pre-2000 sentinel entry timestamps so the equity tooltip
+        # never falls back to "1/1/1970" when older NaT->0 writers leaked a
+        # bogus row into ``closed_trades``. ``exit_ts`` is required (no
+        # row makes sense without a close) but ``entry_ts`` is allowed to
+        # be null — the frontend treats that as "—".
+        _entry_min_valid = pd.Timestamp("2000-01-01", tz="UTC")
         for i, r in rows_df.iterrows():
             entry_ts = pd.to_datetime(r.get("entry_ts"), utc=True, errors="coerce")
             exit_ts = pd.to_datetime(r.get("exit_ts"), utc=True, errors="coerce")
             pnl_pct = pd.to_numeric(r.get("pnl_pct"), errors="coerce")
-            if pd.isna(entry_ts) or pd.isna(exit_ts) or pd.isna(pnl_pct):
+            if pd.isna(exit_ts) or pd.isna(pnl_pct):
                 continue
+            if pd.notna(entry_ts) and entry_ts >= _entry_min_valid:
+                entry_time_val: Optional[int] = int(
+                    (pd.Timestamp(entry_ts) - _EPOCH_UTC) // pd.Timedelta(seconds=1)
+                )
+            else:
+                entry_time_val = None
             out.append(
                 {
                     "id": str(r.get("logical_trade_id") or f"lt_{i}"),
-                    "entry_time": int(pd.Timestamp(entry_ts).timestamp()),
-                    "time": int(pd.Timestamp(exit_ts).timestamp()),
+                    "entry_time": entry_time_val,
+                    "time": int((pd.Timestamp(exit_ts) - _EPOCH_UTC) // pd.Timedelta(seconds=1)),
                     "side": str(r.get("side") or "long"),
                     "qty": (float(r["qty"]) if pd.notna(pd.to_numeric(r.get("qty"), errors="coerce")) else None),
                     "entry_price": (float(r["entry_price"]) if pd.notna(pd.to_numeric(r.get("entry_price"), errors="coerce")) else None),

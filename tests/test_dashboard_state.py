@@ -560,6 +560,121 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(diary.get("source"), "postgres:execution_events_reconstructed")
         self.assertEqual(len(diary.get("entries", [])), 1)
 
+    def test_build_equity_curve_emits_real_entry_time_for_postgres_rows(self) -> None:
+        # Simulate the postgres `closed_trades` direct-row path used by
+        # ``build_trading_diary(live_only=True)``: real entry_ts must round-trip
+        # to the equity curve's ``entry_time`` as the *real* epoch seconds
+        # value, never silently collapsed to 0 / 1.
+        entry1 = pd.Timestamp("2026-05-15T14:00:00Z")
+        exit1 = pd.Timestamp("2026-05-15T15:32:38Z")
+        entry2 = pd.Timestamp("2026-05-16T09:00:00Z")
+        exit2 = pd.Timestamp("2026-05-16T10:00:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["t_real_a", "t_real_b"],
+                "venue": ["kucoin", "kucoin"],
+                "symbol": ["SOL-USDT", "SOL-USDT"],
+                "entry_ts": [entry1, entry2],
+                "exit_ts": [exit1, exit2],
+                "side": ["long", "short"],
+                "qty": [1.0, 1.0],
+                "entry_price": [91.38, 92.12],
+                "exit_price": [89.82, 91.55],
+                "pnl_pct": [-1.71, 0.62],
+                "exit_event": ["sl_exit", "tp_exit"],
+                "strategy": ["live_executor", "live_executor"],
+            }
+        )
+        equity = ds.build_equity_curve(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            live_only=True,
+            include_reconstructed=False,
+            allow_file_fallback=False,
+            allow_fill_reconstruction=False,
+            _trades_df=df,
+        )
+        trades = equity.get("trades", [])
+        self.assertEqual(len(trades), 2)
+        seen_entry_times = {int(t["entry_time"]) for t in trades}
+        self.assertEqual(
+            seen_entry_times,
+            {int(entry1.timestamp()), int(entry2.timestamp())},
+        )
+        # Every entry_time must look like a recent timestamp — anything close
+        # to the unix epoch is the 1970-bug the user reported.
+        for t in trades:
+            self.assertGreater(
+                int(t["entry_time"]),
+                int(pd.Timestamp("2020-01-01", tz="UTC").timestamp()),
+            )
+
+    def test_build_equity_curve_emits_null_for_garbage_entry_time(self) -> None:
+        # `closed_trades.entry_ts` is NOT NULL at the schema level, so older
+        # buggy writers (e.g. NaT->0 fallbacks) end up with rows pinned to
+        # 1970-01-01T00:00:01Z. Surface those as `null` so the frontend can
+        # render "—" instead of showing 1/1/1970 in the tooltip.
+        bogus_entry = pd.Timestamp("1970-01-01T00:00:01Z")  # epoch 1s
+        real_exit = pd.Timestamp("2026-05-15T15:32:38Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["t_bad", "t_nat"],
+                "venue": ["kucoin", "kucoin"],
+                "symbol": ["SOL-USDT", "SOL-USDT"],
+                "entry_ts": [bogus_entry, pd.NaT],
+                "exit_ts": [real_exit, real_exit + pd.Timedelta(minutes=5)],
+                "side": ["long", "short"],
+                "qty": [1.0, 1.0],
+                "entry_price": [91.38, 92.0],
+                "exit_price": [89.82, 91.5],
+                "pnl_pct": [-1.71, 0.5],
+                "exit_event": ["sl_exit", "tp_exit"],
+                "strategy": ["live_executor", "live_executor"],
+            }
+        )
+        equity = ds.build_equity_curve(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            live_only=True,
+            include_reconstructed=False,
+            allow_file_fallback=False,
+            allow_fill_reconstruction=False,
+            _trades_df=df,
+        )
+        trades = equity.get("trades", [])
+        # NaT entry rows are still surfaced (exit_ts + pnl are valid), and the
+        # epoch-1 row must be surfaced too — both with ``entry_time=None`` so
+        # the tooltip can fall back to "—" instead of printing 1970.
+        self.assertEqual(len(trades), 2)
+        for t in trades:
+            self.assertIsNone(t.get("entry_time"))
+
+    def test_reconstruct_trades_from_execution_fills_emits_real_entry_time(self) -> None:
+        # The fills-reconstruction code path is a second producer of
+        # ``entry_time``; make sure it likewise carries through real
+        # timestamps, not epoch.
+        ts0 = pd.Timestamp("2026-04-10T08:00:00Z")
+        fills = pd.DataFrame(
+            {
+                "ts": [ts0, ts0 + pd.Timedelta(minutes=5)],
+                "seq": [1, 2],
+                "side": ["buy", "sell"],
+                "qty": [1.0, 1.0],
+                "price": [100.0, 102.0],
+            }
+        )
+        out = ds._reconstruct_trades_from_execution_fills_df(
+            fills_df=fills, max_points=100, source="test"
+        )
+        self.assertEqual(len(out), 1)
+        self.assertEqual(int(out[0]["entry_time"]), int(ts0.timestamp()))
+        self.assertGreater(
+            int(out[0]["entry_time"]),
+            int(pd.Timestamp("2020-01-01", tz="UTC").timestamp()),
+        )
+
     @patch("quant.execution.dashboard_state.load_closed_trades_from_postgres")
     def test_dashboard_performance_uses_logical_trades_and_neutral_bucket(self, mock_load_trades) -> None:
         mock_load_trades.return_value = pd.DataFrame(

@@ -107,13 +107,15 @@ function SidebarBase({
 
   const strategyLabel = strategy?.strategy_label ?? "—";
 
-  // Prefer the new trade-decision counter (postgres ``trade_decisions``,
-  // filtered to KuCoin + current symbol on the backend) over the legacy
-  // closed-trade count. Fall back to the closed-trade count only if the
-  // decisions query failed or the backend hasn't yet been backfilled — that
-  // way the dashboard never silently shows a Kraken-flavoured number.
-  const tradeDecisionCount =
-    performance?.trade_decision_count ?? performance?.trade_count ?? null;
+  // Every number in this card is derived from the SAME decision list that
+  // the trade-mode equity chart below renders — no dual-source fallback.
+  // Backend contract: ``trade_count`` = decisions (open + closed),
+  // ``closed_decision_count`` = decisions with a known realized pnl,
+  // ``winning_trade_count`` + ``losing_trade_count`` <= closed_decision_count,
+  // and ``pnl_pct`` == the chart's final ``cum_pct``.
+  const tradeCount = performance?.trade_count ?? null;
+  const openCount = performance?.open_decision_count ?? null;
+  const needsBackfill = Boolean(performance?.needs_backfill);
 
   return (
     <aside className="flex w-80 flex-col gap-3 overflow-y-auto">
@@ -186,8 +188,14 @@ function SidebarBase({
           <div className="mt-2 border-t border-zinc-800 pt-2" />
           <div className="flex items-center justify-between gap-3">
             <span className="text-zinc-400">Trades</span>
-            <span>{fmtInt(tradeDecisionCount)}</span>
+            <span>{fmtInt(tradeCount)}</span>
           </div>
+          {openCount != null && openCount > 0 && (
+            <div className="flex items-center justify-between gap-3 text-[11px]">
+              <span className="pl-2 text-zinc-500">Open</span>
+              <span className="text-zinc-400">{fmtInt(openCount)}</span>
+            </div>
+          )}
           <div className="flex items-center justify-between gap-3">
             <span className="text-zinc-400">Wins</span>
             <span className="text-emerald-400">
@@ -200,6 +208,15 @@ function SidebarBase({
               {fmtInt(performance?.losing_trade_count)}
             </span>
           </div>
+          {needsBackfill && (
+            <div className="mt-2 rounded border border-amber-700/40 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-300">
+              No trade decisions yet. Run the backfill on Railway:
+              <br />
+              <code className="text-amber-200">
+                /api/dashboard/performance?backfill=1
+              </code>
+            </div>
+          )}
         </div>
       </SectionCard>
 

@@ -25,21 +25,29 @@ export interface DashboardPerformanceResponse {
   venue: string;
   as_of?: string;
   window?: string;
+  // Every number here is derived from the SAME decision list that the
+  // trade-mode equity chart plots. ``pnl_pct`` == the chart's final
+  // ``cum_pct``; ``trade_count`` == ``points.length``; wins / losses count
+  // only closed decisions whose realized pnl is > 0 / < 0. Open decisions
+  // (still in-position) bump ``trade_count`` and ``open_decision_count``
+  // but do NOT contribute to wins / losses / pnl / avg.
   pnl_pct: number | null;
   winrate: number | null; // 0..100
   monthly_growth: number | null;
   average_gain: number | null;
-  // Closed-trade aggregates (postgres ``closed_trades`` filtered to this
-  // venue). Used for win/loss breakdowns where outcome is required.
   trade_count?: number;
+  closed_decision_count?: number;
   winning_trade_count?: number;
   losing_trade_count?: number;
-  // Decision counter sourced from postgres ``trade_decisions`` (every entry /
-  // flip with its own SL/TP, regardless of whether the trade has closed).
-  // Filtered to the requested venue + symbol on the backend. ``null`` means
-  // the count query failed; ``undefined`` means the field is missing entirely
-  // (older payload). Either case should fall back to the closed-trade count.
+  open_decision_count?: number;
+  // Back-compat alias for the old field name. In the decision-based world
+  // this is the same value as ``trade_count``. Will be retired once the UI
+  // stops referencing it directly.
   trade_decision_count?: number | null;
+  cum_pct?: number | null;
+  // True when ``trade_decisions`` is empty but ``closed_trades`` has rows —
+  // the operator should run the ``backfill=1`` job on Railway.
+  needs_backfill?: boolean;
   source?: string;
   error?: string;
   ts?: string;
