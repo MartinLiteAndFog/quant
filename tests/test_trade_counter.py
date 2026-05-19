@@ -463,51 +463,61 @@ class TradeCountApiTests(unittest.TestCase):
             "needs_backfill": needs_backfill,
         }
 
-    def test_performance_endpoint_keeps_counts_internally_consistent(self) -> None:
-        """The Performance card and the equity chart must share one source.
-
-        With the decision-based pipeline, ``trade_count`` is the number of
-        decisions (entries + flips, open + closed). ``closed_decision_count``
-        equals ``winning + losing`` plus neutral pnl=0 closures. The chart's
-        final ``cum_pct`` is what the card's ``pnl_pct`` shows."""
+    def test_performance_endpoint_uses_closed_trades_for_main_metrics(self) -> None:
+        """Main Performance-card metrics are closed_trades aggregates."""
 
         from unittest.mock import patch
 
         import quant.execution.webhook_server as ws
 
         ws._PERFORMANCE_CACHE.clear()
+        closed_trade_perf = {
+            "symbol": "SOL-USDT",
+            "venue": "kucoin",
+            "as_of": "2026-05-18T12:00:00Z",
+            "window": "lifetime",
+            "pnl_pct": -27.9,
+            "winrate": 35.06,
+            "monthly_growth": -5.0,
+            "average_gain": -0.4,
+            "trade_count": 77,
+            "winning_trade_count": 27,
+            "losing_trade_count": 50,
+            "source": "postgres:closed_trades",
+        }
+        sparse_decision_payload = self._fake_decision_payload(
+            trade_count=2,
+            winning=1,
+            losing=1,
+            pnl_pct=1.0,
+            winrate=50.0,
+            monthly_growth=1.0,
+            average_gain=0.5,
+            cum_pct=1.0,
+        )
 
-        seen_payload_kwargs: Dict[str, Any] = {}
-        seen_count_kwargs: Dict[str, Any] = {}
-
-        def _fake_payload(*args, **kwargs):
-            seen_payload_kwargs.update(kwargs)
-            return self._fake_decision_payload()
-
-        def _fake_count(*, venue=None, symbol=None, decision_kind=None, since_ts=None):
-            seen_count_kwargs.update({"venue": venue, "symbol": symbol})
-            return 77
-
-        with patch.object(ws, "build_decision_dashboard_payload", side_effect=_fake_payload), \
-             patch.object(ws, "count_trade_decisions", side_effect=_fake_count):
+        with patch.object(ws, "build_dashboard_performance", return_value=closed_trade_perf) as perf_mock, \
+             patch.object(ws, "build_decision_dashboard_payload", return_value=sparse_decision_payload, create=True) as decision_mock, \
+             patch.object(ws, "count_trade_decisions", return_value=2) as count_mock, \
+             patch.object(ws, "_schedule_auto_backfill_trade_decisions", return_value={"scheduled": True}) as schedule_mock, \
+             patch.object(ws, "_maybe_auto_backfill_trade_decisions", return_value=None) as backfill_mock:
             res = ws.api_dashboard_performance(symbol="SOL-USDT", venue="kucoin")
 
         self.assertTrue(res["ok"])
-        # ``trade_count`` now counts decisions, not closed_trades aggregates.
         self.assertEqual(res["trade_count"], 77)
         self.assertEqual(res["winning_trade_count"], 27)
         self.assertEqual(res["losing_trade_count"], 50)
-        # closed_decision_count >= wins + losses (no neutrals in this fixture)
-        self.assertEqual(res["closed_decision_count"], 77)
-        self.assertGreaterEqual(
-            res["closed_decision_count"],
-            res["winning_trade_count"] + res["losing_trade_count"],
-        )
-        # The card's pnl_pct == the chart's final cum_pct.
-        self.assertEqual(res["pnl_pct"], res["cum_pct"])
-        # Every count must originate from the kucoin venue end-to-end.
-        self.assertEqual(seen_payload_kwargs.get("venue"), "kucoin")
-        self.assertEqual(seen_count_kwargs.get("venue"), "kucoin")
+        self.assertEqual(res["trade_decision_count"], 2)
+        self.assertNotIn("open_decision_count", res)
+        self.assertNotIn("closed_decision_count", res)
+        self.assertNotIn("needs_backfill", res)
+        self.assertNotIn("synthesized_count", res)
+        perf_mock.assert_called_once()
+        self.assertEqual(perf_mock.call_args.kwargs.get("venue"), "kucoin")
+        decision_mock.assert_not_called()
+        count_mock.assert_called_once()
+        schedule_mock.assert_not_called()
+        backfill_mock.assert_not_called()
 
     def test_performance_endpoint_includes_trade_decision_count(self) -> None:
         from unittest.mock import patch
@@ -515,23 +525,32 @@ class TradeCountApiTests(unittest.TestCase):
         import quant.execution.webhook_server as ws
 
         ws._PERFORMANCE_CACHE.clear()
-        payload = self._fake_decision_payload(
-            trade_count=10, winning=6, losing=4, pnl_pct=1.5, winrate=60.0,
-            monthly_growth=3.0, average_gain=0.25, cum_pct=1.5,
-        )
-        with patch.object(ws, "build_decision_dashboard_payload", return_value=payload), \
+        closed_trade_perf = {
+            "symbol": "SOL-USDT",
+            "venue": "kucoin",
+            "as_of": "2026-05-18T12:00:00Z",
+            "window": "lifetime",
+            "pnl_pct": 1.5,
+            "winrate": 60.0,
+            "monthly_growth": 3.0,
+            "average_gain": 0.25,
+            "trade_count": 10,
+            "winning_trade_count": 6,
+            "losing_trade_count": 4,
+            "source": "postgres:closed_trades",
+        }
+        with patch.object(ws, "build_dashboard_performance", return_value=closed_trade_perf), \
+             patch.object(ws, "build_decision_dashboard_payload", create=True) as decision_mock, \
              patch.object(ws, "count_trade_decisions", return_value=10):
             res = ws.api_dashboard_performance(symbol="SOL-USDT", venue="kucoin")
 
         self.assertTrue(res["ok"])
         self.assertEqual(res["trade_count"], 10)
-        # Back-compat alias for the old field name; same value as trade_count
-        # in the decision world (the legacy frontend reads this).
         self.assertEqual(res["trade_decision_count"], 10)
+        decision_mock.assert_not_called()
 
     def test_performance_endpoint_defaults_to_kucoin(self) -> None:
-        """Calling /api/dashboard/performance without a venue must filter by
-        ``kucoin`` end-to-end (decision builder and trade-decision count)."""
+        """Calling /api/dashboard/performance without a venue uses KuCoin."""
 
         from unittest.mock import patch
 
@@ -539,18 +558,25 @@ class TradeCountApiTests(unittest.TestCase):
 
         ws._PERFORMANCE_CACHE.clear()
 
-        seen_payload_kwargs: Dict[str, Any] = {}
+        seen_perf_kwargs: Dict[str, Any] = {}
         seen_count_kwargs: Dict[str, Any] = {}
 
-        def _fake_payload(*args, **kwargs):
-            seen_payload_kwargs.update(kwargs)
-            return self._fake_decision_payload(
-                symbol=kwargs.get("symbol", "SOL-USDT"),
-                venue=kwargs.get("venue", "kucoin"),
-                trade_count=0, winning=0, losing=0,
-                pnl_pct=None, winrate=None, monthly_growth=None,  # type: ignore[arg-type]
-                average_gain=None, cum_pct=None,  # type: ignore[arg-type]
-            )
+        def _fake_perf(*args, **kwargs):
+            seen_perf_kwargs.update(kwargs)
+            return {
+                "symbol": kwargs.get("symbol", "SOL-USDT"),
+                "venue": kwargs.get("venue", "kucoin"),
+                "as_of": "2026-05-18T12:00:00Z",
+                "window": "lifetime",
+                "pnl_pct": None,
+                "winrate": None,
+                "monthly_growth": None,
+                "average_gain": None,
+                "trade_count": 0,
+                "winning_trade_count": 0,
+                "losing_trade_count": 0,
+                "source": "postgres:closed_trades",
+            }
 
         def _fake_count(*, venue=None, symbol=None, decision_kind=None, since_ts=None):
             seen_count_kwargs.update(
@@ -558,24 +584,23 @@ class TradeCountApiTests(unittest.TestCase):
             )
             return 0
 
-        with patch.object(ws, "build_decision_dashboard_payload", side_effect=_fake_payload), \
+        with patch.object(ws, "build_dashboard_performance", side_effect=_fake_perf), \
+             patch.object(ws, "build_decision_dashboard_payload", create=True) as decision_mock, \
              patch.object(ws, "count_trade_decisions", side_effect=_fake_count):
             res = ws.api_dashboard_performance(symbol="SOL-USDT")
 
         self.assertTrue(res["ok"])
         self.assertEqual(res["venue"], "kucoin")
-        self.assertEqual(seen_payload_kwargs.get("venue"), "kucoin")
+        self.assertEqual(seen_perf_kwargs.get("venue"), "kucoin")
         self.assertEqual(seen_count_kwargs.get("venue"), "kucoin")
         # No Kraken fallback when KuCoin numbers are missing — empty/zero is
         # the correct behaviour, never wrong-venue numbers.
         self.assertEqual(res["trade_count"], 0)
         self.assertEqual(res["trade_decision_count"], 0)
+        decision_mock.assert_not_called()
 
     def test_performance_endpoint_respects_explicit_venue(self) -> None:
-        """An explicit ``venue=kraken`` must be passed straight through to the
-        loaders. The decision builder short-circuits non-KuCoin venues to an
-        empty result, so the endpoint should respond with zeros instead of
-        silently returning KuCoin data."""
+        """An explicit ``venue=kraken`` must be passed straight through."""
 
         from unittest.mock import patch
 
@@ -583,63 +608,88 @@ class TradeCountApiTests(unittest.TestCase):
 
         ws._PERFORMANCE_CACHE.clear()
 
-        seen_payload_kwargs: Dict[str, Any] = {}
+        seen_perf_kwargs: Dict[str, Any] = {}
         seen_count_kwargs: Dict[str, Any] = {}
 
-        def _fake_payload(*args, **kwargs):
-            seen_payload_kwargs.update(kwargs)
-            if str(kwargs.get("venue")).lower() != "kucoin":
-                return self._fake_decision_payload(
-                    symbol=kwargs.get("symbol", "SOL-USDT"),
-                    venue=kwargs.get("venue", "kraken"),
-                    trade_count=0, winning=0, losing=0,
-                    pnl_pct=None, winrate=None, monthly_growth=None,  # type: ignore[arg-type]
-                    average_gain=None, cum_pct=None,  # type: ignore[arg-type]
-                )
-            raise AssertionError("Unexpected fallback to kucoin")
+        def _fake_perf(*args, **kwargs):
+            seen_perf_kwargs.update(kwargs)
+            if str(kwargs.get("venue")).lower() == "kucoin":
+                raise AssertionError("Unexpected fallback to kucoin")
+            return {
+                "symbol": kwargs.get("symbol", "SOL-USDT"),
+                "venue": kwargs.get("venue", "kraken"),
+                "as_of": "2026-05-18T12:00:00Z",
+                "window": "lifetime",
+                "pnl_pct": None,
+                "winrate": None,
+                "monthly_growth": None,
+                "average_gain": None,
+                "trade_count": 0,
+                "winning_trade_count": 0,
+                "losing_trade_count": 0,
+                "source": "unsupported_venue",
+            }
 
         def _fake_count(*, venue=None, symbol=None, decision_kind=None, since_ts=None):
             seen_count_kwargs.update({"venue": venue, "symbol": symbol})
             return 0
 
-        with patch.object(ws, "build_decision_dashboard_payload", side_effect=_fake_payload), \
+        with patch.object(ws, "build_dashboard_performance", side_effect=_fake_perf), \
+             patch.object(ws, "build_decision_dashboard_payload", create=True) as decision_mock, \
              patch.object(ws, "count_trade_decisions", side_effect=_fake_count):
             res = ws.api_dashboard_performance(symbol="SOL-USDT", venue="kraken")
 
         self.assertTrue(res["ok"])
         self.assertEqual(res["venue"], "kraken")
-        self.assertEqual(seen_payload_kwargs.get("venue"), "kraken")
+        self.assertEqual(seen_perf_kwargs.get("venue"), "kraken")
         self.assertEqual(seen_count_kwargs.get("venue"), "kraken")
         self.assertEqual(res["trade_count"], 0)
         self.assertEqual(res["winning_trade_count"], 0)
         self.assertEqual(res["losing_trade_count"], 0)
+        decision_mock.assert_not_called()
 
-    def test_performance_endpoint_runs_backfill_when_requested(self) -> None:
-        """``backfill=1`` must call the idempotent action-event backfill before
-        rebuilding the decision-based payload — that's how the operator
-        refreshes the spine on Railway without redeploying."""
+    def test_performance_endpoint_does_not_backfill_decisions(self) -> None:
+        """Performance reads must not run trade_decisions backfill."""
 
         from unittest.mock import patch
 
         import quant.execution.webhook_server as ws
 
         ws._PERFORMANCE_CACHE.clear()
-        backfill_seen: Dict[str, Any] = {}
+        closed_trade_perf = {
+            "symbol": "SOL-USDT",
+            "venue": "kucoin",
+            "as_of": "2026-05-18T12:00:00Z",
+            "window": "lifetime",
+            "pnl_pct": 1.5,
+            "winrate": 60.0,
+            "monthly_growth": 3.0,
+            "average_gain": 0.25,
+            "trade_count": 10,
+            "winning_trade_count": 6,
+            "losing_trade_count": 4,
+            "source": "postgres:closed_trades",
+        }
 
-        def _fake_backfill(*, venue=None, symbol=None, since_ts=None):
-            backfill_seen.update({"venue": venue, "symbol": symbol})
-            return {"read_events": 5, "decisions": 2, "written": 2}
-
-        with patch.object(ws, "build_decision_dashboard_payload",
-                          return_value=self._fake_decision_payload()), \
-             patch.object(ws, "count_trade_decisions", return_value=77), \
+        with patch.object(ws, "build_dashboard_performance", return_value=closed_trade_perf), \
+             patch.object(ws, "build_decision_dashboard_payload", create=True) as decision_mock, \
+             patch.object(ws, "count_trade_decisions", return_value=2), \
+             patch.object(ws, "_maybe_auto_backfill_trade_decisions", return_value=None) as helper_mock, \
+             patch.object(ws, "_schedule_auto_backfill_trade_decisions", return_value={"scheduled": True}) as schedule_mock, \
              patch.object(ws, "backfill_trade_decisions_from_action_events",
-                           side_effect=_fake_backfill) as bf_mock:
+                           return_value={"read_events": 5, "decisions": 2, "written": 2}) as ae_mock, \
+             patch.object(ws, "backfill_trade_decisions_from_closed_trades",
+                           return_value={"read_rows": 0, "written": 0}) as ct_mock:
             res = ws.api_dashboard_performance(symbol="SOL-USDT", venue="kucoin", backfill=1)
 
         self.assertTrue(res["ok"])
-        bf_mock.assert_called_once()
-        self.assertEqual(backfill_seen.get("venue"), "kucoin")
+        self.assertEqual(res["trade_count"], 10)
+        self.assertEqual(res["trade_decision_count"], 2)
+        decision_mock.assert_not_called()
+        helper_mock.assert_not_called()
+        schedule_mock.assert_not_called()
+        ae_mock.assert_not_called()
+        ct_mock.assert_not_called()
 
     def test_trade_count_endpoint_defaults_to_kucoin(self) -> None:
         """``/api/dashboard/trade_count`` must filter by ``kucoin`` when the
@@ -943,6 +993,7 @@ class AutoBackfillTriggerTests(unittest.TestCase):
         import quant.execution.webhook_server as ws
 
         ws._BACKFILL_LAST_RUN.clear()
+        ws._BACKFILL_IN_FLIGHT.clear()
         ws._PERFORMANCE_CACHE.clear()
         ws._TRADE_COUNT_CACHE.clear()
         ws._CHART_CACHE.clear()
@@ -1079,6 +1130,33 @@ class AutoBackfillTriggerTests(unittest.TestCase):
         assert out is not None
         self.assertTrue(out.get("forced"))
 
+    def test_background_schedule_does_not_block_caller(self) -> None:
+        import time
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        def _slow_execute(venue: str, symbol: str) -> Dict[str, Any]:
+            time.sleep(2.0)
+            return {"venue": venue, "symbol": symbol, "ts": "now"}
+
+        with patch.object(ws, "count_trade_decisions", return_value=2), \
+             patch.object(ws, "count_closed_trades", return_value=80), \
+             patch.object(ws, "latest_decision_ts", return_value=None), \
+             patch.object(ws, "latest_closed_trade_ts", return_value=None), \
+             patch.object(ws, "_execute_trade_decision_backfill", side_effect=_slow_execute):
+            t0 = time.perf_counter()
+            out = ws._schedule_auto_backfill_trade_decisions(
+                venue="kucoin", symbol="SOL-USDT"
+            )
+            elapsed = time.perf_counter() - t0
+            ws._wait_trade_decision_backfill_idle(timeout=5.0)
+
+        self.assertIsNotNone(out)
+        assert out is not None
+        self.assertTrue(out.get("scheduled"))
+        self.assertLess(elapsed, 0.5)
+
     def test_helper_skips_non_kucoin_venues(self) -> None:
         # Kraken is gated out at the source — we never want synthesized
         # KuCoin decisions polluting a kraken venue spine, so the helper
@@ -1097,199 +1175,101 @@ class AutoBackfillTriggerTests(unittest.TestCase):
         ae_mock.assert_not_called()
         ct_mock.assert_not_called()
 
-    def test_performance_endpoint_triggers_auto_backfill_when_spine_thin(self) -> None:
-        # Integration: with 2 decisions / 80 closed_trades, hitting
-        # /api/dashboard/performance should auto-trigger the backfill chain
-        # and surface ``trade_count >= 70`` (allowing some pre-2000 skips).
+    def test_performance_endpoint_does_not_auto_backfill_when_spine_thin(self) -> None:
+        # A sparse ``trade_decisions`` table must not affect the main
+        # Performance card, which is sourced from closed_trades.
         from unittest.mock import patch
 
         import quant.execution.webhook_server as ws
 
         ws._BACKFILL_LAST_RUN.clear()
+        ws._BACKFILL_IN_FLIGHT.clear()
         ws._PERFORMANCE_CACHE.clear()
 
-        # 78 historical legs + 2 recent action-event decisions.
-        seeded_closed_trades = [
-            TradeDecision(
-                decision_id=f"td_ct_seed_{i}",
-                ts=f"2025-0{(i % 9) + 1}-01T10:00:00Z",
-                venue="kucoin",
-                symbol="SOL-USDT",
-                strategy="live_executor",
-                strategy_instance="live_executor",
-                decision_kind=DECISION_ENTRY,
-                direction="long" if i % 2 == 0 else "short",
-                position_before=0,
-                position_after=1,
-                engine_action="enter_long",
-                reason_code="ct",
-                source_action_event_id=None,
-                seq=None,
-                payload={},
-            )
-            for i in range(78)
-        ]
+        closed_trade_perf = {
+            "symbol": "SOL-USDT",
+            "venue": "kucoin",
+            "as_of": "2026-05-19T12:00:00Z",
+            "window": "lifetime",
+            "pnl_pct": 78.0,
+            "winrate": 100.0,
+            "monthly_growth": 0.0,
+            "average_gain": 1.0,
+            "trade_count": 80,
+            "winning_trade_count": 80,
+            "losing_trade_count": 0,
+            "source": "postgres:closed_trades",
+        }
 
-        def _fake_backfill_ct(*, venue=None, symbol=None):
-            # Simulate the backfill writing 78 historical rows to the spine.
-            return {"read_rows": 80, "decisions": 78, "written": 78}
-
-        def _fake_payload(**kwargs):
-            # After the backfill the payload reflects the populated spine.
-            return {
-                "curve": {
-                    "points": [
-                        {
-                            "decision_id": d.decision_id,
-                            "side": d.direction,
-                            "entry_time": 1700000000 + i,
-                            "exit_time": 1700000600 + i,
-                            "entry_price": 100.0,
-                            "exit_price": 101.0,
-                            "pnl_pct": 1.0,
-                            "cum_pct": float(i + 1),
-                            "open": False,
-                            "time": 1700000600 + i,
-                            "source": "postgres:trade_decisions+closed_trades",
-                        }
-                        for i, d in enumerate(seeded_closed_trades)
-                    ],
-                    "source": "postgres:trade_decisions+closed_trades",
-                    "needs_backfill": False,
-                    "synthesized_count": 0,
-                    "decision_count": 78,
-                    "closed_trade_count": 78,
-                },
-                "performance": {
-                    "symbol": "SOL-USDT",
-                    "venue": "kucoin",
-                    "as_of": "2026-05-19T12:00:00Z",
-                    "window": "lifetime",
-                    "pnl_pct": 78.0,
-                    "winrate": 100.0,
-                    "monthly_growth": 0.0,
-                    "average_gain": 1.0,
-                    "trade_count": 78,
-                    "closed_decision_count": 78,
-                    "winning_trade_count": 78,
-                    "losing_trade_count": 0,
-                    "open_decision_count": 0,
-                    "cum_pct": 78.0,
-                    "source": "postgres:trade_decisions+closed_trades",
-                },
-                "needs_backfill": False,
-                "synthesized_count": 0,
-                "decision_count": 78,
-                "closed_trade_count": 78,
-            }
-
-        # Pre-backfill state: only 2 rows in the spine vs 80 in
-        # closed_trades — that's the exact regression the auto-backfill
-        # was added to recover from.
-        with patch.object(ws, "count_trade_decisions", return_value=2), \
+        with patch.object(ws, "build_dashboard_performance", return_value=closed_trade_perf), \
+             patch.object(ws, "build_decision_dashboard_payload", create=True) as decision_mock, \
+             patch.object(ws, "count_trade_decisions", return_value=2), \
              patch.object(ws, "count_closed_trades", return_value=80), \
              patch.object(ws, "latest_decision_ts", return_value=None), \
              patch.object(ws, "latest_closed_trade_ts", return_value=None), \
+             patch.object(ws, "_schedule_auto_backfill_trade_decisions", return_value={"scheduled": True}) as schedule_mock, \
              patch.object(ws, "backfill_trade_decisions_from_action_events",
-                           return_value={"read_events": 5, "decisions": 2, "written": 2}) as ae_mock, \
+                          return_value={"read_events": 5, "decisions": 2, "written": 2}) as ae_mock, \
              patch.object(ws, "backfill_trade_decisions_from_closed_trades",
-                           side_effect=_fake_backfill_ct) as ct_mock, \
-             patch.object(ws, "build_decision_dashboard_payload",
-                           side_effect=_fake_payload):
+                          return_value={"read_rows": 80, "decisions": 78, "written": 78}) as ct_mock:
             res = ws.api_dashboard_performance(symbol="SOL-USDT", venue="kucoin")
 
         self.assertTrue(res["ok"])
-        ae_mock.assert_called_once()
-        ct_mock.assert_called_once()
-        # >= 70 closed decisions, per the spec's integration assertion.
-        self.assertGreaterEqual(res["trade_count"], 70)
+        self.assertEqual(res["trade_count"], 80)
+        self.assertEqual(res["trade_decision_count"], 2)
+        decision_mock.assert_not_called()
+        schedule_mock.assert_not_called()
+        ae_mock.assert_not_called()
+        ct_mock.assert_not_called()
 
 
 class TradeCountInvariantsTests(unittest.TestCase):
     """Pin down the cross-field invariants the Performance card relies on.
 
     These guard the contract the dashboard's right-sidebar reads:
-    ``trade_count`` is the unique-decision-id count of the merged
-    chart list (open + closed); ``wins + losses + open == trade_count``
-    when there are no neutral pnl=0 closures; and the card's
-    ``pnl_pct`` must equal the chart's final ``cum_pct`` (which is
-    the same as the merged list's last cumulative).
+    ``trade_count`` is the closed-trade aggregate count, while
+    ``trade_decision_count`` is a separate diagnostic counter.
     """
 
-    def test_endpoint_trade_count_equals_wins_plus_losses_plus_open(self) -> None:
-        # Build a payload with 2 wins, 1 loss, 1 open decision -> 4
-        # trades. No pnl=0 closures, so the strict equality holds.
+    def test_endpoint_trade_count_equals_closed_trade_outcomes(self) -> None:
         from unittest.mock import patch
 
-        import pandas as pd
-
         import quant.execution.webhook_server as ws
-        from quant.execution.decision_performance import (
-            build_decision_dashboard_payload,
-        )
-
-        decisions = [
-            {
-                "decision_id": f"d{i}",
-                "ts": f"2026-05-15T1{i}:00:00Z",
-                "venue": "kucoin",
-                "symbol": "SOL-USDT",
-                "decision_kind": "entry",
-                "direction": "long",
-                "seq": i,
-                "engine_action": "enter_long",
-                "source_action_event_id": f"src-{i}",
-                "payload_json": {},
-            }
-            for i in range(1, 5)
-        ]
-        closed = [
-            {
-                "trade_id": f"t{i}",
-                "venue": "kucoin",
-                "symbol": "SOL-USDT",
-                "entry_ts": f"2026-05-15T1{i}:00:00Z",
-                "exit_ts": f"2026-05-15T1{i}:30:00Z",
-                "side": "long",
-                "qty": 1.0,
-                "entry_price": 100.0,
-                "exit_price": 101.0 if i < 4 else 99.0,
-                "pnl_pct": 1.0 if i in (1, 2) else (-1.0 if i == 3 else None),
-                "exit_event": "tp_exit",
-            }
-            for i in range(1, 4)
-        ]
-
-        def _fake_payload(*args, **kwargs):
-            return build_decision_dashboard_payload(
-                symbol="SOL-USDT",
-                venue="kucoin",
-                decisions=decisions,
-                closed_trades_df=pd.DataFrame(closed),
-                open_side="long",
-            )
 
         ws._PERFORMANCE_CACHE.clear()
-        with patch.object(ws, "build_decision_dashboard_payload", side_effect=_fake_payload), \
-             patch.object(ws, "count_trade_decisions", return_value=4), \
-             patch.object(ws, "_maybe_auto_backfill_trade_decisions", return_value=None):
+        with patch.object(
+            ws,
+            "build_dashboard_performance",
+            return_value={
+                "symbol": "SOL-USDT",
+                "venue": "kucoin",
+                "as_of": "2026-05-19T12:00:00Z",
+                "window": "lifetime",
+                "pnl_pct": 1.0,
+                "winrate": 50.0,
+                "monthly_growth": 1.0,
+                "average_gain": 0.25,
+                "trade_count": 4,
+                "winning_trade_count": 2,
+                "losing_trade_count": 1,
+                "source": "postgres:closed_trades",
+            },
+        ), patch.object(ws, "build_decision_dashboard_payload", create=True) as decision_mock, \
+             patch.object(ws, "count_trade_decisions", return_value=9):
             res = ws.api_dashboard_performance(symbol="SOL-USDT", venue="kucoin")
 
         self.assertTrue(res["ok"])
         self.assertEqual(res["trade_count"], 4)
         self.assertEqual(res["winning_trade_count"], 2)
         self.assertEqual(res["losing_trade_count"], 1)
-        self.assertEqual(res["open_decision_count"], 1)
-        self.assertEqual(
-            res["winning_trade_count"]
-            + res["losing_trade_count"]
-            + res["open_decision_count"],
+        self.assertLessEqual(
+            res["winning_trade_count"] + res["losing_trade_count"],
             res["trade_count"],
         )
-        # PnL on the card must equal the chart's final cum_pct.
-        self.assertEqual(res["pnl_pct"], res["cum_pct"])
-        # And pnl == sum of the realised pnls (2 wins of +1.0 + 1 loss of -1.0).
-        self.assertAlmostEqual(res["pnl_pct"], 1.0, places=4)
+        self.assertEqual(res["trade_decision_count"], 9)
+        self.assertNotIn("open_decision_count", res)
+        self.assertNotIn("cum_pct", res)
+        decision_mock.assert_not_called()
 
 
 class TradeDecisionDataclassTests(unittest.TestCase):

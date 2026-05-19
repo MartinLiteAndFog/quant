@@ -55,9 +55,6 @@ from quant.execution.trade_decisions_store import (
     latest_decision_ts,
     list_recent_trade_decisions,
 )
-from quant.execution.decision_performance import (
-    build_decision_dashboard_payload,
-)
 from quant.regime import RegimeStore, get_live_gate_confidence
 from ..utils.log import get_logger, log_throttled
 
@@ -83,8 +80,10 @@ _TRADE_COUNT_CACHE: Dict[str, Dict[str, Any]] = {}
 # Postgres with the same idempotent backfill.
 # ---------------------------------------------------------------------------
 _BACKFILL_LAST_RUN: Dict[str, float] = {}
+_BACKFILL_IN_FLIGHT: set[str] = set()
 _BACKFILL_LOCK = threading.Lock()
 _BACKFILL_THROTTLE_SEC = float(os.getenv("DASHBOARD_BACKFILL_THROTTLE_SEC", "30"))
+_BACKFILL_BATCH_LIMIT = int(os.getenv("DASHBOARD_BACKFILL_BATCH_LIMIT", "500"))
 # Trigger backfill when ``trade_decisions`` is less than this fraction of
 # ``closed_trades`` for the (venue, symbol).
 _BACKFILL_RATIO_THRESHOLD = float(os.getenv("DASHBOARD_BACKFILL_RATIO_THRESHOLD", "0.8"))
@@ -163,15 +162,74 @@ def _trade_decision_backfill_needed(venue: str, symbol: str) -> Dict[str, Any]:
     return info
 
 
+def _execute_trade_decision_backfill(venue: str, symbol: str) -> Dict[str, Any]:
+    """Run one bounded batch of both backfill sources.
+
+    Uses the newest persisted decision timestamp as a cursor so repeated
+    throttled batches advance through history instead of re-reading the
+    same oldest rows forever.
+    """
+
+    since_ts: Optional[str] = None
+    try:
+        since_ts = latest_decision_ts(venue=venue, symbol=symbol)
+    except Exception:
+        since_ts = None
+    batch = max(1, _BACKFILL_BATCH_LIMIT)
+    out: Dict[str, Any] = {
+        "venue": venue,
+        "symbol": symbol,
+        "ts": _now_utc_iso(),
+        "batch_limit": batch,
+        "since_ts": since_ts,
+    }
+    try:
+        out["action_events"] = backfill_trade_decisions_from_action_events(
+            venue=venue,
+            symbol=symbol,
+            since_ts=since_ts,
+            limit=batch,
+        )
+    except Exception as be:
+        log.warning("trade_decisions backfill (action_events) failed: %s", be)
+        out["action_events"] = {"error": str(be)}
+    try:
+        out["closed_trades"] = backfill_trade_decisions_from_closed_trades(
+            venue=venue,
+            symbol=symbol,
+            after_entry_ts=since_ts,
+            limit=batch,
+        )
+    except Exception as be:
+        log.warning("trade_decisions backfill (closed_trades) failed: %s", be)
+        out["closed_trades"] = {"error": str(be)}
+    return out
+
+
+def _wait_trade_decision_backfill_idle(timeout: float = 5.0) -> None:
+    """Block until background backfill threads finish (tests / diagnostics)."""
+
+    deadline = time.time() + max(0.1, float(timeout))
+    while time.time() < deadline:
+        with _BACKFILL_LOCK:
+            if not _BACKFILL_IN_FLIGHT:
+                return
+        time.sleep(0.02)
+
+
 def _maybe_auto_backfill_trade_decisions(
     venue: str,
     symbol: str,
     *,
     force: bool = False,
+    background: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Run the action-events + closed_trades backfill chain when the spine
     looks incomplete. ``force=True`` skips both the throttle and the
     needed-check — used by the explicit ``?backfill=1`` override.
+
+    ``background=True`` schedules a daemon thread and returns immediately so
+    dashboard chart/performance handlers are not blocked on Postgres scans.
 
     Both backfills are idempotent: ids are deterministic and the upsert is
     a no-op on conflict, so running them speculatively is safe.
@@ -189,6 +247,8 @@ def _maybe_auto_backfill_trade_decisions(
         last = float(_BACKFILL_LAST_RUN.get(key, 0.0) or 0.0)
         if not force and (now - last) < _BACKFILL_THROTTLE_SEC:
             return {"skipped": "throttled", "last_run_ts": last}
+        if background and not force and key in _BACKFILL_IN_FLIGHT:
+            return {"skipped": "in_flight", "last_run_ts": last}
         diagnosis: Optional[Dict[str, Any]] = None
         if not force:
             diagnosis = _trade_decision_backfill_needed(venue, symbol)
@@ -198,29 +258,53 @@ def _maybe_auto_backfill_trade_decisions(
         # window is respected even if a concurrent request slips through
         # the lock between releases.
         _BACKFILL_LAST_RUN[key] = now
+        if background and not force:
+            _BACKFILL_IN_FLIGHT.add(key)
 
-    out: Dict[str, Any] = {
-        "venue": venue,
-        "symbol": symbol,
-        "ts": _now_utc_iso(),
-        "forced": bool(force),
-        "diagnosis": diagnosis,
-    }
-    try:
-        out["action_events"] = backfill_trade_decisions_from_action_events(
-            venue=venue, symbol=symbol
-        )
-    except Exception as be:
-        log.warning("trade_decisions backfill (action_events) failed: %s", be)
-        out["action_events"] = {"error": str(be)}
-    try:
-        out["closed_trades"] = backfill_trade_decisions_from_closed_trades(
-            venue=venue, symbol=symbol
-        )
-    except Exception as be:
-        log.warning("trade_decisions backfill (closed_trades) failed: %s", be)
-        out["closed_trades"] = {"error": str(be)}
+    if background and not force:
+        def _worker() -> None:
+            try:
+                result = _execute_trade_decision_backfill(venue, symbol)
+                log.debug(
+                    "trade_decisions background backfill finished %s: %s",
+                    key,
+                    result,
+                )
+            except Exception as exc:
+                log.warning(
+                    "trade_decisions background backfill failed %s: %s",
+                    key,
+                    exc,
+                )
+            finally:
+                with _BACKFILL_LOCK:
+                    _BACKFILL_IN_FLIGHT.discard(key)
+
+        threading.Thread(
+            target=_worker,
+            name=f"td-backfill-{key}",
+            daemon=True,
+        ).start()
+        return {
+            "scheduled": True,
+            "venue": venue,
+            "symbol": symbol,
+            "ts": _now_utc_iso(),
+            "diagnosis": diagnosis,
+        }
+
+    out = _execute_trade_decision_backfill(venue, symbol)
+    out["forced"] = bool(force)
+    out["diagnosis"] = diagnosis
     return out
+
+
+def _schedule_auto_backfill_trade_decisions(venue: str, symbol: str) -> Optional[Dict[str, Any]]:
+    """Non-blocking auto-backfill entry point for dashboard hot paths."""
+
+    return _maybe_auto_backfill_trade_decisions(
+        venue, symbol, force=False, background=True
+    )
 
 
 def _daily_regime_label(gate_state: Optional[Dict[str, Any]]) -> Optional[str]:
@@ -960,6 +1044,7 @@ def api_dashboard_chart(
     )
     if cached is not None:
         return cached
+    chart_t0 = time.perf_counter()
     try:
         renko_df = _read_renko_df()
         trades_df = load_closed_trades_from_postgres(
@@ -1154,40 +1239,16 @@ def api_dashboard_chart(
             allow_fill_reconstruction=False,
             _trades_df=trades_df,
         )
-        # Auto-backfill the decision spine when it falls behind
-        # ``closed_trades`` for this venue/symbol. Idempotent + throttled,
-        # so the chart endpoint can call this on every refresh without
-        # hammering Postgres. This is what restores the historical KuCoin
-        # tail in the chart after a fresh deploy where ``trade_decisions``
-        # only carries the most recent rows.
-        _maybe_auto_backfill_trade_decisions(venue="kucoin", symbol=symbol)
-        # Decision-based equity curve — same list that the Performance card
-        # on the sidebar aggregates. Falls back to the legacy diary-driven
-        # curve when ``trade_decisions`` is empty so the chart still renders
-        # something for symbols that pre-date the decision spine.
-        decision_payload = build_decision_dashboard_payload(
+        equity = build_equity_curve(
+            max_points=int(max(100, max_points)),
             symbol=symbol,
             venue="kucoin",
-            max_points=int(max(100, max_points)),
-            closed_trades_df=trades_df,
+            live_only=True,
+            include_reconstructed=False,
+            allow_file_fallback=allow_file_fallback,
+            allow_fill_reconstruction=False,
+            _trades_df=trades_df,
         )
-        decision_points = decision_payload["curve"]["points"]
-        if decision_points:
-            equity = {
-                "trades": decision_points,
-                "source": decision_payload["curve"]["source"],
-            }
-        else:
-            equity = build_equity_curve(
-                max_points=int(max(100, max_points)),
-                symbol=symbol,
-                venue="kucoin",
-                live_only=True,
-                include_reconstructed=False,
-                allow_file_fallback=allow_file_fallback,
-                allow_fill_reconstruction=False,
-                _trades_df=trades_df,
-            )
         equity_real = load_real_equity_history(max_points=int(max(100, max_points)))
 
         equity_components = [
@@ -1308,9 +1369,22 @@ def api_dashboard_chart(
             "_debug": _debug,
             "ts": _now_utc_iso(),
         }
+        log.debug(
+            "dashboard chart built in %.3fs symbol=%s hours=%s max_points=%s",
+            time.perf_counter() - chart_t0,
+            symbol,
+            hours,
+            max_points,
+        )
         _cache_put(_CHART_CACHE, cache_key, result)
         return result
     except Exception as e:
+        log.debug(
+            "dashboard chart failed in %.3fs symbol=%s: %s",
+            time.perf_counter() - chart_t0,
+            symbol,
+            e,
+        )
         err_result = {
             "ok": False,
             "symbol": symbol,
@@ -1388,16 +1462,13 @@ def api_dashboard_performance(
     venue: str = "kucoin",
     backfill: int = 0,
 ) -> Dict[str, Any]:
-    """Decision-based performance summary.
+    """Closed-trades performance summary.
 
-    Every number returned here is derived from the exact same decision list
-    that powers the trade-mode equity curve, so the Performance card and the
-    chart can never disagree. ``backfill=1`` runs the idempotent
-    ``backfill_trade_decisions_from_action_events`` job for the requested
-    venue first so the spine is populated when Railway hasn't done it yet.
+    ``trade_decision_count`` is returned as a separate diagnostic counter,
+    but it does not drive the main card metrics.
     """
 
-    cache_key = f"{_normalize_symbol(symbol)}:{venue}:{int(backfill)}"
+    cache_key = f"{_normalize_symbol(symbol)}:{venue}"
     cached = _cache_get(
         _PERFORMANCE_CACHE,
         cache_key,
@@ -1406,34 +1477,12 @@ def api_dashboard_performance(
     if cached is not None:
         return cached
     try:
-        # Two paths into the backfill machinery:
-        #   * ``backfill=1`` is an explicit operator override that always
-        #     runs and bypasses the throttle.
-        #   * Otherwise the auto-backfill helper inspects the spine vs.
-        #     ``closed_trades`` and only fires when it looks incomplete,
-        #     subject to a per-(venue, symbol) throttle so chart polling
-        #     doesn't hammer Postgres.
-        _maybe_auto_backfill_trade_decisions(
-            venue=venue, symbol=symbol, force=(int(backfill) == 1)
-        )
-
-        payload = build_decision_dashboard_payload(
-            symbol=symbol,
-            venue=venue,
-            # Cap is intentionally well above the historical decision
-            # count for KuCoin (~70 at time of writing). Higher caps
-            # never inflate ``trade_count`` — the builder dedupes and,
-            # if it ever exceeds the cap, downsamples uniformly while
-            # preserving first/last so the chart's cumulative endpoints
-            # still match the card.
-            max_points=int(os.getenv("DASHBOARD_DECISION_MAX_POINTS", "5000")),
-        )
-        perf = payload["performance"]
+        perf = build_dashboard_performance(symbol=symbol, venue=venue)
         try:
             decision_count = int(count_trade_decisions(venue=venue, symbol=symbol))
         except Exception as count_err:
             log.warning("trade decision count failed: %s", count_err)
-            decision_count = perf.get("trade_count")
+            decision_count = None
 
         result = {
             "ok": True,
@@ -1445,29 +1494,10 @@ def api_dashboard_performance(
             "winrate": perf.get("winrate"),
             "monthly_growth": perf.get("monthly_growth"),
             "average_gain": perf.get("average_gain"),
-            # ``trade_count`` is now the count of decisions (entries + flips,
-            # open or closed). ``closed_decision_count`` exposes the closed
-            # subset for completeness — the chart's cumulative line covers
-            # that subset. ``open_decision_count`` flags currently-running
-            # trades that don't contribute to wins / losses yet.
             "trade_count": perf.get("trade_count", 0),
-            "closed_decision_count": perf.get("closed_decision_count", 0),
             "winning_trade_count": perf.get("winning_trade_count", 0),
             "losing_trade_count": perf.get("losing_trade_count", 0),
-            "open_decision_count": perf.get("open_decision_count", 0),
-            # Keep ``trade_decision_count`` as a back-compat alias for the
-            # old Sidebar API. Same value as ``trade_count`` in the
-            # decision-based world; the field will be retired once the
-            # frontend stops referencing it directly.
             "trade_decision_count": decision_count,
-            "cum_pct": perf.get("cum_pct"),
-            "needs_backfill": bool(payload.get("needs_backfill")),
-            # Number of in-memory synthesised rows merged into the
-            # decision spine for this payload. Non-zero means the
-            # persistent ``trade_decisions`` table is still missing
-            # rows that the chart is papering over until the operator
-            # runs ``?backfill=1`` on Railway.
-            "synthesized_count": int(payload.get("synthesized_count") or 0),
             "source": perf.get("source", "unknown"),
             "ts": _now_utc_iso(),
         }
@@ -1485,14 +1515,9 @@ def api_dashboard_performance(
             "monthly_growth": None,
             "average_gain": None,
             "trade_count": 0,
-            "closed_decision_count": 0,
             "winning_trade_count": 0,
             "losing_trade_count": 0,
-            "open_decision_count": 0,
             "trade_decision_count": None,
-            "cum_pct": None,
-            "needs_backfill": False,
-            "synthesized_count": 0,
             "source": "error",
             "error": str(e),
             "ts": _now_utc_iso(),

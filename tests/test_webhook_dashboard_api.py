@@ -434,6 +434,88 @@ class WebhookDashboardApiTests(unittest.TestCase):
 
         self.assertEqual(ts1, ts2, "Second call should return cached response")
 
+    def test_chart_equity_curve_uses_closed_trades_not_decisions(self) -> None:
+        """Trade-mode equity must keep the full closed_trades history."""
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        ws._CHART_CACHE.clear()
+        closed_trades = pd.DataFrame(
+            [
+                {
+                    "trade_id": "ct-1",
+                    "venue": "kucoin",
+                    "symbol": "SOL-USDT",
+                    "entry_ts": "2026-02-20T00:00:00Z",
+                    "exit_ts": "2026-02-20T00:10:00Z",
+                    "side": "long",
+                    "qty": 1.0,
+                    "entry_price": 100.0,
+                    "exit_price": 101.0,
+                    "pnl_pct": 1.0,
+                    "strategy": "live_executor",
+                    "exit_event": "tp_exit",
+                },
+                {
+                    "trade_id": "ct-2",
+                    "venue": "kucoin",
+                    "symbol": "SOL-USDT",
+                    "entry_ts": "2026-02-20T00:20:00Z",
+                    "exit_ts": "2026-02-20T00:30:00Z",
+                    "side": "short",
+                    "qty": 1.0,
+                    "entry_price": 101.0,
+                    "exit_price": 103.0,
+                    "pnl_pct": -2.0,
+                    "strategy": "live_executor",
+                    "exit_event": "sl_exit",
+                },
+                {
+                    "trade_id": "ct-3",
+                    "venue": "kucoin",
+                    "symbol": "SOL-USDT",
+                    "entry_ts": "2026-02-20T00:40:00Z",
+                    "exit_ts": "2026-02-20T00:50:00Z",
+                    "side": "long",
+                    "qty": 1.0,
+                    "entry_price": 103.0,
+                    "exit_price": 106.0,
+                    "pnl_pct": 3.0,
+                    "strategy": "live_executor",
+                    "exit_event": "tp_exit",
+                },
+            ]
+        )
+        sparse_decision_payload = {
+            "curve": {
+                "points": [
+                    {"time": 1, "pnl_pct": 10.0, "cum_pct": 10.0},
+                    {"time": 2, "pnl_pct": -5.0, "cum_pct": 5.0},
+                ],
+                "source": "postgres:trade_decisions+closed_trades",
+            },
+            "performance": {},
+            "needs_backfill": True,
+        }
+
+        with patch.object(ws, "load_closed_trades_from_postgres", return_value=closed_trades), \
+             patch.object(ws, "build_decision_dashboard_payload", return_value=sparse_decision_payload, create=True) as decision_mock, \
+             patch.object(ws, "_schedule_auto_backfill_trade_decisions", return_value={"scheduled": True}) as schedule_mock, \
+             patch.object(ws, "_maybe_auto_backfill_trade_decisions", return_value=None) as backfill_mock:
+            body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=100)
+
+        self.assertTrue(body.get("ok"))
+        self.assertEqual(body.get("equity_source"), "preloaded")
+        self.assertEqual(len(body.get("equity_curve", [])), 3)
+        self.assertEqual(
+            [float(p["pnl_pct"]) for p in body["equity_curve"]],
+            [1.0, -2.0, 3.0],
+        )
+        decision_mock.assert_not_called()
+        schedule_mock.assert_not_called()
+        backfill_mock.assert_not_called()
+
     def test_api_status_uses_cache_within_ttl(self) -> None:
         os.environ["KUCOIN_FUTURES_API_KEY"] = "x"
         os.environ["DASHBOARD_API_CACHE_SEC"] = "120"

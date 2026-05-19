@@ -35,6 +35,10 @@ _MIN_VALID_EPOCH_SEC = 946_684_800  # 2000-01-01T00:00:00Z
 # back-to-back independent re-entries as flips.
 _FLIP_OVERLAP_TOLERANCE_SEC = 60
 
+# Upper bound on rows read/upserted per backfill invocation so dashboard
+# endpoints never scan the full historical tables in one request.
+_DEFAULT_BACKFILL_BATCH_LIMIT = 500
+
 
 _SCHEMA_SQL = """
 create table if not exists trade_decisions (
@@ -315,15 +319,19 @@ def backfill_trade_decisions_from_action_events(
     venue: Optional[str] = None,
     symbol: Optional[str] = None,
     since_ts: Optional[str] = None,
+    limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Re-derive ``trade_decisions`` rows from existing ``action_events`` rows.
 
     Safe to run repeatedly: every decision id is deterministic and the upsert
-    is a no-op on conflict.
+    is a no-op on conflict. ``limit`` caps how many events are read per call
+    (oldest-first after ``since_ts``) so dashboard backfill cannot scan the
+    full table in one shot.
     """
 
+    batch = int(limit) if limit is not None else _DEFAULT_BACKFILL_BATCH_LIMIT
     events = fetch_action_events_for_backfill(
-        venue=venue, symbol=symbol, since_ts=since_ts
+        venue=venue, symbol=symbol, since_ts=since_ts, limit=max(1, batch)
     )
     decisions = build_trade_decisions_from_action_events(events)
     written = upsert_trade_decisions(decisions)
@@ -333,6 +341,8 @@ def backfill_trade_decisions_from_action_events(
         "written": int(written),
         "venue": venue,
         "symbol": symbol,
+        "batch_limit": batch,
+        "since_ts": since_ts,
     }
 
 
@@ -438,6 +448,8 @@ def fetch_closed_trades_for_backfill(
     *,
     venue: Optional[str] = None,
     symbol: Optional[str] = None,
+    after_entry_ts: Optional[str] = None,
+    limit: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """Read raw rows from ``closed_trades`` for the closed-trades backfill.
 
@@ -456,6 +468,9 @@ def fetch_closed_trades_for_backfill(
             "replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s"
         )
         params["symbol_norm"] = _normalize_symbol_token(symbol)
+    if after_entry_ts:
+        where.append("entry_ts > %(after_entry_ts)s::timestamptz")
+        params["after_entry_ts"] = str(after_entry_ts)
     sql = """
     select trade_id, venue, symbol, side, entry_ts, exit_ts, strategy,
            strategy_instance, payload_json
@@ -466,6 +481,9 @@ def fetch_closed_trades_for_backfill(
     # Order by exit_ts ascending so the flip detector sees adjacency in the
     # same direction the executor would have observed it.
     sql += " order by exit_ts asc nulls last, entry_ts asc nulls last"
+    if limit is not None:
+        sql += " limit %(limit)s"
+        params["limit"] = int(max(1, limit))
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         rows = cur.fetchall() or []
@@ -610,6 +628,8 @@ def backfill_trade_decisions_from_closed_trades(
     *,
     venue: Optional[str] = "kucoin",
     symbol: Optional[str] = None,
+    after_entry_ts: Optional[str] = None,
+    limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Backfill ``trade_decisions`` rows from the historical ``closed_trades``
     table.
@@ -625,7 +645,13 @@ def backfill_trade_decisions_from_closed_trades(
     no effect once the spine is populated.
     """
 
-    rows = fetch_closed_trades_for_backfill(venue=venue, symbol=symbol)
+    batch = int(limit) if limit is not None else _DEFAULT_BACKFILL_BATCH_LIMIT
+    rows = fetch_closed_trades_for_backfill(
+        venue=venue,
+        symbol=symbol,
+        after_entry_ts=after_entry_ts,
+        limit=max(1, batch),
+    )
     decisions, stats = build_trade_decisions_from_closed_trades(rows)
     written = upsert_trade_decisions(decisions)
     return {
@@ -634,6 +660,8 @@ def backfill_trade_decisions_from_closed_trades(
         "written": int(written),
         "venue": venue,
         "symbol": symbol,
+        "batch_limit": batch,
+        "after_entry_ts": after_entry_ts,
         **stats,
     }
 

@@ -25,37 +25,16 @@ export interface DashboardPerformanceResponse {
   venue: string;
   as_of?: string;
   window?: string;
-  // Every number here is derived from the SAME decision list that the
-  // trade-mode equity chart plots. ``pnl_pct`` == the chart's final
-  // ``cum_pct``; ``trade_count`` == ``points.length``; wins / losses count
-  // only closed decisions whose realized pnl is > 0 / < 0. Open decisions
-  // (still in-position) bump ``trade_count`` and ``open_decision_count``
-  // but do NOT contribute to wins / losses / pnl / avg.
+  // Main metrics are closed_trades aggregates. ``trade_decision_count`` is a
+  // separate diagnostic counter and must not drive the Performance card.
   pnl_pct: number | null;
   winrate: number | null; // 0..100
   monthly_growth: number | null;
   average_gain: number | null;
   trade_count?: number;
-  closed_decision_count?: number;
   winning_trade_count?: number;
   losing_trade_count?: number;
-  open_decision_count?: number;
-  // Back-compat alias for the old field name. In the decision-based world
-  // this is the same value as ``trade_count``. Will be retired once the UI
-  // stops referencing it directly.
   trade_decision_count?: number | null;
-  cum_pct?: number | null;
-  // True when the persistent ``trade_decisions`` spine is still smaller
-  // than ``closed_trades`` after the auto-backfill ran (or when the
-  // auto-backfill couldn't run). In that mode the chart is patched up
-  // by in-memory ``td_ct_synth_*`` rows that don't survive a restart;
-  // the operator can force-persist them with ``?backfill=1`` on Railway.
-  needs_backfill?: boolean;
-  // Count of in-memory synthesized rows in the latest chart payload.
-  // Non-zero means the spine is missing rows that the backend papered
-  // over with synthesized decisions — informational, surfaced via the
-  // amber hint in the Performance card.
-  synthesized_count?: number;
   source?: string;
   error?: string;
   ts?: string;

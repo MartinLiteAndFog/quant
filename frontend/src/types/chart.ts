@@ -108,14 +108,13 @@ export interface EquityComponent {
 
 export interface TradeEquityPoint {
   time: number;
-  // ``pnl_pct`` is null for open (still-running) decisions; the chart's
-  // cumulative line carries through those gaps via ``cum_pct``.
+  // ``pnl_pct`` may be null for incomplete rows; the chart's cumulative line
+  // carries through those gaps via ``cum_pct``.
   pnl_pct: number | null;
   cum_pct: number;
   side?: string;
-  // ``entry_time`` is null when the decision pre-dates ``action_events`` or
-  // when an older NaT->0 writer left a sentinel row. Render "—" in tooltips
-  // rather than 1/1/1970.
+  // ``entry_time`` is null when older NaT->0 writers left a sentinel row.
+  // Render "—" in tooltips rather than 1/1/1970.
   entry_time?: number | null;
   exit_time?: number | null;
   entry_price?: number | null;

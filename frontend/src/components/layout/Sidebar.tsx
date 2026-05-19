@@ -1,4 +1,4 @@
-import { memo, useEffect } from "react";
+import { memo } from "react";
 import type { ReactNode } from "react";
 import type {
   StatusResponse,
@@ -107,29 +107,9 @@ function SidebarBase({
 
   const strategyLabel = strategy?.strategy_label ?? "—";
 
-  // Every number in this card is derived from the SAME decision list that
-  // the trade-mode equity chart below renders — no dual-source fallback.
-  // Backend contract: ``trade_count`` = decisions (open + closed),
-  // ``closed_decision_count`` = decisions with a known realized pnl,
-  // ``winning_trade_count`` + ``losing_trade_count`` <= closed_decision_count,
-  // and ``pnl_pct`` == the chart's final ``cum_pct``.
+  // Main performance metrics are closed_trades aggregates. The separate
+  // trade_decision_count field is diagnostic only and is not rendered here.
   const tradeCount = performance?.trade_count ?? null;
-  const openCount = performance?.open_decision_count ?? null;
-
-  // The backend still surfaces ``synthesized_count`` so operators can
-  // tell from server logs / devtools when the chart is being patched
-  // up with in-memory ``td_ct_synth_*`` rows. We deliberately do NOT
-  // render any user-facing copy or raw API URLs in the dashboard —
-  // the auto-backfill remains a server-side concern.
-  const synthesizedCount = performance?.synthesized_count ?? 0;
-  useEffect(() => {
-    if (synthesizedCount > 0) {
-      // eslint-disable-next-line no-console
-      console.debug(
-        `[performance] chart history reconstructed from closed_trades (${synthesizedCount} synthesized rows)`
-      );
-    }
-  }, [synthesizedCount]);
 
   return (
     <aside className="flex w-80 flex-col gap-3 overflow-y-auto">
@@ -204,12 +184,6 @@ function SidebarBase({
             <span className="text-zinc-400">Trades</span>
             <span>{fmtInt(tradeCount)}</span>
           </div>
-          {openCount != null && openCount > 0 && (
-            <div className="flex items-center justify-between gap-3 text-[11px]">
-              <span className="pl-2 text-zinc-500">Open</span>
-              <span className="text-zinc-400">{fmtInt(openCount)}</span>
-            </div>
-          )}
           <div className="flex items-center justify-between gap-3">
             <span className="text-zinc-400">Wins</span>
             <span className="text-emerald-400">
