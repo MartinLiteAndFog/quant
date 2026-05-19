@@ -376,7 +376,7 @@ def load_closed_trades_from_postgres(
         if venue is None and symbol is None:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
-                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance
+                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance, payload_json
                 from closed_trades
                 order by exit_ts desc
                 limit %(limit)s
@@ -385,7 +385,7 @@ def load_closed_trades_from_postgres(
         elif venue is None:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
-                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance
+                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance, payload_json
                 from closed_trades
                 where replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
                 order by exit_ts desc
@@ -395,7 +395,7 @@ def load_closed_trades_from_postgres(
         elif symbol is None:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
-                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance
+                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance, payload_json
                 from closed_trades
                 where venue = %(venue)s
                 order by exit_ts desc
@@ -405,7 +405,7 @@ def load_closed_trades_from_postgres(
         else:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
-                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance
+                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance, payload_json
                 from closed_trades
                 where venue = %(venue)s
                   and replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
@@ -441,6 +441,7 @@ def load_closed_trades_from_postgres(
                     "exit_event",
                     "strategy",
                     "strategy_instance",
+                    "payload_json",
                 ],
             )
 
@@ -618,9 +619,52 @@ def _reconstruct_trades_from_execution_fills_df(
 # conversions. Created once so hot paths (e.g. marker building per refresh)
 # don't allocate a fresh ``pd.Timestamp`` on every call.
 _EPOCH_UTC = pd.Timestamp("1970-01-01", tz="UTC")
+_MIN_VALID_ENTRY_EPOCH_SEC = int(pd.Timestamp("2000-01-01", tz="UTC").timestamp())
 
 _LONG_TOKENS = frozenset({"long", "l", "buy", "1"})
 _SHORT_TOKENS = frozenset({"short", "s", "sell", "-1"})
+
+
+def _payload_dict_from_any(v: Any) -> Dict[str, Any]:
+    if isinstance(v, dict):
+        return v
+    if isinstance(v, (bytes, bytearray)):
+        try:
+            v = v.decode("utf-8")
+        except Exception:
+            return {}
+    if isinstance(v, str):
+        try:
+            parsed = json.loads(v)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _valid_entry_epoch_seconds(v: Any) -> Optional[int]:
+    seconds = _epoch_seconds_from_any(v)
+    if seconds is None or seconds < _MIN_VALID_ENTRY_EPOCH_SEC:
+        return None
+    return int(seconds)
+
+
+def _resolve_trade_entry_epoch_seconds(row: Any) -> Optional[int]:
+    entry_seconds = _valid_entry_epoch_seconds(row.get("entry_ts"))
+    if entry_seconds is not None:
+        return entry_seconds
+
+    payload = _payload_dict_from_any(row.get("payload_json"))
+    for key in ("opened_at", "created_at", "entry_bar_ts", "bar_ts"):
+        entry_seconds = _valid_entry_epoch_seconds(payload.get(key))
+        if entry_seconds is not None:
+            return entry_seconds
+    return None
+
+
+def _resolved_entry_ts_series(df: pd.DataFrame) -> pd.Series:
+    epochs = [_resolve_trade_entry_epoch_seconds(r) for _, r in df.iterrows()]
+    return pd.to_datetime(pd.Series(epochs, index=df.index), unit="s", utc=True, errors="coerce")
 
 
 def _side_value_to_int(v: Any) -> int:
@@ -1322,7 +1366,7 @@ def _aggregate_logical_trades(df: pd.DataFrame) -> pd.DataFrame:
     if "exit_ts" not in w.columns:
         return pd.DataFrame()
 
-    w["entry_ts"] = pd.to_datetime(w.get("entry_ts"), utc=True, errors="coerce")
+    w["entry_ts"] = _resolved_entry_ts_series(w)
     w["exit_ts"] = pd.to_datetime(w.get("exit_ts"), utc=True, errors="coerce")
 
     def _side_sign(v: Any) -> int:
@@ -1388,11 +1432,13 @@ def _aggregate_logical_trades(df: pd.DataFrame) -> pd.DataFrame:
     # equality checks instead of paired-None comparisons in a Python loop.
     _NO_ANCHOR_SENTINEL = -1
     dt_entry = pd.to_datetime(w["entry_ts"], utc=True, errors="coerce")
-    entry_anchor_int = (
-        (dt_entry.astype("int64") // 1_000_000_000)
-        .where(dt_entry.notna(), _NO_ANCHOR_SENTINEL)
-        .astype("int64")
-    )
+    entry_anchor_int = pd.Series(_NO_ANCHOR_SENTINEL, index=w.index, dtype="int64")
+    valid_entry_mask = dt_entry.notna()
+    if valid_entry_mask.any():
+        entry_anchor_int.loc[valid_entry_mask] = (
+            (dt_entry.loc[valid_entry_mask] - _EPOCH_UTC)
+            // pd.Timedelta(seconds=1)
+        ).astype("int64")
     w["entry_anchor"] = entry_anchor_int
 
     side_arr = w["side_sign"].astype("int64").to_numpy()
@@ -1477,15 +1523,12 @@ def _aggregate_logical_trades(df: pd.DataFrame) -> pd.DataFrame:
     entry_out_arr = np.where(entry_any, entry_price, np.nan)
     exit_out_arr = np.where(exit_any, exit_price, np.nan)
 
-    # Fall back to exit_ts when entry_ts_min is NaT (group had no valid entry_ts).
-    entry_ts_filled = grouped_sum["entry_ts_min"].fillna(grouped_sum["exit_ts_max"])
-
     out_df = pd.DataFrame(
         {
             "logical_trade_id": [
                 f"lt_{int(gid)}" for gid in grouped_sum.index.to_list()
             ],
-            "entry_ts": entry_ts_filled.to_numpy(),
+            "entry_ts": grouped_sum["entry_ts_min"].to_numpy(),
             "exit_ts": grouped_sum["exit_ts_max"].to_numpy(),
             "side": side_strs,
             "qty": qty_out_arr,
@@ -1591,24 +1634,12 @@ def build_trading_diary(
         else:
             rows_df = _aggregate_logical_trades(rows_df).tail(int(max(1, max_points)))
 
-        # Reject pre-2000 sentinel entry timestamps so the equity tooltip
-        # never falls back to "1/1/1970" when older NaT->0 writers leaked a
-        # bogus row into ``closed_trades``. ``exit_ts`` is required (no
-        # row makes sense without a close) but ``entry_ts`` is allowed to
-        # be null — the frontend treats that as "—".
-        _entry_min_valid = pd.Timestamp("2000-01-01", tz="UTC")
         for i, r in rows_df.iterrows():
-            entry_ts = pd.to_datetime(r.get("entry_ts"), utc=True, errors="coerce")
             exit_ts = pd.to_datetime(r.get("exit_ts"), utc=True, errors="coerce")
             pnl_pct = pd.to_numeric(r.get("pnl_pct"), errors="coerce")
             if pd.isna(exit_ts) or pd.isna(pnl_pct):
                 continue
-            if pd.notna(entry_ts) and entry_ts >= _entry_min_valid:
-                entry_time_val: Optional[int] = int(
-                    (pd.Timestamp(entry_ts) - _EPOCH_UTC) // pd.Timedelta(seconds=1)
-                )
-            else:
-                entry_time_val = None
+            entry_time_val = _resolve_trade_entry_epoch_seconds(r)
             out.append(
                 {
                     "id": str(r.get("logical_trade_id") or f"lt_{i}"),
@@ -2110,23 +2141,35 @@ def _performance_trade_frame(
         venue=venue,
         symbol=symbol,
         max_points=max_points,
+        strategy_whitelist=["live_executor"],
+        exclude_exit_events=["fills_reconstructed"],
     )
     source = "postgres:closed_trades"
 
-    if df.empty:
+    if df.empty and _truthy(os.getenv("DASHBOARD_TRADE_ALLOW_FILE_FALLBACK", "0")):
         df = _read_trades_df()
         source = "trades_parquet"
 
         if not df.empty:
             if "symbol" in df.columns:
-                df = df[df["symbol"].astype(str) == str(symbol)]
+                sym_norm = _normalize_symbol_token(symbol)
+                df = df[df["symbol"].map(lambda x: _normalize_symbol_token(str(x))).astype(str) == sym_norm]
             if "venue" in df.columns:
                 df = df[df["venue"].astype(str) == str(venue)]
+            if "strategy" in df.columns:
+                df = df[df["strategy"].astype(str) == "live_executor"]
+            if "exit_event" in df.columns:
+                df = df[df["exit_event"].astype(str).str.lower() != "fills_reconstructed"]
 
     if df.empty:
         return pd.DataFrame(), "none"
 
     df = df.copy()
+
+    if "strategy" in df.columns:
+        df = df[df["strategy"].astype(str) == "live_executor"]
+    if "exit_event" in df.columns:
+        df = df[df["exit_event"].astype(str).str.lower() != "fills_reconstructed"]
 
     if "exit_ts" not in df.columns:
         return pd.DataFrame(), source
@@ -2134,17 +2177,8 @@ def _performance_trade_frame(
     df["exit_ts"] = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
     df["pnl_pct"] = pd.to_numeric(df.get("pnl_pct"), errors="coerce")
     df = df.dropna(subset=["exit_ts", "pnl_pct"]).sort_values("exit_ts").reset_index(drop=True)
-    df = df[df["exit_ts"] >= pd.Timestamp("2026-03-10T00:00:00Z")]
-
-    if "strategy" in df.columns:
-        if venue == "kucoin":
-            df = df[df["strategy"].astype(str) == "live_executor"]
-
-    df = df.reset_index(drop=True)
-    logical_df = _aggregate_logical_trades(df)
-    if logical_df.empty:
-        return pd.DataFrame(), source
-    return logical_df.reset_index(drop=True), source
+    df = df.tail(int(max(1, max_points))).reset_index(drop=True)
+    return df, source
 
 
 def _compound_trade_returns_pct(s: pd.Series) -> Optional[float]:
@@ -2181,11 +2215,13 @@ def build_dashboard_performance(
             "trade_count": 0,
             "winning_trade_count": 0,
             "losing_trade_count": 0,
+            "breakeven_trade_count": 0,
             "source": source,
         }
 
     winners = df[df["pnl_pct"] > 0]
     losers = df[df["pnl_pct"] < 0]
+    breakevens = df[df["pnl_pct"] == 0]
 
     pnl_pct = _compound_trade_returns_pct(df["pnl_pct"])
     monthly_growth = _compound_trade_returns_pct(
@@ -2196,6 +2232,7 @@ def build_dashboard_performance(
     trade_count = int(len(df))
     winning_trade_count = int(len(winners))
     losing_trade_count = int(len(losers))
+    breakeven_trade_count = int(len(breakevens))
     winrate = (winning_trade_count / trade_count * 100.0) if trade_count > 0 else None
 
     return {
@@ -2210,5 +2247,6 @@ def build_dashboard_performance(
         "trade_count": trade_count,
         "winning_trade_count": winning_trade_count,
         "losing_trade_count": losing_trade_count,
+        "breakeven_trade_count": breakeven_trade_count,
         "source": source,
     }

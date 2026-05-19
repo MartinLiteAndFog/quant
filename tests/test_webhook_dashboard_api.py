@@ -299,6 +299,44 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertEqual(str(live_arrow.get("position", "")), "belowBar")
         self.assertEqual(str(live_arrow.get("color", "")).lower(), "#22c55e")
 
+    def test_chart_includes_live_entry_marker_when_open_entry_predates_bars(self) -> None:
+        root = Path(self.tmp.name)
+        # Simulate the live dashboard after the Renko window has rolled past
+        # the open trade's original entry. Closed-trade markers should still be
+        # constrained to in-window entries, but the current open trade needs a
+        # visible direction arrow.
+        pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-02-20T02:00:00Z", periods=2, freq="h"),
+                "open": [102.0, 103.0],
+                "high": [103.0, 104.0],
+                "low": [101.0, 102.0],
+                "close": [102.5, 103.5],
+            }
+        ).to_parquet(root / "renko.parquet", index=False)
+        os.environ["DASHBOARD_TRADES_PARQUET"] = str(root / "missing_trades.parquet")
+        (root / "execution_state.json").write_text(
+            '{"sl":105.0,"side":"short","entry_px":101.0,"entry_bar_ts":"2026-02-20T00:00:00Z"}',
+            encoding="utf-8",
+        )
+        ws._CHART_CACHE.clear()
+
+        body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+
+        self.assertTrue(body.get("ok"))
+        first_bar_ts = int(body["bars"][0]["time"])
+        live_arrows = [
+            m
+            for m in body.get("markers", [])
+            if int(m.get("time", 0)) == first_bar_ts
+            and str(m.get("shape", "")) == "arrowDown"
+        ]
+        self.assertTrue(live_arrows)
+        live_arrow = live_arrows[0]
+        self.assertEqual(str(live_arrow.get("text", "")), "")
+        self.assertEqual(str(live_arrow.get("position", "")), "aboveBar")
+        self.assertEqual(str(live_arrow.get("color", "")).lower(), "#ef4444")
+
     def test_chart_handles_string_entry_bar_ts(self) -> None:
         root = Path(self.tmp.name)
         os.environ["DASHBOARD_TRADES_PARQUET"] = str(root / "missing_trades.parquet")

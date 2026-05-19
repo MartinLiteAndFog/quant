@@ -1175,8 +1175,9 @@ def api_dashboard_chart(
                         "time": t_i,
                         "position": "belowBar" if side_i >= 0 else "aboveBar",
                         "shape": "arrowUp" if side_i >= 0 else "arrowDown",
-                        "color": "#7aa2f7",
-                        "text": f"live entry {'L' if side_i >= 0 else 'S'}" + (f" @ {px_f:.3f}" if px_f else ""),
+                        "color": "#22c55e" if side_i >= 0 else "#ef4444",
+                        "text": "",
+                        "size": 2,
                     }
         except Exception:
             live_entry_marker = None
@@ -1184,6 +1185,17 @@ def api_dashboard_chart(
         markers_all = markers + markers_live
         if live_entry_marker is not None:
             mt = int(live_entry_marker.get("time", 0))
+            if (
+                oldest_bar_ts is not None
+                and newest_bar_ts is not None
+                and mt < oldest_bar_ts
+                and not markers_all
+            ):
+                # Closed-trade entries remain strictly in-window, but an open
+                # position that started before the Renko slice still needs a
+                # visible arrow so the chart does not look flat/no-position.
+                live_entry_marker = {**live_entry_marker, "time": int(oldest_bar_ts)}
+                mt = int(oldest_bar_ts)
             # Skip the live-entry marker if it would also stack at the chart
             # start because the open position predates the visible bars.
             in_range = (
@@ -1497,6 +1509,7 @@ def api_dashboard_performance(
             "trade_count": perf.get("trade_count", 0),
             "winning_trade_count": perf.get("winning_trade_count", 0),
             "losing_trade_count": perf.get("losing_trade_count", 0),
+            "breakeven_trade_count": perf.get("breakeven_trade_count", 0),
             "trade_decision_count": decision_count,
             "source": perf.get("source", "unknown"),
             "ts": _now_utc_iso(),
@@ -1517,6 +1530,7 @@ def api_dashboard_performance(
             "trade_count": 0,
             "winning_trade_count": 0,
             "losing_trade_count": 0,
+            "breakeven_trade_count": 0,
             "trade_decision_count": None,
             "source": "error",
             "error": str(e),

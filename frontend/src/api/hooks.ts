@@ -34,6 +34,7 @@ export interface DashboardPerformanceResponse {
   trade_count?: number;
   winning_trade_count?: number;
   losing_trade_count?: number;
+  breakeven_trade_count?: number;
   trade_decision_count?: number | null;
   source?: string;
   error?: string;

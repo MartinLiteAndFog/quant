@@ -1252,6 +1252,7 @@ class TradeCountInvariantsTests(unittest.TestCase):
                 "trade_count": 4,
                 "winning_trade_count": 2,
                 "losing_trade_count": 1,
+                "breakeven_trade_count": 1,
                 "source": "postgres:closed_trades",
             },
         ), patch.object(ws, "build_decision_dashboard_payload", create=True) as decision_mock, \
@@ -1262,8 +1263,9 @@ class TradeCountInvariantsTests(unittest.TestCase):
         self.assertEqual(res["trade_count"], 4)
         self.assertEqual(res["winning_trade_count"], 2)
         self.assertEqual(res["losing_trade_count"], 1)
-        self.assertLessEqual(
-            res["winning_trade_count"] + res["losing_trade_count"],
+        self.assertEqual(res["breakeven_trade_count"], 1)
+        self.assertEqual(
+            res["winning_trade_count"] + res["losing_trade_count"] + res["breakeven_trade_count"],
             res["trade_count"],
         )
         self.assertEqual(res["trade_decision_count"], 9)

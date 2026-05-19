@@ -736,6 +736,50 @@ class DashboardStateTests(unittest.TestCase):
         for t in trades:
             self.assertIsNone(t.get("entry_time"))
 
+    def test_build_equity_curve_falls_back_to_payload_entry_time(self) -> None:
+        opened_at = pd.Timestamp("2026-05-14T08:15:00Z")
+        entry_bar_ts = pd.Timestamp("2026-05-14T09:20:00Z")
+        real_exit = pd.Timestamp("2026-05-15T15:32:38Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["t_opened_at", "t_entry_bar"],
+                "venue": ["kucoin", "kucoin"],
+                "symbol": ["SOL-USDT", "SOL-USDT"],
+                "entry_ts": [
+                    pd.Timestamp("1970-01-01T00:00:01Z"),
+                    pd.NaT,
+                ],
+                "exit_ts": [real_exit, real_exit + pd.Timedelta(minutes=5)],
+                "side": ["long", "short"],
+                "qty": [1.0, 1.0],
+                "entry_price": [91.38, 92.0],
+                "exit_price": [89.82, 91.5],
+                "pnl_pct": [-1.71, 0.5],
+                "exit_event": ["sl_exit", "tp_exit"],
+                "strategy": ["live_executor", "live_executor"],
+                "payload_json": [
+                    {"opened_at": opened_at.isoformat()},
+                    {"entry_bar_ts": int(entry_bar_ts.timestamp() * 1000)},
+                ],
+            }
+        )
+        equity = ds.build_equity_curve(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            live_only=True,
+            include_reconstructed=False,
+            allow_file_fallback=False,
+            allow_fill_reconstruction=False,
+            _trades_df=df,
+        )
+        trades = equity.get("trades", [])
+        self.assertEqual(len(trades), 2)
+        self.assertEqual(
+            [int(t["entry_time"]) for t in trades],
+            [int(opened_at.timestamp()), int(entry_bar_ts.timestamp())],
+        )
+
     def test_reconstruct_trades_from_execution_fills_emits_real_entry_time(self) -> None:
         # The fills-reconstruction code path is a second producer of
         # ``entry_time``; make sure it likewise carries through real
@@ -761,39 +805,58 @@ class DashboardStateTests(unittest.TestCase):
         )
 
     @patch("quant.execution.dashboard_state.load_closed_trades_from_postgres")
-    def test_dashboard_performance_uses_logical_trades_and_neutral_bucket(self, mock_load_trades) -> None:
+    def test_dashboard_performance_uses_closed_trade_rows_and_breakeven_bucket(self, mock_load_trades) -> None:
         mock_load_trades.return_value = pd.DataFrame(
             {
-                "trade_id": ["a1", "a2", "b1", "c1"],
-                "venue": ["kucoin", "kucoin", "kucoin", "kucoin"],
-                "symbol": ["SOL-USDT", "SOL-USDT", "SOL-USDT", "SOL-USDT"],
+                "trade_id": ["a1", "a2", "b1", "c1", "reco1", "sim1"],
+                "venue": ["kucoin", "kucoin", "kucoin", "kucoin", "kucoin", "kucoin"],
+                "symbol": ["SOL-USDT", "SOL-USDT", "SOL-USDT", "SOL-USDT", "SOL-USDT", "SOL-USDT"],
                 "entry_ts": [
-                    pd.Timestamp("2026-03-20T10:00:00Z"),
-                    pd.Timestamp("2026-03-20T10:00:00Z"),
-                    pd.Timestamp("2026-03-20T11:00:00Z"),
-                    pd.Timestamp("2026-03-20T12:00:00Z"),
+                    pd.Timestamp("2026-02-20T10:00:00Z"),
+                    pd.Timestamp("2026-02-20T10:00:00Z"),
+                    pd.Timestamp("2026-02-20T11:00:00Z"),
+                    pd.Timestamp("2026-02-20T12:00:00Z"),
+                    pd.Timestamp("2026-02-20T13:00:00Z"),
+                    pd.Timestamp("2026-02-20T14:00:00Z"),
                 ],
                 "exit_ts": [
-                    pd.Timestamp("2026-03-20T10:05:00Z"),
-                    pd.Timestamp("2026-03-20T10:08:00Z"),
-                    pd.Timestamp("2026-03-20T11:07:00Z"),
-                    pd.Timestamp("2026-03-20T12:09:00Z"),
+                    pd.Timestamp("2026-02-20T10:05:00Z"),
+                    pd.Timestamp("2026-02-20T10:08:00Z"),
+                    pd.Timestamp("2026-02-20T11:07:00Z"),
+                    pd.Timestamp("2026-02-20T12:09:00Z"),
+                    pd.Timestamp("2026-02-20T13:09:00Z"),
+                    pd.Timestamp("2026-02-20T14:09:00Z"),
                 ],
-                "side": ["long", "long", "short", "long"],
-                "qty": [1.0, 3.0, 2.0, 1.0],
-                "entry_price": [100.0, 100.0, 105.0, 110.0],
-                "exit_price": [102.0, 104.0, 104.0, 110.0],
-                "pnl_pct": [2.0, 4.0, -1.0, 0.0],
-                "exit_event": ["tp1", "tp2", "sl_exit", "be_exit"],
-                "strategy": ["live_executor", "live_executor", "live_executor", "live_executor"],
+                "side": ["long", "long", "short", "long", "long", "long"],
+                "qty": [1.0, 3.0, 2.0, 1.0, 1.0, 1.0],
+                "entry_price": [100.0, 100.0, 105.0, 110.0, 111.0, 112.0],
+                "exit_price": [102.0, 104.0, 104.0, 110.0, 112.0, 113.0],
+                "pnl_pct": [2.0, 4.0, -1.0, 0.0, 0.9, 0.8],
+                "exit_event": ["tp1", "tp2", "sl_exit", "be_exit", "fills_reconstructed", "tp1"],
+                "strategy": [
+                    "live_executor",
+                    "live_executor",
+                    "live_executor",
+                    "live_executor",
+                    "dashboard_fills_reconstruction",
+                    "sim_backtest",
+                ],
             }
         )
 
         perf = ds.build_dashboard_performance(symbol="SOL-USDT", venue="kucoin", max_points=100)
-        self.assertEqual(int(perf["trade_count"]), 3)
-        self.assertEqual(int(perf["winning_trade_count"]), 1)
+        self.assertEqual(int(perf["trade_count"]), 4)
+        self.assertEqual(int(perf["winning_trade_count"]), 2)
         self.assertEqual(int(perf["losing_trade_count"]), 1)
-        self.assertAlmostEqual(float(perf["average_gain"]), (3.5 - 1.0 + 0.0) / 3.0, places=4)
+        self.assertEqual(int(perf["breakeven_trade_count"]), 1)
+        self.assertEqual(
+            int(perf["winning_trade_count"])
+            + int(perf["losing_trade_count"])
+            + int(perf["breakeven_trade_count"]),
+            int(perf["trade_count"]),
+        )
+        self.assertAlmostEqual(float(perf["average_gain"]), (2.0 + 4.0 - 1.0 + 0.0) / 4.0, places=4)
+        self.assertEqual(perf["source"], "postgres:closed_trades")
 
 
 if __name__ == "__main__":

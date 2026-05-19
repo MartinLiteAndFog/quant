@@ -110,6 +110,7 @@ function SidebarBase({
   // Main performance metrics are closed_trades aggregates. The separate
   // trade_decision_count field is diagnostic only and is not rendered here.
   const tradeCount = performance?.trade_count ?? null;
+  const breakevenCount = performance?.breakeven_trade_count ?? 0;
 
   return (
     <aside className="flex w-80 flex-col gap-3 overflow-y-auto">
@@ -196,6 +197,12 @@ function SidebarBase({
               {fmtInt(performance?.losing_trade_count)}
             </span>
           </div>
+          {breakevenCount > 0 && (
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-zinc-400">Breakeven</span>
+              <span className="text-zinc-300">{fmtInt(breakevenCount)}</span>
+            </div>
+          )}
         </div>
       </SectionCard>
 
