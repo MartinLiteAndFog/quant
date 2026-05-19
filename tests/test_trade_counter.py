@@ -1205,6 +1205,93 @@ class AutoBackfillTriggerTests(unittest.TestCase):
         self.assertGreaterEqual(res["trade_count"], 70)
 
 
+class TradeCountInvariantsTests(unittest.TestCase):
+    """Pin down the cross-field invariants the Performance card relies on.
+
+    These guard the contract the dashboard's right-sidebar reads:
+    ``trade_count`` is the unique-decision-id count of the merged
+    chart list (open + closed); ``wins + losses + open == trade_count``
+    when there are no neutral pnl=0 closures; and the card's
+    ``pnl_pct`` must equal the chart's final ``cum_pct`` (which is
+    the same as the merged list's last cumulative).
+    """
+
+    def test_endpoint_trade_count_equals_wins_plus_losses_plus_open(self) -> None:
+        # Build a payload with 2 wins, 1 loss, 1 open decision -> 4
+        # trades. No pnl=0 closures, so the strict equality holds.
+        from unittest.mock import patch
+
+        import pandas as pd
+
+        import quant.execution.webhook_server as ws
+        from quant.execution.decision_performance import (
+            build_decision_dashboard_payload,
+        )
+
+        decisions = [
+            {
+                "decision_id": f"d{i}",
+                "ts": f"2026-05-15T1{i}:00:00Z",
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "long",
+                "seq": i,
+                "engine_action": "enter_long",
+                "source_action_event_id": f"src-{i}",
+                "payload_json": {},
+            }
+            for i in range(1, 5)
+        ]
+        closed = [
+            {
+                "trade_id": f"t{i}",
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "entry_ts": f"2026-05-15T1{i}:00:00Z",
+                "exit_ts": f"2026-05-15T1{i}:30:00Z",
+                "side": "long",
+                "qty": 1.0,
+                "entry_price": 100.0,
+                "exit_price": 101.0 if i < 4 else 99.0,
+                "pnl_pct": 1.0 if i in (1, 2) else (-1.0 if i == 3 else None),
+                "exit_event": "tp_exit",
+            }
+            for i in range(1, 4)
+        ]
+
+        def _fake_payload(*args, **kwargs):
+            return build_decision_dashboard_payload(
+                symbol="SOL-USDT",
+                venue="kucoin",
+                decisions=decisions,
+                closed_trades_df=pd.DataFrame(closed),
+                open_side="long",
+            )
+
+        ws._PERFORMANCE_CACHE.clear()
+        with patch.object(ws, "build_decision_dashboard_payload", side_effect=_fake_payload), \
+             patch.object(ws, "count_trade_decisions", return_value=4), \
+             patch.object(ws, "_maybe_auto_backfill_trade_decisions", return_value=None):
+            res = ws.api_dashboard_performance(symbol="SOL-USDT", venue="kucoin")
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["trade_count"], 4)
+        self.assertEqual(res["winning_trade_count"], 2)
+        self.assertEqual(res["losing_trade_count"], 1)
+        self.assertEqual(res["open_decision_count"], 1)
+        self.assertEqual(
+            res["winning_trade_count"]
+            + res["losing_trade_count"]
+            + res["open_decision_count"],
+            res["trade_count"],
+        )
+        # PnL on the card must equal the chart's final cum_pct.
+        self.assertEqual(res["pnl_pct"], res["cum_pct"])
+        # And pnl == sum of the realised pnls (2 wins of +1.0 + 1 loss of -1.0).
+        self.assertAlmostEqual(res["pnl_pct"], 1.0, places=4)
+
+
 class TradeDecisionDataclassTests(unittest.TestCase):
     def test_to_dict_round_trip(self) -> None:
         d = TradeDecision(

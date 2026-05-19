@@ -1,4 +1,4 @@
-import { memo } from "react";
+import { memo, useEffect } from "react";
 import type { ReactNode } from "react";
 import type {
   StatusResponse,
@@ -115,13 +115,21 @@ function SidebarBase({
   // and ``pnl_pct`` == the chart's final ``cum_pct``.
   const tradeCount = performance?.trade_count ?? null;
   const openCount = performance?.open_decision_count ?? null;
-  const needsBackfill = Boolean(performance?.needs_backfill);
-  // ``synthesized_count`` is non-zero when the backend papered over a
-  // missing chunk of the persistent decision spine with in-memory
-  // ``td_ct_synth_*`` rows. The history is visible in the chart, but
-  // restarting the worker would drop those rows again until
-  // ``?backfill=1`` writes them to Postgres.
+
+  // The backend still surfaces ``synthesized_count`` so operators can
+  // tell from server logs / devtools when the chart is being patched
+  // up with in-memory ``td_ct_synth_*`` rows. We deliberately do NOT
+  // render any user-facing copy or raw API URLs in the dashboard —
+  // the auto-backfill remains a server-side concern.
   const synthesizedCount = performance?.synthesized_count ?? 0;
+  useEffect(() => {
+    if (synthesizedCount > 0) {
+      // eslint-disable-next-line no-console
+      console.debug(
+        `[performance] chart history reconstructed from closed_trades (${synthesizedCount} synthesized rows)`
+      );
+    }
+  }, [synthesizedCount]);
 
   return (
     <aside className="flex w-80 flex-col gap-3 overflow-y-auto">
@@ -214,29 +222,6 @@ function SidebarBase({
               {fmtInt(performance?.losing_trade_count)}
             </span>
           </div>
-          {needsBackfill && (
-            <div className="mt-2 rounded border border-amber-700/40 bg-amber-900/20 px-2 py-1 text-[11px] text-amber-300">
-              {synthesizedCount > 0 ? (
-                <>
-                  Older history reconstructed from{" "}
-                  <code className="text-amber-200">closed_trades</code> (
-                  {synthesizedCount} synthesized rows). Persist them with:
-                  <br />
-                  <code className="text-amber-200">
-                    /api/dashboard/performance?backfill=1
-                  </code>
-                </>
-              ) : (
-                <>
-                  No trade decisions yet. Run the backfill on Railway:
-                  <br />
-                  <code className="text-amber-200">
-                    /api/dashboard/performance?backfill=1
-                  </code>
-                </>
-              )}
-            </div>
-          )}
         </div>
       </SectionCard>
 

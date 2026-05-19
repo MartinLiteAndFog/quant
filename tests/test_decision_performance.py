@@ -541,5 +541,364 @@ class PerformanceFromDecisionPointsTests(unittest.TestCase):
         )
 
 
+class CardChartInvariantsTests(unittest.TestCase):
+    """Regression guard for the spec's card-aggregate contract.
+
+    These tests pin down the four invariants the spec calls out:
+
+    * ``card.pnl_pct == merged_points[-1].cum_pct``
+    * ``card.trade_count == |{p.decision_id : p in merged_points}|``
+    * ``wins + losses + open_decisions == trade_count`` (when no
+      neutral pnl=0 closures exist)
+    * ``average_gain == mean(closed pnl_pct)``
+    """
+
+    def _payload_with_history(self) -> Dict[str, Any]:
+        # Realistic shape: 3 historical synth legs predating the spine
+        # (mix of wins/losses), then 2 spine decisions (1 closed win,
+        # 1 open).
+        decisions = [
+            _dec("d_recent_a", "2026-05-15T10:00:00Z", "long", seq=1),
+            _dec("d_recent_b", "2026-05-15T12:00:00Z", "short", seq=2),
+        ]
+        ct = pd.DataFrame(
+            [
+                _ct(
+                    entry_ts="2025-01-10T10:00:00Z",
+                    exit_ts="2025-01-10T11:00:00Z",
+                    side="long",
+                    entry_price=100.0,
+                    exit_price=102.0,
+                    pnl_pct=2.0,
+                    trade_id="hist_1",
+                ),
+                _ct(
+                    entry_ts="2025-02-10T10:00:00Z",
+                    exit_ts="2025-02-10T11:00:00Z",
+                    side="short",
+                    entry_price=120.0,
+                    exit_price=121.0,
+                    pnl_pct=-0.83,
+                    trade_id="hist_2",
+                ),
+                _ct(
+                    entry_ts="2025-03-10T10:00:00Z",
+                    exit_ts="2025-03-10T11:00:00Z",
+                    side="long",
+                    entry_price=110.0,
+                    exit_price=115.5,
+                    pnl_pct=5.0,
+                    trade_id="hist_3",
+                ),
+                _ct(
+                    entry_ts="2026-05-15T10:00:00Z",
+                    exit_ts="2026-05-15T11:00:00Z",
+                    side="long",
+                    entry_price=200.0,
+                    exit_price=198.0,
+                    pnl_pct=-1.0,
+                    trade_id="recent_a",
+                ),
+            ]
+        )
+        return build_decision_dashboard_payload(
+            symbol="SOL-USDT",
+            decisions=decisions,
+            closed_trades_df=ct,
+            open_side="short",
+            now=pd.Timestamp("2026-05-15T13:00:00Z"),
+        )
+
+    def test_card_pnl_pct_equals_merged_points_last_cum_pct(self) -> None:
+        payload = self._payload_with_history()
+        merged = payload["curve"]["merged_points"]
+        perf = payload["performance"]
+        self.assertAlmostEqual(perf["pnl_pct"], merged[-1]["cum_pct"], places=4)
+
+    def test_card_trade_count_matches_unique_decision_ids_in_merged_list(self) -> None:
+        payload = self._payload_with_history()
+        merged = payload["curve"]["merged_points"]
+        unique_ids = {p["decision_id"] for p in merged}
+        self.assertEqual(payload["performance"]["trade_count"], len(unique_ids))
+
+    def test_wins_plus_losses_plus_open_equals_trade_count(self) -> None:
+        # Fixture intentionally avoids pnl=0 closures so the strict
+        # equality holds.
+        payload = self._payload_with_history()
+        perf = payload["performance"]
+        self.assertEqual(
+            perf["winning_trade_count"]
+            + perf["losing_trade_count"]
+            + perf["open_decision_count"],
+            perf["trade_count"],
+        )
+
+    def test_average_gain_equals_mean_of_closed_pnl(self) -> None:
+        payload = self._payload_with_history()
+        merged = payload["curve"]["merged_points"]
+        closed_pnls = [
+            float(p["pnl_pct"]) for p in merged
+            if not p.get("open") and p.get("pnl_pct") is not None
+        ]
+        expected = sum(closed_pnls) / len(closed_pnls)
+        self.assertAlmostEqual(payload["performance"]["average_gain"], expected, places=4)
+
+    def test_monthly_growth_uses_calendar_month_window(self) -> None:
+        # Three closed legs: one in April, two in May. "Now" is May 20.
+        # Monthly growth must sum the May legs only — NOT a copy of
+        # ``pnl_pct``.
+        ct = pd.DataFrame(
+            [
+                _ct(
+                    entry_ts="2026-04-20T10:00:00Z",
+                    exit_ts="2026-04-20T11:00:00Z",
+                    side="long",
+                    entry_price=100.0,
+                    exit_price=104.0,
+                    pnl_pct=4.0,
+                    trade_id="april",
+                ),
+                _ct(
+                    entry_ts="2026-05-01T00:00:00Z",
+                    exit_ts="2026-05-01T01:00:00Z",
+                    side="long",
+                    entry_price=100.0,
+                    exit_price=99.0,
+                    pnl_pct=-1.0,
+                    trade_id="may_first",
+                ),
+                _ct(
+                    entry_ts="2026-05-19T12:00:00Z",
+                    exit_ts="2026-05-19T13:00:00Z",
+                    side="long",
+                    entry_price=100.0,
+                    exit_price=102.0,
+                    pnl_pct=2.0,
+                    trade_id="may_mid",
+                ),
+            ]
+        )
+        payload = build_decision_dashboard_payload(
+            symbol="SOL-USDT",
+            decisions=[],
+            closed_trades_df=ct,
+            now=pd.Timestamp("2026-05-20T08:00:00Z"),
+        )
+        perf = payload["performance"]
+        # April leg excluded; May legs: -1 + 2 = 1.0
+        self.assertAlmostEqual(perf["monthly_growth"], 1.0, places=4)
+        # Total cumulative: 4 + (-1) + 2 = 5.0
+        self.assertAlmostEqual(perf["pnl_pct"], 5.0, places=4)
+        # Critical regression guard: monthly_growth must not silently
+        # mirror pnl_pct when the spine covers earlier months.
+        self.assertNotAlmostEqual(perf["monthly_growth"], perf["pnl_pct"], places=4)
+
+    def test_monthly_growth_falls_back_to_exit_time_when_entry_time_missing(self) -> None:
+        # Synth points carry an exit_time but their entry_time may be
+        # ``None`` (1970/NaT-zero sentinel). The monthly bucket still
+        # needs to include them via the exit_time fallback.
+        ct = pd.DataFrame(
+            [
+                _ct(
+                    entry_ts="1970-01-01T00:00:00Z",  # sentinel -> entry_time None
+                    exit_ts="2026-05-19T13:00:00Z",
+                    side="long",
+                    entry_price=100.0,
+                    exit_price=102.0,
+                    pnl_pct=2.0,
+                    trade_id="sentinel_may",
+                ),
+            ]
+        )
+        payload = build_decision_dashboard_payload(
+            symbol="SOL-USDT",
+            decisions=[],
+            closed_trades_df=ct,
+            now=pd.Timestamp("2026-05-20T08:00:00Z"),
+        )
+        perf = payload["performance"]
+        # Bucketed by exit_time fallback (May 19) -> +2.0 in May.
+        self.assertAlmostEqual(perf["monthly_growth"], 2.0, places=4)
+
+    def test_winrate_is_none_when_no_closed_decisions(self) -> None:
+        # Only an open decision in the spine, no matched closes ->
+        # winrate must be ``None``, not 0/0 == 0%.
+        decisions = [_dec("d_open", "2026-05-15T10:00:00Z", "long")]
+        payload = build_decision_dashboard_payload(
+            symbol="SOL-USDT",
+            decisions=decisions,
+            closed_trades_df=pd.DataFrame(),
+            open_side="long",
+        )
+        perf = payload["performance"]
+        self.assertEqual(perf["open_decision_count"], 1)
+        self.assertEqual(perf["winning_trade_count"], 0)
+        self.assertEqual(perf["losing_trade_count"], 0)
+        self.assertIsNone(perf["winrate"])
+
+    def test_card_aggregates_use_full_merged_list_not_downsampled(self) -> None:
+        # 30 synth legs, max_points capped to 5 -> chart downsamples,
+        # but trade_count / pnl_pct must still reflect the full 30.
+        rows = []
+        for i in range(30):
+            day = (i % 28) + 1
+            rows.append(
+                _ct(
+                    entry_ts=f"2025-01-{day:02d}T10:00:00Z",
+                    exit_ts=f"2025-01-{day:02d}T11:00:00Z",
+                    side="long",
+                    entry_price=100.0,
+                    exit_price=101.0,
+                    pnl_pct=1.0,
+                    trade_id=f"t{i}",
+                )
+            )
+        payload = build_decision_dashboard_payload(
+            symbol="SOL-USDT",
+            decisions=[],
+            closed_trades_df=pd.DataFrame(rows),
+            max_points=5,
+        )
+        curve = payload["curve"]
+        perf = payload["performance"]
+        self.assertEqual(len(curve["merged_points"]), 30)
+        self.assertEqual(len(curve["points"]), 5)
+        self.assertEqual(perf["trade_count"], 30)
+        # ``pnl_pct`` still reflects the full cumulative — first and
+        # last are preserved by the uniform downsample.
+        self.assertAlmostEqual(perf["pnl_pct"], 30.0, places=4)
+        self.assertAlmostEqual(
+            curve["points"][-1]["cum_pct"], curve["merged_points"][-1]["cum_pct"], places=4
+        )
+
+    def test_chart_time_includes_full_historical_range(self) -> None:
+        # Even with a 1970 sentinel ``entry_ts`` on the historical
+        # synth leg, the chart's earliest plotted ``time`` must match
+        # the earliest ``exit_ts`` across ``closed_trades`` — exit_ts
+        # is the only reliably-historic anchor.
+        ct = pd.DataFrame(
+            [
+                _ct(
+                    entry_ts="1970-01-01T00:00:00Z",  # sentinel
+                    exit_ts="2025-03-01T10:00:00Z",   # real historic
+                    side="long",
+                    entry_price=100.0,
+                    exit_price=101.0,
+                    pnl_pct=1.0,
+                    trade_id="hist_sentinel",
+                ),
+                _ct(
+                    entry_ts="2026-05-15T14:00:00Z",
+                    exit_ts="2026-05-15T15:30:00Z",
+                    side="long",
+                    entry_price=200.0,
+                    exit_price=205.0,
+                    pnl_pct=2.5,
+                    trade_id="recent",
+                ),
+            ]
+        )
+        out = build_decision_equity_curve(
+            symbol="SOL-USDT",
+            decisions=[],
+            closed_trades_df=ct,
+        )
+        pts = out["points"]
+        self.assertEqual(len(pts), 2)
+
+        earliest_exit_ts = int(pd.Timestamp("2025-03-01T10:00:00Z").timestamp())
+        self.assertEqual(min(int(p["time"]) for p in pts), earliest_exit_ts)
+
+        # The sentinel synth row keeps entry_time=None for tooltip use
+        # — we do NOT silently substitute exit_time so the UI can render
+        # "—" instead of a fake entry.
+        sentinel_pt = next(p for p in pts if float(p["pnl_pct"]) == 1.0)
+        self.assertIsNone(sentinel_pt["entry_time"])
+        self.assertEqual(
+            int(sentinel_pt["exit_time"]),
+            int(pd.Timestamp("2025-03-01T10:00:00Z").timestamp()),
+        )
+        self.assertEqual(int(sentinel_pt["time"]), int(sentinel_pt["exit_time"]))
+
+    def test_real_decision_with_unusable_entry_falls_back_to_matched_exit_for_chart_time(self) -> None:
+        # A real (action-event spine) decision with an unusable ts
+        # would otherwise be skipped or plot at 0. The builder must
+        # derive its chart ``time`` from the matched closed leg's
+        # ``exit_ts`` instead so the spine row still appears.
+        decisions = [
+            {
+                "decision_id": "d_bad_ts",
+                "ts": "1970-01-01T00:00:00Z",
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "long",
+                "seq": 1,
+                "engine_action": "enter_long",
+                "source_action_event_id": "src-bad",
+                "payload_json": {},
+            },
+        ]
+        ct = pd.DataFrame(
+            [
+                _ct(
+                    entry_ts="2026-05-15T10:00:00Z",
+                    exit_ts="2026-05-15T11:00:00Z",
+                    side="long",
+                    entry_price=100.0,
+                    exit_price=101.0,
+                    pnl_pct=1.0,
+                    trade_id="r1",
+                ),
+            ]
+        )
+        out = build_decision_equity_curve(
+            symbol="SOL-USDT",
+            decisions=decisions,
+            closed_trades_df=ct,
+        )
+        # The decision's ts is unusable, but the matched leg's exit_ts
+        # is, so a single point with ``time == exit_time`` is plotted.
+        # _normalize_decisions drops the bad-ts row before it reaches
+        # the matcher, so the matched leg surfaces as a synth point
+        # instead — same chart contract either way.
+        self.assertEqual(len(out["points"]), 1)
+        p = out["points"][0]
+        self.assertEqual(
+            int(p["time"]),
+            int(pd.Timestamp("2026-05-15T11:00:00Z").timestamp()),
+        )
+
+    def test_duplicate_decision_ids_are_deduped(self) -> None:
+        # Two action-event rows accidentally upserted with the same
+        # decision_id must collapse to one entry in the merged list so
+        # the card's ``trade_count`` doesn't inflate.
+        decisions = [
+            _dec("dup", "2026-05-15T10:00:00Z", "long", seq=1),
+            _dec("dup", "2026-05-15T10:00:00Z", "long", seq=2),
+        ]
+        ct = pd.DataFrame(
+            [
+                _ct(
+                    entry_ts="2026-05-15T10:00:00Z",
+                    exit_ts="2026-05-15T11:00:00Z",
+                    side="long",
+                    entry_price=100.0,
+                    exit_price=101.0,
+                    pnl_pct=1.0,
+                    trade_id="t1",
+                ),
+            ]
+        )
+        payload = build_decision_dashboard_payload(
+            symbol="SOL-USDT",
+            decisions=decisions,
+            closed_trades_df=ct,
+        )
+        merged = payload["curve"]["merged_points"]
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(payload["performance"]["trade_count"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

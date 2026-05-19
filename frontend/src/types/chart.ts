@@ -12,6 +12,11 @@ export interface ChartMarker {
   shape: "arrowUp" | "arrowDown" | "circle" | "square";
   color: string;
   text: string;
+  // ``size`` is passed straight through to lightweight-charts' SeriesMarker.
+  // The backend emits ``size: 2`` for the direction arrow (bigger / easier
+  // to read at chart scale) and ``size: 0`` for the co-located pnl text
+  // label (shape collapses, text still renders).
+  size?: number;
 }
 
 export interface ChartLevelsTerminal {

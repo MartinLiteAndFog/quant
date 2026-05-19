@@ -165,11 +165,32 @@ def _detect_open_side(open_side: Optional[str]) -> Optional[str]:
     return None
 
 
+def _uniform_downsample(items: List[Any], n: int) -> List[Any]:
+    """Sample ``items`` down to ``n`` evenly-spaced entries.
+
+    Always preserves the first and last item so the chart's leftmost x
+    domain matches the oldest leg and the rightmost cumulative value
+    matches the latest realised PnL. Never pads or duplicates — the
+    output length is ``min(len(items), n)`` and trade counts therefore
+    can only shrink, never inflate.
+    """
+
+    if n <= 0:
+        return []
+    if len(items) <= n:
+        return list(items)
+    if n == 1:
+        return [items[-1]]
+    step = (len(items) - 1) / (n - 1)
+    indices = sorted({int(round(i * step)) for i in range(n)})
+    return [items[i] for i in indices]
+
+
 def build_decision_equity_curve(
     *,
     symbol: str,
     venue: str = "kucoin",
-    max_points: int = 500,
+    max_points: int = 5000,
     decisions: Optional[Iterable[Dict[str, Any]]] = None,
     closed_trades_df: Optional[pd.DataFrame] = None,
     open_side: Optional[str] = None,
@@ -185,12 +206,18 @@ def build_decision_equity_curve(
     Returns
     -------
     dict
-        ``{"points": [...], "source": "...", "needs_backfill": bool}``.
+        ``{"points": [...], "merged_points": [...], "source": "...",
+        "needs_backfill": bool, ...}``. ``merged_points`` is the full
+        deduped list used for card aggregates; ``points`` is the same
+        list, uniformly downsampled to ``max_points`` for chart display.
         Each point has ``decision_id``, ``side``, ``entry_time``,
         ``entry_price``, ``exit_time``, ``exit_price``, ``pnl_pct``,
-        ``cum_pct``, ``open``, ``time``, ``source``. ``time`` mirrors the
-        existing chart contract (chart x-axis); for closed decisions it is
-        the exit time, for open decisions it is the entry time.
+        ``cum_pct``, ``open``, ``time``, ``source``. ``time`` is the
+        chart x-axis position: for real decisions it is ``entry_time``
+        (or the matched leg's ``exit_time`` when the decision's own
+        timestamp is unusable); for synth points it is always the
+        closed-trade ``exit_ts`` because synth ``entry_ts`` is the only
+        field that may carry the 1970/NaT-zero sentinel.
     """
 
     venue_eff = str(venue or "kucoin").lower()
@@ -264,6 +291,18 @@ def build_decision_equity_curve(
             exit_time = _ts_to_epoch_seconds(row["exit_ts"])
             entry_price = float(row["entry_price"]) if pd.notna(row["entry_price"]) else None
             exit_price = float(row["exit_price"]) if pd.notna(row["exit_price"]) else None
+            # Chart x position: prefer the decision's own entry_time so
+            # the cumulative curve advances at the moment the trade was
+            # taken. Fall back to the matched leg's exit_time only when
+            # the decision ts is unusable (the bug that collapsed the
+            # historical X domain to the last ~7 days).
+            if entry_time is not None:
+                plot_time = entry_time
+            elif exit_time is not None:
+                plot_time = exit_time
+            else:
+                # No usable timestamp at all — skip rather than plot at 0.
+                continue
             raw_points.append(
                 {
                     "decision_id": d["decision_id"],
@@ -274,14 +313,9 @@ def build_decision_equity_curve(
                     "exit_price": exit_price,
                     "pnl_pct": round(pnl_pct, 4),
                     "open": False,
-                    "time": exit_time if exit_time is not None else entry_time,
+                    "time": plot_time,
                     "source": src_label,
-                    # Sort key: chart order is by the entry timestamp so a
-                    # synthesized older trade interleaves cleanly with the
-                    # spine. Entry time is what the user thinks of as "when
-                    # the trade started", which matches the chronological
-                    # order of decisions in the original action-event flow.
-                    "_sort_time": entry_time if entry_time is not None else exit_time,
+                    "_sort_time": plot_time,
                 }
             )
         else:
@@ -298,6 +332,11 @@ def build_decision_equity_curve(
                 is_open = (idx == last_idx) and (open_side_norm == d["direction"])
             else:  # detection returned None
                 is_open = (idx == last_idx)
+            if entry_time is None:
+                # An unmatched decision has no closed-leg fallback, so
+                # without a real entry_time we cannot place it on the
+                # chart. Drop rather than corrupt the X domain.
+                continue
             raw_points.append(
                 {
                     "decision_id": d["decision_id"],
@@ -310,7 +349,7 @@ def build_decision_equity_curve(
                     "open": bool(is_open),
                     "time": entry_time,
                     "source": src_label,
-                    "_sort_time": entry_time if entry_time is not None else 0,
+                    "_sort_time": entry_time,
                 }
             )
 
@@ -337,13 +376,16 @@ def build_decision_equity_curve(
             continue
         side_i = str(row["side"]).lower() or "long"
         entry_ts_i = row.get("entry_ts")
+        # ``entry_time`` is purely metadata for the tooltip here. It must
+        # stay ``None`` when the persisted ``entry_ts`` is the legacy
+        # NaT-zero sentinel, otherwise the UI would render 1/1/1970 or
+        # mis-attribute the bar's timestamp.
         entry_time = _ts_to_epoch_seconds(entry_ts_i) if entry_ts_i is not None else None
-        # If the persisted entry_ts is the sentinel, fall back to the exit
-        # ts for chart positioning so the bar still lands in the visible
-        # window. ``entry_time=None`` would leave the point ambiguous.
-        if entry_time is None:
-            entry_time = _ts_to_epoch_seconds(exit_ts_i)
         exit_time = _ts_to_epoch_seconds(exit_ts_i)
+        if exit_time is None:
+            # Without a usable ``exit_ts`` the synthesized point cannot
+            # be placed on the chart; skip rather than collapse it to 0.
+            continue
         entry_price = float(row["entry_price"]) if pd.notna(row["entry_price"]) else None
         exit_price = float(row["exit_price"]) if pd.notna(row["exit_price"]) else None
         trade_id_raw = row.get("trade_id") if "trade_id" in ct.columns else None
@@ -358,6 +400,11 @@ def build_decision_equity_curve(
             ]
         )
         synth_id = "td_ct_synth_" + hashlib.sha1(synth_seed.encode("utf-8")).hexdigest()[:16]
+        # Synth points always plot at the closed leg's ``exit_ts``: it's
+        # the only timestamp on the row that is reliably historic, so
+        # using it preserves the full X-domain back to the earliest
+        # closed trade. ``entry_time`` is reported separately as ``None``
+        # when the source row's ``entry_ts`` was unusable.
         synthesized_points.append(
             {
                 "decision_id": synth_id,
@@ -368,20 +415,35 @@ def build_decision_equity_curve(
                 "exit_price": exit_price,
                 "pnl_pct": round(pnl_pct, 4),
                 "open": False,
-                "time": exit_time if exit_time is not None else entry_time,
+                "time": exit_time,
                 "source": synth_label,
-                "_sort_time": entry_time if entry_time is not None else exit_time,
+                "_sort_time": exit_time,
             }
         )
 
     merged_points: List[Dict[str, Any]] = raw_points + synthesized_points
-    # Sort by entry chronology so synthesized historical legs interleave
+    # Sort by chart x position so synthesized historical legs interleave
     # before the action-event spine. Tie-break puts closed legs ahead of
     # open ones at the same instant so the open marker doesn't shadow a
     # simultaneously-closed flip.
     merged_points.sort(
         key=lambda p: (int(p.get("_sort_time") or 0), 1 if p.get("open") else 0)
     )
+
+    # Dedupe by decision_id (keep first occurrence). Defensive guard
+    # against the upstream spine returning a duplicated row after a
+    # backfill retry — without this the Performance card could inflate
+    # ``trade_count`` past the true number of decisions.
+    seen_ids: set = set()
+    deduped: List[Dict[str, Any]] = []
+    for p in merged_points:
+        did = str(p.get("decision_id") or "")
+        if did and did in seen_ids:
+            continue
+        if did:
+            seen_ids.add(did)
+        deduped.append(p)
+    merged_points = deduped
 
     # Recompute the cumulative PnL after the merge so synthesized rows
     # contribute to the chart's final ``cum_pct`` (and therefore the
@@ -394,7 +456,16 @@ def build_decision_equity_curve(
         p["cum_pct"] = round(cum, 4)
         p.pop("_sort_time", None)
 
-    points = merged_points[-int(max(1, max_points)):]
+    # ``max_points`` is a downsampling guard — never a counter. When the
+    # full merged list exceeds the cap we sample uniformly while
+    # preserving the first and last entry, so the chart's start and end
+    # x-positions (and the final ``cum_pct``) match what the card
+    # aggregates over the full ``merged_points`` list.
+    cap = int(max(1, max_points))
+    if len(merged_points) > cap:
+        points = _uniform_downsample(merged_points, cap)
+    else:
+        points = list(merged_points)
 
     # ``needs_backfill`` semantics, post-auto-backfill: true when the
     # persistent spine is still smaller than ``closed_trades`` (the chart
@@ -406,6 +477,7 @@ def build_decision_equity_curve(
 
     return {
         "points": points,
+        "merged_points": merged_points,
         "source": src_label if dec_rows else (synth_label if synthesized_points else "none"),
         "needs_backfill": needs_backfill,
         "synthesized_count": synthesized_count,
@@ -425,56 +497,108 @@ def compute_performance_from_decision_points(
     equity chart plots. Every aggregate here can be reproduced by the
     frontend by walking the same list — there is no second source.
 
-    PnL is summed (additive) so that the card's ``pnl_pct`` is exactly the
-    chart's final ``cum_pct``.
+    Contract (matches the trade-mode equity chart):
+        * ``trade_count`` = count of unique ``decision_id`` (open + closed).
+        * ``open_decision_count`` = points with ``open == True``.
+        * ``closed_decision_count`` = ``trade_count - open_decision_count``.
+        * ``winning_trade_count`` / ``losing_trade_count`` = closed points
+          with realised ``pnl_pct > 0`` / ``< 0``.
+        * ``winrate`` = wins / (wins + losses) when the denominator > 0,
+          else ``None`` — never 0/0 = 0%.
+        * ``pnl_pct`` = the merged list's final ``cum_pct``, which by
+          construction equals the chart's final cumulative line.
+        * ``average_gain`` = mean of ``pnl_pct`` over closed points that
+          carry a realised pnl; ``None`` when none do.
+        * ``monthly_growth`` = sum of ``pnl_pct`` over closed points whose
+          ``entry_time`` (or ``exit_time`` when entry_time is missing)
+          falls in the current calendar month at ``now`` (UTC). It is
+          NOT a copy of ``pnl_pct`` — those values only coincide when
+          every closed trade in the spine happened this month.
     """
 
     if now is None:
         now = pd.Timestamp.now("UTC")
 
-    closed = [p for p in points if not p.get("open")]
-    open_decisions = [p for p in points if p.get("open")]
+    # Defensive dedupe by ``decision_id`` so duplicated rows from the
+    # spine cannot inflate ``trade_count`` past the real number of
+    # decisions taken.
+    seen_ids: set = set()
+    unique_points: List[Dict[str, Any]] = []
+    for p in points:
+        did = str(p.get("decision_id") or "")
+        if did and did in seen_ids:
+            continue
+        if did:
+            seen_ids.add(did)
+        unique_points.append(p)
 
-    winning = [p for p in closed if float(p.get("pnl_pct") or 0.0) > 0]
-    losing = [p for p in closed if float(p.get("pnl_pct") or 0.0) < 0]
+    closed = [p for p in unique_points if not p.get("open")]
+    open_decisions = [p for p in unique_points if p.get("open")]
+    closed_with_pnl = [p for p in closed if p.get("pnl_pct") is not None]
 
-    pnl_total = sum(float(p.get("pnl_pct") or 0.0) for p in closed)
-    avg_trade = (pnl_total / len(closed)) if closed else None
-    cum_last = points[-1].get("cum_pct") if points else None
+    winning = [p for p in closed_with_pnl if float(p["pnl_pct"]) > 0]
+    losing = [p for p in closed_with_pnl if float(p["pnl_pct"]) < 0]
 
+    cum_last: Optional[float] = None
+    if unique_points:
+        last_cum = unique_points[-1].get("cum_pct")
+        if last_cum is not None:
+            cum_last = float(last_cum)
+
+    # ``pnl_pct`` on the card must equal the chart's final ``cum_pct`` so
+    # the two views can never disagree on the user's overall PnL.
+    pnl_value: Optional[float] = cum_last if closed_with_pnl else None
+
+    avg_trade: Optional[float] = None
+    if closed_with_pnl:
+        avg_trade = sum(float(p["pnl_pct"]) for p in closed_with_pnl) / len(closed_with_pnl)
+
+    # Calendar-month bucket: anchor on the first of this month (UTC) at
+    # ``now``, open-ended through the start of next month. Use
+    # ``entry_time`` first so each trade is bucketed by when it was
+    # taken; fall back to ``exit_time`` when entry_time is unusable —
+    # this is the case for synthesized rows whose source ``entry_ts``
+    # was the legacy 1970/NaT-zero sentinel.
     month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    next_month_start = month_start + pd.offsets.MonthBegin(1)
     monthly_growth_value: Optional[float] = None
-    if closed:
+    if closed_with_pnl:
         monthly_growth_value = 0.0
-        for p in closed:
-            xt = p.get("exit_time")
-            if xt is None:
+        for p in closed_with_pnl:
+            t_raw = p.get("entry_time")
+            if t_raw is None or int(t_raw) < _MIN_VALID_EPOCH_SEC:
+                t_raw = p.get("exit_time")
+            if t_raw is None:
                 continue
-            ts = pd.to_datetime(int(xt), unit="s", utc=True)
-            if ts >= month_start:
-                monthly_growth_value += float(p.get("pnl_pct") or 0.0)
+            ts = pd.to_datetime(int(t_raw), unit="s", utc=True)
+            if month_start <= ts < next_month_start:
+                monthly_growth_value += float(p["pnl_pct"])
 
-    winrate = None
+    winrate: Optional[float] = None
     decided = len(winning) + len(losing)
     if decided > 0:
         winrate = 100.0 * len(winning) / decided
+
+    trade_count = len(unique_points)
+    open_count = len(open_decisions)
+    closed_count = trade_count - open_count
 
     return {
         "symbol": symbol,
         "venue": venue,
         "as_of": now.isoformat(),
         "window": "lifetime",
-        "pnl_pct": round(float(pnl_total), 4) if closed else None,
+        "pnl_pct": round(float(pnl_value), 4) if pnl_value is not None else None,
         "winrate": round(float(winrate), 4) if winrate is not None else None,
         "monthly_growth": (
             round(float(monthly_growth_value), 4) if monthly_growth_value is not None else None
         ),
         "average_gain": round(float(avg_trade), 4) if avg_trade is not None else None,
-        "trade_count": int(len(points)),
-        "closed_decision_count": int(len(closed)),
+        "trade_count": int(trade_count),
+        "closed_decision_count": int(closed_count),
         "winning_trade_count": int(len(winning)),
         "losing_trade_count": int(len(losing)),
-        "open_decision_count": int(len(open_decisions)),
+        "open_decision_count": int(open_count),
         "cum_pct": round(float(cum_last), 4) if cum_last is not None else None,
         "source": "postgres:trade_decisions+closed_trades",
     }
@@ -484,7 +608,7 @@ def build_decision_dashboard_payload(
     *,
     symbol: str,
     venue: str = "kucoin",
-    max_points: int = 500,
+    max_points: int = 5000,
     decisions: Optional[Iterable[Dict[str, Any]]] = None,
     closed_trades_df: Optional[pd.DataFrame] = None,
     open_side: Optional[str] = None,
@@ -493,6 +617,11 @@ def build_decision_dashboard_payload(
     """Convenience wrapper: build the equity curve AND derive the
     performance aggregates in one shot. The two outputs share the same
     underlying points list so the chart and card are guaranteed consistent.
+
+    Aggregates are computed off the full ``merged_points`` list rather
+    than the (possibly) downsampled ``points`` list, so the card's counts
+    and ``pnl_pct`` always reflect the true history even when the chart
+    has been downsampled for display.
     """
 
     curve = build_decision_equity_curve(
@@ -503,8 +632,9 @@ def build_decision_dashboard_payload(
         closed_trades_df=closed_trades_df,
         open_side=open_side,
     )
+    perf_source = curve.get("merged_points") or curve.get("points") or []
     perf = compute_performance_from_decision_points(
-        curve["points"],
+        perf_source,
         symbol=symbol,
         venue=venue,
         now=now,

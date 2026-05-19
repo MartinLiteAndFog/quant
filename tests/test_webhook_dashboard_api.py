@@ -277,12 +277,27 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertIn("gate_off_ts", body)
 
     def test_chart_includes_live_entry_marker_when_trades_missing(self) -> None:
+        # New marker contract: the live (open) trade is represented by a
+        # plain direction-colored arrow (long -> arrowUp belowBar in green)
+        # with empty text. The legacy blue "live entry" label has been
+        # superseded by load_trade_markers' open-trade arrow.
         root = Path(self.tmp.name)
         os.environ["DASHBOARD_TRADES_PARQUET"] = str(root / "missing_trades.parquet")
         body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
         self.assertTrue(body.get("ok"))
         self.assertIsInstance(body.get("open_position"), dict)
-        self.assertTrue(any("live entry" in str(m.get("text", "")) for m in body.get("markers", [])))
+        entry_ts = int(pd.Timestamp("2026-02-20T00:00:00Z").timestamp())
+        live_arrows = [
+            m
+            for m in body.get("markers", [])
+            if int(m.get("time", 0)) == entry_ts
+            and str(m.get("shape", "")) == "arrowUp"
+        ]
+        self.assertTrue(live_arrows)
+        live_arrow = live_arrows[0]
+        self.assertEqual(str(live_arrow.get("text", "")), "")
+        self.assertEqual(str(live_arrow.get("position", "")), "belowBar")
+        self.assertEqual(str(live_arrow.get("color", "")).lower(), "#22c55e")
 
     def test_chart_handles_string_entry_bar_ts(self) -> None:
         root = Path(self.tmp.name)
@@ -293,7 +308,17 @@ class WebhookDashboardApiTests(unittest.TestCase):
         )
         body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
         self.assertTrue(body.get("ok"))
-        self.assertTrue(any("live entry" in str(m.get("text", "")) for m in body.get("markers", [])))
+        # Direction arrow renders at the parsed entry_bar_ts with empty
+        # text (new contract — see test above).
+        entry_ts = int(pd.Timestamp("2026-02-20T00:00:00Z").timestamp())
+        live_arrows = [
+            m
+            for m in body.get("markers", [])
+            if int(m.get("time", 0)) == entry_ts
+            and str(m.get("shape", "")) == "arrowUp"
+        ]
+        self.assertTrue(live_arrows)
+        self.assertEqual(str(live_arrows[0].get("text", "")), "")
         self.assertIsInstance(body.get("levels", {}).get("entry_bar_ts"), int)
 
     def test_chart_falls_back_to_expected_trades_when_levels_missing_entry(self) -> None:

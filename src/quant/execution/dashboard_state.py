@@ -655,7 +655,35 @@ def _side_value_to_int(v: Any) -> int:
 def load_trade_markers(
     max_points: int = 5000,
     _trades_df: Optional[pd.DataFrame] = None,
+    open_entry_ts: Optional[int] = None,
+    open_side: Any = None,
 ) -> List[Dict[str, Any]]:
+    """
+    Render closed-trade markers on the price chart with a single entry arrow
+    per trade plus a co-located text label carrying the realized pnl.
+
+    Contract (rewritten):
+
+    * One arrow marker per closed trade at the *entry* timestamp:
+        - Long  -> ``arrowUp`` ``belowBar`` in green.
+        - Short -> ``arrowDown`` ``aboveBar`` in red.
+      The arrow's color is *direction only* — never pnl-based — so the user
+      can read "where did the trade start and which way" at a glance.
+    * When the trade has a known realized pnl, a second invisible-shape
+      marker is appended at the same timestamp/position carrying the pnl
+      text ("``+1.23%``" / "``-1.23%``") colored by sign (green/red).
+      Lightweight-charts uses the marker's ``color`` for both shape *and*
+      text, so we split the arrow and the label into two markers to keep
+      direction (arrow) and outcome (text) independently colorable.
+    * Exit markers are NOT emitted — the entry arrow + co-located pnl text
+      carries the full per-trade story.
+    * The currently-open trade (which never appears in ``closed_trades``)
+      gets a plain direction-colored arrow with empty text. The open
+      timestamp is resolved from ``open_entry_ts`` (caller hint) or
+      ``load_active_levels()`` (live execution state). The matching
+      ``time + shape`` will dedup the legacy live-entry marker emitted by
+      the chart endpoint, so the new direction-colored arrow wins.
+    """
     if _trades_df is not None:
         df = _trades_df
     else:
@@ -666,146 +694,188 @@ def load_trade_markers(
         )
         if df.empty:
             df = _read_trades_df()
-    if df.empty:
-        return []
-    if "entry_ts" not in df.columns and "ts" in df.columns:
-        df = df.rename(columns={"ts": "entry_ts"})
-    if "entry_ts" not in df.columns:
-        return []
 
-    df = df.copy()
-    df["entry_ts"] = pd.to_datetime(df["entry_ts"], utc=True, errors="coerce")
-    df = df.dropna(subset=["entry_ts"]).sort_values("entry_ts").tail(int(max(1, max_points)))
-    if df.empty:
-        return []
+    open_side_int = _side_value_to_int(open_side) if open_side is not None else 0
+    # Auto-detect the open-trade entry from live execution state whenever
+    # the caller didn't fully specify it. This runs regardless of whether
+    # ``_trades_df`` was injected because the chart endpoint always passes
+    # closed_trades through ``_trades_df`` (which by definition never
+    # contains the open trade). If ``execution_state.json`` is empty / has
+    # no side, ``open_side_int`` stays 0 and the open marker is skipped.
+    if open_entry_ts is None or open_side_int == 0:
+        try:
+            live_levels = load_active_levels()
+        except Exception:
+            live_levels = {}
+        if isinstance(live_levels, dict) and live_levels:
+            if open_entry_ts is None:
+                raw_ts = live_levels.get("entry_bar_ts")
+                if raw_ts is None:
+                    raw_ts = live_levels.get("ts")
+                if raw_ts is not None:
+                    open_entry_ts = _epoch_seconds_from_any(raw_ts)
+            if open_side_int == 0:
+                open_side_int = _side_value_to_int(live_levels.get("side"))
 
-    cols = set(df.columns)
-    entry_px_col = next(
-        (c for c in ("entry_px", "entry_price", "price_entry", "entry") if c in cols),
-        None,
-    )
-    exit_px_col = next(
-        (c for c in ("exit_px", "exit_price", "price_exit", "exit") if c in cols),
-        None,
-    )
-    pnl_col = next(
-        (c for c in ("pnl_pct", "pnl", "pnl_abs", "net_pnl") if c in cols),
-        None,
-    )
-    has_exit = "exit_ts" in cols
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        df = pd.DataFrame()
 
-    side_series = df["side"] if "side" in cols else pd.Series(0, index=df.index)
-    side_int = side_series.map(_side_value_to_int).astype("int64").to_numpy()
+    if not df.empty:
+        if "entry_ts" not in df.columns and "ts" in df.columns:
+            df = df.rename(columns={"ts": "entry_ts"})
+        if "entry_ts" not in df.columns:
+            df = pd.DataFrame()
 
-    # Convert tz-aware datetime series to integer epoch seconds using
-    # timedelta arithmetic. Casting via ``.astype("int64") // 1_000_000_000``
-    # silently breaks under pandas 2.x because ``pd.to_datetime`` now returns
-    # ``datetime64[us, UTC]`` (microsecond resolution) rather than the
-    # ``datetime64[ns, UTC]`` it used to. That regression collapsed every
-    # marker timestamp to ``epoch_seconds // 1000``, which lightweight-charts
-    # then rendered as a tight stack at the chart's left edge — the visible
-    # "summary of old trades" artefact.
-    entry_ts_int = (
-        (df["entry_ts"] - _EPOCH_UTC) // pd.Timedelta(seconds=1)
-    ).to_numpy(dtype="int64")
-
-    if entry_px_col:
-        entry_px_num = pd.to_numeric(df[entry_px_col], errors="coerce").to_numpy()
-    else:
-        entry_px_num = None
-    if exit_px_col:
-        exit_px_num = pd.to_numeric(df[exit_px_col], errors="coerce").to_numpy()
-    else:
-        exit_px_num = None
-    if pnl_col:
-        pnl_num = pd.to_numeric(df[pnl_col], errors="coerce").to_numpy()
-    else:
-        pnl_num = None
-
-    if has_exit:
-        exit_ts_series = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
-        exit_ts_int = (
-            (exit_ts_series - _EPOCH_UTC) // pd.Timedelta(seconds=1)
-        ).to_numpy(dtype="int64")
-        exit_ts_valid = exit_ts_series.notna().to_numpy()
-        exit_event_series = (
-            df.get("exit_event", pd.Series(["exit"] * len(df), index=df.index))
-            .fillna("exit")
-            .astype(str)
-            .to_numpy()
+    if not df.empty:
+        df = df.copy()
+        df["entry_ts"] = pd.to_datetime(df["entry_ts"], utc=True, errors="coerce")
+        df = (
+            df.dropna(subset=["entry_ts"])
+            .sort_values("entry_ts")
+            .tail(int(max(1, max_points)))
         )
-    else:
-        exit_ts_int = None
-        exit_ts_valid = None
-        exit_event_series = None
 
-    # Marker conventions used by the React dashboard `PriceChart`:
-    #   * Long entry  -> arrowUp below the bar (green)
-    #   * Long exit   -> arrowDown above the bar (color reflects pnl sign)
-    #   * Short entry -> arrowDown above the bar (orange)
-    #   * Short exit  -> arrowUp below the bar (color reflects pnl sign)
-    # Text is kept short ("L @ 82.6" / "S +1.2%") so adjacent markers don't
-    # produce a wall of labels on the chart.
+    # Direction palette (entry arrow color) and pnl palette (text marker).
+    # Both share the same hex values for green/red so the entire chart
+    # legend stays in a single palette.
     LONG_COLOR = "#22c55e"
-    SHORT_COLOR = "#f97316"
-    EXIT_WIN_COLOR = "#16a34a"
-    EXIT_LOSS_COLOR = "#ef4444"
+    SHORT_COLOR = "#ef4444"
+    PNL_WIN_COLOR = "#22c55e"
+    PNL_LOSS_COLOR = "#ef4444"
+    ARROW_SIZE = 2
+    # Lightweight-charts v4 uses ``size`` as a multiplier on its built-in
+    # marker shape size; ``size=0`` collapses the shape to a single pixel
+    # while keeping the text label rendered next to it. That gives us a
+    # de-facto "text-only" marker without resorting to a primitive plugin.
+    TEXT_MARKER_SIZE = 0
 
     markers: List[Dict[str, Any]] = []
-    n = len(df)
-    for i in range(n):
-        side_i = int(side_int[i])
-        is_long = side_i >= 0
-        prefix = "L" if is_long else "S"
+    entry_seen_ts: set[int] = set()
 
-        epx_str = ""
-        if entry_px_num is not None:
-            ep = entry_px_num[i]
-            if ep == ep:  # not NaN
-                epx_str = f" @ {float(ep):.2f}"
-
-        markers.append(
-            {
-                "time": int(entry_ts_int[i]),
-                "position": "belowBar" if is_long else "aboveBar",
-                "shape": "arrowUp" if is_long else "arrowDown",
-                "color": LONG_COLOR if is_long else SHORT_COLOR,
-                "text": f"{prefix}{epx_str}",
-            }
+    if not df.empty:
+        cols = set(df.columns)
+        entry_px_col = next(
+            (c for c in ("entry_px", "entry_price", "price_entry", "entry") if c in cols),
+            None,
+        )
+        exit_px_col = next(
+            (c for c in ("exit_px", "exit_price", "price_exit", "exit") if c in cols),
+            None,
+        )
+        pnl_col = next(
+            (c for c in ("pnl_pct", "pnl", "pnl_abs", "net_pnl") if c in cols),
+            None,
         )
 
-        if has_exit and exit_ts_valid is not None and exit_ts_valid[i]:
-            pnl_positive = True
+        side_series = df["side"] if "side" in cols else pd.Series(0, index=df.index)
+        side_int = side_series.map(_side_value_to_int).astype("int64").to_numpy()
+
+        # Convert tz-aware datetime series to integer epoch seconds using
+        # timedelta arithmetic. Casting via ``.astype("int64") // 1_000_000_000``
+        # silently breaks under pandas 2.x because ``pd.to_datetime`` now returns
+        # ``datetime64[us, UTC]`` (microsecond resolution) rather than the
+        # ``datetime64[ns, UTC]`` it used to. That regression collapsed every
+        # marker timestamp to ``epoch_seconds // 1000``, which lightweight-charts
+        # then rendered as a tight stack at the chart's left edge — the visible
+        # "summary of old trades" artefact.
+        entry_ts_int = (
+            (df["entry_ts"] - _EPOCH_UTC) // pd.Timedelta(seconds=1)
+        ).to_numpy(dtype="int64")
+
+        entry_px_num = (
+            pd.to_numeric(df[entry_px_col], errors="coerce").to_numpy()
+            if entry_px_col
+            else None
+        )
+        exit_px_num = (
+            pd.to_numeric(df[exit_px_col], errors="coerce").to_numpy()
+            if exit_px_col
+            else None
+        )
+        pnl_num = (
+            pd.to_numeric(df[pnl_col], errors="coerce").to_numpy()
+            if pnl_col
+            else None
+        )
+
+        for i in range(len(df)):
+            side_i = int(side_int[i])
+            is_long = side_i >= 0
+            entry_ts_val = int(entry_ts_int[i])
+
+            arrow_color = LONG_COLOR if is_long else SHORT_COLOR
+            position = "belowBar" if is_long else "aboveBar"
+            shape = "arrowUp" if is_long else "arrowDown"
+
+            # Compute realized pnl: prefer the stored pnl_pct, otherwise
+            # derive from entry/exit prices weighted by direction.
+            pnl_value: Optional[float] = None
             if pnl_num is not None:
                 p = pnl_num[i]
-                if p == p:
-                    pnl_positive = float(p) >= 0.0
-            elif entry_px_num is not None and exit_px_num is not None:
+                if p == p:  # not NaN
+                    pnl_value = float(p)
+            if (
+                pnl_value is None
+                and entry_px_num is not None
+                and exit_px_num is not None
+            ):
                 ep = entry_px_num[i]
                 xp = exit_px_num[i]
-                if ep == ep and xp == xp:
-                    pnl_positive = (
-                        (float(xp) - float(ep)) * (1 if is_long else -1)
-                    ) >= 0.0
+                if ep == ep and xp == xp and float(ep) != 0.0:
+                    pnl_value = (
+                        ((float(xp) - float(ep)) / float(ep))
+                        * 100.0
+                        * (1 if is_long else -1)
+                    )
 
-            if pnl_num is not None and pnl_num[i] == pnl_num[i]:
-                text = f"{prefix} {float(pnl_num[i]):+.2f}%"
-            elif exit_px_num is not None and exit_px_num[i] == exit_px_num[i]:
-                text = f"{prefix} @ {float(exit_px_num[i]):.2f}"
-            else:
-                text = f"{prefix} exit"
+            suppress_text = (
+                open_entry_ts is not None and entry_ts_val == int(open_entry_ts)
+            )
 
             markers.append(
                 {
-                    "time": int(exit_ts_int[i]),
-                    # Exit on the opposite side of the bar from the entry so
-                    # entry/exit pairs don't visually collide.
-                    "position": "aboveBar" if is_long else "belowBar",
-                    "shape": "arrowDown" if is_long else "arrowUp",
-                    "color": EXIT_WIN_COLOR if pnl_positive else EXIT_LOSS_COLOR,
-                    "text": text,
+                    "time": entry_ts_val,
+                    "position": position,
+                    "shape": shape,
+                    "color": arrow_color,
+                    "text": "",
+                    "size": ARROW_SIZE,
                 }
             )
+            entry_seen_ts.add(entry_ts_val)
+
+            if pnl_value is not None and not suppress_text:
+                pnl_color = PNL_WIN_COLOR if pnl_value >= 0 else PNL_LOSS_COLOR
+                markers.append(
+                    {
+                        "time": entry_ts_val,
+                        "position": position,
+                        "shape": "circle",
+                        "color": pnl_color,
+                        "text": f"{pnl_value:+.2f}%",
+                        "size": TEXT_MARKER_SIZE,
+                    }
+                )
+
+    # Emit the open-trade arrow when we know it and we haven't already
+    # rendered a closed-trade arrow at the same entry timestamp. No text
+    # label — the trade is still running, so the realized pnl is undefined.
+    if (
+        open_entry_ts is not None
+        and open_side_int != 0
+        and int(open_entry_ts) not in entry_seen_ts
+    ):
+        is_long_open = open_side_int >= 0
+        markers.append(
+            {
+                "time": int(open_entry_ts),
+                "position": "belowBar" if is_long_open else "aboveBar",
+                "shape": "arrowUp" if is_long_open else "arrowDown",
+                "color": LONG_COLOR if is_long_open else SHORT_COLOR,
+                "text": "",
+                "size": ARROW_SIZE,
+            }
+        )
 
     return markers
 

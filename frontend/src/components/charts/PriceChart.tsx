@@ -173,6 +173,10 @@ export default function PriceChart({
       layout: {
         background: { type: ColorType.Solid, color: CHART_BG },
         textColor: CHART_TEXT,
+        // Lightweight-charts marker text inherits the layout fontSize.
+        // Bumping from the default (11) gives the new pnl labels enough
+        // visual weight without resorting to custom rendering.
+        fontSize: 13,
       },
       grid: {
         vertLines: { color: CHART_GRID, visible: true },
@@ -247,6 +251,10 @@ export default function PriceChart({
         shape: m.shape as "arrowUp" | "arrowDown" | "circle" | "square",
         color: m.color,
         text: m.text,
+        // ``size`` lets the backend bump direction arrows (size: 2) and
+        // collapse the pnl-text companion marker (size: 0) so the trade
+        // label sits next to the arrow rather than dominating it.
+        size: typeof m.size === "number" ? m.size : undefined,
       }))
     );
   }, [bars, markers]);

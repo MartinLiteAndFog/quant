@@ -1420,7 +1420,13 @@ def api_dashboard_performance(
         payload = build_decision_dashboard_payload(
             symbol=symbol,
             venue=venue,
-            max_points=int(os.getenv("DASHBOARD_DECISION_MAX_POINTS", "1000")),
+            # Cap is intentionally well above the historical decision
+            # count for KuCoin (~70 at time of writing). Higher caps
+            # never inflate ``trade_count`` — the builder dedupes and,
+            # if it ever exceeds the cap, downsamples uniformly while
+            # preserving first/last so the chart's cumulative endpoints
+            # still match the card.
+            max_points=int(os.getenv("DASHBOARD_DECISION_MAX_POINTS", "5000")),
         )
         perf = payload["performance"]
         try:

@@ -120,12 +120,27 @@ class DashboardStateTests(unittest.TestCase):
         latest = overlay["latest"]
         self.assertEqual(int(latest["gate_on"]), 0)
 
-    def test_load_trade_markers_returns_all_trades(self) -> None:
+    def test_load_trade_markers_returns_entry_arrow_only_for_priceless_rows(self) -> None:
+        # Seeded trades.parquet rows carry side + entry/exit_ts but no
+        # entry_price / exit_price / pnl_pct. New contract: one arrow
+        # marker per trade at the entry timestamp, no pnl-text companion,
+        # no exit marker.
         markers = load_trade_markers(max_points=100000)
-        # 3 trades -> 3 entries + 3 exits
-        self.assertEqual(len(markers), 6)
+        self.assertEqual(len(markers), 3)
+        for m in markers:
+            self.assertIn(m["shape"], ("arrowUp", "arrowDown"))
+            self.assertEqual(m["text"], "")
+        seeded_entry_ts = {
+            int(pd.Timestamp(s, tz="UTC").timestamp())
+            for s in (
+                "2026-02-20T00:00:00Z",
+                "2026-02-20T01:00:00Z",
+                "2026-02-20T02:00:00Z",
+            )
+        }
+        self.assertEqual({int(m["time"]) for m in markers}, seeded_entry_ts)
 
-    def test_load_trade_markers_uses_real_entry_and_exit_timestamps(self) -> None:
+    def test_load_trade_markers_emits_entry_arrow_and_pnl_text(self) -> None:
         entry1 = pd.Timestamp("2026-04-01T10:00:00Z")
         exit1 = pd.Timestamp("2026-04-01T10:15:00Z")
         entry2 = pd.Timestamp("2026-04-02T11:00:00Z")
@@ -143,44 +158,114 @@ class DashboardStateTests(unittest.TestCase):
                 "qty": [1.0, 1.0, 1.0],
                 "entry_price": [82.5, 84.3, 81.0],
                 "exit_price": [83.0, 82.9, 81.5],
-                "pnl_pct": [0.6, 1.6, 0.6],
+                "pnl_pct": [0.6, -1.6, 0.6],
                 "exit_event": ["tp_exit", "signal_flip_exit", "tp_exit"],
             }
         )
         markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+
+        # 3 trades -> 3 arrows + 3 pnl-text companions = 6 markers, all
+        # anchored to entry timestamps. No exit markers at all.
         self.assertEqual(len(markers), 6)
-        # Markers must carry the real per-trade timestamps, never the same
-        # min-time or a fallback to the chart start.
-        seen_times = [int(m["time"]) for m in markers]
-        self.assertEqual(
-            sorted(seen_times),
-            sorted(
-                int(t.timestamp())
-                for t in (entry1, exit1, entry2, exit2, entry3, exit3)
+        entry_ts_set = {int(t.timestamp()) for t in (entry1, entry2, entry3)}
+        exit_ts_set = {int(t.timestamp()) for t in (exit1, exit2, exit3)}
+        seen_times = {int(m["time"]) for m in markers}
+        self.assertEqual(seen_times, entry_ts_set)
+        self.assertFalse(seen_times & exit_ts_set)
+
+        long_entry_at = int(entry1.timestamp())
+        long_markers = [m for m in markers if int(m["time"]) == long_entry_at]
+        self.assertEqual(len(long_markers), 2)
+        long_arrow = next(m for m in long_markers if m["shape"] == "arrowUp")
+        self.assertEqual(long_arrow["position"], "belowBar")
+        self.assertEqual(long_arrow["color"], "#22c55e")
+        self.assertEqual(long_arrow["text"], "")
+        self.assertEqual(int(long_arrow["size"]), 2)
+        long_text = next(m for m in long_markers if m["shape"] != "arrowUp")
+        # Winning long -> green text companion at the entry timestamp.
+        self.assertEqual(long_text["position"], "belowBar")
+        self.assertEqual(long_text["color"], "#22c55e")
+        self.assertTrue(long_text["text"].endswith("%"))
+        self.assertTrue(long_text["text"].startswith("+"))
+
+        short_entry_at = int(entry2.timestamp())
+        short_markers = [m for m in markers if int(m["time"]) == short_entry_at]
+        self.assertEqual(len(short_markers), 2)
+        short_arrow = next(m for m in short_markers if m["shape"] == "arrowDown")
+        self.assertEqual(short_arrow["position"], "aboveBar")
+        self.assertEqual(short_arrow["color"], "#ef4444")
+        self.assertEqual(short_arrow["text"], "")
+        self.assertEqual(int(short_arrow["size"]), 2)
+        short_text = next(m for m in short_markers if m["shape"] != "arrowDown")
+        # Losing short -> red text companion (negative pnl).
+        self.assertEqual(short_text["position"], "aboveBar")
+        self.assertEqual(short_text["color"], "#ef4444")
+        self.assertTrue(short_text["text"].startswith("-"))
+        self.assertTrue(short_text["text"].endswith("%"))
+
+    def test_load_trade_markers_skips_text_for_open_entry(self) -> None:
+        entry1 = pd.Timestamp("2026-04-01T10:00:00Z")
+        exit1 = pd.Timestamp("2026-04-01T10:15:00Z")
+        entry_open = pd.Timestamp("2026-04-02T09:00:00Z")
+        exit_open_placeholder = pd.Timestamp("2026-04-02T09:30:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["t1", "t_open"],
+                "venue": ["kucoin"] * 2,
+                "symbol": ["SOL-USDT"] * 2,
+                "entry_ts": [entry1, entry_open],
+                "exit_ts": [exit1, exit_open_placeholder],
+                "side": ["long", "long"],
+                "qty": [1.0, 1.0],
+                "entry_price": [82.5, 83.0],
+                "exit_price": [83.0, 84.0],
+                "pnl_pct": [0.6, 1.2],
+                "exit_event": ["tp_exit", "tp_exit"],
+            }
+        )
+        markers = ds.load_trade_markers(
+            max_points=100,
+            _trades_df=df,
+            open_entry_ts=int(entry_open.timestamp()),
+        )
+        at_open = [m for m in markers if int(m["time"]) == int(entry_open.timestamp())]
+        # The "open" trade keeps its arrow but drops the pnl-text companion.
+        self.assertEqual(len(at_open), 1)
+        self.assertEqual(at_open[0]["shape"], "arrowUp")
+        self.assertEqual(at_open[0]["text"], "")
+        # The other trade still ships both arrow + text.
+        at_closed = [m for m in markers if int(m["time"]) == int(entry1.timestamp())]
+        self.assertEqual(len(at_closed), 2)
+
+    def test_load_trade_markers_emits_open_arrow_from_live_levels(self) -> None:
+        # When ``execution_state.json`` carries an open position the loader
+        # appends a direction-colored arrow at that timestamp even though
+        # it isn't in ``closed_trades``. ``time + shape`` match dedupes
+        # the legacy live-entry marker that the chart endpoint emits
+        # separately.
+        open_entry = int(pd.Timestamp("2026-02-20T05:00:00Z").timestamp())
+        (self.tmp_path / "execution_state.json").write_text(
+            json.dumps(
+                {
+                    "side": "short",
+                    "entry_bar_ts": open_entry,
+                    "sl": 99.1,
+                }
             ),
+            encoding="utf-8",
         )
-        self.assertEqual(len(set(seen_times)), len(seen_times))
-        # Long entry should sit below the bar with an up arrow; short entry
-        # above with a down arrow.
-        first_long_entry = next(
-            m for m in markers if int(m["time"]) == int(entry1.timestamp())
-        )
-        self.assertEqual(first_long_entry["position"], "belowBar")
-        self.assertEqual(first_long_entry["shape"], "arrowUp")
-        self.assertTrue(first_long_entry["text"].startswith("L"))
-
-        short_entry = next(
-            m for m in markers if int(m["time"]) == int(entry2.timestamp())
-        )
-        self.assertEqual(short_entry["position"], "aboveBar")
-        self.assertEqual(short_entry["shape"], "arrowDown")
-        self.assertTrue(short_entry["text"].startswith("S"))
-
-        long_exit = next(
-            m for m in markers if int(m["time"]) == int(exit1.timestamp())
-        )
-        self.assertEqual(long_exit["position"], "aboveBar")
-        self.assertEqual(long_exit["shape"], "arrowDown")
+        # Empty trades.parquet so only the open marker comes out.
+        pd.DataFrame(
+            columns=["entry_ts", "exit_ts", "side", "pnl_pct"]
+        ).to_parquet(self.tmp_path / "trades.parquet", index=False)
+        markers = load_trade_markers(max_points=100)
+        self.assertEqual(len(markers), 1)
+        open_marker = markers[0]
+        self.assertEqual(int(open_marker["time"]), open_entry)
+        self.assertEqual(open_marker["shape"], "arrowDown")
+        self.assertEqual(open_marker["position"], "aboveBar")
+        self.assertEqual(open_marker["color"], "#ef4444")
+        self.assertEqual(open_marker["text"], "")
 
     @patch("quant.execution.dashboard_state.list_fills")
     def test_load_live_fill_markers_parses_microsecond_trade_time(self, mock_list_fills) -> None:
