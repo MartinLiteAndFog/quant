@@ -98,6 +98,13 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(len(bars), 3)
         self.assertIn("open", bars[0])
         self.assertIn("time", bars[0])
+        # ``time`` must be epoch *seconds* regardless of the underlying
+        # datetime64 precision (pandas 2.x reads parquet as us-resolution by
+        # default, which historically collapsed every bar timestamp to
+        # ``epoch_seconds // 1000`` and pushed markers off to the chart edge).
+        expected_first = int(pd.Timestamp("2026-02-20", tz="UTC").timestamp())
+        self.assertEqual(int(bars[0]["time"]), expected_first)
+        self.assertGreater(int(bars[0]["time"]), 1_000_000_000)
 
     def test_load_levels(self) -> None:
         levels = load_active_levels()
@@ -117,6 +124,63 @@ class DashboardStateTests(unittest.TestCase):
         markers = load_trade_markers(max_points=100000)
         # 3 trades -> 3 entries + 3 exits
         self.assertEqual(len(markers), 6)
+
+    def test_load_trade_markers_uses_real_entry_and_exit_timestamps(self) -> None:
+        entry1 = pd.Timestamp("2026-04-01T10:00:00Z")
+        exit1 = pd.Timestamp("2026-04-01T10:15:00Z")
+        entry2 = pd.Timestamp("2026-04-02T11:00:00Z")
+        exit2 = pd.Timestamp("2026-04-02T11:30:00Z")
+        entry3 = pd.Timestamp("2026-04-03T12:00:00Z")
+        exit3 = pd.Timestamp("2026-04-03T13:00:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["t1", "t2", "t3"],
+                "venue": ["kucoin"] * 3,
+                "symbol": ["SOL-USDT"] * 3,
+                "entry_ts": [entry1, entry2, entry3],
+                "exit_ts": [exit1, exit2, exit3],
+                "side": ["long", "short", "long"],
+                "qty": [1.0, 1.0, 1.0],
+                "entry_price": [82.5, 84.3, 81.0],
+                "exit_price": [83.0, 82.9, 81.5],
+                "pnl_pct": [0.6, 1.6, 0.6],
+                "exit_event": ["tp_exit", "signal_flip_exit", "tp_exit"],
+            }
+        )
+        markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+        self.assertEqual(len(markers), 6)
+        # Markers must carry the real per-trade timestamps, never the same
+        # min-time or a fallback to the chart start.
+        seen_times = [int(m["time"]) for m in markers]
+        self.assertEqual(
+            sorted(seen_times),
+            sorted(
+                int(t.timestamp())
+                for t in (entry1, exit1, entry2, exit2, entry3, exit3)
+            ),
+        )
+        self.assertEqual(len(set(seen_times)), len(seen_times))
+        # Long entry should sit below the bar with an up arrow; short entry
+        # above with a down arrow.
+        first_long_entry = next(
+            m for m in markers if int(m["time"]) == int(entry1.timestamp())
+        )
+        self.assertEqual(first_long_entry["position"], "belowBar")
+        self.assertEqual(first_long_entry["shape"], "arrowUp")
+        self.assertTrue(first_long_entry["text"].startswith("L"))
+
+        short_entry = next(
+            m for m in markers if int(m["time"]) == int(entry2.timestamp())
+        )
+        self.assertEqual(short_entry["position"], "aboveBar")
+        self.assertEqual(short_entry["shape"], "arrowDown")
+        self.assertTrue(short_entry["text"].startswith("S"))
+
+        long_exit = next(
+            m for m in markers if int(m["time"]) == int(exit1.timestamp())
+        )
+        self.assertEqual(long_exit["position"], "aboveBar")
+        self.assertEqual(long_exit["shape"], "arrowDown")
 
     @patch("quant.execution.dashboard_state.list_fills")
     def test_load_live_fill_markers_parses_microsecond_trade_time(self, mock_list_fills) -> None:
@@ -265,7 +329,25 @@ class DashboardStateTests(unittest.TestCase):
         self.assertGreater(len(diary.get("entries", [])), 0)
 
         equity = ds.build_equity_curve(max_points=100, _trades_df=df)
-        self.assertGreater(len(equity.get("trades", [])), 0)
+        trades = equity.get("trades", [])
+        self.assertGreater(len(trades), 0)
+        first = trades[0]
+        self.assertIn("entry_time", first)
+        self.assertIn("exit_time", first)
+        self.assertIn("entry_price", first)
+        self.assertIn("exit_price", first)
+        self.assertIn("side", first)
+        self.assertEqual(
+            int(first["entry_time"]),
+            int(pd.Timestamp("2025-01-01", tz="UTC").timestamp()),
+        )
+        self.assertEqual(
+            int(first["exit_time"]),
+            int(pd.Timestamp("2025-01-02", tz="UTC").timestamp()),
+        )
+        self.assertEqual(int(first["exit_time"]), int(first["time"]))
+        self.assertAlmostEqual(float(first["entry_price"]), 100.0)
+        self.assertAlmostEqual(float(first["exit_price"]), 105.0)
 
     def test_regime_functions_accept_preloaded_rows(self) -> None:
         """Regime functions should accept pre-loaded rows to avoid duplicate queries."""

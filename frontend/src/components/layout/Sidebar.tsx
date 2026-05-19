@@ -107,6 +107,14 @@ function SidebarBase({
 
   const strategyLabel = strategy?.strategy_label ?? "—";
 
+  // Prefer the new trade-decision counter (postgres ``trade_decisions``,
+  // filtered to KuCoin + current symbol on the backend) over the legacy
+  // closed-trade count. Fall back to the closed-trade count only if the
+  // decisions query failed or the backend hasn't yet been backfilled — that
+  // way the dashboard never silently shows a Kraken-flavoured number.
+  const tradeDecisionCount =
+    performance?.trade_decision_count ?? performance?.trade_count ?? null;
+
   return (
     <aside className="flex w-80 flex-col gap-3 overflow-y-auto">
       <SectionCard title="Status">
@@ -178,7 +186,7 @@ function SidebarBase({
           <div className="mt-2 border-t border-zinc-800 pt-2" />
           <div className="flex items-center justify-between gap-3">
             <span className="text-zinc-400">Trades</span>
-            <span>{fmtInt(performance?.trade_count)}</span>
+            <span>{fmtInt(tradeDecisionCount)}</span>
           </div>
           <div className="flex items-center justify-between gap-3">
             <span className="text-zinc-400">Wins</span>

@@ -29,13 +29,23 @@ export interface DashboardPerformanceResponse {
   winrate: number | null; // 0..100
   monthly_growth: number | null;
   average_gain: number | null;
+  // Closed-trade aggregates (postgres ``closed_trades`` filtered to this
+  // venue). Used for win/loss breakdowns where outcome is required.
   trade_count?: number;
   winning_trade_count?: number;
   losing_trade_count?: number;
+  // Decision counter sourced from postgres ``trade_decisions`` (every entry /
+  // flip with its own SL/TP, regardless of whether the trade has closed).
+  // Filtered to the requested venue + symbol on the backend. ``null`` means
+  // the count query failed; ``undefined`` means the field is missing entirely
+  // (older payload). Either case should fall back to the closed-trade count.
+  trade_decision_count?: number | null;
   source?: string;
   error?: string;
   ts?: string;
 }
+
+export const DEFAULT_DASHBOARD_VENUE = "kucoin" as const;
 
 export function useChartData(symbol: string, hours: number, maxPoints = 4000) {
   return useQuery({
@@ -89,7 +99,7 @@ export function useDashboardStrategy(symbol: string = "SOL-USDT") {
 
 export function useDashboardPerformance(
   symbol: string = "SOL-USDT",
-  venue: string = "kucoin"
+  venue: string = DEFAULT_DASHBOARD_VENUE
 ) {
   return useQuery({
     queryKey: ["dashboardPerformance", symbol, venue],
@@ -121,7 +131,10 @@ export function useEquityEvents(range: string) {
   return useQuery({
     queryKey: ["equityEvents", range],
     queryFn: () =>
-      apiFetch<EquityEventsResponse>("/api/equity/events", { range, venue: "kucoin" }),
+      apiFetch<EquityEventsResponse>("/api/equity/events", {
+        range,
+        venue: DEFAULT_DASHBOARD_VENUE,
+      }),
     refetchInterval: 30000,
   });
 }

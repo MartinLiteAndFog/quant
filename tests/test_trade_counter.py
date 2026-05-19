@@ -22,7 +22,7 @@ The following are NOT counted as new decisions:
 from __future__ import annotations
 
 import unittest
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from quant.execution.trade_counter import (
     DECISION_ENTRY,
@@ -447,6 +447,170 @@ class TradeCountApiTests(unittest.TestCase):
         self.assertEqual(res["trade_count"], 10)
         # New field: counts every entry / flip with its own SL/TP.
         self.assertEqual(res["trade_decision_count"], 17)
+
+    def test_performance_endpoint_defaults_to_kucoin(self) -> None:
+        """Calling /api/dashboard/performance without a venue must filter by
+        ``kucoin`` end-to-end (closed-trade frame and trade-decision count)."""
+
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        ws._PERFORMANCE_CACHE.clear()
+
+        seen_perf_kwargs: Dict[str, Any] = {}
+        seen_count_kwargs: Dict[str, Any] = {}
+
+        def _fake_build(*args, **kwargs) -> Dict[str, Any]:
+            seen_perf_kwargs.update(kwargs)
+            return {
+                "symbol": kwargs.get("symbol", "SOL-USDT"),
+                "venue": kwargs.get("venue", "kucoin"),
+                "as_of": "2026-05-18T12:00:00Z",
+                "window": "lifetime",
+                "pnl_pct": None,
+                "winrate": None,
+                "monthly_growth": None,
+                "average_gain": None,
+                "trade_count": 0,
+                "winning_trade_count": 0,
+                "losing_trade_count": 0,
+                "source": "postgres:closed_trades",
+            }
+
+        def _fake_count(*, venue=None, symbol=None, decision_kind=None, since_ts=None):
+            seen_count_kwargs.update(
+                {"venue": venue, "symbol": symbol, "decision_kind": decision_kind}
+            )
+            return 0
+
+        with patch.object(ws, "build_dashboard_performance", side_effect=_fake_build), \
+             patch.object(ws, "count_trade_decisions", side_effect=_fake_count):
+            res = ws.api_dashboard_performance(symbol="SOL-USDT")
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["venue"], "kucoin")
+        self.assertEqual(seen_perf_kwargs.get("venue"), "kucoin")
+        self.assertEqual(seen_count_kwargs.get("venue"), "kucoin")
+        # No Kraken fallback when KuCoin numbers are missing — empty/zero is
+        # the correct behaviour, never wrong-venue numbers.
+        self.assertEqual(res["trade_count"], 0)
+        self.assertEqual(res["trade_decision_count"], 0)
+
+    def test_performance_endpoint_respects_explicit_venue(self) -> None:
+        """An explicit ``venue=kraken`` must be passed straight through to the
+        loaders. The current Kraken loader returns empty, so the endpoint
+        should respond with zeros instead of silently returning KuCoin data."""
+
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        ws._PERFORMANCE_CACHE.clear()
+
+        seen_perf_kwargs: Dict[str, Any] = {}
+        seen_count_kwargs: Dict[str, Any] = {}
+
+        def _fake_build(*args, **kwargs) -> Dict[str, Any]:
+            seen_perf_kwargs.update(kwargs)
+            # ``build_dashboard_performance`` short-circuits to an empty
+            # payload for any non-kucoin venue today — mirror that here.
+            if str(kwargs.get("venue")).lower() != "kucoin":
+                return {
+                    "symbol": kwargs.get("symbol", "SOL-USDT"),
+                    "venue": kwargs.get("venue"),
+                    "as_of": "2026-05-18T12:00:00Z",
+                    "window": "lifetime",
+                    "pnl_pct": None,
+                    "winrate": None,
+                    "monthly_growth": None,
+                    "average_gain": None,
+                    "trade_count": 0,
+                    "winning_trade_count": 0,
+                    "losing_trade_count": 0,
+                    "source": "unsupported_venue",
+                }
+            raise AssertionError("Unexpected fallback to kucoin")
+
+        def _fake_count(*, venue=None, symbol=None, decision_kind=None, since_ts=None):
+            seen_count_kwargs.update({"venue": venue, "symbol": symbol})
+            return 0
+
+        with patch.object(ws, "build_dashboard_performance", side_effect=_fake_build), \
+             patch.object(ws, "count_trade_decisions", side_effect=_fake_count):
+            res = ws.api_dashboard_performance(symbol="SOL-USDT", venue="kraken")
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["venue"], "kraken")
+        self.assertEqual(seen_perf_kwargs.get("venue"), "kraken")
+        self.assertEqual(seen_count_kwargs.get("venue"), "kraken")
+        self.assertEqual(res["trade_count"], 0)
+        self.assertEqual(res["winning_trade_count"], 0)
+        self.assertEqual(res["losing_trade_count"], 0)
+
+    def test_trade_count_endpoint_defaults_to_kucoin(self) -> None:
+        """``/api/dashboard/trade_count`` must filter by ``kucoin`` when the
+        caller omits the ``venue`` query param."""
+
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        seen_count_kwargs: Dict[str, Any] = {}
+        seen_list_kwargs: Dict[str, Any] = {}
+
+        def _fake_count(*, venue=None, symbol=None, decision_kind=None, since_ts=None):
+            seen_count_kwargs.setdefault("calls", []).append(
+                {"venue": venue, "symbol": symbol, "decision_kind": decision_kind}
+            )
+            return 0
+
+        def _fake_list(*, venue=None, symbol=None, limit=50):
+            seen_list_kwargs.update({"venue": venue, "symbol": symbol, "limit": limit})
+            return []
+
+        ws._TRADE_COUNT_CACHE.clear()
+        with patch.object(ws, "count_trade_decisions", side_effect=_fake_count), \
+             patch.object(ws, "list_recent_trade_decisions", side_effect=_fake_list):
+            res = ws.api_dashboard_trade_count(symbol="SOL-USDT")
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["venue"], "kucoin")
+        self.assertEqual(res["total"], 0)
+        self.assertEqual(res["entries"], 0)
+        self.assertEqual(res["flips"], 0)
+        self.assertEqual(seen_list_kwargs.get("venue"), "kucoin")
+        for call in seen_count_kwargs.get("calls", []):
+            self.assertEqual(call["venue"], "kucoin")
+
+    def test_trade_count_endpoint_respects_explicit_venue(self) -> None:
+        """Explicit ``venue=kraken`` filters must be honoured rather than
+        silently rewritten to ``kucoin``."""
+
+        from unittest.mock import patch
+
+        import quant.execution.webhook_server as ws
+
+        seen_venues: List[str] = []
+
+        def _fake_count(*, venue=None, symbol=None, decision_kind=None, since_ts=None):
+            seen_venues.append(str(venue))
+            return 0
+
+        def _fake_list(*, venue=None, symbol=None, limit=50):
+            seen_venues.append(str(venue))
+            return []
+
+        ws._TRADE_COUNT_CACHE.clear()
+        with patch.object(ws, "count_trade_decisions", side_effect=_fake_count), \
+             patch.object(ws, "list_recent_trade_decisions", side_effect=_fake_list):
+            res = ws.api_dashboard_trade_count(symbol="SOL-USDT", venue="kraken")
+
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["venue"], "kraken")
+        self.assertTrue(seen_venues, "venue must be threaded through to the store")
+        for v in seen_venues:
+            self.assertEqual(v, "kraken")
 
 
 class TradeDecisionDataclassTests(unittest.TestCase):

@@ -831,6 +831,20 @@ def api_dashboard_chart(
         bars = load_renko_bars(max_points=int(max(100, max_points)), _df=renko_df)
         markers = load_trade_markers(max_points=int(max(1000, max_points * 50)), _trades_df=trades_df)
         oldest_bar_ts = int(bars[0]["time"]) if bars else None
+        newest_bar_ts = int(bars[-1]["time"]) if bars else None
+        # Restrict trade markers to the bars' visible time window. Renko bars
+        # are price-event based so the rendered window is a moving slice of
+        # recent activity; ``closed_trades`` can go back arbitrarily far. Any
+        # marker whose timestamp falls before the first bar gets stacked at
+        # the chart's left edge by lightweight-charts, producing the
+        # "summary of old trades at the chart start" artefact. Drop those.
+        if oldest_bar_ts is not None and newest_bar_ts is not None and markers:
+            markers = [
+                m
+                for m in markers
+                if oldest_bar_ts <= int(m.get("time", 0)) <= newest_bar_ts
+            ]
+        markers_in_bar_window = len(markers)
         # Fill markers (ladder/scaling) excluded from chart — only show logical entry/exit
         markers_live: list[dict[str, Any]] = []
         levels = load_active_levels()
@@ -926,8 +940,19 @@ def api_dashboard_chart(
         markers_all = markers + markers_live
         if live_entry_marker is not None:
             mt = int(live_entry_marker.get("time", 0))
-            dup = any(int(m.get("time", 0)) == mt and str(m.get("shape", "")) == str(live_entry_marker.get("shape")) for m in markers_all)
-            if not dup:
+            # Skip the live-entry marker if it would also stack at the chart
+            # start because the open position predates the visible bars.
+            in_range = (
+                oldest_bar_ts is None
+                or newest_bar_ts is None
+                or oldest_bar_ts <= mt <= newest_bar_ts
+            )
+            dup = any(
+                int(m.get("time", 0)) == mt
+                and str(m.get("shape", "")) == str(live_entry_marker.get("shape"))
+                for m in markers_all
+            )
+            if in_range and not dup:
                 markers_all.append(live_entry_marker)
 
         markers = sorted(markers_all, key=lambda x: int(x.get("time", 0)))
@@ -1032,7 +1057,6 @@ def api_dashboard_chart(
                     forecast_ts = int((now_ts + pd.Timedelta(minutes=minutes)).timestamp())
                     regime_forecast.append({"time": forecast_ts, "score": score})
 
-        _newest_bar_ts = int(bars[-1]["time"]) if bars else None
         # ``markers`` is already sorted by time above; just slice the tail.
         _marker_newest_5_times = (
             [int(m.get("time", 0)) for m in markers[-5:]] if markers else []
@@ -1040,7 +1064,8 @@ def api_dashboard_chart(
         _debug = {
             "renko_bars_count": len(bars),
             "oldest_bar_ts": oldest_bar_ts,
-            "newest_bar_ts": _newest_bar_ts,
+            "newest_bar_ts": newest_bar_ts,
+            "markers_in_bar_window": markers_in_bar_window,
             "markers_from_trades_parquet": len(markers),
             "markers_from_live_fills": len(markers_live),
             "markers_total_after_merge": len(markers),

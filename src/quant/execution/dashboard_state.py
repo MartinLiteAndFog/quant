@@ -259,11 +259,16 @@ def load_renko_bars(max_points: int = 5000, _df: Optional[pd.DataFrame] = None) 
     if df.empty:
         return []
     df = df.tail(int(max(1, max_points)))
-    # Vectorized epoch (seconds) conversion.
+    # Vectorized epoch (seconds) conversion. Use ``Timedelta`` arithmetic
+    # rather than ``// 1_000_000_000`` so we stay correct regardless of the
+    # underlying datetime64 precision. Pandas 2.x can return
+    # ``datetime64[us, UTC]`` from ``pd.to_datetime`` / parquet, which made
+    # the previous ``astype("int64") // 1e9`` path silently produce
+    # ``seconds // 1000``.
     try:
         ts_int = (
-            pd.to_datetime(df["ts"], utc=True, errors="coerce").astype("int64")
-            // 1_000_000_000
+            (pd.to_datetime(df["ts"], utc=True, errors="coerce") - _EPOCH_UTC)
+            // pd.Timedelta(seconds=1)
         ).to_numpy(dtype="int64")
     except Exception:
         ts_int = (
@@ -609,6 +614,11 @@ def _reconstruct_trades_from_execution_fills_df(
     return entries[-int(max(1, max_points)) :]
 
 
+# Module-level epoch anchor used for vectorised UTC datetime -> epoch seconds
+# conversions. Created once so hot paths (e.g. marker building per refresh)
+# don't allocate a fresh ``pd.Timestamp`` on every call.
+_EPOCH_UTC = pd.Timestamp("1970-01-01", tz="UTC")
+
 _LONG_TOKENS = frozenset({"long", "l", "buy", "1"})
 _SHORT_TOKENS = frozenset({"short", "s", "sell", "-1"})
 
@@ -687,8 +697,16 @@ def load_trade_markers(
     side_series = df["side"] if "side" in cols else pd.Series(0, index=df.index)
     side_int = side_series.map(_side_value_to_int).astype("int64").to_numpy()
 
+    # Convert tz-aware datetime series to integer epoch seconds using
+    # timedelta arithmetic. Casting via ``.astype("int64") // 1_000_000_000``
+    # silently breaks under pandas 2.x because ``pd.to_datetime`` now returns
+    # ``datetime64[us, UTC]`` (microsecond resolution) rather than the
+    # ``datetime64[ns, UTC]`` it used to. That regression collapsed every
+    # marker timestamp to ``epoch_seconds // 1000``, which lightweight-charts
+    # then rendered as a tight stack at the chart's left edge — the visible
+    # "summary of old trades" artefact.
     entry_ts_int = (
-        df["entry_ts"].astype("int64") // 1_000_000_000
+        (df["entry_ts"] - _EPOCH_UTC) // pd.Timedelta(seconds=1)
     ).to_numpy(dtype="int64")
 
     if entry_px_col:
@@ -706,9 +724,9 @@ def load_trade_markers(
 
     if has_exit:
         exit_ts_series = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
-        exit_ts_int = (exit_ts_series.astype("int64") // 1_000_000_000).to_numpy(
-            dtype="int64"
-        )
+        exit_ts_int = (
+            (exit_ts_series - _EPOCH_UTC) // pd.Timedelta(seconds=1)
+        ).to_numpy(dtype="int64")
         exit_ts_valid = exit_ts_series.notna().to_numpy()
         exit_event_series = (
             df.get("exit_event", pd.Series(["exit"] * len(df), index=df.index))
@@ -721,23 +739,38 @@ def load_trade_markers(
         exit_ts_valid = None
         exit_event_series = None
 
+    # Marker conventions used by the React dashboard `PriceChart`:
+    #   * Long entry  -> arrowUp below the bar (green)
+    #   * Long exit   -> arrowDown above the bar (color reflects pnl sign)
+    #   * Short entry -> arrowDown above the bar (orange)
+    #   * Short exit  -> arrowUp below the bar (color reflects pnl sign)
+    # Text is kept short ("L @ 82.6" / "S +1.2%") so adjacent markers don't
+    # produce a wall of labels on the chart.
+    LONG_COLOR = "#22c55e"
+    SHORT_COLOR = "#f97316"
+    EXIT_WIN_COLOR = "#16a34a"
+    EXIT_LOSS_COLOR = "#ef4444"
+
     markers: List[Dict[str, Any]] = []
     n = len(df)
     for i in range(n):
         side_i = int(side_int[i])
+        is_long = side_i >= 0
+        prefix = "L" if is_long else "S"
+
         epx_str = ""
         if entry_px_num is not None:
             ep = entry_px_num[i]
             if ep == ep:  # not NaN
-                epx_str = f" @ {float(ep):.3f}"
+                epx_str = f" @ {float(ep):.2f}"
 
         markers.append(
             {
                 "time": int(entry_ts_int[i]),
-                "position": "belowBar" if side_i >= 0 else "aboveBar",
-                "shape": "arrowUp" if side_i >= 0 else "arrowDown",
-                "color": "#2ecc71" if side_i >= 0 else "#f39c12",
-                "text": ("LONG" if side_i >= 0 else "SHORT") + epx_str,
+                "position": "belowBar" if is_long else "aboveBar",
+                "shape": "arrowUp" if is_long else "arrowDown",
+                "color": LONG_COLOR if is_long else SHORT_COLOR,
+                "text": f"{prefix}{epx_str}",
             }
         )
 
@@ -752,27 +785,25 @@ def load_trade_markers(
                 xp = exit_px_num[i]
                 if ep == ep and xp == xp:
                     pnl_positive = (
-                        (float(xp) - float(ep)) * (1 if side_i >= 0 else -1)
+                        (float(xp) - float(ep)) * (1 if is_long else -1)
                     ) >= 0.0
 
-            pnl_str = ""
-            if pnl_num is not None:
-                p = pnl_num[i]
-                if p == p:
-                    pnl_str = f" {float(p):+.2f}%"
-            xpx_str = ""
-            if exit_px_num is not None:
-                xp = exit_px_num[i]
-                if xp == xp:
-                    xpx_str = f" @ {float(xp):.3f}"
+            if pnl_num is not None and pnl_num[i] == pnl_num[i]:
+                text = f"{prefix} {float(pnl_num[i]):+.2f}%"
+            elif exit_px_num is not None and exit_px_num[i] == exit_px_num[i]:
+                text = f"{prefix} @ {float(exit_px_num[i]):.2f}"
+            else:
+                text = f"{prefix} exit"
 
             markers.append(
                 {
                     "time": int(exit_ts_int[i]),
-                    "position": "aboveBar" if side_i >= 0 else "belowBar",
-                    "shape": "square",
-                    "color": "#2ecc71" if pnl_positive else "#f7768e",
-                    "text": f"{exit_event_series[i]}{xpx_str}{pnl_str}",
+                    # Exit on the opposite side of the bar from the entry so
+                    # entry/exit pairs don't visually collide.
+                    "position": "aboveBar" if is_long else "belowBar",
+                    "shape": "arrowDown" if is_long else "arrowUp",
+                    "color": EXIT_WIN_COLOR if pnl_positive else EXIT_LOSS_COLOR,
+                    "text": text,
                 }
             )
 
@@ -1677,7 +1708,9 @@ def build_regime_overlay(
         .clip(0.0, 1.0)
     )
 
-    ts_int = (df["ts"].astype("int64") // 1_000_000_000).to_numpy(dtype="int64")
+    ts_int = (
+        (df["ts"] - _EPOCH_UTC) // pd.Timedelta(seconds=1)
+    ).to_numpy(dtype="int64")
     gate_arr = df["gate_on"].to_numpy(dtype="int64")
     conf_arr = df["confidence"].to_numpy(dtype="float64")
     regime_state_arr = (
@@ -1778,9 +1811,17 @@ def build_equity_curve(
     for e in entries:
         pnl_pct = float(e.get("pnl_pct", 0.0))
         cum += pnl_pct
+        exit_time_val = int(e.get("time", 0))
+        entry_time_raw = e.get("entry_time")
+        try:
+            entry_time_val = int(entry_time_raw) if entry_time_raw is not None else None
+        except (TypeError, ValueError):
+            entry_time_val = None
         curve.append(
             {
-                "time": int(e.get("time", 0)),
+                "time": exit_time_val,
+                "entry_time": entry_time_val,
+                "exit_time": exit_time_val,
                 "pnl_pct": round(pnl_pct, 4),
                 "cum_pct": round(cum, 4),
                 "side": e.get("side"),
@@ -1821,7 +1862,9 @@ def build_regime_scores(symbol: str, hours: int = 24 * 14, _rows: Optional[List[
     if df.empty:
         return {"scores": [], "forecast": []}
 
-    ts_int = (df["ts"].astype("int64") // 1_000_000_000).to_numpy(dtype="int64")
+    ts_int = (
+        (df["ts"] - _EPOCH_UTC) // pd.Timedelta(seconds=1)
+    ).to_numpy(dtype="int64")
     score_round = df["regime_score"].astype(float).round(4).to_numpy()
     scores = [
         {"time": int(t), "score": float(s)}

@@ -151,6 +151,71 @@ class WebhookDashboardApiTests(unittest.TestCase):
         os.environ.pop("WEBHOOK_TOKEN", None)
         self.tmp.cleanup()
 
+    def test_chart_drops_trade_markers_before_first_bar(self) -> None:
+        root = Path(self.tmp.name)
+        # Bars cover Feb 20 only (see setUp). Seed trades that include both
+        # an "ancient" trade well before the bars window and a fresh trade
+        # within it. Only the in-window trade markers should survive.
+        pd.DataFrame(
+            [
+                # Ancient trade: would otherwise be stacked at the chart
+                # start because its timestamps predate the first bar.
+                {
+                    "entry_ts": "2025-12-01T00:00:00Z",
+                    "exit_ts": "2025-12-01T00:30:00Z",
+                    "side": 1,
+                    "entry_price": 70.0,
+                    "exit_price": 71.0,
+                    "pnl_pct": 1.4,
+                    "exit_event": "tp_exit",
+                },
+                # Fresh trade: lives squarely inside the Renko bar window.
+                {
+                    "entry_ts": "2026-02-20T00:30:00Z",
+                    "exit_ts": "2026-02-20T00:45:00Z",
+                    "side": 1,
+                    "entry_price": 100.0,
+                    "exit_price": 101.0,
+                    "pnl_pct": 1.0,
+                    "exit_event": "tp_exit",
+                },
+            ]
+        ).to_parquet(root / "trades.parquet", index=False)
+        # Make sure the test reads from this seeded file rather than from
+        # any background Postgres data picked up by the live executor.
+        os.environ["DASHBOARD_TRADE_ALLOW_FILE_FALLBACK"] = "1"
+        ws._CHART_CACHE.clear()
+
+        body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+        self.assertTrue(body.get("ok"))
+        bars = body.get("bars", [])
+        self.assertTrue(bars, "test setUp must seed at least one Renko bar")
+        first_bar_ts = int(bars[0]["time"])
+        last_bar_ts = int(bars[-1]["time"])
+        trade_markers = [
+            m
+            for m in body.get("markers", [])
+            if "live entry" not in str(m.get("text", ""))
+        ]
+        self.assertTrue(
+            trade_markers,
+            "Fresh in-window trade markers must still render",
+        )
+        for m in trade_markers:
+            mt = int(m.get("time", 0))
+            self.assertGreaterEqual(
+                mt,
+                first_bar_ts,
+                f"Marker {m!r} predates the first bar at {first_bar_ts}",
+            )
+            self.assertLessEqual(mt, last_bar_ts)
+        # The ancient 2025 markers must have been filtered out.
+        ancient_ts = int(pd.Timestamp("2025-12-01T00:00:00Z").timestamp())
+        self.assertFalse(
+            any(int(m.get("time", 0)) == ancient_ts for m in trade_markers),
+            "Marker that predates the first bar must be dropped",
+        )
+
     def test_chart_payload_shape(self) -> None:
         body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
         self.assertTrue(body.get("ok"))

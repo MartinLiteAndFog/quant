@@ -106,6 +106,8 @@ export interface TradeEquityPoint {
   pnl_pct: number;
   cum_pct: number;
   side?: string;
+  entry_time?: number;
+  exit_time?: number;
   entry_price?: number;
   exit_price?: number;
   qty?: number;
@@ -159,10 +161,6 @@ export interface ChartResponse {
   equity_source?: string;
   equity_real?: EquityPoint[];
   equity_real_source?: string;
-  equity_kraken?: EquityPoint[];
-  equity_kraken_source?: string;
-  equity_combined?: EquityPoint[];
-  equity_combined_source?: string;
   equity_total?: EquityPoint[];
   equity_total_source?: string;
   equity_components?: EquityComponent[];
