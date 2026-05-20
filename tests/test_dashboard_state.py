@@ -240,6 +240,146 @@ class DashboardStateTests(unittest.TestCase):
             self.assertEqual(int(label["time"]), int(arrow["time"]))
             self.assertEqual(label["position"], arrow["position"])
 
+    def test_load_trade_markers_uses_payload_action_entry_time(self) -> None:
+        opened_at = pd.Timestamp("2026-05-14T08:15:00Z")
+        exit_ts = pd.Timestamp("2026-05-14T08:45:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["payload_trade"],
+                "venue": ["kucoin"],
+                "symbol": ["SOL-USDT"],
+                "entry_ts": [pd.NaT],
+                "exit_ts": [exit_ts],
+                "side": ["long"],
+                "qty": [1.0],
+                "entry_price": [91.0],
+                "exit_price": [92.0],
+                "pnl_pct": [1.23],
+                "exit_event": ["tp_exit"],
+                "payload_json": [
+                    {
+                        "engine_action": "enter_long",
+                        "position_before": 0,
+                        "position_after": 1,
+                        "ts": opened_at.isoformat(),
+                    }
+                ],
+            }
+        )
+
+        markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+
+        self.assertEqual(len(markers), 2)
+        self.assertEqual([m.get("trade_id") for m in markers], ["payload_trade", "payload_trade"])
+        self.assertEqual({int(m["time"]) for m in markers}, {int(opened_at.timestamp())})
+        self.assertEqual({int(m["original_time"]) for m in markers}, {int(opened_at.timestamp())})
+        self.assertEqual(markers[1]["text"], "+1.23%")
+
+    def test_load_trade_markers_same_row_flip_uses_previous_close_time(self) -> None:
+        first_entry = pd.Timestamp("2026-05-14T08:00:00Z")
+        first_exit = pd.Timestamp("2026-05-14T08:30:00Z")
+        second_exit = pd.Timestamp("2026-05-14T09:00:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["flip_exit_trade", "post_flip_trade"],
+                "venue": ["kucoin", "kucoin"],
+                "symbol": ["SOL-USDT", "SOL-USDT"],
+                "entry_ts": [first_entry, pd.NaT],
+                "exit_ts": [first_exit, second_exit],
+                "side": ["long", "short"],
+                "qty": [1.0, 1.0],
+                "entry_price": [91.0, 90.5],
+                "exit_price": [90.5, 92.0],
+                "pnl_pct": [-0.55, -1.66],
+                "exit_event": ["tp_exit", "sl_exit"],
+                "payload_json": [
+                    {},
+                    {
+                        "engine_action": "flip_to_short",
+                        "position_before": 1,
+                        "position_after": -1,
+                    },
+                ],
+            }
+        )
+
+        markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+
+        post_flip = [m for m in markers if m.get("trade_id") == "post_flip_trade"]
+        self.assertEqual(len(post_flip), 2)
+        self.assertEqual({int(m["time"]) for m in post_flip}, {int(first_exit.timestamp())})
+        self.assertEqual({int(m["original_time"]) for m in post_flip}, {int(first_exit.timestamp())})
+        arrow = next(m for m in post_flip if m["shape"] == "arrowDown")
+        label = next(m for m in post_flip if m["shape"] == "circle")
+        self.assertEqual(arrow["text"], "")
+        self.assertEqual(label["text"], "-1.66%")
+
+    def test_load_trade_markers_does_not_infer_after_tp_sl_close(self) -> None:
+        first_entry = pd.Timestamp("2026-05-14T08:00:00Z")
+        first_exit = pd.Timestamp("2026-05-14T08:30:00Z")
+        second_exit = pd.Timestamp("2026-05-14T09:00:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["flip_closed_trade", "plain_close_trade"],
+                "venue": ["kucoin", "kucoin"],
+                "symbol": ["SOL-USDT", "SOL-USDT"],
+                "entry_ts": [first_entry, pd.NaT],
+                "exit_ts": [first_exit, second_exit],
+                "side": ["long", "short"],
+                "qty": [1.0, 1.0],
+                "entry_price": [91.0, 90.5],
+                "exit_price": [90.5, 92.0],
+                "pnl_pct": [-0.55, -1.66],
+                "exit_event": ["signal_flip_exit", "sl_exit"],
+                "payload_json": [
+                    {"engine_action": "flip_to_short"},
+                    {"action": "exit_sl", "event_name": "sl_exit"},
+                ],
+            }
+        )
+
+        markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+
+        self.assertEqual({m.get("trade_id") for m in markers}, {"flip_closed_trade"})
+        self.assertNotIn("plain_close_trade", {m.get("trade_id") for m in markers})
+
+    def test_load_trade_markers_keeps_pnl_with_post_flip_trade_id(self) -> None:
+        first_entry = pd.Timestamp("2026-05-14T08:00:00Z")
+        first_exit = pd.Timestamp("2026-05-14T08:30:00Z")
+        second_exit = pd.Timestamp("2026-05-14T09:00:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["prev_trade", "trade_i"],
+                "venue": ["kucoin", "kucoin"],
+                "symbol": ["SOL-USDT", "SOL-USDT"],
+                "entry_ts": [first_entry, pd.NaT],
+                "exit_ts": [first_exit, second_exit],
+                "side": ["long", "short"],
+                "qty": [1.0, 1.0],
+                "entry_price": [100.0, 99.0],
+                "exit_price": [99.0, 101.0],
+                "pnl_pct": [-1.0, -2.02],
+                "exit_event": ["tp_exit", "sl_exit"],
+                "payload_json": [
+                    {},
+                    {
+                        "decision_kind": "flip",
+                        "engine_action": "flip_to_short",
+                        "position_before": 1,
+                        "position_after": -1,
+                    },
+                ],
+            }
+        )
+
+        markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+
+        labels = [m for m in markers if m["shape"] == "circle"]
+        self.assertEqual(
+            [(m.get("trade_id"), m.get("text")) for m in labels],
+            [("prev_trade", "-1.00%"), ("trade_i", "-2.02%")],
+        )
+
     def test_load_trade_markers_skips_text_for_open_entry(self) -> None:
         entry1 = pd.Timestamp("2026-04-01T10:00:00Z")
         exit1 = pd.Timestamp("2026-04-01T10:15:00Z")

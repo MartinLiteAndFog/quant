@@ -649,6 +649,84 @@ def _valid_entry_epoch_seconds(v: Any) -> Optional[int]:
     return int(seconds)
 
 
+_ENTRY_ACTION_TOKENS = frozenset({"entry", "enter_long", "enter_short", "open_long", "open_short"})
+_FLIP_ACTION_TOKENS = frozenset({"flip", "exit_flip", "flip_to_long", "flip_to_short"})
+
+
+def _norm_action_token(v: Any) -> str:
+    return str(v or "").strip().lower()
+
+
+def _payload_dicts_from_row(row: Any) -> List[Dict[str, Any]]:
+    payload = _payload_dict_from_any(row.get("payload_json"))
+    if not payload:
+        return []
+    nested = _payload_dict_from_any(payload.get("payload_json"))
+    return [payload, nested] if nested else [payload]
+
+
+def _row_metadata_values(row: Any, keys: tuple[str, ...]) -> List[Any]:
+    values: List[Any] = []
+    for key in keys:
+        values.append(row.get(key))
+    for payload in _payload_dicts_from_row(row):
+        for key in keys:
+            values.append(payload.get(key))
+    return values
+
+
+def _metadata_position_flip(row: Any) -> bool:
+    before_vals = _row_metadata_values(row, ("position_before",))
+    after_vals = _row_metadata_values(row, ("position_after",))
+    for before_raw, after_raw in zip(before_vals, after_vals):
+        try:
+            before = int(float(before_raw))
+            after = int(float(after_raw))
+        except Exception:
+            continue
+        if before * after < 0:
+            return True
+    return False
+
+
+def _row_action_kind(row: Any) -> Optional[str]:
+    for value in _row_metadata_values(row, ("decision_kind", "kind", "trade_decision_kind")):
+        token = _norm_action_token(value)
+        if token in ("entry", "flip"):
+            return token
+
+    for value in _row_metadata_values(row, ("engine_action", "action")):
+        token = _norm_action_token(value)
+        if token in _ENTRY_ACTION_TOKENS:
+            return "entry"
+        if token in _FLIP_ACTION_TOKENS:
+            return "flip"
+        if "flip" in token and _metadata_position_flip(row):
+            return "flip"
+    return None
+
+
+def _action_metadata_epoch_seconds(row: Any) -> Optional[int]:
+    for value in _row_metadata_values(
+        row,
+        (
+            "decision_ts",
+            "action_ts",
+            "action_time",
+            "event_ts",
+            "ts",
+            "opened_at",
+            "created_at",
+            "entry_bar_ts",
+            "bar_ts",
+        ),
+    ):
+        entry_seconds = _valid_entry_epoch_seconds(value)
+        if entry_seconds is not None:
+            return entry_seconds
+    return None
+
+
 def _resolve_trade_entry_epoch_seconds(row: Any) -> Optional[int]:
     entry_seconds = _valid_entry_epoch_seconds(row.get("entry_ts"))
     if entry_seconds is not None:
@@ -662,9 +740,28 @@ def _resolve_trade_entry_epoch_seconds(row: Any) -> Optional[int]:
     return None
 
 
+def _resolve_marker_entry_epoch_seconds(row: Any) -> Optional[int]:
+    entry_seconds = _valid_entry_epoch_seconds(row.get("entry_ts"))
+    if entry_seconds is not None:
+        return entry_seconds
+
+    if _row_action_kind(row) in ("entry", "flip"):
+        return _action_metadata_epoch_seconds(row)
+    return None
+
+
 def _resolved_entry_ts_series(df: pd.DataFrame) -> pd.Series:
     epochs = [_resolve_trade_entry_epoch_seconds(r) for _, r in df.iterrows()]
     return pd.to_datetime(pd.Series(epochs, index=df.index), unit="s", utc=True, errors="coerce")
+
+
+def _resolved_marker_entry_ts_series(df: pd.DataFrame) -> pd.Series:
+    epochs = [_resolve_marker_entry_epoch_seconds(r) for _, r in df.iterrows()]
+    return pd.to_datetime(pd.Series(epochs, index=df.index), unit="s", utc=True, errors="coerce")
+
+
+def _row_indicates_flip(row: Any) -> bool:
+    return _row_action_kind(row) == "flip"
 
 
 def _side_value_to_int(v: Any) -> int:
@@ -768,11 +865,20 @@ def load_trade_markers(
         if "entry_ts" not in df.columns and "ts" in df.columns:
             df = df.rename(columns={"ts": "entry_ts"})
         if "entry_ts" not in df.columns:
-            df = pd.DataFrame()
+            df = df.assign(entry_ts=pd.NaT)
 
     if not df.empty:
         df = df.copy()
-        df["entry_ts"] = pd.to_datetime(df["entry_ts"], utc=True, errors="coerce")
+        df["entry_ts"] = _resolved_marker_entry_ts_series(df)
+        if "exit_ts" in df.columns:
+            df["exit_ts"] = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
+            close_order = df.sort_values("exit_ts", na_position="last")
+            prev_close_ts: Optional[pd.Timestamp] = None
+            for idx, r in close_order.iterrows():
+                if pd.isna(df.at[idx, "entry_ts"]) and _row_indicates_flip(r) and prev_close_ts is not None:
+                    df.at[idx, "entry_ts"] = prev_close_ts
+                exit_ts = pd.to_datetime(r.get("exit_ts"), utc=True, errors="coerce")
+                prev_close_ts = pd.Timestamp(exit_ts) if pd.notna(exit_ts) else None
         df = (
             df.dropna(subset=["entry_ts"])
             .sort_values("entry_ts")
