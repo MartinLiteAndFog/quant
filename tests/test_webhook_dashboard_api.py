@@ -220,12 +220,16 @@ class WebhookDashboardApiTests(unittest.TestCase):
             any(int(m.get("original_time", 0)) < first_bar_ts for m in trade_markers)
         )
 
+        # The fresh trade is inside the visible window, but between the two
+        # Renko bars. Lightweight-charts only renders markers on existing
+        # series times, so keep the original trade time for diagnostics while
+        # rendering the marker on the nearest-left visible bar.
         fresh_ts = int(pd.Timestamp("2026-02-20T00:30:00Z").timestamp())
         fresh_markers = [m for m in trade_markers if m.get("trade_id") == "fresh_trade"]
-        self.assertEqual([int(m.get("time", 0)) for m in fresh_markers], [fresh_ts, fresh_ts])
+        self.assertEqual([int(m.get("time", 0)) for m in fresh_markers], [first_bar_ts, first_bar_ts])
         self.assertEqual([m.get("text") for m in fresh_markers], ["", "+1.00%"])
         self.assertEqual({int(m.get("original_time", 0)) for m in fresh_markers}, {fresh_ts})
-        self.assertFalse(any("time_anchor" in m for m in fresh_markers))
+        self.assertEqual({m.get("time_anchor") for m in fresh_markers}, {"asof_bar"})
 
     def test_chart_payload_shape(self) -> None:
         body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)

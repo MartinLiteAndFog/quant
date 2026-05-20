@@ -1077,18 +1077,43 @@ def api_dashboard_chart(
         oldest_bar_ts = int(bars[0]["time"]) if bars else None
         newest_bar_ts = int(bars[-1]["time"]) if bars else None
         # Only render closed-trade markers whose actual/recovered timestamp is
-        # inside the visible bar window. Older markers should be hidden instead
-        # of being anchored to the first visible bar.
+        # inside the visible bar window. Then map the surviving markers onto an
+        # existing series time, because lightweight-charts only renders markers
+        # at bar timestamps.
         if oldest_bar_ts is not None and newest_bar_ts is not None and markers:
-            filtered_markers: list[dict[str, Any]] = []
+            bar_times = [int(b["time"]) for b in bars]
+            anchored_markers: list[dict[str, Any]] = []
+
+            def _asof_bar_time(marker_time: int) -> Optional[int]:
+                lo = 0
+                hi = len(bar_times) - 1
+                best: Optional[int] = None
+                while lo <= hi:
+                    mid = (lo + hi) // 2
+                    if bar_times[mid] <= marker_time:
+                        best = int(bar_times[mid])
+                        lo = mid + 1
+                    else:
+                        hi = mid - 1
+                return best
+
             for m in markers:
                 try:
-                    marker_time = int(m.get("time", 0))
+                    marker_time = int(m.get("original_time", m.get("time", 0)))
                 except (TypeError, ValueError):
                     continue
-                if oldest_bar_ts <= marker_time <= newest_bar_ts:
-                    filtered_markers.append(m)
-            markers = filtered_markers
+                if not (oldest_bar_ts <= marker_time <= newest_bar_ts):
+                    continue
+                anchored_time = _asof_bar_time(marker_time)
+                if anchored_time is None:
+                    continue
+                anchored = {**m, "time": int(anchored_time), "original_time": marker_time}
+                if anchored_time != marker_time:
+                    anchored["time_anchor"] = "asof_bar"
+                else:
+                    anchored.pop("time_anchor", None)
+                anchored_markers.append(anchored)
+            markers = anchored_markers
         markers_in_bar_window = len(markers)
         # Fill markers (ladder/scaling) excluded from chart — only show logical entry/exit
         markers_live: list[dict[str, Any]] = []
