@@ -151,18 +151,18 @@ class WebhookDashboardApiTests(unittest.TestCase):
         os.environ.pop("WEBHOOK_TOKEN", None)
         self.tmp.cleanup()
 
-    def test_chart_anchors_historic_trade_markers_before_first_bar(self) -> None:
+    def test_chart_filters_historic_trade_markers_before_first_bar(self) -> None:
         root = Path(self.tmp.name)
         # Bars cover Feb 20 only (see setUp). Seed trades that include both
         # an "ancient" trade well before the bars window and a fresh trade
-        # within it. Both should be represented on the chart; the ancient
-        # trade is anchored to the first visible bar because lightweight-charts
-        # cannot render series markers outside the series time domain.
+        # within it. Only the fresh trade should be represented on the chart;
+        # older trades must not be anchored to the first visible bar.
         pd.DataFrame(
             [
                 # Ancient trade: would otherwise be stacked at the chart
                 # start because its timestamps predate the first bar.
                 {
+                    "trade_id": "ancient_trade",
                     "entry_ts": "2025-12-01T00:00:00Z",
                     "exit_ts": "2025-12-01T00:30:00Z",
                     "side": 1,
@@ -173,6 +173,7 @@ class WebhookDashboardApiTests(unittest.TestCase):
                 },
                 # Fresh trade: lives squarely inside the Renko bar window.
                 {
+                    "trade_id": "fresh_trade",
                     "entry_ts": "2026-02-20T00:30:00Z",
                     "exit_ts": "2026-02-20T00:45:00Z",
                     "side": 1,
@@ -197,12 +198,9 @@ class WebhookDashboardApiTests(unittest.TestCase):
         trade_markers = [
             m
             for m in body.get("markers", [])
-            if "live entry" not in str(m.get("text", ""))
+            if m.get("trade_id") in {"ancient_trade", "fresh_trade"}
         ]
-        self.assertTrue(
-            trade_markers,
-            "Fresh in-window trade markers must still render",
-        )
+        self.assertEqual(len(trade_markers), 2)
         for m in trade_markers:
             mt = int(m.get("time", 0))
             self.assertGreaterEqual(
@@ -212,18 +210,22 @@ class WebhookDashboardApiTests(unittest.TestCase):
             )
             self.assertLessEqual(mt, last_bar_ts)
         ancient_ts = int(pd.Timestamp("2025-12-01T00:00:00Z").timestamp())
-        anchored_ancient = [
+        ancient_markers = [
             m
             for m in trade_markers
             if int(m.get("original_time", 0)) == ancient_ts
         ]
-        self.assertEqual(
-            len(anchored_ancient),
-            2,
-            "Historic trade should keep arrow + pnl text markers",
+        self.assertEqual(ancient_markers, [])
+        self.assertFalse(
+            any(int(m.get("original_time", 0)) < first_bar_ts for m in trade_markers)
         )
-        self.assertTrue(all(int(m.get("time", 0)) == first_bar_ts for m in anchored_ancient))
-        self.assertEqual([m.get("text") for m in anchored_ancient], ["", "+1.40%"])
+
+        fresh_ts = int(pd.Timestamp("2026-02-20T00:30:00Z").timestamp())
+        fresh_markers = [m for m in trade_markers if m.get("trade_id") == "fresh_trade"]
+        self.assertEqual([int(m.get("time", 0)) for m in fresh_markers], [fresh_ts, fresh_ts])
+        self.assertEqual([m.get("text") for m in fresh_markers], ["", "+1.00%"])
+        self.assertEqual({int(m.get("original_time", 0)) for m in fresh_markers}, {fresh_ts})
+        self.assertFalse(any("time_anchor" in m for m in fresh_markers))
 
     def test_chart_payload_shape(self) -> None:
         body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
