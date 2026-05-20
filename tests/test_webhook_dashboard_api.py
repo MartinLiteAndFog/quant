@@ -151,11 +151,13 @@ class WebhookDashboardApiTests(unittest.TestCase):
         os.environ.pop("WEBHOOK_TOKEN", None)
         self.tmp.cleanup()
 
-    def test_chart_drops_trade_markers_before_first_bar(self) -> None:
+    def test_chart_anchors_historic_trade_markers_before_first_bar(self) -> None:
         root = Path(self.tmp.name)
         # Bars cover Feb 20 only (see setUp). Seed trades that include both
         # an "ancient" trade well before the bars window and a fresh trade
-        # within it. Only the in-window trade markers should survive.
+        # within it. Both should be represented on the chart; the ancient
+        # trade is anchored to the first visible bar because lightweight-charts
+        # cannot render series markers outside the series time domain.
         pd.DataFrame(
             [
                 # Ancient trade: would otherwise be stacked at the chart
@@ -209,12 +211,19 @@ class WebhookDashboardApiTests(unittest.TestCase):
                 f"Marker {m!r} predates the first bar at {first_bar_ts}",
             )
             self.assertLessEqual(mt, last_bar_ts)
-        # The ancient 2025 markers must have been filtered out.
         ancient_ts = int(pd.Timestamp("2025-12-01T00:00:00Z").timestamp())
-        self.assertFalse(
-            any(int(m.get("time", 0)) == ancient_ts for m in trade_markers),
-            "Marker that predates the first bar must be dropped",
+        anchored_ancient = [
+            m
+            for m in trade_markers
+            if int(m.get("original_time", 0)) == ancient_ts
+        ]
+        self.assertEqual(
+            len(anchored_ancient),
+            2,
+            "Historic trade should keep arrow + pnl text markers",
         )
+        self.assertTrue(all(int(m.get("time", 0)) == first_bar_ts for m in anchored_ancient))
+        self.assertEqual([m.get("text") for m in anchored_ancient], ["", "+1.40%"])
 
     def test_chart_payload_shape(self) -> None:
         body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)

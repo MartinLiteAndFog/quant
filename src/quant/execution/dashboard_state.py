@@ -841,11 +841,21 @@ def load_trade_markers(
             if pnl_col
             else None
         )
+        trade_ids = (
+            df["trade_id"].where(df["trade_id"].notna(), "").astype(str).to_numpy()
+            if "trade_id" in cols
+            else None
+        )
 
         for i in range(len(df)):
             side_i = int(side_int[i])
             is_long = side_i >= 0
             entry_ts_val = int(entry_ts_int[i])
+            trade_id_val = (
+                str(trade_ids[i]).strip()
+                if trade_ids is not None
+                else ""
+            )
 
             arrow_color = LONG_COLOR if is_long else SHORT_COLOR
             position = "belowBar" if is_long else "aboveBar"
@@ -884,6 +894,8 @@ def load_trade_markers(
                     "color": arrow_color,
                     "text": "",
                     "size": ARROW_SIZE,
+                    "original_time": entry_ts_val,
+                    **({"trade_id": trade_id_val} if trade_id_val else {}),
                 }
             )
             entry_seen_ts.add(entry_ts_val)
@@ -898,6 +910,8 @@ def load_trade_markers(
                         "color": pnl_color,
                         "text": f"{pnl_value:+.2f}%",
                         "size": TEXT_MARKER_SIZE,
+                        "original_time": entry_ts_val,
+                        **({"trade_id": trade_id_val} if trade_id_val else {}),
                     }
                 )
 

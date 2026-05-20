@@ -203,6 +203,43 @@ class DashboardStateTests(unittest.TestCase):
         self.assertTrue(short_text["text"].startswith("-"))
         self.assertTrue(short_text["text"].endswith("%"))
 
+    def test_load_trade_markers_pairs_pnl_text_with_same_trade(self) -> None:
+        entry1 = pd.Timestamp("2026-04-01T10:00:00Z")
+        entry2 = pd.Timestamp("2026-04-01T10:01:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["first_trade", "second_trade"],
+                "venue": ["kucoin"] * 2,
+                "symbol": ["SOL-USDT"] * 2,
+                "entry_ts": [entry1, entry2],
+                "exit_ts": [
+                    entry1 + pd.Timedelta(minutes=5),
+                    entry2 + pd.Timedelta(minutes=5),
+                ],
+                "side": ["long", "short"],
+                "qty": [1.0, 1.0],
+                "entry_price": [100.0, 100.0],
+                "exit_price": [101.0, 103.0],
+                "pnl_pct": [1.0, -3.0],
+                "exit_event": ["tp_exit", "sl_exit"],
+            }
+        )
+
+        markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+
+        self.assertEqual(len(markers), 4)
+        for arrow, label, trade_id, expected_text in zip(
+            markers[0::2],
+            markers[1::2],
+            ["first_trade", "second_trade"],
+            ["+1.00%", "-3.00%"],
+        ):
+            self.assertEqual(arrow.get("trade_id"), trade_id)
+            self.assertEqual(label.get("trade_id"), trade_id)
+            self.assertEqual(label.get("text"), expected_text)
+            self.assertEqual(int(label["time"]), int(arrow["time"]))
+            self.assertEqual(label["position"], arrow["position"])
+
     def test_load_trade_markers_skips_text_for_open_entry(self) -> None:
         entry1 = pd.Timestamp("2026-04-01T10:00:00Z")
         exit1 = pd.Timestamp("2026-04-01T10:15:00Z")
