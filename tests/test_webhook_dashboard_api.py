@@ -231,6 +231,68 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertEqual({int(m.get("original_time", 0)) for m in fresh_markers}, {fresh_ts})
         self.assertEqual({m.get("time_anchor") for m in fresh_markers}, {"asof_bar"})
 
+    def test_chart_includes_closed_trade_overlapping_window(self) -> None:
+        root = Path(self.tmp.name)
+        pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-02-20T02:00:00Z", periods=2, freq="h"),
+                "open": [102.0, 103.0],
+                "high": [103.0, 104.0],
+                "low": [101.0, 102.0],
+                "close": [102.5, 103.5],
+            }
+        ).to_parquet(root / "renko.parquet", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "trade_id": "fully_old_trade",
+                    "entry_ts": "2026-02-20T00:00:00Z",
+                    "exit_ts": "2026-02-20T01:00:00Z",
+                    "side": "long",
+                    "entry_price": 100.0,
+                    "exit_price": 101.0,
+                    "pnl_pct": 1.0,
+                    "exit_event": "tp_exit",
+                },
+                {
+                    "trade_id": "overlap_trade",
+                    "entry_ts": "2026-02-20T01:30:00Z",
+                    "exit_ts": "2026-02-20T02:30:00Z",
+                    "side": "short",
+                    "entry_price": 104.0,
+                    "exit_price": 102.0,
+                    "pnl_pct": 1.92,
+                    "exit_event": "tp_exit",
+                },
+            ]
+        ).to_parquet(root / "trades.parquet", index=False)
+        os.environ["DASHBOARD_TRADE_ALLOW_FILE_FALLBACK"] = "1"
+        ws._CHART_CACHE.clear()
+
+        body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+
+        self.assertTrue(body.get("ok"))
+        first_bar_ts = int(body["bars"][0]["time"])
+        old_markers = [
+            m for m in body.get("markers", [])
+            if m.get("trade_id") == "fully_old_trade"
+        ]
+        overlap_markers = [
+            m for m in body.get("markers", [])
+            if m.get("trade_id") == "overlap_trade"
+        ]
+        self.assertEqual(old_markers, [])
+        self.assertEqual(len(overlap_markers), 2)
+        self.assertEqual([int(m.get("time", 0)) for m in overlap_markers], [first_bar_ts, first_bar_ts])
+        self.assertEqual({int(m.get("original_time", 0)) for m in overlap_markers}, {int(pd.Timestamp("2026-02-20T01:30:00Z").timestamp())})
+        self.assertEqual({int(m.get("exit_time", 0)) for m in overlap_markers}, {int(pd.Timestamp("2026-02-20T02:30:00Z").timestamp())})
+        self.assertEqual({m.get("time_anchor") for m in overlap_markers}, {"window_start"})
+        arrow = next(m for m in overlap_markers if m.get("shape") == "arrowDown")
+        text = next(m for m in overlap_markers if m.get("text") == "+1.92%")
+        self.assertEqual(arrow.get("position"), "aboveBar")
+        self.assertEqual(str(arrow.get("color")).lower(), "#ef4444")
+        self.assertEqual(str(text.get("color")).lower(), "#22c55e")
+
     def test_chart_payload_shape(self) -> None:
         body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
         self.assertTrue(body.get("ok"))
