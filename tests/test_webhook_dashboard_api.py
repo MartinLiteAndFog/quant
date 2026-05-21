@@ -293,6 +293,128 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertEqual(str(arrow.get("color")).lower(), "#ef4444")
         self.assertEqual(str(text.get("color")).lower(), "#22c55e")
 
+    def test_chart_maps_stop_loss_marker_to_visible_renko_bar(self) -> None:
+        root = Path(self.tmp.name)
+        pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-02-20T02:00:00Z", periods=2, freq="h", tz="UTC"),
+                "open": [102.0, 103.0],
+                "high": [103.0, 104.0],
+                "low": [101.0, 102.0],
+                "close": [102.5, 103.5],
+            }
+        ).to_parquet(root / "renko.parquet", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "trade_id": "sl_visible_exit",
+                    "entry_ts": "2026-02-20T01:30:00Z",
+                    "exit_ts": "2026-02-20T02:30:00Z",
+                    "side": "long",
+                    "entry_price": 103.0,
+                    "exit_price": 101.5,
+                    "pnl_pct": -1.46,
+                    "exit_event": "stop_loss",
+                },
+                {
+                    "trade_id": "tp_visible_exit",
+                    "entry_ts": "2026-02-20T02:15:00Z",
+                    "exit_ts": "2026-02-20T02:45:00Z",
+                    "side": "long",
+                    "entry_price": 102.0,
+                    "exit_price": 103.0,
+                    "pnl_pct": 0.98,
+                    "exit_event": "tp_exit",
+                },
+            ]
+        ).to_parquet(root / "trades.parquet", index=False)
+        os.environ["DASHBOARD_TRADE_ALLOW_FILE_FALLBACK"] = "1"
+        ws._CHART_CACHE.clear()
+
+        body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+
+        self.assertTrue(body.get("ok"))
+        first_bar_ts = int(body["bars"][0]["time"])
+        sl_markers = [
+            m
+            for m in body.get("markers", [])
+            if m.get("trade_id") == "sl_visible_exit"
+            and m.get("marker_kind") == "sl_exit"
+        ]
+        self.assertEqual(len(sl_markers), 1)
+        sl_marker = sl_markers[0]
+        self.assertEqual(int(sl_marker["time"]), first_bar_ts)
+        self.assertEqual(int(sl_marker["original_time"]), int(pd.Timestamp("2026-02-20T02:30:00Z").timestamp()))
+        self.assertEqual(sl_marker.get("time_anchor"), "asof_bar")
+        self.assertEqual(sl_marker.get("text"), "×")
+        self.assertEqual(str(sl_marker.get("color")).lower(), "#ef4444")
+        self.assertFalse(
+            any(
+                m.get("trade_id") == "tp_visible_exit"
+                and m.get("marker_kind") == "sl_exit"
+                for m in body.get("markers", [])
+            )
+        )
+
+    def test_chart_maps_decision_entry_marker_to_visible_renko_bar(self) -> None:
+        ws._CHART_CACHE.clear()
+        decision_ts = pd.Timestamp("2026-02-20T00:30:00Z")
+        exit_ts = pd.Timestamp("2026-02-20T00:45:00Z")
+        closed_trades = pd.DataFrame(
+            [
+                {
+                    "trade_id": "bad-entry-decision-trade",
+                    "venue": "kucoin",
+                    "symbol": "SOL-USDT",
+                    "entry_ts": pd.Timestamp("1970-01-01T00:00:01Z"),
+                    "exit_ts": exit_ts,
+                    "side": "long",
+                    "qty": 1.0,
+                    "entry_price": 100.0,
+                    "exit_price": 101.0,
+                    "pnl_pct": 1.0,
+                    "exit_event": "tp_exit",
+                    "strategy": "live_executor",
+                    "source_action_event_id": "decision-action-1",
+                    "payload_json": {},
+                }
+            ]
+        )
+        decisions = [
+            {
+                "decision_id": "decision-chart-1",
+                "ts": decision_ts.isoformat(),
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "long",
+                "source_action_event_id": "decision-action-1",
+                "seq": 1,
+                "payload_json": {},
+            }
+        ]
+
+        with patch.object(ws, "load_closed_trades_from_postgres", return_value=closed_trades), \
+             patch("quant.execution.dashboard_state._load_decision_rows_for_trade_markers", return_value=decisions):
+            body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+
+        self.assertTrue(body.get("ok"))
+        first_bar_ts = int(body["bars"][0]["time"])
+        trade_markers = [
+            m
+            for m in body.get("markers", [])
+            if m.get("trade_id") == "bad-entry-decision-trade"
+        ]
+        self.assertEqual(len(trade_markers), 2)
+        self.assertEqual([int(m["time"]) for m in trade_markers], [first_bar_ts, first_bar_ts])
+        self.assertEqual({int(m["original_time"]) for m in trade_markers}, {int(decision_ts.timestamp())})
+        self.assertEqual({m.get("time_anchor") for m in trade_markers}, {"asof_bar"})
+        self.assertEqual([m.get("text") for m in trade_markers], ["", "+1.00%"])
+        self.assertNotIn(
+            int(pd.Timestamp("1970-01-01T00:00:01Z").timestamp()),
+            {int(m.get("original_time", 0)) for m in trade_markers},
+        )
+
     def test_chart_payload_shape(self) -> None:
         body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
         self.assertTrue(body.get("ok"))

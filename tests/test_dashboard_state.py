@@ -22,6 +22,39 @@ from quant.execution.dashboard_state import (
 from quant.regime import RegimeDecision, RegimeService, RegimeStore
 
 
+class _Ctx:
+    def __init__(self, value) -> None:
+        self.value = value
+
+    def __enter__(self):
+        return self.value
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+
+class _SequencedCursor:
+    def __init__(self, *result_sets) -> None:
+        self._result_sets = [list(rows) for rows in result_sets]
+        self.execute_calls = []
+
+    def execute(self, sql, params=None) -> None:
+        self.execute_calls.append((sql, params))
+
+    def fetchall(self):
+        if not self._result_sets:
+            return []
+        return self._result_sets.pop(0)
+
+
+class _FakeConn:
+    def __init__(self, cursor: _SequencedCursor) -> None:
+        self._cursor = cursor
+
+    def cursor(self):
+        return _Ctx(self._cursor)
+
+
 class DashboardStateTests(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
@@ -35,6 +68,7 @@ class DashboardStateTests(unittest.TestCase):
         ds._LAST_REFRESH_ERROR = None
         ds._LAST_FILLS_REFRESH_TS = None
         ds._LAST_FILLS_REFRESH_ERROR = None
+        ds._CLOSED_TRADES_CACHE.clear()
 
         # Seed renko parquet
         renko = pd.DataFrame(
@@ -123,14 +157,15 @@ class DashboardStateTests(unittest.TestCase):
         latest = overlay["latest"]
         self.assertEqual(int(latest["gate_on"]), 0)
 
-    def test_load_trade_markers_returns_entry_arrow_only_for_priceless_rows(self) -> None:
+    def test_load_trade_markers_marks_stop_loss_exit_for_priceless_rows(self) -> None:
         # Seeded trades.parquet rows carry side + entry/exit_ts but no
-        # entry_price / exit_price / pnl_pct. New contract: one arrow
-        # marker per trade at the entry timestamp, no pnl-text companion,
-        # no exit marker.
+        # entry_price / exit_price / pnl_pct. Contract: one arrow marker per
+        # trade at the entry timestamp, plus a dedicated SL marker at exit.
         markers = load_trade_markers(max_points=100000)
-        self.assertEqual(len(markers), 3)
-        for m in markers:
+        self.assertEqual(len(markers), 4)
+        arrow_markers = [m for m in markers if m.get("marker_kind") != "sl_exit"]
+        self.assertEqual(len(arrow_markers), 3)
+        for m in arrow_markers:
             self.assertIn(m["shape"], ("arrowUp", "arrowDown"))
             self.assertEqual(m["text"], "")
         seeded_entry_ts = {
@@ -141,7 +176,13 @@ class DashboardStateTests(unittest.TestCase):
                 "2026-02-20T02:00:00Z",
             )
         }
-        self.assertEqual({int(m["time"]) for m in markers}, seeded_entry_ts)
+        self.assertEqual({int(m["time"]) for m in arrow_markers}, seeded_entry_ts)
+
+        sl_marker = next(m for m in markers if m.get("marker_kind") == "sl_exit")
+        self.assertEqual(int(sl_marker["time"]), int(pd.Timestamp("2026-02-20T01:05:00Z").timestamp()))
+        self.assertEqual(sl_marker["color"], "#ef4444")
+        self.assertEqual(sl_marker["text"], "×")
+        self.assertEqual(sl_marker["shape"], "circle")
 
     def test_load_trade_markers_emits_entry_arrow_and_pnl_text(self) -> None:
         entry1 = pd.Timestamp("2026-04-01T10:00:00Z")
@@ -206,6 +247,177 @@ class DashboardStateTests(unittest.TestCase):
         self.assertTrue(short_text["text"].startswith("-"))
         self.assertTrue(short_text["text"].endswith("%"))
 
+    def test_load_trade_markers_emits_stop_loss_exit_marker(self) -> None:
+        entry = pd.Timestamp("2026-04-04T10:00:00Z")
+        exit_ts = pd.Timestamp("2026-04-04T10:20:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["sl-long"],
+                "venue": ["kucoin"],
+                "symbol": ["SOL-USDT"],
+                "entry_ts": [entry],
+                "exit_ts": [exit_ts],
+                "side": ["long"],
+                "qty": [1.0],
+                "entry_price": [100.0],
+                "exit_price": [98.5],
+                "pnl_pct": [-1.5],
+                "exit_event": ["stop_loss"],
+            }
+        )
+
+        markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+
+        at_entry = [m for m in markers if int(m["time"]) == int(entry.timestamp())]
+        self.assertEqual(len(at_entry), 2)
+        self.assertTrue(any(m["shape"] == "arrowUp" for m in at_entry))
+
+        sl_markers = [m for m in markers if m.get("marker_kind") == "sl_exit"]
+        self.assertEqual(len(sl_markers), 1)
+        sl_marker = sl_markers[0]
+        self.assertEqual(int(sl_marker["time"]), int(exit_ts.timestamp()))
+        self.assertEqual(sl_marker["position"], "belowBar")
+        self.assertEqual(sl_marker["shape"], "circle")
+        self.assertEqual(sl_marker["color"], "#ef4444")
+        self.assertEqual(sl_marker["text"], "×")
+        self.assertEqual(sl_marker.get("trade_id"), "sl-long")
+
+    def test_load_trade_markers_uses_decision_start_when_closed_entry_is_bad(self) -> None:
+        decision_ts = pd.Timestamp("2026-05-20T08:15:00Z")
+        exit_ts = pd.Timestamp("2026-05-20T08:45:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["bad-entry-closed-trade"],
+                "venue": ["kucoin"],
+                "symbol": ["SOL-USDT"],
+                "entry_ts": [pd.Timestamp("1970-01-01T00:00:01Z")],
+                "exit_ts": [exit_ts],
+                "side": ["long"],
+                "entry_price": [85.3],
+                "exit_price": [86.153],
+                "pnl_pct": [1.0],
+                "exit_event": ["tp_exit"],
+                "source_action_event_id": ["entry-action-1"],
+                "payload_json": [{}],
+            }
+        )
+        decisions = [
+            {
+                "decision_id": "decision-1",
+                "ts": decision_ts.isoformat(),
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "long",
+                "source_action_event_id": "entry-action-1",
+                "seq": 10,
+                "payload_json": {},
+            }
+        ]
+
+        markers = ds.load_trade_markers(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            _trades_df=df,
+            _decision_rows=decisions,
+        )
+
+        self.assertEqual(len(markers), 2)
+        self.assertEqual({int(m["time"]) for m in markers}, {int(decision_ts.timestamp())})
+        arrow = next(m for m in markers if m["shape"] == "arrowUp")
+        label = next(m for m in markers if m["shape"] == "circle")
+        self.assertEqual(arrow["text"], "")
+        self.assertEqual(label["text"], "+1.00%")
+        self.assertEqual(label.get("trade_id"), "bad-entry-closed-trade")
+        self.assertNotIn(int(pd.Timestamp("1970-01-01T00:00:01Z").timestamp()), {int(m["time"]) for m in markers})
+
+    def test_load_trade_markers_emits_unmatched_decision_without_pnl_text(self) -> None:
+        decision_ts = pd.Timestamp("2026-05-20T09:00:00Z")
+        decisions = [
+            {
+                "decision_id": "open-decision",
+                "ts": decision_ts.isoformat(),
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "short",
+                "source_action_event_id": "open-action",
+                "seq": 11,
+                "payload_json": {},
+            }
+        ]
+
+        markers = ds.load_trade_markers(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            _trades_df=pd.DataFrame(),
+            _decision_rows=decisions,
+        )
+
+        self.assertEqual(len(markers), 1)
+        marker = markers[0]
+        self.assertEqual(int(marker["time"]), int(decision_ts.timestamp()))
+        self.assertEqual(marker["shape"], "arrowDown")
+        self.assertEqual(marker["text"], "")
+        self.assertEqual(marker.get("trade_id"), None)
+
+    def test_load_trade_markers_skips_bad_fallback_entry_but_keeps_sl_exit(self) -> None:
+        exit_ts = pd.Timestamp("2026-05-20T10:20:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["bad-entry-sl"],
+                "venue": ["kucoin"],
+                "symbol": ["SOL-USDT"],
+                "entry_ts": [pd.Timestamp("1970-01-01T00:00:01Z")],
+                "exit_ts": [exit_ts],
+                "side": ["long"],
+                "entry_price": [100.0],
+                "exit_price": [98.5],
+                "pnl_pct": [-1.5],
+                "exit_event": ["sl_exit"],
+            }
+        )
+
+        markers = ds.load_trade_markers(
+            max_points=100,
+            _trades_df=df,
+            _decision_rows=[],
+        )
+
+        self.assertEqual(len(markers), 1)
+        sl_marker = markers[0]
+        self.assertEqual(sl_marker.get("marker_kind"), "sl_exit")
+        self.assertEqual(int(sl_marker["time"]), int(exit_ts.timestamp()))
+        self.assertEqual(sl_marker["text"], "×")
+        self.assertEqual(sl_marker.get("trade_id"), "bad-entry-sl")
+
+    def test_load_trade_markers_does_not_mark_non_stop_loss_exit(self) -> None:
+        entry = pd.Timestamp("2026-04-04T11:00:00Z")
+        exit_ts = pd.Timestamp("2026-04-04T11:20:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["tp-long"],
+                "venue": ["kucoin"],
+                "symbol": ["SOL-USDT"],
+                "entry_ts": [entry],
+                "exit_ts": [exit_ts],
+                "side": ["long"],
+                "qty": [1.0],
+                "entry_price": [100.0],
+                "exit_price": [102.0],
+                "pnl_pct": [2.0],
+                "exit_event": ["tp_exit"],
+            }
+        )
+
+        markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+
+        self.assertEqual(len(markers), 2)
+        self.assertFalse(any(m.get("marker_kind") == "sl_exit" for m in markers))
+        self.assertEqual({int(m["time"]) for m in markers}, {int(entry.timestamp())})
+
     def test_load_trade_markers_pairs_pnl_text_with_same_trade(self) -> None:
         entry1 = pd.Timestamp("2026-04-01T10:00:00Z")
         entry2 = pd.Timestamp("2026-04-01T10:01:00Z")
@@ -229,11 +441,12 @@ class DashboardStateTests(unittest.TestCase):
         )
 
         markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+        entry_markers = [m for m in markers if m.get("marker_kind") != "sl_exit"]
 
-        self.assertEqual(len(markers), 4)
+        self.assertEqual(len(entry_markers), 4)
         for arrow, label, trade_id, expected_text in zip(
-            markers[0::2],
-            markers[1::2],
+            entry_markers[0::2],
+            entry_markers[1::2],
             ["first_trade", "second_trade"],
             ["+1.00%", "-3.00%"],
         ):
@@ -242,8 +455,12 @@ class DashboardStateTests(unittest.TestCase):
             self.assertEqual(label.get("text"), expected_text)
             self.assertEqual(int(label["time"]), int(arrow["time"]))
             self.assertEqual(label["position"], arrow["position"])
+        self.assertEqual(
+            [m.get("trade_id") for m in markers if m.get("marker_kind") == "sl_exit"],
+            ["second_trade"],
+        )
 
-    def test_load_trade_markers_uses_payload_action_entry_time(self) -> None:
+    def test_load_trade_markers_uses_decision_action_entry_time(self) -> None:
         opened_at = pd.Timestamp("2026-05-14T08:15:00Z")
         exit_ts = pd.Timestamp("2026-05-14T08:45:00Z")
         df = pd.DataFrame(
@@ -259,6 +476,7 @@ class DashboardStateTests(unittest.TestCase):
                 "exit_price": [92.0],
                 "pnl_pct": [1.23],
                 "exit_event": ["tp_exit"],
+                "source_action_event_id": ["payload-action"],
                 "payload_json": [
                     {
                         "engine_action": "enter_long",
@@ -269,8 +487,27 @@ class DashboardStateTests(unittest.TestCase):
                 ],
             }
         )
+        decisions = [
+            {
+                "decision_id": "payload-decision",
+                "ts": opened_at.isoformat(),
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "long",
+                "source_action_event_id": "payload-action",
+                "seq": 1,
+                "payload_json": {},
+            }
+        ]
 
-        markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+        markers = ds.load_trade_markers(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            _trades_df=df,
+            _decision_rows=decisions,
+        )
 
         self.assertEqual(len(markers), 2)
         self.assertEqual([m.get("trade_id") for m in markers], ["payload_trade", "payload_trade"])
@@ -295,6 +532,7 @@ class DashboardStateTests(unittest.TestCase):
                 "exit_price": [90.5, 92.0],
                 "pnl_pct": [-0.55, -1.66],
                 "exit_event": ["tp_exit", "sl_exit"],
+                "source_action_event_id": ["entry-action", "flip-action"],
                 "payload_json": [
                     {},
                     {
@@ -305,10 +543,45 @@ class DashboardStateTests(unittest.TestCase):
                 ],
             }
         )
+        decisions = [
+            {
+                "decision_id": "entry-decision",
+                "ts": first_entry.isoformat(),
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "long",
+                "source_action_event_id": "entry-action",
+                "seq": 1,
+                "payload_json": {},
+            },
+            {
+                "decision_id": "flip-decision",
+                "ts": first_exit.isoformat(),
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "flip",
+                "direction": "short",
+                "source_action_event_id": "flip-action",
+                "seq": 2,
+                "payload_json": {},
+            },
+        ]
 
-        markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+        markers = ds.load_trade_markers(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            _trades_df=df,
+            _decision_rows=decisions,
+        )
 
-        post_flip = [m for m in markers if m.get("trade_id") == "post_flip_trade"]
+        post_flip = [
+            m
+            for m in markers
+            if m.get("trade_id") == "post_flip_trade"
+            and m.get("marker_kind") != "sl_exit"
+        ]
         self.assertEqual(len(post_flip), 2)
         self.assertEqual({int(m["time"]) for m in post_flip}, {int(first_exit.timestamp())})
         self.assertEqual({int(m["original_time"]) for m in post_flip}, {int(first_exit.timestamp())})
@@ -317,7 +590,11 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(arrow["text"], "")
         self.assertEqual(label["text"], "-1.66%")
 
-    def test_load_trade_markers_does_not_infer_after_tp_sl_close(self) -> None:
+        sl_marker = next(m for m in markers if m.get("marker_kind") == "sl_exit")
+        self.assertEqual(sl_marker.get("trade_id"), "post_flip_trade")
+        self.assertEqual(int(sl_marker["time"]), int(second_exit.timestamp()))
+
+    def test_load_trade_markers_does_not_infer_start_after_tp_sl_close(self) -> None:
         first_entry = pd.Timestamp("2026-05-14T08:00:00Z")
         first_exit = pd.Timestamp("2026-05-14T08:30:00Z")
         second_exit = pd.Timestamp("2026-05-14T09:00:00Z")
@@ -343,8 +620,12 @@ class DashboardStateTests(unittest.TestCase):
 
         markers = ds.load_trade_markers(max_points=100, _trades_df=df)
 
-        self.assertEqual({m.get("trade_id") for m in markers}, {"flip_closed_trade"})
-        self.assertNotIn("plain_close_trade", {m.get("trade_id") for m in markers})
+        entry_markers = [m for m in markers if m.get("marker_kind") != "sl_exit"]
+        self.assertEqual({m.get("trade_id") for m in entry_markers}, {"flip_closed_trade"})
+        plain_markers = [m for m in markers if m.get("trade_id") == "plain_close_trade"]
+        self.assertEqual(len(plain_markers), 1)
+        self.assertEqual(plain_markers[0].get("marker_kind"), "sl_exit")
+        self.assertEqual(int(plain_markers[0]["time"]), int(second_exit.timestamp()))
 
     def test_load_trade_markers_keeps_pnl_with_post_flip_trade_id(self) -> None:
         first_entry = pd.Timestamp("2026-05-14T08:00:00Z")
@@ -363,6 +644,7 @@ class DashboardStateTests(unittest.TestCase):
                 "exit_price": [99.0, 101.0],
                 "pnl_pct": [-1.0, -2.02],
                 "exit_event": ["tp_exit", "sl_exit"],
+                "source_action_event_id": ["entry-action", "flip-action"],
                 "payload_json": [
                     {},
                     {
@@ -374,10 +656,45 @@ class DashboardStateTests(unittest.TestCase):
                 ],
             }
         )
+        decisions = [
+            {
+                "decision_id": "prev-decision",
+                "ts": first_entry.isoformat(),
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "long",
+                "source_action_event_id": "entry-action",
+                "seq": 1,
+                "payload_json": {},
+            },
+            {
+                "decision_id": "trade-i-decision",
+                "ts": first_exit.isoformat(),
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "flip",
+                "direction": "short",
+                "source_action_event_id": "flip-action",
+                "seq": 2,
+                "payload_json": {},
+            },
+        ]
 
-        markers = ds.load_trade_markers(max_points=100, _trades_df=df)
+        markers = ds.load_trade_markers(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            _trades_df=df,
+            _decision_rows=decisions,
+        )
 
-        labels = [m for m in markers if m["shape"] == "circle"]
+        labels = [
+            m
+            for m in markers
+            if m["shape"] == "circle"
+            and m.get("marker_kind") != "sl_exit"
+        ]
         self.assertEqual(
             [(m.get("trade_id"), m.get("text")) for m in labels],
             [("prev_trade", "-1.00%"), ("trade_i", "-2.02%")],
@@ -982,6 +1299,165 @@ class DashboardStateTests(unittest.TestCase):
         self.assertGreater(
             int(out[0]["entry_time"]),
             int(pd.Timestamp("2020-01-01", tz="UTC").timestamp()),
+        )
+
+    def test_load_closed_trades_recovers_bad_entry_ts_from_source_action_event(self) -> None:
+        recovered_entry = pd.Timestamp("2026-05-19T03:47:00Z")
+        exit_ts = pd.Timestamp("2026-05-19T04:05:30Z")
+        cursor = _SequencedCursor(
+            [
+                (
+                    "trade-recovered",
+                    "kucoin",
+                    "SOL-USDT",
+                    pd.Timestamp("1970-01-01T00:00:01Z"),
+                    exit_ts,
+                    "long",
+                    1.0,
+                    85.3,
+                    84.7145,
+                    -0.6864,
+                    "sl_exit",
+                    "live_executor",
+                    "live_executor",
+                    "entry-action-1",
+                    {},
+                )
+            ],
+            [
+                (
+                    "entry-action-1",
+                    recovered_entry,
+                    "enter_long",
+                    "long",
+                    0,
+                    1,
+                    False,
+                )
+            ],
+        )
+
+        with patch.object(ds, "get_conn", return_value=_Ctx(_FakeConn(cursor))):
+            out = ds.load_closed_trades_from_postgres(
+                venue="kucoin",
+                symbol="SOL-USDT",
+                max_points=100,
+            )
+
+        self.assertEqual(len(out), 1)
+        self.assertEqual(
+            ds._resolve_trade_entry_epoch_seconds(out.iloc[0]),
+            int(recovered_entry.timestamp()),
+        )
+        diary = ds.build_trading_diary(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            live_only=True,
+            allow_file_fallback=False,
+            allow_fill_reconstruction=False,
+            _trades_df=out,
+        )
+        self.assertEqual(
+            int(diary["entries"][0]["entry_time"]),
+            int(recovered_entry.timestamp()),
+        )
+
+    def test_load_closed_trades_keeps_bad_entry_ts_null_without_recovery_source(self) -> None:
+        exit_ts = pd.Timestamp("2026-05-19T04:05:30Z")
+        cursor = _SequencedCursor(
+            [
+                (
+                    "trade-unrecovered",
+                    "kucoin",
+                    "SOL-USDT",
+                    pd.Timestamp("1970-01-01T00:00:01Z"),
+                    exit_ts,
+                    "long",
+                    1.0,
+                    85.3,
+                    84.7145,
+                    -0.6864,
+                    "sl_exit",
+                    "live_executor",
+                    "live_executor",
+                    None,
+                    {},
+                )
+            ],
+            [],
+        )
+
+        with patch.object(ds, "get_conn", return_value=_Ctx(_FakeConn(cursor))):
+            out = ds.load_closed_trades_from_postgres(
+                venue="kucoin",
+                symbol="SOL-USDT",
+                max_points=100,
+            )
+
+        equity = ds.build_equity_curve(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            live_only=True,
+            allow_file_fallback=False,
+            allow_fill_reconstruction=False,
+            _trades_df=out,
+        )
+
+        self.assertEqual(len(equity["trades"]), 1)
+        self.assertIsNone(equity["trades"][0].get("entry_time"))
+
+    def test_load_closed_trades_recovers_bad_entry_ts_from_unique_entry_fill(self) -> None:
+        recovered_entry = pd.Timestamp("2026-05-19T03:47:00Z")
+        exit_ts = pd.Timestamp("2026-05-19T04:05:30Z")
+        cursor = _SequencedCursor(
+            [
+                (
+                    "trade-fill-recovered",
+                    "kucoin",
+                    "SOL-USDT",
+                    pd.Timestamp("1970-01-01T00:00:01Z"),
+                    exit_ts,
+                    "long",
+                    1.0,
+                    85.3,
+                    84.7145,
+                    -0.6864,
+                    "sl_exit",
+                    "live_executor",
+                    "live_executor",
+                    None,
+                    {},
+                )
+            ],
+            [
+                (
+                    recovered_entry,
+                    "buy",
+                    1.0,
+                    85.3,
+                    False,
+                    "fill",
+                    "fill",
+                )
+            ],
+        )
+
+        with patch.object(ds, "get_conn", return_value=_Ctx(_FakeConn(cursor))):
+            out = ds.load_closed_trades_from_postgres(
+                venue="kucoin",
+                symbol="SOL-USDT",
+                max_points=100,
+            )
+
+        self.assertEqual(
+            ds._resolve_trade_entry_epoch_seconds(out.iloc[0]),
+            int(recovered_entry.timestamp()),
+        )
+        self.assertEqual(
+            out.iloc[0].get("entry_ts_recovery_source"),
+            "execution_events:unique_fill_match",
         )
 
     @patch("quant.execution.dashboard_state.load_closed_trades_from_postgres")

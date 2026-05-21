@@ -4,7 +4,7 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 import numpy as np
 import pandas as pd
@@ -169,6 +169,315 @@ def _read_fills_df() -> pd.DataFrame:
     df = df.dropna(subset=["time", "side", "size", "price"])
     df = df[df["size"] > 0].sort_values("time").reset_index(drop=True)
     return df
+
+
+def _numeric_float(v: Any) -> Optional[float]:
+    try:
+        x = pd.to_numeric(v, errors="coerce")
+    except Exception:
+        return None
+    try:
+        if pd.isna(x):
+            return None
+    except Exception:
+        pass
+    try:
+        return float(x)
+    except Exception:
+        return None
+
+
+def _truthy_bool(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    s = str(v or "").strip().lower()
+    return s in ("1", "true", "yes", "on", "y", "t")
+
+
+def _closed_trade_entry_side(side: Any) -> Optional[str]:
+    s = str(side or "").strip().lower()
+    if s in _LONG_TOKENS:
+        return "buy"
+    if s in _SHORT_TOKENS:
+        return "sell"
+    return None
+
+
+def _payload_str_values(payload: Dict[str, Any], keys: List[str]) -> List[str]:
+    out: List[str] = []
+    for key in keys:
+        raw = payload.get(key)
+        if raw is None:
+            continue
+        value = str(raw).strip()
+        if value:
+            out.append(value)
+    return out
+
+
+def _entry_action_event_ts_by_id(cur: Any, event_ids: List[str]) -> Dict[str, tuple[pd.Timestamp, str]]:
+    ids = sorted({str(v).strip() for v in event_ids if str(v).strip()})
+    if not ids:
+        return {}
+    try:
+        cur.execute(
+            """
+            select event_id, ts, engine_action, action_side, position_before,
+                   position_after, blocked
+            from action_events
+            where event_id = any(%(event_ids)s::text[])
+            """,
+            {"event_ids": ids},
+        )
+        rows = cur.fetchall() or []
+    except Exception:
+        return {}
+
+    out: Dict[str, tuple[pd.Timestamp, str]] = {}
+    for row in rows:
+        if len(row) < 7:
+            continue
+        event_id, ts, engine_action, action_side, position_before, position_after, blocked = row[:7]
+        if _truthy_bool(blocked):
+            continue
+        action = str(engine_action or "").strip().lower()
+        side = str(action_side or "").strip().lower()
+        if action not in ("enter_long", "enter_short", "flip_to_long", "flip_to_short"):
+            continue
+        direction = "long" if action.endswith("_long") else "short"
+        if action.endswith("_long") and side not in ("", "long"):
+            continue
+        if action.endswith("_short") and side not in ("", "short"):
+            continue
+        if action.startswith("enter_"):
+            before = _numeric_float(position_before)
+            after = _numeric_float(position_after)
+            if before is not None and abs(before) > 1e-12:
+                continue
+            if after is not None and abs(after) <= 1e-12:
+                continue
+        ts_parsed = pd.to_datetime(ts, utc=True, errors="coerce")
+        if pd.isna(ts_parsed):
+            continue
+        if _valid_entry_epoch_seconds(ts_parsed) is None:
+            continue
+        out[str(event_id)] = (pd.Timestamp(ts_parsed), direction)
+    return out
+
+
+def _entry_execution_event_ts_by_id(cur: Any, event_ids: List[str]) -> Dict[str, tuple[pd.Timestamp, str]]:
+    ids = sorted({str(v).strip() for v in event_ids if str(v).strip()})
+    if not ids:
+        return {}
+    try:
+        cur.execute(
+            """
+            select event_id, ts, side, reduce_only, execution_stage, status
+            from execution_events
+            where event_id = any(%(event_ids)s::text[])
+            """,
+            {"event_ids": ids},
+        )
+        rows = cur.fetchall() or []
+    except Exception:
+        return {}
+
+    out: Dict[str, tuple[pd.Timestamp, str]] = {}
+    for row in rows:
+        if len(row) < 6:
+            continue
+        event_id, ts, side, reduce_only, execution_stage, status = row[:6]
+        if _truthy_bool(reduce_only):
+            continue
+        if str(execution_stage or "").strip().lower() not in ("", "fill"):
+            continue
+        if str(status or "").strip().lower() in ("reject", "rejected", "cancelled", "canceled"):
+            continue
+        if str(side or "").strip().lower() not in ("buy", "sell"):
+            continue
+        ts_parsed = pd.to_datetime(ts, utc=True, errors="coerce")
+        if pd.isna(ts_parsed):
+            continue
+        if _valid_entry_epoch_seconds(ts_parsed) is None:
+            continue
+        out[str(event_id)] = (pd.Timestamp(ts_parsed), str(side or "").strip().lower())
+    return out
+
+
+def _recover_entry_ts_from_unique_fill_matches(df: pd.DataFrame, cur: Any) -> Dict[int, pd.Timestamp]:
+    if df.empty:
+        return {}
+
+    unresolved = [
+        (idx, row)
+        for idx, row in df.iterrows()
+        if _resolve_trade_entry_epoch_seconds(row) is None
+        and _closed_trade_entry_side(row.get("side")) is not None
+        and _numeric_float(row.get("entry_price")) is not None
+        and _numeric_float(row.get("qty")) is not None
+        and pd.notna(pd.to_datetime(row.get("exit_ts"), utc=True, errors="coerce"))
+    ]
+    if not unresolved:
+        return {}
+
+    lookback_days = int(max(1, min(90, _numeric_float(os.getenv("DASHBOARD_ENTRY_RECOVERY_LOOKBACK_DAYS", "14")) or 14)))
+    recovered: Dict[int, pd.Timestamp] = {}
+    for (venue, symbol_norm), group in pd.DataFrame(
+        [
+            {
+                "idx": idx,
+                "venue": str(row.get("venue") or ""),
+                "symbol_norm": _normalize_symbol_token(str(row.get("symbol") or "")),
+                "exit_ts": pd.to_datetime(row.get("exit_ts"), utc=True, errors="coerce"),
+            }
+            for idx, row in unresolved
+        ]
+    ).groupby(["venue", "symbol_norm"], dropna=False):
+        if not venue or not symbol_norm:
+            continue
+        start_ts = pd.Timestamp(group["exit_ts"].min()) - pd.Timedelta(days=lookback_days)
+        end_ts = pd.Timestamp(group["exit_ts"].max()) + pd.Timedelta(seconds=1)
+        try:
+            cur.execute(
+                """
+                select ts, side, qty, price, reduce_only, status, execution_stage
+                from execution_events
+                where venue = %(venue)s
+                  and replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
+                  and ts >= %(start_ts)s::timestamptz
+                  and ts <= %(end_ts)s::timestamptz
+                  and execution_stage = 'fill'
+                  and coalesce(reduce_only, false) = false
+                order by ts asc, seq asc nulls last
+                """,
+                {
+                    "venue": venue,
+                    "symbol_norm": symbol_norm,
+                    "start_ts": start_ts.isoformat(),
+                    "end_ts": end_ts.isoformat(),
+                },
+            )
+            fill_rows = cur.fetchall() or []
+        except Exception:
+            continue
+
+        fills: List[Dict[str, Any]] = []
+        for fill in fill_rows:
+            if len(fill) < 7:
+                continue
+            ts, side, qty, price, reduce_only, status, execution_stage = fill[:7]
+            ts_parsed = pd.to_datetime(ts, utc=True, errors="coerce")
+            if pd.isna(ts_parsed) or _valid_entry_epoch_seconds(ts_parsed) is None:
+                continue
+            if _truthy_bool(reduce_only):
+                continue
+            if str(status or "").strip().lower() in ("reject", "rejected", "cancelled", "canceled"):
+                continue
+            if str(execution_stage or "").strip().lower() not in ("", "fill"):
+                continue
+            fills.append(
+                {
+                    "ts": pd.Timestamp(ts_parsed),
+                    "side": str(side or "").strip().lower(),
+                    "qty": _numeric_float(qty),
+                    "price": _numeric_float(price),
+                }
+            )
+
+        for _, row in group.iterrows():
+            idx = row["idx"]
+            trade_row = df.loc[idx]
+            entry_side = _closed_trade_entry_side(trade_row.get("side"))
+            entry_price = _numeric_float(trade_row.get("entry_price"))
+            qty = _numeric_float(trade_row.get("qty"))
+            exit_ts = pd.to_datetime(trade_row.get("exit_ts"), utc=True, errors="coerce")
+            if entry_side is None or entry_price is None or qty is None or pd.isna(exit_ts):
+                continue
+            price_tol = max(1e-8, abs(entry_price) * 1e-6)
+            qty_tol = max(1e-8, abs(qty) * 1e-6)
+            candidates = [
+                f
+                for f in fills
+                if f["side"] == entry_side
+                and f["qty"] is not None
+                and f["price"] is not None
+                and abs(float(f["price"]) - float(entry_price)) <= price_tol
+                and abs(abs(float(f["qty"])) - abs(float(qty))) <= qty_tol
+                and f["ts"] < pd.Timestamp(exit_ts)
+            ]
+            if len(candidates) == 1:
+                recovered[idx] = candidates[0]["ts"]
+    return recovered
+
+
+def _enrich_missing_closed_trade_entries_from_events(df: pd.DataFrame, cur: Any) -> pd.DataFrame:
+    if df.empty:
+        return df
+
+    out = df.copy()
+    action_ids_by_idx: Dict[int, List[str]] = {}
+    execution_ids_by_idx: Dict[int, List[str]] = {}
+    action_ids: List[str] = []
+    execution_ids: List[str] = []
+    for idx, row in out.iterrows():
+        if _resolve_trade_entry_epoch_seconds(row) is not None:
+            continue
+        payload = _payload_dict_from_any(row.get("payload_json"))
+        row_action_ids = []
+        source_action_id = row.get("source_action_event_id")
+        if source_action_id is not None:
+            source_action_id_s = str(source_action_id).strip()
+            if source_action_id_s:
+                row_action_ids.append(source_action_id_s)
+        row_action_ids.extend(
+            _payload_str_values(
+                payload,
+                ["entry_action_event_id", "source_action_event_id", "action_event_id"],
+            )
+        )
+        row_execution_ids = _payload_str_values(
+            payload,
+            ["entry_execution_event_id", "entry_fill_event_id", "source_execution_event_id", "execution_event_id"],
+        )
+        if row_action_ids:
+            action_ids_by_idx[idx] = row_action_ids
+            action_ids.extend(row_action_ids)
+        if row_execution_ids:
+            execution_ids_by_idx[idx] = row_execution_ids
+            execution_ids.extend(row_execution_ids)
+
+    action_ts_by_id = _entry_action_event_ts_by_id(cur, action_ids)
+    execution_ts_by_id = _entry_execution_event_ts_by_id(cur, execution_ids)
+
+    for idx, ids in action_ids_by_idx.items():
+        row_side = str(out.loc[idx].get("side") or "").strip().lower()
+        for event_id in ids:
+            recovered = action_ts_by_id.get(event_id)
+            if recovered is not None and recovered[1] == row_side:
+                ts = recovered[0]
+                out.at[idx, "entry_ts"] = ts
+                out.at[idx, "entry_ts_recovery_source"] = "action_events"
+                break
+    for idx, ids in execution_ids_by_idx.items():
+        if _resolve_trade_entry_epoch_seconds(out.loc[idx]) is not None:
+            continue
+        row_entry_side = _closed_trade_entry_side(out.loc[idx].get("side"))
+        for event_id in ids:
+            recovered = execution_ts_by_id.get(event_id)
+            if recovered is not None and recovered[1] == row_entry_side:
+                ts = recovered[0]
+                out.at[idx, "entry_ts"] = ts
+                out.at[idx, "entry_ts_recovery_source"] = "execution_events"
+                break
+
+    fill_matches = _recover_entry_ts_from_unique_fill_matches(out, cur)
+    for idx, ts in fill_matches.items():
+        if _resolve_trade_entry_epoch_seconds(out.loc[idx]) is not None:
+            continue
+        out.at[idx, "entry_ts"] = ts
+        out.at[idx, "entry_ts_recovery_source"] = "execution_events:unique_fill_match"
+
+    return out
 
 
 def _truthy(v: Optional[str]) -> bool:
@@ -376,7 +685,8 @@ def load_closed_trades_from_postgres(
         if venue is None and symbol is None:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
-                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance, payload_json
+                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance,
+                       source_action_event_id, payload_json
                 from closed_trades
                 order by exit_ts desc
                 limit %(limit)s
@@ -385,7 +695,8 @@ def load_closed_trades_from_postgres(
         elif venue is None:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
-                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance, payload_json
+                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance,
+                       source_action_event_id, payload_json
                 from closed_trades
                 where replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
                 order by exit_ts desc
@@ -395,7 +706,8 @@ def load_closed_trades_from_postgres(
         elif symbol is None:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
-                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance, payload_json
+                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance,
+                       source_action_event_id, payload_json
                 from closed_trades
                 where venue = %(venue)s
                 order by exit_ts desc
@@ -405,7 +717,8 @@ def load_closed_trades_from_postgres(
         else:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
-                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance, payload_json
+                       entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance,
+                       source_action_event_id, payload_json
                 from closed_trades
                 where venue = %(venue)s
                   and replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
@@ -421,29 +734,30 @@ def load_closed_trades_from_postgres(
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
-
-        if not rows:
-            out = pd.DataFrame()
-        else:
-            out = pd.DataFrame(
-                rows,
-                columns=[
-                    "trade_id",
-                    "venue",
-                    "symbol",
-                    "entry_ts",
-                    "exit_ts",
-                    "side",
-                    "qty",
-                    "entry_price",
-                    "exit_price",
-                    "pnl_pct",
-                    "exit_event",
-                    "strategy",
-                    "strategy_instance",
-                    "payload_json",
-                ],
-            )
+            if not rows:
+                out = pd.DataFrame()
+            else:
+                out = pd.DataFrame(
+                    rows,
+                    columns=[
+                        "trade_id",
+                        "venue",
+                        "symbol",
+                        "entry_ts",
+                        "exit_ts",
+                        "side",
+                        "qty",
+                        "entry_price",
+                        "exit_price",
+                        "pnl_pct",
+                        "exit_event",
+                        "strategy",
+                        "strategy_instance",
+                        "source_action_event_id",
+                        "payload_json",
+                    ],
+                )
+                out = _enrich_missing_closed_trade_entries_from_events(out, cur)
 
         if cache_key is not None:
             _CLOSED_TRADES_CACHE[cache_key] = {"ts": time.time(), "df": out}
@@ -624,6 +938,14 @@ _MIN_VALID_ENTRY_EPOCH_SEC = int(pd.Timestamp("2000-01-01", tz="UTC").timestamp(
 _LONG_TOKENS = frozenset({"long", "l", "buy", "1"})
 _SHORT_TOKENS = frozenset({"short", "s", "sell", "-1"})
 
+_TRADE_MARKER_LONG_COLOR = "#22c55e"
+_TRADE_MARKER_SHORT_COLOR = "#ef4444"
+_TRADE_MARKER_WIN_COLOR = "#22c55e"
+_TRADE_MARKER_LOSS_COLOR = "#ef4444"
+_TRADE_MARKER_STOP_LOSS_COLOR = "#ef4444"
+_TRADE_MARKER_ARROW_SIZE = 2
+_TRADE_MARKER_TEXT_SIZE = 0
+
 
 def _payload_dict_from_any(v: Any) -> Dict[str, Any]:
     if isinstance(v, dict):
@@ -640,6 +962,39 @@ def _payload_dict_from_any(v: Any) -> Dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
+
+
+_STOP_LOSS_EXIT_TOKENS = frozenset(
+    {
+        "sl",
+        "stop",
+        "stop_loss",
+        "stop-loss",
+        "sl_exit",
+        "exit_sl",
+        "hard_stop",
+    }
+)
+
+
+def _text_looks_like_stop_loss_exit(v: Any) -> bool:
+    s = str(v or "").strip().lower()
+    if not s:
+        return False
+    normalized = s.replace("-", "_")
+    return any(token in normalized for token in _STOP_LOSS_EXIT_TOKENS)
+
+
+def _closed_trade_is_stop_loss_exit(row: Any) -> bool:
+    for key in ("exit_event", "reason"):
+        if _text_looks_like_stop_loss_exit(row.get(key)):
+            return True
+
+    payload = _payload_dict_from_any(row.get("payload_json"))
+    for key in ("exit_event", "event_name", "reason", "reason_code", "action", "engine_action", "exit_reason"):
+        if _text_looks_like_stop_loss_exit(payload.get(key)):
+            return True
+    return False
 
 
 def _valid_entry_epoch_seconds(v: Any) -> Optional[int]:
@@ -696,11 +1051,370 @@ def _side_value_to_int(v: Any) -> int:
     return 0
 
 
+def _side_value_to_direction(v: Any) -> Optional[str]:
+    side_int = _side_value_to_int(v)
+    if side_int > 0:
+        return "long"
+    if side_int < 0:
+        return "short"
+    return None
+
+
+def _nonnull_str(v: Any) -> Optional[str]:
+    if v is None:
+        return None
+    try:
+        if pd.isna(v):
+            return None
+    except Exception:
+        pass
+    s = str(v).strip()
+    return s or None
+
+
+def _iter_payload_link_values(payload: Dict[str, Any], keys: Iterable[str]) -> Set[str]:
+    out: Set[str] = set()
+    for key in keys:
+        raw = payload.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, (list, tuple, set)):
+            values = raw
+        else:
+            values = [raw]
+        for value in values:
+            s = _nonnull_str(value)
+            if s:
+                out.add(s)
+    return out
+
+
+def _normalize_decision_marker_rows(
+    rows: Optional[Iterable[Dict[str, Any]]],
+    *,
+    venue: str,
+    symbol: str,
+) -> List[Dict[str, Any]]:
+    venue_norm = str(venue or "").strip().lower()
+    symbol_norm = _normalize_symbol_token(symbol)
+    out: List[Dict[str, Any]] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        payload = _payload_dict_from_any(row.get("payload_json"))
+        decision_venue = str(row.get("venue") or "").strip().lower()
+        if decision_venue and venue_norm and decision_venue != venue_norm:
+            continue
+        decision_symbol = _normalize_symbol_token(row.get("symbol"))
+        if decision_symbol and symbol_norm and decision_symbol != symbol_norm:
+            continue
+        kind = str(row.get("decision_kind") or payload.get("decision_kind") or payload.get("kind") or "").strip().lower()
+        if kind not in ("entry", "flip"):
+            continue
+        direction = str(row.get("direction") or payload.get("direction") or payload.get("action_side") or "").strip().lower()
+        if direction not in ("long", "short"):
+            direction = _side_value_to_direction(direction) or ""
+        if direction not in ("long", "short"):
+            continue
+        ts_epoch = _valid_entry_epoch_seconds(row.get("ts"))
+        if ts_epoch is None:
+            continue
+        seq_raw = row.get("seq")
+        try:
+            seq_val: Optional[int] = int(seq_raw) if seq_raw is not None and not pd.isna(seq_raw) else None
+        except Exception:
+            seq_val = None
+        out.append(
+            {
+                "decision_id": str(row.get("decision_id") or ""),
+                "ts_epoch": int(ts_epoch),
+                "direction": direction,
+                "decision_kind": kind,
+                "source_action_event_id": _nonnull_str(row.get("source_action_event_id")),
+                "seq": seq_val,
+                "payload": payload,
+            }
+        )
+    out.sort(key=lambda d: (int(d["ts_epoch"]), d.get("seq") if d.get("seq") is not None else 0, str(d.get("decision_id") or "")))
+    return out
+
+
+def _load_decision_rows_for_trade_markers(
+    *,
+    venue: str,
+    symbol: str,
+    limit: int,
+) -> List[Dict[str, Any]]:
+    try:
+        from quant.execution.trade_decisions_store import list_recent_trade_decisions
+
+        rows = list_recent_trade_decisions(
+            venue=venue,
+            symbol=symbol,
+            limit=int(max(1, limit)),
+        )
+    except Exception:
+        rows = []
+    if rows:
+        return rows
+
+    try:
+        from quant.execution.trade_counter import build_trade_decisions_from_action_events
+        from quant.execution.trade_decisions_store import fetch_action_events_for_backfill
+
+        events = fetch_action_events_for_backfill(
+            venue=venue,
+            symbol=symbol,
+            limit=int(max(1, limit)),
+        )
+        return [d.to_db_row() for d in build_trade_decisions_from_action_events(events)]
+    except Exception:
+        return []
+
+
+def _closed_trade_marker_link_sets(row: Any) -> Tuple[Set[str], Set[str], Set[str]]:
+    payload = _payload_dict_from_any(row.get("payload_json"))
+    action_ids: Set[str] = set()
+    source_action_id = _nonnull_str(row.get("source_action_event_id"))
+    if source_action_id:
+        action_ids.add(source_action_id)
+    action_ids |= _iter_payload_link_values(
+        payload,
+        (
+            "entry_action_event_id",
+            "source_action_event_id",
+            "action_event_id",
+            "source_event_id",
+        ),
+    )
+    decision_ids = _iter_payload_link_values(
+        payload,
+        ("decision_id", "trade_decision_id", "source_decision_id"),
+    )
+    trade_ids: Set[str] = set()
+    trade_id = _nonnull_str(row.get("trade_id"))
+    if trade_id:
+        trade_ids.add(trade_id)
+    trade_ids |= _iter_payload_link_values(payload, ("closed_trade_id", "trade_id"))
+    return action_ids, decision_ids, trade_ids
+
+
+def _closed_trade_pnl_value(row: Any) -> Optional[float]:
+    pnl_raw = pd.to_numeric(row.get("pnl_pct"), errors="coerce")
+    if pd.notna(pnl_raw):
+        return float(pnl_raw)
+    entry_price = pd.to_numeric(row.get("entry_price"), errors="coerce")
+    exit_price = pd.to_numeric(row.get("exit_price"), errors="coerce")
+    if pd.isna(entry_price) or pd.isna(exit_price) or float(entry_price) == 0.0:
+        return None
+    side = _side_value_to_int(row.get("side"))
+    if side == 0:
+        return None
+    return ((float(exit_price) - float(entry_price)) / float(entry_price)) * 100.0 * (1 if side > 0 else -1)
+
+
+def _prepare_closed_trade_marker_candidates(
+    df: pd.DataFrame,
+    *,
+    venue: str,
+    symbol: str,
+) -> List[Dict[str, Any]]:
+    if df is None or not isinstance(df, pd.DataFrame) or df.empty:
+        return []
+    venue_norm = str(venue or "").strip().lower()
+    symbol_norm = _normalize_symbol_token(symbol)
+    candidates: List[Dict[str, Any]] = []
+    for row_idx, row in df.iterrows():
+        row_venue = str(row.get("venue") or "").strip().lower()
+        if row_venue and venue_norm and row_venue != venue_norm:
+            continue
+        row_symbol = _normalize_symbol_token(row.get("symbol"))
+        if row_symbol and symbol_norm and row_symbol != symbol_norm:
+            continue
+        exit_epoch = _epoch_seconds_from_any(row.get("exit_ts"))
+        if exit_epoch is None or exit_epoch <= 0:
+            continue
+        direction = _side_value_to_direction(row.get("side"))
+        if direction is None:
+            continue
+        action_ids, decision_ids, trade_ids = _closed_trade_marker_link_sets(row)
+        candidates.append(
+            {
+                "match_key": len(candidates),
+                "idx": row_idx,
+                "row": row,
+                "exit_epoch": int(exit_epoch),
+                "direction": direction,
+                "action_ids": action_ids,
+                "decision_ids": decision_ids,
+                "trade_ids": trade_ids,
+            }
+        )
+    candidates.sort(
+        key=lambda c: (
+            int(c["exit_epoch"]),
+            str(c["row"].get("trade_id") or ""),
+        )
+    )
+    return candidates
+
+
+def _match_decisions_to_closed_trades(
+    decisions: List[Dict[str, Any]],
+    closed_candidates: List[Dict[str, Any]],
+) -> List[Optional[Dict[str, Any]]]:
+    used: Set[Any] = set()
+    matches: List[Optional[Dict[str, Any]]] = []
+
+    for decision in decisions:
+        decision_ts = int(decision["ts_epoch"])
+        direction = str(decision["direction"])
+        decision_id = str(decision.get("decision_id") or "")
+        source_action_id = _nonnull_str(decision.get("source_action_event_id"))
+        payload = decision.get("payload") if isinstance(decision.get("payload"), dict) else {}
+        linked_trade_ids = _iter_payload_link_values(payload, ("closed_trade_id", "trade_id"))
+
+        def _eligible(candidate: Dict[str, Any]) -> bool:
+            if candidate["match_key"] in used:
+                return False
+            if str(candidate.get("direction") or "") != direction:
+                return False
+            return int(candidate["exit_epoch"]) >= decision_ts
+
+        match: Optional[Dict[str, Any]] = None
+        for candidate in closed_candidates:
+            if not _eligible(candidate):
+                continue
+            if linked_trade_ids and linked_trade_ids & candidate["trade_ids"]:
+                match = candidate
+                break
+            if source_action_id and source_action_id in candidate["action_ids"]:
+                match = candidate
+                break
+            if decision_id and decision_id in candidate["decision_ids"]:
+                match = candidate
+                break
+
+        if match is None:
+            for candidate in closed_candidates:
+                if _eligible(candidate):
+                    match = candidate
+                    break
+
+        if match is not None:
+            used.add(match["match_key"])
+        matches.append(match)
+
+    return matches
+
+
+def _build_decision_trade_markers(
+    *,
+    decisions: List[Dict[str, Any]],
+    closed_trades_df: pd.DataFrame,
+    venue: str,
+    symbol: str,
+    max_points: int,
+) -> List[Dict[str, Any]]:
+    if not decisions:
+        return []
+    closed_candidates = _prepare_closed_trade_marker_candidates(
+        closed_trades_df,
+        venue=venue,
+        symbol=symbol,
+    )
+    matches = _match_decisions_to_closed_trades(decisions, closed_candidates)
+    markers: List[Dict[str, Any]] = []
+    start = max(0, len(decisions) - int(max(1, max_points)))
+    for decision, match in zip(decisions[start:], matches[start:]):
+        is_long = str(decision["direction"]) == "long"
+        entry_ts_val = int(decision["ts_epoch"])
+        marker_meta: Dict[str, Any] = {
+            "original_time": entry_ts_val,
+            "decision_id": str(decision.get("decision_id") or ""),
+            "decision_kind": str(decision.get("decision_kind") or ""),
+        }
+        pnl_value: Optional[float] = None
+        if match is not None:
+            row = match["row"]
+            trade_id = _nonnull_str(row.get("trade_id"))
+            if trade_id:
+                marker_meta["trade_id"] = trade_id
+            marker_meta["exit_time"] = int(match["exit_epoch"])
+            pnl_value = _closed_trade_pnl_value(row)
+
+        position = "belowBar" if is_long else "aboveBar"
+        markers.append(
+            {
+                "time": entry_ts_val,
+                "position": position,
+                "shape": "arrowUp" if is_long else "arrowDown",
+                "color": _TRADE_MARKER_LONG_COLOR if is_long else _TRADE_MARKER_SHORT_COLOR,
+                "text": "",
+                "size": _TRADE_MARKER_ARROW_SIZE,
+                **marker_meta,
+            }
+        )
+        if pnl_value is not None:
+            markers.append(
+                {
+                    "time": entry_ts_val,
+                    "position": position,
+                    "shape": "circle",
+                    "color": _TRADE_MARKER_WIN_COLOR if pnl_value >= 0 else _TRADE_MARKER_LOSS_COLOR,
+                    "text": f"{pnl_value:+.2f}%",
+                    "size": _TRADE_MARKER_TEXT_SIZE,
+                    **marker_meta,
+                }
+            )
+    return markers
+
+
+def _build_stop_loss_exit_markers(closed_trades_df: pd.DataFrame) -> List[Dict[str, Any]]:
+    if closed_trades_df is None or not isinstance(closed_trades_df, pd.DataFrame) or closed_trades_df.empty:
+        return []
+    out: List[Dict[str, Any]] = []
+    for _, row in closed_trades_df.iterrows():
+        if not _closed_trade_is_stop_loss_exit(row):
+            continue
+        exit_ts_val = _epoch_seconds_from_any(row.get("exit_ts"))
+        if exit_ts_val is None or exit_ts_val <= 0:
+            continue
+        side_int = _side_value_to_int(row.get("side"))
+        is_long = side_int >= 0
+        marker_meta: Dict[str, Any] = {
+            "original_time": int(exit_ts_val),
+            "exit_time": int(exit_ts_val),
+            "marker_kind": "sl_exit",
+        }
+        entry_ts_val = _resolve_trade_entry_epoch_seconds(row)
+        if entry_ts_val is not None:
+            marker_meta["entry_time"] = int(entry_ts_val)
+        trade_id = _nonnull_str(row.get("trade_id"))
+        if trade_id:
+            marker_meta["trade_id"] = trade_id
+        out.append(
+            {
+                "time": int(exit_ts_val),
+                "position": "belowBar" if is_long else "aboveBar",
+                "shape": "circle",
+                "color": _TRADE_MARKER_STOP_LOSS_COLOR,
+                "text": "×",
+                "size": _TRADE_MARKER_TEXT_SIZE,
+                **marker_meta,
+            }
+        )
+    return out
+
+
 def load_trade_markers(
     max_points: int = 5000,
     _trades_df: Optional[pd.DataFrame] = None,
     open_entry_ts: Optional[int] = None,
     open_side: Any = None,
+    symbol: Optional[str] = None,
+    venue: str = "kucoin",
+    _decision_rows: Optional[Iterable[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Render closed-trade markers on the price chart with a single entry arrow
@@ -719,8 +1433,8 @@ def load_trade_markers(
       Lightweight-charts uses the marker's ``color`` for both shape *and*
       text, so we split the arrow and the label into two markers to keep
       direction (arrow) and outcome (text) independently colorable.
-    * Exit markers are NOT emitted — the entry arrow + co-located pnl text
-      carries the full per-trade story.
+    * Stop-loss exits add a separate red text marker at ``exit_ts`` so a
+      stopped long is not mistaken for a fresh long entry.
     * The currently-open trade (which never appears in ``closed_trades``)
       gets a plain direction-colored arrow with empty text. The open
       timestamp is resolved from ``open_entry_ts`` (caller hint) or
@@ -728,12 +1442,14 @@ def load_trade_markers(
       ``time + shape`` will dedup the legacy live-entry marker emitted by
       the chart endpoint, so the new direction-colored arrow wins.
     """
+    symbol_eff = symbol or os.getenv("DASHBOARD_SYMBOL", "SOL-USDT")
+    venue_eff = str(venue or "kucoin")
     if _trades_df is not None:
         df = _trades_df
     else:
         df = load_closed_trades_from_postgres(
-            venue="kucoin",
-            symbol=os.getenv("DASHBOARD_SYMBOL", "SOL-USDT"),
+            venue=venue_eff,
+            symbol=symbol_eff,
             max_points=max_points,
         )
         if df.empty:
@@ -764,86 +1480,39 @@ def load_trade_markers(
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         df = pd.DataFrame()
 
+    raw_closed_trades_df = df.copy() if isinstance(df, pd.DataFrame) else pd.DataFrame()
+
     if not df.empty:
         if "entry_ts" not in df.columns and "ts" in df.columns:
             df = df.rename(columns={"ts": "entry_ts"})
         if "entry_ts" not in df.columns:
             df = pd.DataFrame()
 
+    if _decision_rows is None:
+        should_load_decisions = _trades_df is None or symbol is not None
+        decision_source_rows = (
+            _load_decision_rows_for_trade_markers(
+                venue=venue_eff,
+                symbol=symbol_eff,
+                limit=int(max(500, max_points)),
+            )
+            if should_load_decisions
+            else []
+        )
+    else:
+        decision_source_rows = list(_decision_rows)
+    decision_rows = _normalize_decision_marker_rows(
+        decision_source_rows,
+        venue=venue_eff,
+        symbol=symbol_eff,
+    )
+
     if not df.empty:
         df = df.copy()
-        from bisect import bisect_left
-
-        exit_epochs_for_resolution: List[Optional[int]] = []
-        if "exit_ts" in df.columns:
-            exit_ts_for_resolution = pd.to_datetime(df["exit_ts"], utc=True, errors="coerce")
-            exit_epochs_for_resolution = [
-                (
-                    int((pd.Timestamp(ts) - _EPOCH_UTC) // pd.Timedelta(seconds=1))
-                    if pd.notna(ts)
-                    else None
-                )
-                for ts in exit_ts_for_resolution
-            ]
-        else:
-            exit_epochs_for_resolution = [None] * len(df)
-        sorted_exit_epochs = sorted(t for t in exit_epochs_for_resolution if t is not None)
-
-        def _payload_position_number(payload: Dict[str, Any], key: str) -> Optional[float]:
-            try:
-                value = pd.to_numeric(payload.get(key), errors="coerce")
-            except Exception:
-                return None
-            return float(value) if pd.notna(value) else None
-
-        def _payload_looks_like_entry(payload: Dict[str, Any]) -> bool:
-            action = str(payload.get("engine_action") or payload.get("action") or "").strip().lower()
-            if action.startswith("enter"):
-                return True
-            before = _payload_position_number(payload, "position_before")
-            after = _payload_position_number(payload, "position_after")
-            return before == 0 and after is not None and after != 0
-
-        def _payload_looks_like_flip(payload: Dict[str, Any]) -> bool:
-            action = str(payload.get("engine_action") or payload.get("action") or "").strip().lower()
-            kind = str(payload.get("decision_kind") or "").strip().lower()
-            if "flip" in kind or action.startswith("flip") or "flip_to" in action:
-                return True
-            before = _payload_position_number(payload, "position_before")
-            after = _payload_position_number(payload, "position_after")
-            return before is not None and after is not None and before * after < 0
-
-        def _resolve_marker_entry_epoch(row: Any, previous_close_epoch: Optional[int]) -> Optional[int]:
-            entry_seconds = _valid_entry_epoch_seconds(row.get("entry_ts"))
-            if entry_seconds is not None:
-                return entry_seconds
-
-            payload = _payload_dict_from_any(row.get("payload_json"))
-            for key in ("opened_at", "created_at", "entry_bar_ts", "bar_ts"):
-                entry_seconds = _valid_entry_epoch_seconds(payload.get(key))
-                if entry_seconds is not None:
-                    return entry_seconds
-            if _payload_looks_like_entry(payload):
-                entry_seconds = _valid_entry_epoch_seconds(payload.get("ts"))
-                if entry_seconds is not None:
-                    return entry_seconds
-            if _payload_looks_like_flip(payload) and previous_close_epoch is not None:
-                return previous_close_epoch
-            return None
 
         resolved_entry_epochs: List[Optional[int]] = []
-        for pos, (_, row) in enumerate(df.iterrows()):
-            current_exit_epoch = (
-                exit_epochs_for_resolution[pos]
-                if pos < len(exit_epochs_for_resolution)
-                else None
-            )
-            previous_close_epoch: Optional[int] = None
-            if current_exit_epoch is not None:
-                insert_at = bisect_left(sorted_exit_epochs, current_exit_epoch)
-                if insert_at > 0:
-                    previous_close_epoch = sorted_exit_epochs[insert_at - 1]
-            resolved_entry_epochs.append(_resolve_marker_entry_epoch(row, previous_close_epoch))
+        for _, row in df.iterrows():
+            resolved_entry_epochs.append(_valid_entry_epoch_seconds(row.get("entry_ts")))
 
         df["entry_ts"] = pd.to_datetime(
             pd.Series(resolved_entry_epochs, index=df.index),
@@ -860,21 +1529,35 @@ def load_trade_markers(
     # Direction palette (entry arrow color) and pnl palette (text marker).
     # Both share the same hex values for green/red so the entire chart
     # legend stays in a single palette.
-    LONG_COLOR = "#22c55e"
-    SHORT_COLOR = "#ef4444"
-    PNL_WIN_COLOR = "#22c55e"
-    PNL_LOSS_COLOR = "#ef4444"
-    ARROW_SIZE = 2
+    LONG_COLOR = _TRADE_MARKER_LONG_COLOR
+    SHORT_COLOR = _TRADE_MARKER_SHORT_COLOR
+    PNL_WIN_COLOR = _TRADE_MARKER_WIN_COLOR
+    PNL_LOSS_COLOR = _TRADE_MARKER_LOSS_COLOR
+    ARROW_SIZE = _TRADE_MARKER_ARROW_SIZE
     # Lightweight-charts v4 uses ``size`` as a multiplier on its built-in
     # marker shape size; ``size=0`` collapses the shape to a single pixel
     # while keeping the text label rendered next to it. That gives us a
     # de-facto "text-only" marker without resorting to a primitive plugin.
-    TEXT_MARKER_SIZE = 0
+    TEXT_MARKER_SIZE = _TRADE_MARKER_TEXT_SIZE
 
     markers: List[Dict[str, Any]] = []
     entry_seen_ts: set[int] = set()
+    decision_markers = _build_decision_trade_markers(
+        decisions=decision_rows,
+        closed_trades_df=raw_closed_trades_df,
+        venue=venue_eff,
+        symbol=symbol_eff,
+        max_points=max_points,
+    )
+    if decision_markers:
+        markers.extend(decision_markers)
+        entry_seen_ts.update(
+            int(m["time"])
+            for m in decision_markers
+            if str(m.get("shape") or "").startswith("arrow")
+        )
 
-    if not df.empty:
+    if not decision_markers and not df.empty:
         cols = set(df.columns)
         entry_px_col = next(
             (c for c in ("entry_px", "entry_price", "price_entry", "entry") if c in cols),
@@ -983,6 +1666,7 @@ def load_trade_markers(
             except Exception:
                 if trade_id is not None:
                     marker_meta["trade_id"] = str(trade_id)
+            exit_ts_val: Optional[int] = None
             if exit_ts_values is not None and i < len(exit_ts_values):
                 exit_ts_val = exit_ts_values[i]
                 if exit_ts_val is not None:
@@ -1014,6 +1698,7 @@ def load_trade_markers(
                         **marker_meta,
                     }
                 )
+    markers.extend(_build_stop_loss_exit_markers(raw_closed_trades_df))
 
     # Emit the open-trade arrow when we know it and we haven't already
     # rendered a closed-trade arrow at the same entry timestamp. No text

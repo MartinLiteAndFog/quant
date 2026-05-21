@@ -1073,7 +1073,12 @@ def api_dashboard_chart(
                 if "exit_event" in trades_df.columns:
                     trades_df = trades_df[trades_df["exit_event"].astype(str).str.lower() != "fills_reconstructed"]
         bars = load_renko_bars(max_points=int(max(100, max_points)), _df=renko_df)
-        markers = load_trade_markers(max_points=int(max(1000, max_points * 50)), _trades_df=trades_df)
+        markers = load_trade_markers(
+            max_points=int(max(1000, max_points * 50)),
+            _trades_df=trades_df,
+            symbol=symbol,
+            venue="kucoin",
+        )
         oldest_bar_ts = int(bars[0]["time"]) if bars else None
         newest_bar_ts = int(bars[-1]["time"]) if bars else None
         # Render closed-trade markers when the trade overlaps the visible bar
