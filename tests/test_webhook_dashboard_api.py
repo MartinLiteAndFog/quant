@@ -352,6 +352,54 @@ class WebhookDashboardApiTests(unittest.TestCase):
         self.assertEqual(str(live_arrow.get("position", "")), "aboveBar")
         self.assertEqual(str(live_arrow.get("color", "")).lower(), "#ef4444")
 
+    def test_chart_keeps_live_entry_marker_when_closed_markers_exist(self) -> None:
+        root = Path(self.tmp.name)
+        pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-02-20T02:00:00Z", periods=2, freq="h"),
+                "open": [102.0, 103.0],
+                "high": [103.0, 104.0],
+                "low": [101.0, 102.0],
+                "close": [102.5, 103.5],
+            }
+        ).to_parquet(root / "renko.parquet", index=False)
+        pd.DataFrame(
+            [
+                {
+                    "trade_id": "visible_closed_trade",
+                    "entry_ts": "2026-02-20T02:30:00Z",
+                    "exit_ts": "2026-02-20T02:45:00Z",
+                    "side": "long",
+                    "entry_price": 102.0,
+                    "exit_price": 103.0,
+                    "pnl_pct": 0.98,
+                    "exit_event": "tp_exit",
+                }
+            ]
+        ).to_parquet(root / "trades.parquet", index=False)
+        (root / "execution_state.json").write_text(
+            '{"sl":105.0,"side":"short","entry_px":101.0,"entry_bar_ts":"2026-02-20T00:00:00Z"}',
+            encoding="utf-8",
+        )
+        os.environ["DASHBOARD_TRADE_ALLOW_FILE_FALLBACK"] = "1"
+        ws._CHART_CACHE.clear()
+
+        body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+
+        self.assertTrue(body.get("ok"))
+        first_bar_ts = int(body["bars"][0]["time"])
+        live_arrows = [
+            m
+            for m in body.get("markers", [])
+            if int(m.get("time", 0)) == first_bar_ts
+            and str(m.get("shape", "")) == "arrowDown"
+            and str(m.get("text", "")) == ""
+        ]
+        self.assertTrue(live_arrows)
+        self.assertTrue(
+            any(m.get("trade_id") == "visible_closed_trade" for m in body.get("markers", []))
+        )
+
     def test_chart_handles_string_entry_bar_ts(self) -> None:
         root = Path(self.tmp.name)
         os.environ["DASHBOARD_TRADES_PARQUET"] = str(root / "missing_trades.parquet")

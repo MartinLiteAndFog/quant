@@ -1215,7 +1215,6 @@ def api_dashboard_chart(
                 oldest_bar_ts is not None
                 and newest_bar_ts is not None
                 and mt < oldest_bar_ts
-                and not markers_all
             ):
                 # Closed-trade entries remain strictly in-window, but an open
                 # position that started before the Renko slice still needs a

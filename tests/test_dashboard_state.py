@@ -61,11 +61,14 @@ class DashboardStateTests(unittest.TestCase):
             ]
         ).to_parquet(self.tmp_path / "trades.parquet", index=False)
 
+        regime_now = pd.Timestamp.now("UTC").floor("s")
+        regime_first_ts = (regime_now - pd.Timedelta(hours=2)).isoformat()
+        regime_second_ts = (regime_now - pd.Timedelta(hours=1)).isoformat()
         store = RegimeStore()
         svc = RegimeService(store)
         svc.upsert_decision(
             RegimeDecision(
-                ts="2026-02-20T00:00:00Z",
+                ts=regime_first_ts,
                 symbol="SOL-USDT",
                 gate_on=1,
                 regime_state="trend",
@@ -76,7 +79,7 @@ class DashboardStateTests(unittest.TestCase):
         )
         svc.upsert_decision(
             RegimeDecision(
-                ts="2026-02-21T00:00:00Z",
+                ts=regime_second_ts,
                 symbol="SOL-USDT",
                 gate_on=0,
                 regime_state="countertrend",
