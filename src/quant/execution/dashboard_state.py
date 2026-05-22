@@ -32,6 +32,7 @@ _LAST_FILLS_REFRESH_ERROR: Optional[str] = None
 # absorbing the bulk of repeated requests within the same refresh tick.
 _RENKO_DF_CACHE: Dict[str, Any] = {"path": None, "mtime": None, "ts": 0.0, "df": None}
 _CLOSED_TRADES_CACHE: Dict[str, Dict[str, Any]] = {}
+_TRADE_MARKER_DECISION_ROWS_CACHE: Dict[str, Dict[str, Any]] = {}
 _REGIME_HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 _EQUITY_HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 
@@ -1139,37 +1140,258 @@ def _normalize_decision_marker_rows(
     return out
 
 
+def _epoch_iso_utc(seconds: int) -> str:
+    return pd.Timestamp(int(seconds), unit="s", tz="UTC").isoformat()
+
+
+def _decision_marker_query_window(
+    start_ts: Optional[int],
+    end_ts: Optional[int],
+) -> Tuple[Optional[str], Optional[str]]:
+    start_epoch = _epoch_seconds_from_any(start_ts)
+    end_epoch = _epoch_seconds_from_any(end_ts)
+    if start_epoch is None and end_epoch is None:
+        return None, None
+
+    since_iso: Optional[str] = None
+    if start_epoch is not None:
+        if end_epoch is not None and end_epoch > start_epoch:
+            default_lookback_hours = max(24.0, float(end_epoch - start_epoch) / 3600.0)
+        else:
+            default_lookback_hours = 24.0
+        lookback_hours = _cache_ttl_env(
+            "DASHBOARD_TRADE_MARKER_LOOKBACK_HOURS",
+            default_lookback_hours,
+        )
+        since_epoch = max(0, int(start_epoch) - int(max(0.0, lookback_hours) * 3600))
+        since_iso = _epoch_iso_utc(since_epoch)
+
+    until_iso = _epoch_iso_utc(end_epoch) if end_epoch is not None else None
+    return since_iso, until_iso
+
+
+def _decision_marker_cache_key(
+    *,
+    venue: str,
+    symbol: str,
+    limit: int,
+    start_ts: Optional[int],
+    end_ts: Optional[int],
+) -> str:
+    start_key = _epoch_seconds_from_any(start_ts)
+    end_key = _epoch_seconds_from_any(end_ts)
+    return "|".join(
+        [
+            str(venue or ""),
+            _normalize_symbol_token(symbol),
+            str(int(max(1, limit))),
+            str(start_key or ""),
+            str(end_key or ""),
+        ]
+    )
+
+
+def _copy_decision_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [dict(r) for r in rows]
+
+
+def _query_recent_trade_decisions_for_markers(
+    *,
+    venue: str,
+    symbol: str,
+    limit: int,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    since_iso, until_iso = _decision_marker_query_window(start_ts, end_ts)
+    where: List[str] = [
+        "venue = %(venue)s",
+        "replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s",
+        "decision_kind in ('entry', 'flip')",
+    ]
+    params: Dict[str, Any] = {
+        "venue": str(venue),
+        "symbol_norm": _normalize_symbol_token(symbol),
+        "limit": int(max(1, limit)),
+    }
+    if since_iso is not None:
+        where.append("ts >= %(since_ts)s::timestamptz")
+        params["since_ts"] = since_iso
+    if until_iso is not None:
+        where.append("ts <= %(until_ts)s::timestamptz")
+        params["until_ts"] = until_iso
+
+    sql = """
+        select decision_id, ts, venue, symbol, strategy, strategy_instance,
+               decision_kind, direction, position_before, position_after,
+               engine_action, reason_code, source_action_event_id, seq, payload_json
+        from trade_decisions
+        where {where}
+        order by ts desc, seq desc nulls last
+        limit %(limit)s
+    """.format(where=" and ".join(where))
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall() or []
+    except Exception:
+        return []
+
+    columns = [
+        "decision_id",
+        "ts",
+        "venue",
+        "symbol",
+        "strategy",
+        "strategy_instance",
+        "decision_kind",
+        "direction",
+        "position_before",
+        "position_after",
+        "engine_action",
+        "reason_code",
+        "source_action_event_id",
+        "seq",
+        "payload_json",
+    ]
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        record = dict(zip(columns, row))
+        record["payload_json"] = _payload_dict_from_any(record.get("payload_json"))
+        ts_val = record.get("ts")
+        if ts_val is not None and hasattr(ts_val, "isoformat"):
+            record["ts"] = ts_val.isoformat()
+        out.append(record)
+    return out
+
+
+def _query_action_events_for_marker_decisions(
+    *,
+    venue: str,
+    symbol: str,
+    limit: int,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    since_iso, until_iso = _decision_marker_query_window(start_ts, end_ts)
+    where: List[str] = [
+        "venue = %(venue)s",
+        "replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s",
+    ]
+    params: Dict[str, Any] = {
+        "venue": str(venue),
+        "symbol_norm": _normalize_symbol_token(symbol),
+        "limit": int(max(1, limit)),
+    }
+    if since_iso is not None:
+        where.append("ts >= %(since_ts)s::timestamptz")
+        params["since_ts"] = since_iso
+    if until_iso is not None:
+        where.append("ts <= %(until_ts)s::timestamptz")
+        params["until_ts"] = until_iso
+
+    sql = """
+        select event_id, ts, seq, strategy, strategy_instance, symbol, venue,
+               engine_action, action_side, position_before, position_after,
+               reason_code, blocked, payload_json
+        from action_events
+        where {where}
+        order by ts asc, seq asc nulls last
+        limit %(limit)s
+    """.format(where=" and ".join(where))
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall() or []
+    except Exception:
+        return []
+
+    columns = [
+        "event_id",
+        "ts",
+        "seq",
+        "strategy",
+        "strategy_instance",
+        "symbol",
+        "venue",
+        "engine_action",
+        "action_side",
+        "position_before",
+        "position_after",
+        "reason_code",
+        "blocked",
+        "payload_json",
+    ]
+    out: List[Dict[str, Any]] = []
+    for row in rows:
+        record = dict(zip(columns, row))
+        record["payload_json"] = _payload_dict_from_any(record.get("payload_json"))
+        ts_val = record.get("ts")
+        if ts_val is not None and hasattr(ts_val, "isoformat"):
+            record["ts"] = ts_val.isoformat()
+        out.append(record)
+    return out
+
+
 def _load_decision_rows_for_trade_markers(
     *,
     venue: str,
     symbol: str,
     limit: int,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    try:
-        from quant.execution.trade_decisions_store import list_recent_trade_decisions
+    limit_i = int(max(1, limit))
+    cache_key = _decision_marker_cache_key(
+        venue=venue,
+        symbol=symbol,
+        limit=limit_i,
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+    ttl = _cache_ttl_env("DASHBOARD_TRADE_MARKER_DECISIONS_CACHE_SEC", 10.0)
+    if ttl > 0:
+        entry = _TRADE_MARKER_DECISION_ROWS_CACHE.get(cache_key)
+        if entry is not None and (time.time() - float(entry.get("ts", 0.0))) <= ttl:
+            cached_rows = entry.get("rows")
+            if isinstance(cached_rows, list):
+                return _copy_decision_rows(cached_rows)
 
-        rows = list_recent_trade_decisions(
-            venue=venue,
-            symbol=symbol,
-            limit=int(max(1, limit)),
-        )
-    except Exception:
-        rows = []
+    rows = _query_recent_trade_decisions_for_markers(
+        venue=venue,
+        symbol=symbol,
+        limit=limit_i,
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
     if rows:
+        if ttl > 0:
+            _TRADE_MARKER_DECISION_ROWS_CACHE[cache_key] = {
+                "ts": time.time(),
+                "rows": _copy_decision_rows(rows),
+            }
         return rows
 
     try:
         from quant.execution.trade_counter import build_trade_decisions_from_action_events
-        from quant.execution.trade_decisions_store import fetch_action_events_for_backfill
 
-        events = fetch_action_events_for_backfill(
+        events = _query_action_events_for_marker_decisions(
             venue=venue,
             symbol=symbol,
-            limit=int(max(1, limit)),
+            limit=limit_i,
+            start_ts=start_ts,
+            end_ts=end_ts,
         )
-        return [d.to_db_row() for d in build_trade_decisions_from_action_events(events)]
+        rows = [d.to_db_row() for d in build_trade_decisions_from_action_events(events)]
     except Exception:
-        return []
+        rows = []
+    if ttl > 0:
+        _TRADE_MARKER_DECISION_ROWS_CACHE[cache_key] = {
+            "ts": time.time(),
+            "rows": _copy_decision_rows(rows),
+        }
+    return rows
+
 
 
 def _closed_trade_marker_link_sets(row: Any) -> Tuple[Set[str], Set[str], Set[str]]:
@@ -1218,11 +1440,15 @@ def _prepare_closed_trade_marker_candidates(
     *,
     venue: str,
     symbol: str,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     if df is None or not isinstance(df, pd.DataFrame) or df.empty:
         return []
     venue_norm = str(venue or "").strip().lower()
     symbol_norm = _normalize_symbol_token(symbol)
+    start_epoch = _epoch_seconds_from_any(start_ts)
+    end_epoch = _epoch_seconds_from_any(end_ts)
     candidates: List[Dict[str, Any]] = []
     for row_idx, row in df.iterrows():
         row_venue = str(row.get("venue") or "").strip().lower()
@@ -1233,6 +1459,11 @@ def _prepare_closed_trade_marker_candidates(
             continue
         exit_epoch = _epoch_seconds_from_any(row.get("exit_ts"))
         if exit_epoch is None or exit_epoch <= 0:
+            continue
+        if start_epoch is not None and int(exit_epoch) < int(start_epoch):
+            continue
+        entry_epoch = _resolve_trade_entry_epoch_seconds(row)
+        if end_epoch is not None and entry_epoch is not None and int(entry_epoch) > int(end_epoch):
             continue
         direction = _side_value_to_direction(row.get("side"))
         if direction is None:
@@ -1315,6 +1546,8 @@ def _build_decision_trade_markers(
     venue: str,
     symbol: str,
     max_points: int,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     if not decisions:
         return []
@@ -1322,6 +1555,8 @@ def _build_decision_trade_markers(
         closed_trades_df,
         venue=venue,
         symbol=symbol,
+        start_ts=start_ts,
+        end_ts=end_ts,
     )
     matches = _match_decisions_to_closed_trades(decisions, closed_candidates)
     markers: List[Dict[str, Any]] = []
@@ -1415,6 +1650,8 @@ def load_trade_markers(
     symbol: Optional[str] = None,
     venue: str = "kucoin",
     _decision_rows: Optional[Iterable[Dict[str, Any]]] = None,
+    start_ts: Optional[int] = None,
+    end_ts: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Render closed-trade markers on the price chart with a single entry arrow
@@ -1495,6 +1732,8 @@ def load_trade_markers(
                 venue=venue_eff,
                 symbol=symbol_eff,
                 limit=int(max(500, max_points)),
+                start_ts=start_ts,
+                end_ts=end_ts,
             )
             if should_load_decisions
             else []
@@ -1548,6 +1787,8 @@ def load_trade_markers(
         venue=venue_eff,
         symbol=symbol_eff,
         max_points=max_points,
+        start_ts=start_ts,
+        end_ts=end_ts,
     )
     if decision_markers:
         markers.extend(decision_markers)

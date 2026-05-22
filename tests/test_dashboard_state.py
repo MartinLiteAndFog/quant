@@ -69,6 +69,7 @@ class DashboardStateTests(unittest.TestCase):
         ds._LAST_FILLS_REFRESH_TS = None
         ds._LAST_FILLS_REFRESH_ERROR = None
         ds._CLOSED_TRADES_CACHE.clear()
+        ds._TRADE_MARKER_DECISION_ROWS_CACHE.clear()
 
         # Seed renko parquet
         renko = pd.DataFrame(
@@ -128,6 +129,8 @@ class DashboardStateTests(unittest.TestCase):
         os.environ.pop("DASHBOARD_EXPECTED_TRADES_JSONL", None)
         os.environ.pop("DASHBOARD_FILLS_REFRESH_COOLDOWN_SEC", None)
         os.environ.pop("DASHBOARD_FILLS_AUTO_REFRESH_ON_READ", None)
+        os.environ.pop("DASHBOARD_TRADE_MARKER_DECISIONS_CACHE_SEC", None)
+        os.environ.pop("DASHBOARD_TRADE_MARKER_LOOKBACK_HOURS", None)
         self.tmp.cleanup()
 
     def test_load_renko_bars(self) -> None:
@@ -362,6 +365,64 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(marker["shape"], "arrowDown")
         self.assertEqual(marker["text"], "")
         self.assertEqual(marker.get("trade_id"), None)
+
+    def test_load_trade_markers_passes_visible_window_to_decision_loader(self) -> None:
+        start_ts = int(pd.Timestamp("2026-05-20T00:00:00Z").timestamp())
+        end_ts = int(pd.Timestamp("2026-05-20T12:00:00Z").timestamp())
+
+        with patch.object(ds, "_load_decision_rows_for_trade_markers", return_value=[]) as load_decisions:
+            markers = ds.load_trade_markers(
+                max_points=100,
+                symbol="SOL-USDT",
+                venue="kucoin",
+                _trades_df=pd.DataFrame(),
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
+
+        self.assertEqual(markers, [])
+        load_decisions.assert_called_once()
+        kwargs = load_decisions.call_args.kwargs
+        self.assertEqual(kwargs.get("start_ts"), start_ts)
+        self.assertEqual(kwargs.get("end_ts"), end_ts)
+
+    def test_decision_marker_rows_are_cached_by_visible_window(self) -> None:
+        if hasattr(ds, "_TRADE_MARKER_DECISION_ROWS_CACHE"):
+            ds._TRADE_MARKER_DECISION_ROWS_CACHE.clear()
+        os.environ["DASHBOARD_TRADE_MARKER_DECISIONS_CACHE_SEC"] = "60"
+        start_ts = int(pd.Timestamp("2026-05-20T00:00:00Z").timestamp())
+        end_ts = int(pd.Timestamp("2026-05-20T12:00:00Z").timestamp())
+        decision_row = {
+            "decision_id": "cached-decision",
+            "ts": "2026-05-20T01:00:00Z",
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+            "decision_kind": "entry",
+            "direction": "long",
+            "source_action_event_id": "cached-action",
+            "seq": 1,
+            "payload_json": {},
+        }
+
+        with patch.object(ds, "_query_recent_trade_decisions_for_markers", return_value=[decision_row]) as query:
+            first = ds._load_decision_rows_for_trade_markers(
+                venue="kucoin",
+                symbol="SOL-USDT",
+                limit=100,
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
+            second = ds._load_decision_rows_for_trade_markers(
+                venue="kucoin",
+                symbol="SOL-USDT",
+                limit=100,
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
+
+        self.assertEqual(first, [decision_row])
+        self.assertEqual(second, [decision_row])
+        query.assert_called_once()
 
     def test_load_trade_markers_skips_bad_fallback_entry_but_keeps_sl_exit(self) -> None:
         exit_ts = pd.Timestamp("2026-05-20T10:20:00Z")

@@ -1045,8 +1045,22 @@ def api_dashboard_chart(
     if cached is not None:
         return cached
     chart_t0 = time.perf_counter()
+    chart_timings: dict[str, float] = {}
+    last_timing = chart_t0
+
+    def _mark_timing(name: str) -> None:
+        nonlocal last_timing
+        now = time.perf_counter()
+        chart_timings[name] = round(now - last_timing, 4)
+        last_timing = now
+
     try:
         renko_df = _read_renko_df()
+        _mark_timing("read_renko")
+        bars = load_renko_bars(max_points=int(max(100, max_points)), _df=renko_df)
+        _mark_timing("build_bars")
+        oldest_bar_ts = int(bars[0]["time"]) if bars else None
+        newest_bar_ts = int(bars[-1]["time"]) if bars else None
         trades_df = load_closed_trades_from_postgres(
             venue="kucoin",
             symbol=symbol,
@@ -1054,6 +1068,7 @@ def api_dashboard_chart(
             strategy_whitelist=["live_executor"],
             exclude_exit_events=["fills_reconstructed"],
         )
+        _mark_timing("load_closed_trades")
         allow_file_fallback = str(os.getenv("DASHBOARD_TRADE_ALLOW_FILE_FALLBACK", "0")).strip().lower() in (
             "1",
             "true",
@@ -1072,15 +1087,15 @@ def api_dashboard_chart(
                     trades_df = trades_df[trades_df["strategy"].astype(str) == "live_executor"]
                 if "exit_event" in trades_df.columns:
                     trades_df = trades_df[trades_df["exit_event"].astype(str).str.lower() != "fills_reconstructed"]
-        bars = load_renko_bars(max_points=int(max(100, max_points)), _df=renko_df)
         markers = load_trade_markers(
             max_points=int(max(1000, max_points * 50)),
             _trades_df=trades_df,
             symbol=symbol,
             venue="kucoin",
+            start_ts=oldest_bar_ts,
+            end_ts=newest_bar_ts,
         )
-        oldest_bar_ts = int(bars[0]["time"]) if bars else None
-        newest_bar_ts = int(bars[-1]["time"]) if bars else None
+        _mark_timing("load_markers")
         # Render closed-trade markers when the trade overlaps the visible bar
         # window, then map the surviving markers onto an existing series time
         # because lightweight-charts only renders markers at bar timestamps.
@@ -1385,6 +1400,7 @@ def api_dashboard_chart(
             "diary_source": diary.get("source"),
             "equity_count": len(equity.get("trades", [])),
             "equity_component_count": len(equity_components),
+            "timings": chart_timings,
         }
 
         result = {
@@ -1429,11 +1445,12 @@ def api_dashboard_chart(
             "ts": _now_utc_iso(),
         }
         log.debug(
-            "dashboard chart built in %.3fs symbol=%s hours=%s max_points=%s",
+            "dashboard chart built in %.3fs symbol=%s hours=%s max_points=%s timings=%s",
             time.perf_counter() - chart_t0,
             symbol,
             hours,
             max_points,
+            chart_timings,
         )
         _cache_put(_CHART_CACHE, cache_key, result)
         return result
