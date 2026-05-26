@@ -436,9 +436,12 @@ async def _lifespan(a: FastAPI):
     t = threading.Thread(target=_state_space_refresh_loop, daemon=True, name="ss-refresh")
     t.start()
     log.info("state space refresh thread started (interval=%ss)", os.getenv("DASHBOARD_SS_REFRESH_SEC", "300"))
-    tc = threading.Thread(target=_chart_precompute_loop, daemon=True, name="chart-precompute")
-    tc.start()
-    log.info("chart precompute thread started (interval=%ss)", os.getenv("DASHBOARD_CHART_PRECOMPUTE_SEC", "12"))
+    if _truthy(os.getenv("DASHBOARD_CHART_PRECOMPUTE_ENABLED", "0")):
+        tc = threading.Thread(target=_chart_precompute_loop, daemon=True, name="chart-precompute")
+        tc.start()
+        log.info("chart precompute thread started (interval=%ss)", os.getenv("DASHBOARD_CHART_PRECOMPUTE_SEC", "12"))
+    else:
+        log.info("chart precompute disabled (set DASHBOARD_CHART_PRECOMPUTE_ENABLED=1 to enable)")
     _start_renko_cache_updater_if_enabled()
     from quant.execution.tv_signal_executor import start_tv_executor
     start_tv_executor()
@@ -580,6 +583,39 @@ def _cache_ttl_sec(env_key: Optional[str] = None, default: float = 8.0) -> float
     return float(default)
 
 
+def _int_env(env_key: str, default_value: int, *, min_value: int = 1) -> int:
+    raw = os.getenv(env_key)
+    if raw:
+        try:
+            return max(int(min_value), int(raw))
+        except Exception:
+            pass
+    return max(int(min_value), int(default_value))
+
+
+def _cap_payload_items(
+    items: Any,
+    *,
+    env_key: str,
+    default_limit: int,
+    label: str,
+) -> list[Any]:
+    if not isinstance(items, list):
+        return []
+    limit = _int_env(env_key, default_limit)
+    if len(items) <= limit:
+        return items
+    capped = items[-limit:]
+    log.warning(
+        "dashboard payload capped label=%s original=%d cap=%d returned=%d",
+        label,
+        len(items),
+        limit,
+        len(capped),
+    )
+    return capped
+
+
 def _cache_get(
     cache: Dict[str, Dict[str, Any]],
     key: str,
@@ -600,6 +636,15 @@ def _cache_get(
 
 def _cache_put(cache: Dict[str, Dict[str, Any]], key: str, value: Dict[str, Any]) -> None:
     cache[key] = {"_ts": time.time(), "value": value}
+    max_keys = (
+        _int_env("DASHBOARD_CHART_CACHE_MAX_KEYS", 4)
+        if cache is _CHART_CACHE
+        else _int_env("DASHBOARD_API_CACHE_MAX_KEYS", 64)
+    )
+    if len(cache) > max_keys:
+        stale_first = sorted(cache.items(), key=lambda item: float(item[1].get("_ts", 0.0) or 0.0))
+        for stale_key, _ in stale_first[: max(0, len(cache) - max_keys)]:
+            cache.pop(stale_key, None)
 
 
 def _read_live_gate_from_redis() -> Optional[Dict[str, Any]]:
@@ -1047,6 +1092,8 @@ def api_dashboard_chart(
     chart_t0 = time.perf_counter()
     chart_timings: dict[str, float] = {}
     last_timing = chart_t0
+    marker_cap = _int_env("DASHBOARD_MAX_MARKERS", 1000)
+    marker_source_limit = _int_env("DASHBOARD_MARKER_SOURCE_ROW_LIMIT", 5000)
 
     def _mark_timing(name: str) -> None:
         nonlocal last_timing
@@ -1088,7 +1135,7 @@ def api_dashboard_chart(
                 if "exit_event" in trades_df.columns:
                     trades_df = trades_df[trades_df["exit_event"].astype(str).str.lower() != "fills_reconstructed"]
         markers = load_trade_markers(
-            max_points=int(max(1000, max_points * 50)),
+            max_points=int(max(marker_cap, min(int(max(100, max_points)), marker_source_limit))),
             _trades_df=trades_df,
             symbol=symbol,
             venue="kucoin",
@@ -1150,7 +1197,40 @@ def api_dashboard_chart(
                 else:
                     anchored.pop("time_anchor", None)
                 anchored_markers.append(anchored)
-            markers = anchored_markers
+            collapsed_markers: list[dict[str, Any]] = []
+            decision_bar_index: dict[tuple[Any, ...], int] = {}
+            for anchored in anchored_markers:
+                is_unmatched_decision_entry = (
+                    anchored.get("decision_id") is not None
+                    and anchored.get("trade_id") is None
+                    and anchored.get("marker_kind") != "sl_exit"
+                    and str(anchored.get("shape") or "").startswith("arrow")
+                    and not str(anchored.get("text") or "")
+                )
+                if not is_unmatched_decision_entry:
+                    collapsed_markers.append(anchored)
+                    continue
+                key = (
+                    int(anchored.get("time", 0)),
+                    str(anchored.get("shape") or ""),
+                    str(anchored.get("position") or ""),
+                    str(anchored.get("decision_kind") or ""),
+                )
+                prev_idx = decision_bar_index.get(key)
+                if prev_idx is None:
+                    decision_bar_index[key] = len(collapsed_markers)
+                    collapsed_markers.append(anchored)
+                    continue
+                prev = collapsed_markers[prev_idx]
+                try:
+                    prev_original = int(prev.get("original_time", prev.get("time", 0)))
+                    next_original = int(anchored.get("original_time", anchored.get("time", 0)))
+                except (TypeError, ValueError):
+                    next_original = 0
+                    prev_original = 0
+                if next_original >= prev_original:
+                    collapsed_markers[prev_idx] = anchored
+            markers = collapsed_markers
         markers_in_bar_window = len(markers)
         # Fill markers (ladder/scaling) excluded from chart — only show logical entry/exit
         markers_live: list[dict[str, Any]] = []
@@ -1274,8 +1354,14 @@ def api_dashboard_chart(
                 markers_all.append(live_entry_marker)
 
         markers = sorted(markers_all, key=lambda x: int(x.get("time", 0)))
-        if len(markers) > int(max(100, max_points)):
-            markers = markers[-int(max(100, max_points)):]
+        if len(markers) > marker_cap:
+            log.warning(
+                "dashboard chart markers capped original=%d cap=%d bars=%d",
+                len(markers),
+                marker_cap,
+                len(bars),
+            )
+            markers = markers[-marker_cap:]
 
         fibo = build_fibo_levels(max_points=int(max(100, max_points)), _df=renko_df)
         renko_health = load_renko_health(_df=renko_df)
@@ -1286,9 +1372,15 @@ def api_dashboard_chart(
             symbol=symbol,
             start_ts=regime_start.isoformat(),
             end_ts=regime_end.isoformat(),
-            limit=20000,
+            limit=_int_env("DASHBOARD_REGIME_ROW_LIMIT", 5000),
         )
         regime = build_regime_overlay(symbol=symbol, hours=int(max(1, hours)), _rows=regime_rows)
+        regime["points"] = _cap_payload_items(
+            regime.get("points", []),
+            env_key="DASHBOARD_MAX_REGIME_POINTS",
+            default_limit=1000,
+            label="regime.points",
+        )
         latest = regime.get("latest") or {}
         day_gate = get_live_gate_state()
         day_regime_state = _daily_regime_label(day_gate)
@@ -1303,6 +1395,12 @@ def api_dashboard_chart(
         confidence_out = live_conf if live_conf is not None else latest.get("confidence")
 
         regime_score_data = build_regime_scores(symbol=symbol, hours=int(max(1, hours)), _rows=regime_rows)
+        regime_scores = _cap_payload_items(
+            regime_score_data.get("scores", []),
+            env_key="DASHBOARD_MAX_REGIME_SCORES",
+            default_limit=5000,
+            label="regime_scores",
+        )
         diary = build_trading_diary(
             max_points=int(max(100, max_points)),
             symbol=symbol,
@@ -1399,9 +1497,24 @@ def api_dashboard_chart(
             "diary_count": len(diary.get("entries", [])),
             "diary_source": diary.get("source"),
             "equity_count": len(equity.get("trades", [])),
+            "equity_real_count": len(equity_real.get("points", [])),
+            "regime_points_count": len(regime.get("points", [])),
+            "regime_scores_count": len(regime_scores),
             "equity_component_count": len(equity_components),
             "timings": chart_timings,
         }
+        log_throttled(
+            log,
+            logging.INFO,
+            f"dashboard_chart_payload:{_normalize_symbol(symbol)}:{hours}:{max_points}",
+            float(os.getenv("DASHBOARD_LOG_THROTTLE_SEC", "60")),
+            "dashboard chart payload counts bars=%d markers=%d equity_points=%d regime_points=%d regime_scores=%d",
+            len(bars),
+            len(markers),
+            len(equity.get("trades", [])),
+            len(regime.get("points", [])),
+            len(regime_scores),
+        )
 
         result = {
             "ok": True,
@@ -1420,7 +1533,7 @@ def api_dashboard_chart(
             "segments": [],
             "fibo": fibo,
             "renko_health": renko_health,
-            "regime_scores": regime_score_data.get("scores", []),
+            "regime_scores": regime_scores,
             "regime_forecast": regime_forecast,
             "equity_curve": equity.get("trades", []),
             "equity_source": equity.get("source"),

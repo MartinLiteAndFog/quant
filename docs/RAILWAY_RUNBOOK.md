@@ -100,6 +100,14 @@ With `KRAKEN_TRADE_TRACKING_ENABLED` unset, the decision loops still run; only
 the equity / `action_events` / `execution_events` / metrics writes are
 skipped. This is the supported "Kraken shadow / observe-only" mode.
 
+Memory note:
+The main dashboard service does not load Kraken dashboard state. If Railway
+reports OOM on a separate Kraken service while Kraken trading is not intended
+to run, disable that Railway service or change its start command away from
+`quant.execution.live_executor_2` / `quant.execution.kraken_bot`. Leaving
+`KRAKEN_TRADE_TRACKING_ENABLED=0` stops persistence side effects but does not
+stop the Kraken decision loop itself.
+
 ---
 
 ## 3. Current truth model

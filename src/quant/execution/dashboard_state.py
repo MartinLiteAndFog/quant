@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import time
 from pathlib import Path
@@ -35,6 +36,7 @@ _CLOSED_TRADES_CACHE: Dict[str, Dict[str, Any]] = {}
 _TRADE_MARKER_DECISION_ROWS_CACHE: Dict[str, Dict[str, Any]] = {}
 _REGIME_HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
 _EQUITY_HISTORY_CACHE: Dict[str, Dict[str, Any]] = {}
+log = logging.getLogger("quant.dashboard_state")
 
 
 def _cache_ttl_env(env_key: str, default_sec: float) -> float:
@@ -45,6 +47,60 @@ def _cache_ttl_env(env_key: str, default_sec: float) -> float:
         except Exception:
             pass
     return float(default_sec)
+
+
+def _int_env(env_key: str, default_value: int, *, min_value: int = 1) -> int:
+    raw = os.getenv(env_key)
+    if raw:
+        try:
+            return max(int(min_value), int(raw))
+        except Exception:
+            pass
+    return max(int(min_value), int(default_value))
+
+
+def _dashboard_max_markers() -> int:
+    return _int_env("DASHBOARD_MAX_MARKERS", 1000)
+
+
+def _marker_source_row_limit() -> int:
+    return _int_env("DASHBOARD_MARKER_SOURCE_ROW_LIMIT", 5000)
+
+
+def _closed_trades_query_limit(max_points: int) -> int:
+    return min(int(max(1, max_points)), _int_env("DASHBOARD_CLOSED_TRADES_MAX_POINTS", 10000))
+
+
+def _prune_ttl_cache(cache: Dict[str, Dict[str, Any]], *, max_keys: int) -> None:
+    if len(cache) <= max(1, int(max_keys)):
+        return
+    stale_first = sorted(
+        cache.items(),
+        key=lambda item: float(item[1].get("ts", item[1].get("_ts", 0.0)) or 0.0),
+    )
+    for key, _ in stale_first[: max(0, len(cache) - max(1, int(max_keys)))]:
+        cache.pop(key, None)
+
+
+def _cap_recent_markers(markers: List[Dict[str, Any]], *, context: str) -> List[Dict[str, Any]]:
+    cap = _dashboard_max_markers()
+    if len(markers) <= cap:
+        return markers
+
+    def _marker_sort_key(marker: Dict[str, Any]) -> Tuple[int, int]:
+        ts = _epoch_seconds_from_any(marker.get("original_time", marker.get("time")))
+        return (int(ts or 0), int(_epoch_seconds_from_any(marker.get("time")) or 0))
+
+    capped = sorted(markers, key=_marker_sort_key)[-cap:]
+    capped = sorted(capped, key=_marker_sort_key)
+    log.warning(
+        "dashboard markers capped context=%s original=%d cap=%d returned=%d",
+        context,
+        len(markers),
+        cap,
+        len(capped),
+    )
+    return capped
 
 
 def _to_ts_iso(ts_like: Any) -> Optional[str]:
@@ -665,13 +721,14 @@ def load_closed_trades_from_postgres(
     strategy_whitelist: Optional[List[str]] = None,
     exclude_exit_events: Optional[List[str]] = None,
 ) -> pd.DataFrame:
+    query_limit = _closed_trades_query_limit(max_points)
     # Short-lived in-process cache to absorb back-to-back identical reads
     # (e.g. chart endpoint + diary + performance all fanning out).
     ttl = _cache_ttl_env("DASHBOARD_CLOSED_TRADES_CACHE_SEC", 4.0)
     if ttl > 0:
         sw = ",".join(sorted(strategy_whitelist)) if strategy_whitelist else ""
         ee = ",".join(sorted(exclude_exit_events)) if exclude_exit_events else ""
-        cache_key = f"{venue or ''}|{symbol or ''}|{int(max_points)}|{sw}|{ee}"
+        cache_key = f"{venue or ''}|{symbol or ''}|{int(query_limit)}|{sw}|{ee}"
         entry = _CLOSED_TRADES_CACHE.get(cache_key)
         now = time.time()
         if entry is not None and (now - float(entry.get("ts", 0.0))) <= ttl:
@@ -692,7 +749,7 @@ def load_closed_trades_from_postgres(
                 order by exit_ts desc
                 limit %(limit)s
             """
-            params = {"limit": int(max(1, max_points))}
+            params = {"limit": query_limit}
         elif venue is None:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
@@ -703,7 +760,7 @@ def load_closed_trades_from_postgres(
                 order by exit_ts desc
                 limit %(limit)s
             """
-            params = {"symbol_norm": symbol_norm, "limit": int(max(1, max_points))}
+            params = {"symbol_norm": symbol_norm, "limit": query_limit}
         elif symbol is None:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
@@ -714,7 +771,7 @@ def load_closed_trades_from_postgres(
                 order by exit_ts desc
                 limit %(limit)s
             """
-            params = {"venue": venue, "limit": int(max(1, max_points))}
+            params = {"venue": venue, "limit": query_limit}
         else:
             sql = """
                 select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
@@ -729,7 +786,7 @@ def load_closed_trades_from_postgres(
             params = {
                 "venue": venue,
                 "symbol_norm": symbol_norm,
-                "limit": int(max(1, max_points)),
+                "limit": query_limit,
             }
 
         with get_conn() as conn, conn.cursor() as cur:
@@ -762,6 +819,10 @@ def load_closed_trades_from_postgres(
 
         if cache_key is not None:
             _CLOSED_TRADES_CACHE[cache_key] = {"ts": time.time(), "df": out}
+            _prune_ttl_cache(
+                _CLOSED_TRADES_CACHE,
+                max_keys=_int_env("DASHBOARD_CLOSED_TRADES_CACHE_MAX_KEYS", 16),
+            )
         return out.copy() if not out.empty else out
     except Exception:
         return pd.DataFrame()
@@ -1103,6 +1164,8 @@ def _normalize_decision_marker_rows(
         if not isinstance(row, dict):
             continue
         payload = _payload_dict_from_any(row.get("payload_json"))
+        if _decision_marker_row_is_failed(row, payload):
+            continue
         decision_venue = str(row.get("venue") or "").strip().lower()
         if decision_venue and venue_norm and decision_venue != venue_norm:
             continue
@@ -1151,7 +1214,12 @@ def _decision_marker_query_window(
     start_epoch = _epoch_seconds_from_any(start_ts)
     end_epoch = _epoch_seconds_from_any(end_ts)
     if start_epoch is None and end_epoch is None:
-        return None, None
+        default_lookback_hours = _cache_ttl_env(
+            "DASHBOARD_TRADE_MARKER_DEFAULT_LOOKBACK_HOURS",
+            24.0 * 14.0,
+        )
+        end_epoch = int(pd.Timestamp.now("UTC").timestamp())
+        start_epoch = max(0, int(end_epoch) - int(max(1.0, default_lookback_hours) * 3600))
 
     since_iso: Optional[str] = None
     if start_epoch is not None:
@@ -1193,6 +1261,50 @@ def _decision_marker_cache_key(
 
 def _copy_decision_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [dict(r) for r in rows]
+
+
+_FAILED_DECISION_MARKER_TOKENS = (
+    "insufficient_funds",
+    "insufficient funds",
+    "not_enough",
+    "not enough",
+    "rejected",
+    "error",
+    "failed",
+    "order_failed",
+    "no_balance",
+    "no balance",
+)
+
+
+def _decision_marker_row_is_failed(row: Dict[str, Any], payload: Dict[str, Any]) -> bool:
+    if _truthy_bool(row.get("blocked")) or _truthy_bool(payload.get("blocked")):
+        return True
+
+    values: List[str] = []
+    for key in (
+        "reason_code",
+        "status",
+        "error",
+        "error_code",
+        "error_message",
+        "failure_reason",
+        "order_status",
+    ):
+        raw = row.get(key)
+        if raw is not None:
+            values.append(str(raw))
+        raw_payload = payload.get(key)
+        if raw_payload is not None:
+            values.append(str(raw_payload))
+    if payload:
+        for key, raw_payload in payload.items():
+            key_s = str(key).lower()
+            if any(token in key_s for token in ("error", "failed", "rejected", "insufficient", "balance")):
+                values.append(str(raw_payload))
+
+    haystack = " ".join(v.lower() for v in values if v)
+    return any(token in haystack for token in _FAILED_DECISION_MARKER_TOKENS)
 
 
 def _query_recent_trade_decisions_for_markers(
@@ -1296,7 +1408,7 @@ def _query_action_events_for_marker_decisions(
                reason_code, blocked, payload_json
         from action_events
         where {where}
-        order by ts asc, seq asc nulls last
+        order by ts desc, seq desc nulls last
         limit %(limit)s
     """.format(where=" and ".join(where))
     try:
@@ -1323,7 +1435,7 @@ def _query_action_events_for_marker_decisions(
         "payload_json",
     ]
     out: List[Dict[str, Any]] = []
-    for row in rows:
+    for row in reversed(rows):
         record = dict(zip(columns, row))
         record["payload_json"] = _payload_dict_from_any(record.get("payload_json"))
         ts_val = record.get("ts")
@@ -1341,7 +1453,7 @@ def _load_decision_rows_for_trade_markers(
     start_ts: Optional[int] = None,
     end_ts: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    limit_i = int(max(1, limit))
+    limit_i = min(int(max(1, limit)), _marker_source_row_limit())
     cache_key = _decision_marker_cache_key(
         venue=venue,
         symbol=symbol,
@@ -1370,6 +1482,10 @@ def _load_decision_rows_for_trade_markers(
                 "ts": time.time(),
                 "rows": _copy_decision_rows(rows),
             }
+            _prune_ttl_cache(
+                _TRADE_MARKER_DECISION_ROWS_CACHE,
+                max_keys=_int_env("DASHBOARD_TRADE_MARKER_DECISIONS_CACHE_MAX_KEYS", 32),
+            )
         return rows
 
     try:
@@ -1390,6 +1506,10 @@ def _load_decision_rows_for_trade_markers(
             "ts": time.time(),
             "rows": _copy_decision_rows(rows),
         }
+        _prune_ttl_cache(
+            _TRADE_MARKER_DECISION_ROWS_CACHE,
+            max_keys=_int_env("DASHBOARD_TRADE_MARKER_DECISIONS_CACHE_MAX_KEYS", 32),
+        )
     return rows
 
 
@@ -1551,6 +1671,8 @@ def _build_decision_trade_markers(
 ) -> List[Dict[str, Any]]:
     if not decisions:
         return []
+    point_limit = int(max(1, max_points))
+    decisions_for_markers = decisions[-point_limit:]
     closed_candidates = _prepare_closed_trade_marker_candidates(
         closed_trades_df,
         venue=venue,
@@ -1558,10 +1680,9 @@ def _build_decision_trade_markers(
         start_ts=start_ts,
         end_ts=end_ts,
     )
-    matches = _match_decisions_to_closed_trades(decisions, closed_candidates)
+    matches = _match_decisions_to_closed_trades(decisions_for_markers, closed_candidates)
     markers: List[Dict[str, Any]] = []
-    start = max(0, len(decisions) - int(max(1, max_points)))
-    for decision, match in zip(decisions[start:], matches[start:]):
+    for decision, match in zip(decisions_for_markers, matches):
         is_long = str(decision["direction"]) == "long"
         entry_ts_val = int(decision["ts_epoch"])
         marker_meta: Dict[str, Any] = {
@@ -1569,6 +1690,9 @@ def _build_decision_trade_markers(
             "decision_id": str(decision.get("decision_id") or ""),
             "decision_kind": str(decision.get("decision_kind") or ""),
         }
+        source_action_id = _nonnull_str(decision.get("source_action_event_id"))
+        if source_action_id:
+            marker_meta["source_action_event_id"] = source_action_id
         pnl_value: Optional[float] = None
         if match is not None:
             row = match["row"]
@@ -1602,7 +1726,7 @@ def _build_decision_trade_markers(
                     **marker_meta,
                 }
             )
-    return markers
+    return _cap_recent_markers(markers, context="load_trade_markers")
 
 
 def _build_stop_loss_exit_markers(closed_trades_df: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -1797,8 +1921,15 @@ def load_trade_markers(
             for m in decision_markers
             if str(m.get("shape") or "").startswith("arrow")
         )
+    decision_trade_ids = {
+        str(m.get("trade_id"))
+        for m in decision_markers
+        if m.get("trade_id") is not None
+        and str(m.get("trade_id")).strip()
+        and m.get("marker_kind") != "sl_exit"
+    }
 
-    if not decision_markers and not df.empty:
+    if not df.empty:
         cols = set(df.columns)
         entry_px_col = next(
             (c for c in ("entry_px", "entry_price", "price_entry", "entry") if c in cols),
@@ -1901,12 +2032,19 @@ def load_trade_markers(
             marker_meta: Dict[str, Any] = {}
             marker_meta["original_time"] = entry_ts_val
             trade_id = trade_id_values[i] if i < len(trade_id_values) else None
+            trade_id_s: Optional[str] = None
             try:
                 if trade_id is not None and not pd.isna(trade_id):
-                    marker_meta["trade_id"] = str(trade_id)
+                    trade_id_s = str(trade_id)
+                    marker_meta["trade_id"] = trade_id_s
             except Exception:
                 if trade_id is not None:
-                    marker_meta["trade_id"] = str(trade_id)
+                    trade_id_s = str(trade_id)
+                    marker_meta["trade_id"] = trade_id_s
+            if trade_id_s is not None and trade_id_s in decision_trade_ids:
+                continue
+            if trade_id_s is None and entry_ts_val in entry_seen_ts:
+                continue
             exit_ts_val: Optional[int] = None
             if exit_ts_values is not None and i < len(exit_ts_values):
                 exit_ts_val = exit_ts_values[i]
@@ -1961,7 +2099,7 @@ def load_trade_markers(
             }
         )
 
-    return markers
+    return _cap_recent_markers(markers, context="load_trade_markers")
 
 
 def _refresh_fills_cache_if_needed(symbol: str, fills_path: Path) -> None:

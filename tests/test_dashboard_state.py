@@ -131,6 +131,9 @@ class DashboardStateTests(unittest.TestCase):
         os.environ.pop("DASHBOARD_FILLS_AUTO_REFRESH_ON_READ", None)
         os.environ.pop("DASHBOARD_TRADE_MARKER_DECISIONS_CACHE_SEC", None)
         os.environ.pop("DASHBOARD_TRADE_MARKER_LOOKBACK_HOURS", None)
+        os.environ.pop("DASHBOARD_MAX_MARKERS", None)
+        os.environ.pop("DASHBOARD_MARKER_SOURCE_ROW_LIMIT", None)
+        os.environ.pop("DASHBOARD_TRADE_MARKER_DEFAULT_LOOKBACK_HOURS", None)
         self.tmp.cleanup()
 
     def test_load_renko_bars(self) -> None:
@@ -366,6 +369,98 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(marker["text"], "")
         self.assertEqual(marker.get("trade_id"), None)
 
+    def test_load_trade_markers_filters_failed_retry_decisions(self) -> None:
+        failed_ts = pd.Timestamp("2026-05-20T09:00:00Z")
+        valid_ts = pd.Timestamp("2026-05-20T09:05:00Z")
+        decisions = [
+            {
+                "decision_id": "failed-decision",
+                "ts": failed_ts.isoformat(),
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "long",
+                "source_action_event_id": "failed-action",
+                "seq": 11,
+                "reason_code": "insufficient_funds",
+                "payload_json": {"status": "order_failed", "error": "not enough balance"},
+            },
+            {
+                "decision_id": "valid-open-decision",
+                "ts": valid_ts.isoformat(),
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "long",
+                "source_action_event_id": "valid-action",
+                "seq": 12,
+                "payload_json": {},
+            },
+        ]
+
+        markers = ds.load_trade_markers(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            _trades_df=pd.DataFrame(),
+            _decision_rows=decisions,
+        )
+
+        self.assertEqual(len(markers), 1)
+        marker = markers[0]
+        self.assertEqual(marker.get("decision_id"), "valid-open-decision")
+        self.assertEqual(int(marker["time"]), int(valid_ts.timestamp()))
+        self.assertEqual(marker["shape"], "arrowUp")
+        self.assertEqual(marker["text"], "")
+
+    def test_load_trade_markers_keeps_closed_trade_fallback_with_decisions(self) -> None:
+        closed_entry = pd.Timestamp("2026-05-20T08:00:00Z")
+        closed_exit = pd.Timestamp("2026-05-20T08:30:00Z")
+        decision_ts = pd.Timestamp("2026-05-20T09:00:00Z")
+        df = pd.DataFrame(
+            {
+                "trade_id": ["historical-closed-trade"],
+                "venue": ["kucoin"],
+                "symbol": ["SOL-USDT"],
+                "entry_ts": [closed_entry],
+                "exit_ts": [closed_exit],
+                "side": ["short"],
+                "entry_price": [100.0],
+                "exit_price": [98.0],
+                "pnl_pct": [2.0],
+                "exit_event": ["tp_exit"],
+            }
+        )
+        decisions = [
+            {
+                "decision_id": "unmatched-open-decision",
+                "ts": decision_ts.isoformat(),
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "long",
+                "source_action_event_id": "open-action",
+                "seq": 1,
+                "payload_json": {},
+            }
+        ]
+
+        markers = ds.load_trade_markers(
+            max_points=100,
+            symbol="SOL-USDT",
+            venue="kucoin",
+            _trades_df=df,
+            _decision_rows=decisions,
+        )
+
+        closed_markers = [m for m in markers if m.get("trade_id") == "historical-closed-trade"]
+        open_markers = [m for m in markers if m.get("decision_id") == "unmatched-open-decision"]
+        self.assertEqual(len(closed_markers), 2)
+        self.assertEqual([m.get("text") for m in closed_markers], ["", "+2.00%"])
+        self.assertEqual({int(m["time"]) for m in closed_markers}, {int(closed_entry.timestamp())})
+        self.assertEqual(len(open_markers), 1)
+        self.assertEqual(open_markers[0].get("trade_id"), None)
+
     def test_load_trade_markers_passes_visible_window_to_decision_loader(self) -> None:
         start_ts = int(pd.Timestamp("2026-05-20T00:00:00Z").timestamp())
         end_ts = int(pd.Timestamp("2026-05-20T12:00:00Z").timestamp())
@@ -423,6 +518,58 @@ class DashboardStateTests(unittest.TestCase):
         self.assertEqual(first, [decision_row])
         self.assertEqual(second, [decision_row])
         query.assert_called_once()
+
+    def test_decision_marker_rows_are_loaded_with_source_cap(self) -> None:
+        os.environ["DASHBOARD_MARKER_SOURCE_ROW_LIMIT"] = "7"
+        os.environ["DASHBOARD_TRADE_MARKER_DECISIONS_CACHE_SEC"] = "0"
+
+        with patch.object(ds, "_query_recent_trade_decisions_for_markers", return_value=[]) as query, \
+             patch.object(ds, "_query_action_events_for_marker_decisions", return_value=[]):
+            rows = ds._load_decision_rows_for_trade_markers(
+                venue="kucoin",
+                symbol="SOL-USDT",
+                limit=5000,
+                start_ts=int(pd.Timestamp("2026-05-20T00:00:00Z").timestamp()),
+                end_ts=int(pd.Timestamp("2026-05-20T12:00:00Z").timestamp()),
+            )
+
+        self.assertEqual(rows, [])
+        self.assertEqual(query.call_args.kwargs.get("limit"), 7)
+
+    def test_decision_marker_query_window_defaults_to_bounded_lookback(self) -> None:
+        os.environ["DASHBOARD_TRADE_MARKER_DEFAULT_LOOKBACK_HOURS"] = "24"
+
+        since_iso, until_iso = ds._decision_marker_query_window(None, None)
+
+        self.assertIsNotNone(since_iso)
+        self.assertIsNotNone(until_iso)
+        self.assertLess(pd.Timestamp(since_iso), pd.Timestamp(until_iso))
+
+    def test_load_trade_markers_caps_returned_markers_to_recent_entries(self) -> None:
+        os.environ["DASHBOARD_MAX_MARKERS"] = "4"
+        entries = pd.date_range("2026-05-20T00:00:00Z", periods=5, freq="h")
+        df = pd.DataFrame(
+            {
+                "trade_id": [f"trade-{i}" for i in range(5)],
+                "venue": ["kucoin"] * 5,
+                "symbol": ["SOL-USDT"] * 5,
+                "entry_ts": entries,
+                "exit_ts": entries + pd.Timedelta(minutes=10),
+                "side": ["long"] * 5,
+                "entry_price": [100.0] * 5,
+                "exit_price": [101.0] * 5,
+                "pnl_pct": [1.0] * 5,
+                "exit_event": ["tp_exit"] * 5,
+            }
+        )
+
+        markers = ds.load_trade_markers(max_points=100, _trades_df=df, _decision_rows=[])
+
+        self.assertEqual(len(markers), 4)
+        self.assertEqual(
+            {m.get("trade_id") for m in markers},
+            {"trade-3", "trade-4"},
+        )
 
     def test_load_trade_markers_skips_bad_fallback_entry_but_keeps_sl_exit(self) -> None:
         exit_ts = pd.Timestamp("2026-05-20T10:20:00Z")

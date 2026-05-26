@@ -147,6 +147,9 @@ class WebhookDashboardApiTests(unittest.TestCase):
         ws._POSITION_CACHE.clear()
         ws._CHART_CACHE.clear()
         os.environ.pop("DASHBOARD_API_CACHE_SEC", None)
+        os.environ.pop("DASHBOARD_MAX_MARKERS", None)
+        os.environ.pop("DASHBOARD_MAX_REGIME_POINTS", None)
+        os.environ.pop("DASHBOARD_MAX_REGIME_SCORES", None)
         os.environ.pop("KUCOIN_FUTURES_API_KEY", None)
         os.environ.pop("WEBHOOK_TOKEN", None)
         self.tmp.cleanup()
@@ -414,6 +417,139 @@ class WebhookDashboardApiTests(unittest.TestCase):
             int(pd.Timestamp("1970-01-01T00:00:01Z").timestamp()),
             {int(m.get("original_time", 0)) for m in trade_markers},
         )
+
+    def test_chart_caps_marker_payload_with_env_limit(self) -> None:
+        ws._CHART_CACHE.clear()
+        os.environ["DASHBOARD_MAX_MARKERS"] = "2"
+        markers = [
+            {"time": int(pd.Timestamp(f"2026-02-20T00:0{i}:00Z").timestamp()), "shape": "arrowUp"}
+            for i in range(5)
+        ]
+
+        with patch.object(ws, "load_trade_markers", return_value=markers):
+            body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+
+        self.assertTrue(body.get("ok"))
+        self.assertEqual(len(body.get("markers", [])), 2)
+        self.assertEqual(
+            [int(m.get("original_time", m.get("time", 0))) for m in body.get("markers", [])],
+            [int(markers[-2]["time"]), int(markers[-1]["time"])],
+        )
+
+    def test_chart_caps_unrendered_regime_points(self) -> None:
+        ws._CHART_CACHE.clear()
+        os.environ["DASHBOARD_MAX_REGIME_POINTS"] = "1"
+        os.environ["DASHBOARD_MAX_REGIME_SCORES"] = "1"
+        now = pd.Timestamp("2026-02-20T00:00:00Z")
+        regime_rows = [
+            {
+                "ts": (now + pd.Timedelta(minutes=i)).isoformat(),
+                "symbol": "SOL-USDT",
+                "gate_on": i % 2,
+                "regime_state": "trend",
+                "regime_score": float(i),
+                "confidence": 0.5,
+            }
+            for i in range(3)
+        ]
+
+        with patch.object(ws.RegimeStore, "get_history", return_value=regime_rows):
+            body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+
+        self.assertTrue(body.get("ok"))
+        self.assertEqual(len(body.get("regime", {}).get("points", [])), 1)
+        self.assertEqual(len(body.get("regime_scores", [])), 1)
+
+    def test_chart_collapses_retried_decision_markers_on_same_renko_bar(self) -> None:
+        ws._CHART_CACHE.clear()
+        os.environ["DASHBOARD_TRADE_ALLOW_FILE_FALLBACK"] = "0"
+        decisions = [
+            {
+                "decision_id": f"retry-decision-{idx}",
+                "ts": pd.Timestamp(f"2026-02-20T00:{minute:02d}:00Z").isoformat(),
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "long",
+                "source_action_event_id": f"retry-action-{idx}",
+                "seq": idx,
+                "payload_json": {},
+            }
+            for idx, minute in enumerate((10, 20, 30), start=1)
+        ]
+
+        with patch.object(ws, "load_closed_trades_from_postgres", return_value=pd.DataFrame()), \
+             patch("quant.execution.dashboard_state._load_decision_rows_for_trade_markers", return_value=decisions):
+            body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+
+        self.assertTrue(body.get("ok"))
+        first_bar_ts = int(body["bars"][0]["time"])
+        retry_markers = [
+            m
+            for m in body.get("markers", [])
+            if str(m.get("decision_id", "")).startswith("retry-decision-")
+        ]
+        self.assertEqual(len(retry_markers), 1)
+        self.assertEqual(int(retry_markers[0]["time"]), first_bar_ts)
+        self.assertEqual(retry_markers[0]["shape"], "arrowUp")
+        self.assertEqual(retry_markers[0].get("decision_kind"), "entry")
+
+    def test_chart_keeps_overlapping_closed_trade_when_decisions_exist(self) -> None:
+        ws._CHART_CACHE.clear()
+        first_bar_ts = int(pd.Timestamp("2026-02-20T02:00:00Z").timestamp())
+        pd.DataFrame(
+            {
+                "ts": pd.date_range("2026-02-20T02:00:00Z", periods=2, freq="h", tz="UTC"),
+                "open": [102.0, 103.0],
+                "high": [103.0, 104.0],
+                "low": [101.0, 102.0],
+                "close": [102.5, 103.5],
+            }
+        ).to_parquet(Path(os.environ["DASHBOARD_RENKO_PARQUET"]), index=False)
+        closed_trades = pd.DataFrame(
+            [
+                {
+                    "trade_id": "overlap-with-decisions",
+                    "venue": "kucoin",
+                    "symbol": "SOL-USDT",
+                    "entry_ts": "2026-02-20T01:30:00Z",
+                    "exit_ts": "2026-02-20T02:30:00Z",
+                    "side": "short",
+                    "entry_price": 104.0,
+                    "exit_price": 102.0,
+                    "pnl_pct": 1.92,
+                    "exit_event": "tp_exit",
+                    "strategy": "live_executor",
+                }
+            ]
+        )
+        decisions = [
+            {
+                "decision_id": "unrelated-open-decision",
+                "ts": "2026-02-20T02:10:00Z",
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "decision_kind": "entry",
+                "direction": "long",
+                "source_action_event_id": "unrelated-action",
+                "seq": 1,
+                "payload_json": {},
+            }
+        ]
+
+        with patch.object(ws, "load_closed_trades_from_postgres", return_value=closed_trades), \
+             patch("quant.execution.dashboard_state._load_decision_rows_for_trade_markers", return_value=decisions):
+            body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
+
+        self.assertTrue(body.get("ok"))
+        overlap_markers = [
+            m for m in body.get("markers", [])
+            if m.get("trade_id") == "overlap-with-decisions"
+        ]
+        self.assertEqual(len(overlap_markers), 2)
+        self.assertEqual([int(m["time"]) for m in overlap_markers], [first_bar_ts, first_bar_ts])
+        self.assertEqual({m.get("time_anchor") for m in overlap_markers}, {"window_start"})
+        self.assertEqual([m.get("text") for m in overlap_markers], ["", "+1.92%"])
 
     def test_chart_payload_shape(self) -> None:
         body = api_dashboard_chart(symbol="SOL-USDT", hours=48, max_points=1000)
