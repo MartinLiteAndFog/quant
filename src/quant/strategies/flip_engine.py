@@ -156,6 +156,7 @@ def run_flip_state_machine(
     params: FlipParams,
     regime_on: Optional[pd.Series] = None,
     regime_forces_flat: bool = True,
+    reverse_on_wait_sl: bool = False,
 ) -> Tuple[pd.Series, pd.DataFrame, Dict[str, Any]]:
     """
     bars: DataFrame with at least ['ts','close'] and optionally ['high','low'] for swing stops.
@@ -379,11 +380,18 @@ def run_flip_state_machine(
             stop = swing_sl_price(i)
             if (pos > 0 and px <= stop) or (pos < 0 and px >= stop):
                 pnl = realized_pnl_pct(stop)
-                emit(ts, "sl_exit", pos, stop, pnl, f"SL hit -> flat (sl={stop:.4f})")
-                pos = 0
-                entry_px = None
-                best_fav = None
-                mode = None
+                if reverse_on_wait_sl:
+                    emit(ts, "sl_reverse_exit", pos, stop, pnl, f"SL hit -> reverse -> WAIT (sl={stop:.4f})")
+                    pos = -pos
+                    entry_px = stop
+                    best_fav = stop
+                    mode = "WAIT"
+                else:
+                    emit(ts, "sl_exit", pos, stop, pnl, f"SL hit -> flat (sl={stop:.4f})")
+                    pos = 0
+                    entry_px = None
+                    best_fav = None
+                    mode = None
                 out_pos.iloc[i] = pos
                 continue
 
