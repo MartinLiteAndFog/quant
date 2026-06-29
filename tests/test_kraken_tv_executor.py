@@ -104,7 +104,7 @@ class KrakenTVExecutorTests(unittest.TestCase):
     def test_compute_target_size_floors_to_kraken_step(self) -> None:
         self.assertEqual(compute_target_size(100.0, 83.0, 10.0, 0.90, 0.1), 10.8)
 
-    def test_flip_closes_reduce_only_then_opens_fresh_target(self) -> None:
+    def test_flip_tries_single_net_order_first(self) -> None:
         client = DummyKrakenClient(position_signed=9.0, equity_usd=100.0, mark_price=100.0)
         res = execute_kraken_tv_signal(_signal("flip", "sell"), _config(dry_run=False), client)
 
@@ -112,16 +112,51 @@ class KrakenTVExecutorTests(unittest.TestCase):
         self.assertEqual(res["target_size"], 9.0)
         self.assertEqual(res["desired_signed"], -9.0)
         self.assertEqual(res["order_side"], "sell")
-        self.assertEqual(res["order_size"], 9.0)
+        self.assertEqual(res["order_size"], 18.0)
+        self.assertFalse(res["fallback_used"])
+        self.assertEqual(client.market_orders, [{"side": "sell", "size": 18.0, "symbol": "PF_SOLUSD", "reduce_only": False}])
+        self.assertEqual(client.position_signed, -9.0)
+        self.assertEqual(client.cancel_calls, ["PF_SOLUSD"])
+
+    def test_flip_falls_back_to_close_then_open_when_net_order_is_rejected(self) -> None:
+        class RejectFirstClient(DummyKrakenClient):
+            def place_market(self, side: str, size: float, symbol=None, reduce_only: bool = False, cli_ord_id=None) -> dict:
+                if not self.market_orders:
+                    self.market_orders.append(
+                        {
+                            "side": side,
+                            "size": size,
+                            "symbol": symbol,
+                            "reduce_only": reduce_only,
+                        }
+                    )
+                    return {
+                        "ok": True,
+                        "data": {
+                            "result": "success",
+                            "sendStatus": {
+                                "status": "insufficientAvailableFunds",
+                                "orderEvents": [],
+                            },
+                        },
+                    }
+                return super().place_market(side, size, symbol=symbol, reduce_only=reduce_only, cli_ord_id=cli_ord_id)
+
+        client = RejectFirstClient(position_signed=9.0, equity_usd=100.0, mark_price=100.0)
+        res = execute_kraken_tv_signal(_signal("flip", "sell"), _config(dry_run=False), client)
+
+        self.assertTrue(res["fallback_used"])
+        self.assertEqual(res["fallback_reason"], "net_order_rejected")
+        self.assertIn("insufficientavailablefunds", res["net_order_error"])
         self.assertEqual(
             client.market_orders,
             [
+                {"side": "sell", "size": 18.0, "symbol": "PF_SOLUSD", "reduce_only": False},
                 {"side": "sell", "size": 9.0, "symbol": "PF_SOLUSD", "reduce_only": True},
                 {"side": "sell", "size": 9.0, "symbol": "PF_SOLUSD", "reduce_only": False},
             ],
         )
         self.assertEqual(client.position_signed, -9.0)
-        self.assertEqual(client.cancel_calls, ["PF_SOLUSD"])
 
     def test_flip_resizes_from_equity_with_unrealized_pnl_before_close(self) -> None:
         client = DummyKrakenClient(position_signed=9.0, equity_usd=111.0, mark_price=100.0)
