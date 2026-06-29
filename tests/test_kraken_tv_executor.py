@@ -104,7 +104,7 @@ class KrakenTVExecutorTests(unittest.TestCase):
     def test_compute_target_size_floors_to_kraken_step(self) -> None:
         self.assertEqual(compute_target_size(100.0, 83.0, 10.0, 0.90, 0.1), 10.8)
 
-    def test_flip_uses_single_net_order_from_current_signed_to_target_signed(self) -> None:
+    def test_flip_closes_reduce_only_then_opens_fresh_target(self) -> None:
         client = DummyKrakenClient(position_signed=9.0, equity_usd=100.0, mark_price=100.0)
         res = execute_kraken_tv_signal(_signal("flip", "sell"), _config(dry_run=False), client)
 
@@ -112,8 +112,14 @@ class KrakenTVExecutorTests(unittest.TestCase):
         self.assertEqual(res["target_size"], 9.0)
         self.assertEqual(res["desired_signed"], -9.0)
         self.assertEqual(res["order_side"], "sell")
-        self.assertEqual(res["order_size"], 18.0)
-        self.assertEqual(client.market_orders, [{"side": "sell", "size": 18.0, "symbol": "PF_SOLUSD", "reduce_only": False}])
+        self.assertEqual(res["order_size"], 9.0)
+        self.assertEqual(
+            client.market_orders,
+            [
+                {"side": "sell", "size": 9.0, "symbol": "PF_SOLUSD", "reduce_only": True},
+                {"side": "sell", "size": 9.0, "symbol": "PF_SOLUSD", "reduce_only": False},
+            ],
+        )
         self.assertEqual(client.position_signed, -9.0)
         self.assertEqual(client.cancel_calls, ["PF_SOLUSD"])
 
@@ -174,6 +180,37 @@ class KrakenTVExecutorTests(unittest.TestCase):
         self.assertEqual(res["order_side"], "buy")
         self.assertEqual(res["order_size"], 4.5)
         self.assertEqual(client.cancel_calls, [])
+
+    def test_rejected_kraken_order_raises_and_releases_dedupe(self) -> None:
+        class RejectingClient(DummyKrakenClient):
+            def place_market(self, side: str, size: float, symbol=None, reduce_only: bool = False, cli_ord_id=None) -> dict:
+                self.market_orders.append(
+                    {
+                        "side": side,
+                        "size": size,
+                        "symbol": symbol,
+                        "reduce_only": reduce_only,
+                    }
+                )
+                return {
+                    "ok": True,
+                    "data": {
+                        "result": "success",
+                        "sendStatus": {
+                            "status": "rejected",
+                            "rejectReason": "insufficient margin",
+                        },
+                    },
+                }
+
+        sig = _signal("entry", "buy")
+        config = _config(dry_run=False, dedup_ttl_sec=300)
+
+        with self.assertRaisesRegex(RuntimeError, "insufficient margin"):
+            execute_kraken_tv_signal(sig, config, RejectingClient())
+
+        retry = execute_kraken_tv_signal(sig, config, DummyKrakenClient())
+        self.assertFalse(retry.get("deduped", False))
 
 
 class KrakenTVWebhookTests(unittest.TestCase):

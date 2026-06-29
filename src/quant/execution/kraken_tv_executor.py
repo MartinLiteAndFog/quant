@@ -16,6 +16,7 @@ log = get_logger("quant.kraken_tv_executor")
 TARGET_ACTIONS = {"entry", "flip"}
 UNSUPPORTED_ACTIONS = {"exit", "sl", "tp2"}
 VALID_SIDES = {"buy", "sell"}
+ORDER_SUCCESS_STATUSES = {"placed", "received", "success", "accepted"}
 
 _DEDUP_LOCK = threading.Lock()
 _SEEN_FINGERPRINTS: Dict[str, float] = {}
@@ -184,6 +185,81 @@ def _position_snapshot(client: KrakenFuturesClient, venue_symbol: str) -> Tuple[
     return pos, float(pos.get("size_signed", 0.0) or 0.0)
 
 
+def _order_status(result: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(result, dict):
+        return ""
+    data = result.get("data")
+    if not isinstance(data, dict):
+        data = result
+    send_status = data.get("sendStatus")
+    if isinstance(send_status, dict):
+        status = send_status.get("status") or send_status.get("result")
+    else:
+        status = data.get("status") or data.get("result")
+    return str(status or "").strip().lower()
+
+
+def _order_reject_reason(result: Optional[Dict[str, Any]]) -> str:
+    if not isinstance(result, dict):
+        return "missing order response"
+    data = result.get("data")
+    if not isinstance(data, dict):
+        data = result
+    send_status = data.get("sendStatus")
+    if isinstance(send_status, dict):
+        for key in ("rejectReason", "reason", "error", "message"):
+            value = send_status.get(key)
+            if value:
+                return str(value)
+    for key in ("error", "message", "rejectReason", "reason"):
+        value = data.get(key)
+        if value:
+            return str(value)
+    return f"unexpected order status: {_order_status(result) or 'unknown'}"
+
+
+def _assert_order_accepted(result: Optional[Dict[str, Any]], label: str) -> Dict[str, Any]:
+    if isinstance(result, dict) and result.get("ok") is False:
+        raise RuntimeError(f"{label} rejected by Kraken: {_order_reject_reason(result)}")
+    status = _order_status(result)
+    if status and status not in ORDER_SUCCESS_STATUSES:
+        raise RuntimeError(f"{label} rejected by Kraken: {_order_reject_reason(result)}")
+    if not isinstance(result, dict):
+        raise RuntimeError(f"{label} returned no Kraken response")
+    return result
+
+
+def _place_market_checked(
+    client: KrakenFuturesClient,
+    side: str,
+    *,
+    size: float,
+    symbol: str,
+    reduce_only: bool,
+    label: str,
+) -> Dict[str, Any]:
+    result = client.place_market(side, size=size, symbol=symbol, reduce_only=reduce_only)
+    return _assert_order_accepted(result, label)
+
+
+def _wait_for_flat(
+    client: KrakenFuturesClient,
+    venue_symbol: str,
+    step: float,
+    attempts: int = 3,
+    delay_sec: float = 0.25,
+) -> Tuple[Dict[str, Any], float]:
+    tolerance = max(float(step) / 2.0, 0.00000001)
+    last_pos, last_signed = _position_snapshot(client, venue_symbol)
+    for attempt in range(max(1, attempts)):
+        if abs(last_signed) <= tolerance:
+            return last_pos, last_signed
+        if attempt < attempts - 1:
+            time.sleep(delay_sec)
+            last_pos, last_signed = _position_snapshot(client, venue_symbol)
+    return last_pos, last_signed
+
+
 def execute_kraken_tv_signal(
     signal: KrakenTVSignal,
     config: KrakenTVConfig,
@@ -230,11 +306,13 @@ def _execute_tp1(
     order_side = "sell" if current_signed > 0 else "buy"
     result: Optional[Dict[str, Any]] = None
     if not config.dry_run:
-        result = client.place_market(
+        result = _place_market_checked(
+            client,
             order_side,
             size=close_size,
             symbol=config.venue_symbol,
             reduce_only=True,
+            label="kraken tv tp1",
         )
 
     position_after = None
@@ -295,19 +373,96 @@ def _execute_target_side(
 
     direction_change = current_signed != 0 and math.copysign(1.0, current_signed) != math.copysign(1.0, desired_signed)
     cancel_result: Optional[Dict[str, Any]] = None
+    close_result: Optional[Dict[str, Any]] = None
+    close_position_after = None
+    close_signed_after: Optional[float] = None
     order_result: Optional[Dict[str, Any]] = None
     refill_result: Optional[Dict[str, Any]] = None
     position_after = None
+    order_plan = [
+        {
+            "side": order_side,
+            "size": order_size,
+            "reduce_only": False,
+            "role": "net_target",
+        }
+    ]
+
+    if direction_change:
+        close_side = "sell" if current_signed > 0 else "buy"
+        close_size = _floor_to_step(abs(current_signed), config.size_step)
+        entry_side = signal.side
+        order_plan = [
+            {
+                "side": close_side,
+                "size": close_size,
+                "reduce_only": True,
+                "role": "close_current",
+            },
+            {
+                "side": entry_side,
+                "size": target_abs,
+                "reduce_only": False,
+                "role": "open_target",
+            },
+        ]
 
     if not config.dry_run:
         if direction_change and config.cancel_reduce_only_on_flip:
             cancel_result = client.cancel_all_reduce_only_orders(symbol=config.venue_symbol)
-        order_result = client.place_market(
-            order_side,
-            size=order_size,
-            symbol=config.venue_symbol,
-            reduce_only=False,
-        )
+
+        if direction_change:
+            close_step = order_plan[0]
+            close_result = _place_market_checked(
+                client,
+                str(close_step["side"]),
+                size=float(close_step["size"]),
+                symbol=config.venue_symbol,
+                reduce_only=True,
+                label="kraken tv flip close",
+            )
+            close_position_after, close_signed_after = _wait_for_flat(
+                client,
+                config.venue_symbol,
+                config.size_step,
+            )
+            if abs(float(close_signed_after or 0.0)) > max(config.size_step / 2.0, 0.00000001):
+                raise RuntimeError(
+                    f"kraken tv flip close did not flatten position: signed={close_signed_after}"
+                )
+
+            mark = float(client.get_mark_price(symbol=config.venue_symbol) or 0.0)
+            equity = client.get_account_equity()
+            equity_usd = float(equity.get("equity_usd", 0.0) or 0.0)
+            target_abs = compute_target_size(
+                equity_usd=equity_usd,
+                mark_price=mark,
+                leverage=config.leverage,
+                pos_pct=config.pos_pct,
+                step=config.size_step,
+            )
+            desired_signed = target_abs if signal.side == "buy" else -target_abs
+            order_size = target_abs
+            order_side = signal.side
+            order_plan[1]["size"] = target_abs
+        else:
+            reducing_same_side = (
+                current_signed != 0
+                and desired_signed != 0
+                and math.copysign(1.0, current_signed) == math.copysign(1.0, desired_signed)
+                and abs(desired_signed) < abs(current_signed)
+            )
+            order_plan[0]["reduce_only"] = reducing_same_side
+
+        if order_size > 0:
+            order_result = _place_market_checked(
+                client,
+                order_side,
+                size=order_size,
+                symbol=config.venue_symbol,
+                reduce_only=bool(order_plan[-1]["reduce_only"]),
+                label="kraken tv target entry",
+            )
 
         if config.verify_after_order:
             position_after = client.get_position(symbol=config.venue_symbol)
@@ -317,22 +472,25 @@ def _execute_target_side(
                 refill_size = _floor_to_step(abs(refill_delta), config.size_step)
                 if refill_size > 0:
                     refill_side = "buy" if refill_delta > 0 else "sell"
-                    refill_result = client.place_market(
+                    refill_result = _place_market_checked(
+                        client,
                         refill_side,
                         size=refill_size,
                         symbol=config.venue_symbol,
                         reduce_only=False,
+                        label="kraken tv target refill",
                     )
                     position_after = client.get_position(symbol=config.venue_symbol)
 
     log.info(
-        "kraken tv %s %s: current=%s desired=%s order=%s %s equity=%.2f mark=%.4f dry_run=%s",
+        "kraken tv %s %s: current=%s desired=%s order=%s %s direction_change=%s equity=%.2f mark=%.4f dry_run=%s",
         signal.action,
         signal.side,
         current_signed,
         desired_signed,
         order_side,
         order_size,
+        direction_change,
         equity_usd,
         mark,
         config.dry_run,
@@ -356,8 +514,12 @@ def _execute_target_side(
         "desired_side": _signed_side(desired_signed),
         "order_side": order_side,
         "order_size": order_size,
+        "order_plan": order_plan,
         "direction_change": direction_change,
         "cancel_reduce_only_result": cancel_result,
+        "close_result": close_result,
+        "close_position_after": close_position_after,
+        "close_signed_after": close_signed_after,
         "order_result": order_result,
         "refill_result": refill_result,
         "position_before": pos_raw,
