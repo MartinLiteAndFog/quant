@@ -3411,6 +3411,42 @@ async def tv_execute_webhook(
     return result
 
 
+@app.post("/webhook/kraken-tv-execute")
+async def kraken_tv_execute_webhook(
+    request: Request,
+    x_webhook_token: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json")
+
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+    body_token = payload.get("token") if isinstance(payload, dict) else None
+    effective_token = x_webhook_token or body_token
+    if _auth_required():
+        _check_token(effective_token)
+
+    from quant.execution.kraken_tv_executor import (
+        KrakenTVConfig,
+        execute_kraken_tv_signal,
+        parse_kraken_tv_signal,
+    )
+
+    try:
+        config = KrakenTVConfig.from_env()
+        signal = parse_kraken_tv_signal(payload, default_symbol=config.display_symbol)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    import asyncio
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, execute_kraken_tv_signal, signal, config)
+    return result
+
+
 _DASHBOARD2_DIST = Path(
     os.getenv(
         "DASHBOARD2_DIST",

@@ -14,6 +14,7 @@ import pandas as pd
 
 from quant.execution.execution_state import read_execution_state, write_execution_state
 from quant.execution.CHOPgate import get_live_gate_state
+from quant.execution.bot_profiles import resolve_profile_gate, reverse_on_wait_sl
 from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
 from quant.execution.event_builders import build_action_event, build_execution_event
@@ -596,6 +597,7 @@ def _latest_backtest_event(
         params=params,
         regime_on=None,
         regime_forces_flat=False,
+        reverse_on_wait_sl=reverse_on_wait_sl(),
     )
     if events is None or events.empty:
         return None, terminal
@@ -1091,7 +1093,7 @@ def run_once(
     renko_bars = _load_renko_bars(_renko_path(), limit=int(os.getenv("LIVE_RENKO_LIMIT", "4000")))
     signals_df = _load_signals_df(signals_root, symbol)
 
-    gate = get_live_gate_state()
+    gate = resolve_profile_gate(get_live_gate_state())
 
     gate_countertrend_on = int(gate.get("gate_countertrend_on", 0) or 0)
     gate_trend_on = int(gate.get("gate_trend_on", 0) or 0)
