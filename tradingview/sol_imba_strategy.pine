@@ -1,0 +1,397 @@
+//@version=6
+strategy("SOL IMBA Classic - Gate Strategy", shorttitle="SOL IMBA", overlay=true, pyramiding=0, initial_capital=10000, default_qty_type=strategy.fixed, default_qty_value=1, margin_long=1, margin_short=1, commission_type=strategy.commission.percent, commission_value=0.06, process_orders_on_close=true, calc_on_order_fills=true, max_labels_count=500)
+
+// ----------------------------
+// Inputs
+// ----------------------------
+grpImba = "IMBA"
+sensitivity = input.float(25.0, "Original sensitivity", minval=0.1, step=0.1, group=grpImba)
+useOriginalMultiplier = input.bool(true, "Use original x10 sensitivity multiplier", group=grpImba)
+explicitLookback = input.int(250, "Lookback if multiplier is off", minval=2, group=grpImba)
+startTime = input.time(1685577600000, "Start calculating date", group=grpImba)
+emitInitialSignal = input.bool(true, "Emit initial bootstrap signal", group=grpImba)
+showDebugZones = input.bool(false, "Show debug zone dots", group=grpImba)
+
+grpMode = "Mode"
+modeInput = input.string("Auto daily gate", "Strategy mode", options=["Auto daily gate", "Force countertrend", "Force trendfollower"], group=grpMode)
+useConfirmedDaily = input.bool(true, "Use last confirmed daily gate", group=grpMode)
+showOrderComments = input.bool(false, "Show order comments", group=grpMode)
+
+grpSizing = "Sizing"
+baseEquityPct = input.float(10.0, "Base equity percent", minval=0.1, maxval=100.0, step=0.1, group=grpSizing)
+leverageInput = input.float(1.0, "Leverage", minval=0.1, maxval=100.0, step=0.1, group=grpSizing)
+useOptimalKelly = input.bool(false, "Use adaptive Kelly sizing", group=grpSizing)
+kellyMinTrades = input.int(30, "Kelly min closed trades", minval=5, maxval=500, group=grpSizing)
+kellyCapPct = input.float(25.0, "Kelly cap percent", minval=0.1, maxval=100.0, step=0.1, group=grpSizing)
+
+grpWebhook = "Railway webhook"
+webhookSymbol = input.string("SOL-USDT", "Symbol", group=grpWebhook)
+webhookToken = input.string("", "Token", group=grpWebhook)
+webhookSource = input.string("sol_imba_kraken_tv", "Source", group=grpWebhook)
+emitWebhookAlerts = input.bool(false, "Emit alert() webhooks", group=grpWebhook)
+
+grpData = "Data window"
+useRecentAccurateWindow = input.bool(true, "Trade only recent accurate window", group=grpData)
+accurateWindowDays = input.int(14, "Recent window days", minval=1, maxval=365, group=grpData)
+flattenOutsideWindow = input.bool(true, "Flatten outside window", group=grpData)
+
+grpGate = "Daily gate"
+gateMode = input.string("Rolling quantiles", "Gate thresholds", options=["Rolling quantiles", "Fixed"], group=grpGate)
+gateWindow = input.int(120, "Rolling threshold window", minval=20, group=grpGate)
+chopLen = input.int(14, "CHOP length", minval=2, group=grpGate)
+adxLen = input.int(14, "ADX length", minval=2, group=grpGate)
+erLen = input.int(40, "ER length", minval=2, group=grpGate)
+qBand = input.float(0.05, "Quantile hysteresis band", minval=0.0, maxval=0.5, step=0.01, group=grpGate)
+chopQ = input.float(0.40, "CHOP on quantile", minval=0.0, maxval=1.0, step=0.01, group=grpGate)
+adxQ = input.float(0.60, "ADX on quantile", minval=0.0, maxval=1.0, step=0.01, group=grpGate)
+erQ = input.float(0.30, "ER on quantile", minval=0.0, maxval=1.0, step=0.01, group=grpGate)
+fixedChopOn = input.float(58.0, "Fixed CHOP on", group=grpGate)
+fixedChopOff = input.float(52.0, "Fixed CHOP off", group=grpGate)
+fixedAdxOn = input.float(18.0, "Fixed ADX on", group=grpGate)
+fixedAdxOff = input.float(25.0, "Fixed ADX off", group=grpGate)
+fixedErOn = input.float(0.30, "Fixed ER on", group=grpGate)
+fixedErOff = input.float(0.40, "Fixed ER off", group=grpGate)
+
+grpCT = "Countertrend"
+ttpTrailPct = input.float(1.2, "TTP trail percent", minval=0.05, step=0.05, group=grpCT) / 100.0
+ctUsePartialTp = input.bool(false, "Use fixed partial TP", group=grpCT)
+ctPartialTpPct = input.float(3.0, "Partial TP percent", minval=0.05, step=0.05, group=grpCT) / 100.0
+ctPartialTpFrac = input.float(50.0, "Partial TP close percent", minval=0.0, maxval=100.0, step=5.0, group=grpCT)
+ctMinSlPct = input.float(1.5, "WAIT min SL percent", minval=0.05, step=0.05, group=grpCT) / 100.0
+ctMaxSlPct = input.float(3.0, "WAIT max SL percent", minval=0.05, step=0.05, group=grpCT) / 100.0
+ctSwingLookback = input.int(50, "WAIT swing lookback", minval=1, maxval=50, group=grpCT)
+reverseOnWaitSl = input.bool(false, "Reverse on WAIT SL", group=grpCT)
+
+grpTF = "Trendfollower"
+tp1Pct = input.float(3.0, "TP1 percent", minval=0.05, step=0.05, group=grpTF) / 100.0
+tp2Pct = input.float(6.0, "TP2 percent", minval=0.05, step=0.05, group=grpTF) / 100.0
+tp1Frac = input.float(50.0, "TP1 close percent", minval=0.0, maxval=100.0, step=5.0, group=grpTF)
+tfMinSlPct = input.float(3.0, "Swing min SL percent", minval=0.05, step=0.05, group=grpTF) / 100.0
+tfMaxSlPct = input.float(8.0, "Swing max SL percent", minval=0.05, step=0.05, group=grpTF) / 100.0
+tfSwingLookback = input.int(50, "Swing lookback", minval=1, maxval=50, group=grpTF)
+beAfterTp1 = input.bool(true, "Move remainder to BE after TP1", group=grpTF)
+flipTrendOnOpposite = input.bool(true, "Flip trendfollower on opposite IMBA", group=grpTF)
+
+// ----------------------------
+// Utility
+// ----------------------------
+f_chop(int len) =>
+    trSum = ta.sma(ta.tr(true), len) * len
+    hh = ta.highest(high, len)
+    ll = ta.lowest(low, len)
+    denom = hh - ll
+    denom == 0.0 ? na : 100.0 * math.log10(trSum / denom) / math.log10(len)
+
+f_er(int len) =>
+    net = math.abs(close - close[len])
+    den = ta.sma(math.abs(ta.change(close)), len) * len
+    den == 0.0 ? na : math.min(math.max(net / den, 0.0), 1.0)
+
+f_clamp(float x, float lo, float hi) =>
+    math.max(lo, math.min(hi, x))
+
+f_position_fraction() =>
+    baseFrac = baseEquityPct / 100.0
+    frac = baseFrac
+    n = strategy.closedtrades
+    if useOptimalKelly and n >= kellyMinTrades
+        wins = 0.0
+        losses = 0.0
+        winTotal = 0.0
+        lossTotal = 0.0
+        for i = 0 to n - 1
+            p = strategy.closedtrades.profit(i)
+            if p > 0
+                wins += 1.0
+                winTotal += p
+            else if p < 0
+                losses += 1.0
+                lossTotal += math.abs(p)
+        if wins > 0 and losses > 0 and lossTotal > 0
+            winRate = wins / (wins + losses)
+            avgWin = winTotal / wins
+            avgLoss = lossTotal / losses
+            payoff = avgWin / avgLoss
+            kelly = winRate - (1.0 - winRate) / payoff
+            frac := f_clamp(kelly, 0.0, kellyCapPct / 100.0)
+        else
+            frac := 0.0
+    frac
+
+f_order_qty() =>
+    frac = f_position_fraction()
+    close > 0 and strategy.equity > 0 and frac > 0 ? strategy.equity * frac * leverageInput / close : 0.0
+
+f_tv_payload(string action, string side, string reason) =>
+    "{\"token\":\"" + webhookToken + "\",\"action\":\"" + action + "\",\"side\":\"" + side + "\",\"symbol\":\"" + webhookSymbol + "\",\"source\":\"" + webhookSource + "\",\"reason\":\"" + reason + "\",\"bar_time\":" + str.tostring(time) + ",\"bar_index\":" + str.tostring(bar_index) + ",\"price\":" + str.tostring(close, format.mintick) + "}"
+
+f_emit_tv_alert(string action, string side, string reason) =>
+    if emitWebhookAlerts
+        alert(f_tv_payload(action, side, reason), alert.freq_once_per_bar_close)
+
+f_gate() =>
+    ch = f_chop(chopLen)
+    [diPlus, diMinus, ax] = ta.dmi(adxLen, adxLen)
+    er = f_er(erLen)
+
+    cqOff = math.max(0.0, math.min(1.0, chopQ - qBand))
+    aqOff = math.max(0.0, math.min(1.0, adxQ + qBand))
+    eqOff = math.max(0.0, math.min(1.0, erQ + qBand))
+
+    chopOn = gateMode == "Fixed" ? fixedChopOn : ta.percentile_linear_interpolation(ch, gateWindow, chopQ * 100.0)
+    chopOff = gateMode == "Fixed" ? fixedChopOff : ta.percentile_linear_interpolation(ch, gateWindow, cqOff * 100.0)
+    adxOn = gateMode == "Fixed" ? fixedAdxOn : ta.percentile_linear_interpolation(ax, gateWindow, adxQ * 100.0)
+    adxOff = gateMode == "Fixed" ? fixedAdxOff : ta.percentile_linear_interpolation(ax, gateWindow, aqOff * 100.0)
+    erOn = gateMode == "Fixed" ? fixedErOn : ta.percentile_linear_interpolation(er, gateWindow, erQ * 100.0)
+    erOff = gateMode == "Fixed" ? fixedErOff : ta.percentile_linear_interpolation(er, gateWindow, eqOff * 100.0)
+
+    var bool chopOk = false
+    var bool adxOk = true
+    var bool erOk = true
+
+    if not na(ch) and not na(chopOn) and not na(chopOff)
+        if not chopOk and ch >= chopOn
+            chopOk := true
+        else if chopOk and ch <= chopOff
+            chopOk := false
+
+    if not na(ax) and not na(adxOn) and not na(adxOff)
+        if adxOk and ax >= adxOff
+            adxOk := false
+        else if not adxOk and ax <= adxOn
+            adxOk := true
+
+    if not na(er) and not na(erOn) and not na(erOff)
+        if erOk and er >= erOff
+            erOk := false
+        else if not erOk and er <= erOn
+            erOk := true
+
+    score = (chopOk ? 1 : 0) + (adxOk ? 1 : 0) + (erOk ? 1 : 0)
+    [score >= 2 ? 1 : 0, score]
+
+f_swing_stop(int side, float entry, float swingLowPrev, float swingHighPrev, float minPct, float maxPct) =>
+    if side > 0
+        raw = na(swingLowPrev) or entry == 0.0 ? maxPct : (entry - swingLowPrev) / entry
+        entry * (1.0 - f_clamp(raw, minPct, maxPct))
+    else
+        raw = na(swingHighPrev) or entry == 0.0 ? maxPct : (swingHighPrev - entry) / entry
+        entry * (1.0 + f_clamp(raw, minPct, maxPct))
+
+// ----------------------------
+// IMBA signal stream
+// ----------------------------
+lookback = useOriginalMultiplier ? int(math.round(sensitivity * 10.0)) : explicitLookback
+highLine = ta.highest(high, lookback)
+lowLine = ta.lowest(low, lookback)
+channelRange = highLine - lowLine
+fib236 = highLine - channelRange * 0.236
+fib50 = highLine - channelRange * 0.500
+fib786 = highLine - channelRange * 0.786
+
+ready = time >= startTime and not na(fib236) and not na(fib50) and not na(fib786)
+longZone = ready and close >= fib50 and close >= fib236
+shortZone = ready and close <= fib50 and close <= fib786
+
+var int imbaTrend = 0
+var bool initialized = false
+signal = 0
+
+if longZone or shortZone
+    desired = longZone and not shortZone ? 1 : shortZone and not longZone ? -1 : initialized ? imbaTrend : 1
+    if not initialized
+        imbaTrend := desired
+        initialized := true
+        signal := emitInitialSignal ? desired : 0
+    else if desired != imbaTrend
+        imbaTrend := desired
+        signal := desired
+
+// ----------------------------
+// Gate and mode
+// ----------------------------
+[gateRaw, gateScoreRaw] = request.security(syminfo.tickerid, "D", f_gate(), barmerge.gaps_off, barmerge.lookahead_off)
+gateOn = useConfirmedDaily ? nz(gateRaw[1], gateRaw) : gateRaw
+activeCountertrend = modeInput == "Force countertrend" ? true : modeInput == "Force trendfollower" ? false : gateOn == 1
+accurateWindowStart = timenow - accurateWindowDays * 86400000
+inDataWindow = not useRecentAccurateWindow or time >= accurateWindowStart
+
+// ----------------------------
+// State
+// ----------------------------
+var string tradeMode = ""
+var bool ctTtpArmed = false
+var float ctBestFav = na
+var bool ctPartialTpDone = false
+var bool tfTp1Done = false
+var bool tfBeArmed = false
+var float tfEntry = na
+
+pos = strategy.position_size
+posSide = pos > 0 ? 1 : pos < 0 ? -1 : 0
+orderQty = f_order_qty()
+
+if posSide == 0
+    tradeMode := ""
+    ctTtpArmed := false
+    ctBestFav := na
+    ctPartialTpDone := false
+    tfTp1Done := false
+    tfBeArmed := false
+    tfEntry := na
+
+// ----------------------------
+// Entries from flat
+// ----------------------------
+if flattenOutsideWindow and not inDataWindow and posSide != 0
+    strategy.close_all(comment=showOrderComments ? "Outside data window" : "", alert_message=f_tv_payload("exit", "", "outside_data_window"))
+    f_emit_tv_alert("exit", "", "outside_data_window")
+
+if inDataWindow and posSide == 0 and signal != 0 and orderQty > 0
+    if activeCountertrend
+        strategy.entry(signal > 0 ? "CT Long" : "CT Short", signal > 0 ? strategy.long : strategy.short, qty=orderQty, comment=showOrderComments ? "CT entry" : "", alert_message=f_tv_payload("entry", signal > 0 ? "buy" : "sell", "ct_entry"))
+        f_emit_tv_alert("entry", signal > 0 ? "buy" : "sell", "ct_entry")
+        tradeMode := "CT"
+        ctTtpArmed := true
+        ctBestFav := close
+        ctPartialTpDone := false
+    else
+        strategy.entry(signal > 0 ? "TF Long" : "TF Short", signal > 0 ? strategy.long : strategy.short, qty=orderQty, comment=showOrderComments ? "TF entry" : "", alert_message=f_tv_payload("entry", signal > 0 ? "buy" : "sell", "tf_entry"))
+        f_emit_tv_alert("entry", signal > 0 ? "buy" : "sell", "tf_entry")
+        tradeMode := "TF"
+        tfTp1Done := false
+        tfBeArmed := false
+        tfEntry := close
+
+// Refresh side after possible entry.
+pos := strategy.position_size
+posSide := pos > 0 ? 1 : pos < 0 ? -1 : 0
+entryPx = strategy.position_avg_price
+ctSwingLowPrev = ta.lowest(low, ctSwingLookback)[1]
+ctSwingHighPrev = ta.highest(high, ctSwingLookback)[1]
+tfSwingLowPrev = ta.lowest(low, tfSwingLookback)[1]
+tfSwingHighPrev = ta.highest(high, tfSwingLookback)[1]
+
+// ----------------------------
+// Countertrend management
+// ----------------------------
+if inDataWindow and posSide != 0 and tradeMode == "CT"
+    ctBestFav := na(ctBestFav) ? entryPx : posSide > 0 ? math.max(ctBestFav, close) : math.min(ctBestFav, close)
+
+    if signal != 0
+        if signal == -posSide and orderQty > 0
+            strategy.entry(signal > 0 ? "CT Long" : "CT Short", signal > 0 ? strategy.long : strategy.short, qty=orderQty, comment=showOrderComments ? "CT flip" : "", alert_message=f_tv_payload("flip", signal > 0 ? "buy" : "sell", "ct_imba_flip"))
+            f_emit_tv_alert("flip", signal > 0 ? "buy" : "sell", "ct_imba_flip")
+            ctTtpArmed := true
+            ctBestFav := close
+            ctPartialTpDone := false
+        else if signal == posSide and not ctTtpArmed
+            ctTtpArmed := true
+            ctBestFav := close
+
+    ctPartialTp = posSide > 0 ? entryPx * (1.0 + ctPartialTpPct) : entryPx * (1.0 - ctPartialTpPct)
+    ctPartialTpHit = ctUsePartialTp and not ctPartialTpDone and ctPartialTpFrac > 0 and (posSide > 0 ? high >= ctPartialTp : low <= ctPartialTp)
+    if ctPartialTpHit
+        strategy.close(posSide > 0 ? "CT Long" : "CT Short", qty_percent=ctPartialTpFrac, comment=showOrderComments ? "CT partial TP" : "", alert_message=f_tv_payload("tp1", "", "ct_partial_tp"))
+        f_emit_tv_alert("tp1", "", "ct_partial_tp")
+        ctPartialTpDone := true
+
+    if ctTtpArmed and posSide != 0
+        ttpStop = posSide > 0 ? ctBestFav * (1.0 - ttpTrailPct) : ctBestFav * (1.0 + ttpTrailPct)
+        ttpHit = posSide > 0 ? close <= ttpStop : close >= ttpStop
+        if ttpHit
+            newSide = -posSide
+            if orderQty > 0
+                strategy.entry(newSide > 0 ? "CT Long" : "CT Short", newSide > 0 ? strategy.long : strategy.short, qty=orderQty, comment=showOrderComments ? "CT TTP reverse" : "", alert_message=f_tv_payload("flip", newSide > 0 ? "buy" : "sell", "ct_ttp_reverse"))
+                f_emit_tv_alert("flip", newSide > 0 ? "buy" : "sell", "ct_ttp_reverse")
+            ctTtpArmed := false
+            ctBestFav := ttpStop
+            ctPartialTpDone := false
+    else if not ctTtpArmed and posSide != 0
+        waitStop = f_swing_stop(posSide, entryPx, ctSwingLowPrev, ctSwingHighPrev, ctMinSlPct, ctMaxSlPct)
+        waitHit = posSide > 0 ? close <= waitStop : close >= waitStop
+        if waitHit
+            if reverseOnWaitSl
+                newSide = -posSide
+                if orderQty > 0
+                    strategy.entry(newSide > 0 ? "CT Long" : "CT Short", newSide > 0 ? strategy.long : strategy.short, qty=orderQty, comment=showOrderComments ? "CT WAIT SL reverse" : "", alert_message=f_tv_payload("flip", newSide > 0 ? "buy" : "sell", "ct_wait_sl_reverse"))
+                    f_emit_tv_alert("flip", newSide > 0 ? "buy" : "sell", "ct_wait_sl_reverse")
+                ctTtpArmed := false
+                ctBestFav := waitStop
+                ctPartialTpDone := false
+            else
+                strategy.close_all(comment=showOrderComments ? "CT WAIT SL" : "", alert_message=f_tv_payload("sl", "", "ct_wait_sl"))
+                f_emit_tv_alert("sl", "", "ct_wait_sl")
+
+// ----------------------------
+// Trendfollower management
+// ----------------------------
+if inDataWindow and posSide != 0 and tradeMode == "TF"
+    tfEntry := na(tfEntry) ? entryPx : tfEntry
+
+    if signal != 0 and signal == -posSide
+        strategy.close_all(comment=showOrderComments ? "TF opposite IMBA" : "", alert_message=f_tv_payload("exit", "", "tf_opposite_imba"))
+        f_emit_tv_alert("exit", "", "tf_opposite_imba")
+        if flipTrendOnOpposite and orderQty > 0
+            strategy.entry(signal > 0 ? "TF Long" : "TF Short", signal > 0 ? strategy.long : strategy.short, qty=orderQty, comment=showOrderComments ? "TF flip" : "", alert_message=f_tv_payload("flip", signal > 0 ? "buy" : "sell", "tf_imba_flip"))
+            f_emit_tv_alert("flip", signal > 0 ? "buy" : "sell", "tf_imba_flip")
+            tfTp1Done := false
+            tfBeArmed := false
+            tfEntry := close
+
+    tp1 = posSide > 0 ? tfEntry * (1.0 + tp1Pct) : tfEntry * (1.0 - tp1Pct)
+    tp2 = posSide > 0 ? tfEntry * (1.0 + tp2Pct) : tfEntry * (1.0 - tp2Pct)
+    sl = f_swing_stop(posSide, tfEntry, tfSwingLowPrev, tfSwingHighPrev, tfMinSlPct, tfMaxSlPct)
+    be = posSide > 0 ? tfEntry : tfEntry
+
+    tp1Hit = not tfTp1Done and (posSide > 0 ? high >= tp1 : low <= tp1)
+    if tp1Hit
+        strategy.close(posSide > 0 ? "TF Long" : "TF Short", qty_percent=tp1Frac, comment=showOrderComments ? "TF TP1" : "", alert_message=f_tv_payload("tp1", "", "tf_tp1"))
+        f_emit_tv_alert("tp1", "", "tf_tp1")
+        tfTp1Done := true
+        tfBeArmed := beAfterTp1
+
+    tp2Hit = posSide > 0 ? high >= tp2 : low <= tp2
+    slHit = posSide > 0 ? low <= sl : high >= sl
+    beHit = tfBeArmed and (posSide > 0 ? low <= be : high >= be)
+
+    if tp2Hit
+        strategy.close_all(comment=showOrderComments ? "TF TP2" : "", alert_message=f_tv_payload("tp2", "", "tf_tp2"))
+        f_emit_tv_alert("tp2", "", "tf_tp2")
+    else if beHit
+        strategy.close_all(comment=showOrderComments ? "TF BE" : "", alert_message=f_tv_payload("exit", "", "tf_be"))
+        f_emit_tv_alert("exit", "", "tf_be")
+    else if slHit
+        strategy.close_all(comment=showOrderComments ? "TF SL" : "", alert_message=f_tv_payload("sl", "", "tf_sl"))
+        f_emit_tv_alert("sl", "", "tf_sl")
+
+// ----------------------------
+// Visuals
+// ----------------------------
+trendColor = imbaTrend == 1 ? color.lime : imbaTrend == -1 ? color.red : color.gray
+plot(fib50, "IMBA trend line", color=trendColor, linewidth=3)
+plot(fib236, "Fib 0.236", color=color.new(color.lime, 50))
+plot(fib786, "Fib 0.786", color=color.new(color.red, 50))
+plotshape(signal == 1, title="Long flip", style=shape.triangleup, location=location.belowbar, color=color.lime, size=size.small, text="L")
+plotshape(signal == -1, title="Short flip", style=shape.triangledown, location=location.abovebar, color=color.red, size=size.small, text="S")
+plotshape(showDebugZones and longZone and signal != 1, title="Long zone", style=shape.circle, location=location.belowbar, color=color.new(color.lime, 65), size=size.tiny)
+plotshape(showDebugZones and shortZone and signal != -1, title="Short zone", style=shape.circle, location=location.abovebar, color=color.new(color.red, 65), size=size.tiny)
+bgcolor(activeCountertrend ? color.new(color.aqua, 90) : color.new(color.orange, 92), title="Active mode")
+
+var table info = table.new(position.top_right, 2, 6, border_width=1)
+if barstate.islast
+    table.cell(info, 0, 0, "Mode", text_color=color.white, bgcolor=color.new(color.black, 0))
+    table.cell(info, 1, 0, activeCountertrend ? "Countertrend" : "Trendfollower", text_color=activeCountertrend ? color.aqua : color.orange, bgcolor=color.new(color.black, 0))
+    table.cell(info, 0, 1, "Trade", text_color=color.white)
+    table.cell(info, 1, 1, tradeMode == "" ? "Flat" : tradeMode, text_color=color.white)
+    table.cell(info, 0, 2, "Gate score", text_color=color.white)
+    table.cell(info, 1, 2, str.tostring(useConfirmedDaily ? nz(gateScoreRaw[1], gateScoreRaw) : gateScoreRaw) + "/3", text_color=color.white)
+    table.cell(info, 0, 3, "Lookback", text_color=color.white)
+    table.cell(info, 1, 3, str.tostring(lookback), text_color=color.white)
+    table.cell(info, 0, 4, "Data window", text_color=color.white)
+    table.cell(info, 1, 4, inDataWindow ? "ON" : "OFF", text_color=inDataWindow ? color.lime : color.red)
+    table.cell(info, 0, 5, "Sizing", text_color=color.white)
+    table.cell(info, 1, 5, str.tostring(f_position_fraction() * 100.0, "#.##") + "% x" + str.tostring(leverageInput, "#.##"), text_color=useOptimalKelly ? color.aqua : color.white)
+
+alertcondition(signal == 1, "IMBA long flip", "IMBA long flip")
+alertcondition(signal == -1, "IMBA short flip", "IMBA short flip")
