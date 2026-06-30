@@ -8,7 +8,12 @@ from unittest.mock import patch
 
 import pandas as pd
 
-from quant.execution.bot_profiles import resolve_profile_gate, reverse_on_wait_sl
+from quant.execution.bot_profiles import (
+    resolve_profile_gate,
+    reverse_on_wait_sl,
+    strategy_config_hash,
+    strategy_instance_id,
+)
 from quant.execution.railway_bot import configure_environment
 
 
@@ -27,6 +32,7 @@ class BotProfileTests(unittest.TestCase):
             "LIVE_FLIP_MIN_SL_PCT",
             "LIVE_FLIP_MAX_SL_PCT",
             "LIVE_FLIP_SWING_LOOKBACK",
+            "EVENTS_DIR",
         ):
             os.environ.pop(key, None)
 
@@ -114,3 +120,28 @@ class BotProfileTests(unittest.TestCase):
             self.assertEqual(os.environ["LIVE_FLIP_MIN_SL_PCT"], "0.010")
             self.assertEqual(os.environ["LIVE_FLIP_MAX_SL_PCT"], "0.080")
             self.assertEqual(os.environ["LIVE_FLIP_SWING_LOOKBACK"], "180")
+            self.assertEqual(os.environ["EVENTS_DIR"], "/tmp/bots/sl-reverse-1/events")
+
+    def test_canonical_profile_skips_countertrend_backtest_defaults(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "BOT_PROFILE": "canonical",
+                "BOT_INSTANCE_ID": "canonical",
+                "BOT_DATA_ROOT": "/tmp/bots",
+            },
+            clear=False,
+        ):
+            profile, instance = configure_environment()
+            self.assertEqual(profile, "canonical")
+            self.assertEqual(instance, "canonical")
+            self.assertNotIn("LIVE_IMBA_LOOKBACK", os.environ)
+
+    def test_strategy_instance_helpers(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"BOT_INSTANCE_ID": "pc3axis", "BOT_PROFILE": "pc3axis"},
+            clear=False,
+        ):
+            self.assertEqual(strategy_instance_id(), "pc3axis")
+            self.assertEqual(strategy_config_hash(), "pc3axis_pc3axis_v1")

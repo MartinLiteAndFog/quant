@@ -8,7 +8,13 @@ import sys
 import time
 from pathlib import Path
 
-from quant.execution.bot_profiles import SUPPORTED_PROFILES, active_profile
+from quant.execution.bot_profiles import (
+    PROFILE_CANONICAL,
+    PROFILE_COUNTERTREND,
+    PROFILE_COUNTERTREND_SL_REVERSE,
+    SUPPORTED_PROFILES,
+    active_profile,
+)
 
 
 _BACKTEST_DEFAULTS = {
@@ -39,8 +45,10 @@ def configure_environment() -> tuple[str, str]:
     os.environ.setdefault("SIGNALS_DIR", str(root / "signals"))
     os.environ.setdefault("LIVE_SIGNAL_STATE", str(root / "live_signal_state.json"))
     os.environ.setdefault("LIVE_EXECUTOR_STATE", str(root / "live_executor_state.json"))
-    for key, value in _BACKTEST_DEFAULTS.items():
-        os.environ.setdefault(key, value)
+    os.environ.setdefault("EVENTS_DIR", str(root / "events"))
+    if profile in {PROFILE_COUNTERTREND, PROFILE_COUNTERTREND_SL_REVERSE}:
+        for key, value in _BACKTEST_DEFAULTS.items():
+            os.environ.setdefault(key, value)
     return profile, instance
 
 

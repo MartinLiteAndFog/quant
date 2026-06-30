@@ -17,6 +17,7 @@ PROFILE_COUNTERTREND_SL_REVERSE = "countertrend_sl_reverse"
 PROFILE_PC3AXIS = "pc3axis"
 PROFILE_CANONICAL = "canonical"
 SUPPORTED_PROFILES = {
+    PROFILE_CANONICAL,
     PROFILE_COUNTERTREND,
     PROFILE_COUNTERTREND_SL_REVERSE,
     PROFILE_PC3AXIS,
@@ -34,6 +35,17 @@ def active_profile() -> str:
 
 def reverse_on_wait_sl() -> bool:
     return active_profile() == PROFILE_COUNTERTREND_SL_REVERSE
+
+
+def strategy_instance_id() -> str:
+    raw = str(os.getenv("BOT_INSTANCE_ID", "live_executor")).strip()
+    return raw or "live_executor"
+
+
+def strategy_config_hash() -> str:
+    profile = active_profile()
+    instance = strategy_instance_id()
+    return f"{instance}_{profile}_v1"
 
 
 def _forced_countertrend_gate(profile: str) -> Dict[str, Any]:

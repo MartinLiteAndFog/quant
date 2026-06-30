@@ -14,7 +14,12 @@ import pandas as pd
 
 from quant.execution.execution_state import read_execution_state, write_execution_state
 from quant.execution.CHOPgate import get_live_gate_state
-from quant.execution.bot_profiles import resolve_profile_gate, reverse_on_wait_sl
+from quant.execution.bot_profiles import (
+    resolve_profile_gate,
+    reverse_on_wait_sl,
+    strategy_config_hash,
+    strategy_instance_id,
+)
 from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
 from quant.execution.event_builders import build_action_event, build_execution_event
@@ -101,6 +106,9 @@ def _read_live_gate_from_redis(symbol: str) -> Optional[Dict[str, Any]]:
 
 
 def _events_root() -> Path:
+    configured = os.getenv("EVENTS_DIR", "").strip()
+    if configured:
+        return Path(configured)
     if Path("/data").exists():
         return Path("/data/events")
     return Path("data/events")
@@ -141,8 +149,8 @@ def _append_action_event(
         blocked=bool(blocked),
         block_reason=block_reason,
     )
-    event["strategy_instance"] = "live_executor"
-    event["config_hash"] = "live_executor_v1"
+    event["strategy_instance"] = strategy_instance_id()
+    event["config_hash"] = strategy_config_hash()
 
     if payload_json:
         event["payload_json"] = dict(payload_json)
@@ -238,8 +246,8 @@ def _append_execution_event(
         reduce_only=reduce_only,
         status=status,
         reject_reason=reject_reason,
-        strategy_instance="live_executor",
-        config_hash="live_executor_v1",
+        strategy_instance=strategy_instance_id(),
+        config_hash=strategy_config_hash(),
         payload_json=payload_json or {},
     )
 
@@ -341,8 +349,8 @@ def _append_closed_trade(
                 "pnl_pct": float(pnl_pct_realized),
                 "exit_event": event_name,
                 "strategy": "live_executor",
-                "strategy_instance": "live_executor",
-                "config_hash": "live_executor_v1",
+                "strategy_instance": strategy_instance_id(),
+                "config_hash": strategy_config_hash(),
                 "source_action_event_id": None,
                 "payload_json": {
                     "kind": "closed_trade",
