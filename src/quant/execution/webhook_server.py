@@ -3388,27 +3388,37 @@ async def tv_execute_webhook(
     if _auth_required():
         _check_token(effective_token)
 
-    from quant.execution.tv_signal_executor import (
-        parse_tv_signal,
-        execute_tv_signal,
-        TVExecConfig,
-        _ready as tv_ready,
-    )
-
-    if not tv_ready.is_set():
-        raise HTTPException(status_code=503, detail="tv_executor not ready")
-
     try:
-        config = TVExecConfig.from_env()
-        signal = parse_tv_signal(payload, default_symbol=config.symbol)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        from quant.execution.tv_signal_executor import (
+            parse_tv_signal,
+            execute_tv_signal,
+            TVExecConfig,
+            _ready as tv_ready,
+        )
 
-    import asyncio
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, execute_tv_signal, signal, config)
+        if not tv_ready.is_set():
+            raise HTTPException(status_code=503, detail="tv_executor not ready")
 
-    return result
+        try:
+            config = TVExecConfig.from_env()
+            signal = parse_tv_signal(payload, default_symbol=config.symbol)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+        import asyncio
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, execute_tv_signal, signal, config)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {
+            "ok": False,
+            "action": str(payload.get("action") or ""),
+            "symbol": _normalize_symbol(_symbol_from_payload(payload)),
+            "reason": str(e),
+            "error_type": type(e).__name__,
+        }
 
 
 _DASHBOARD2_DIST = Path(

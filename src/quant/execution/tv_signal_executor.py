@@ -50,6 +50,7 @@ class TVExecConfig:
     symbol: str
     pos_pct: float
     leverage: float
+    order_leverage: float
     tp1_close_pct: float
     dry_run: bool
     gate_mode: str
@@ -59,10 +60,12 @@ class TVExecConfig:
 
     @classmethod
     def from_env(cls) -> TVExecConfig:
+        leverage = float(os.getenv("TV_EXEC_LEVERAGE", "10.0"))
         return cls(
             symbol=os.getenv("LIVE_SYMBOL", "SOL-USDT"),
             pos_pct=float(os.getenv("TV_EXEC_POS_PCT", "0.50")),
-            leverage=float(os.getenv("TV_EXEC_LEVERAGE", "10.0")),
+            leverage=leverage,
+            order_leverage=float(os.getenv("TV_EXEC_ORDER_LEVERAGE", str(leverage))),
             tp1_close_pct=float(os.getenv("TV_EXEC_TP1_PCT", "0.50")),
             dry_run=_truthy(os.getenv("TV_EXEC_DRY_RUN", "1")),
             gate_mode=os.getenv("TV_EXEC_GATE_MODE", "countertrend").strip().lower(),
@@ -102,6 +105,10 @@ def parse_tv_signal(payload: Dict[str, Any], default_symbol: str = "") -> TVSign
         sym = default_symbol or "SOL-USDT"
 
     return TVSignal(action=action, side=side, symbol=sym)
+
+
+def _close_side_for_position(position_side: str) -> str:
+    return "sell" if position_side == "long" else "buy"
 
 
 # ---------------------------------------------------------------------------
@@ -540,6 +547,12 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
             log.warning("tv_executor DRY_RUN entry %s qty=%d", want_side, qty)
             return {"ok": True, "action": "entry", "reason": "dry_run", "qty": qty, "side": want_side}
 
+        # Mirror live_executor OMS behavior: clear resting orders before a fresh entry.
+        try:
+            broker.cancel_all(signal.symbol)
+        except Exception as e:
+            log.warning("tv_executor cancel_all before entry failed: %s", e)
+
         order_side = signal.side  # buy or sell
         oid = _place_market(broker, signal.symbol, order_side, qty, reduce_only=False, action_label="entry")
         pos_after_i = 1 if want_side == "long" else -1
@@ -570,7 +583,7 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
             log.warning("tv_executor DRY_RUN exit %s qty=%d", side, close_qty)
             return {"ok": True, "action": "exit", "reason": "dry_run", "qty": close_qty}
 
-        close_side = "sell" if side == "long" else "buy"
+        close_side = _close_side_for_position(side)
         oid = _place_market(broker, signal.symbol, close_side, close_qty, reduce_only=True, action_label="exit")
 
         _refresh_position_in_cache(broker, config)
@@ -602,7 +615,7 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
             log.warning("tv_executor DRY_RUN tp1 %s qty=%d", side, close_qty)
             return {"ok": True, "action": "tp1", "reason": "dry_run", "qty": close_qty}
 
-        close_side = "sell" if side == "long" else "buy"
+        close_side = _close_side_for_position(side)
         oid = _place_market(broker, signal.symbol, close_side, close_qty, reduce_only=True, action_label="tp1")
 
         _refresh_position_in_cache(broker, config)
@@ -630,7 +643,7 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
             log.warning("tv_executor DRY_RUN tp2 %s qty=%d", side, close_qty)
             return {"ok": True, "action": "tp2", "reason": "dry_run", "qty": close_qty}
 
-        close_side = "sell" if side == "long" else "buy"
+        close_side = _close_side_for_position(side)
         oid = _place_market(broker, signal.symbol, close_side, close_qty, reduce_only=True, action_label="tp2")
 
         _refresh_position_in_cache(broker, config)
@@ -668,7 +681,7 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
         except Exception:
             pass
 
-        close_side = "sell" if side == "long" else "buy"
+        close_side = _close_side_for_position(side)
         oid = _place_market(broker, signal.symbol, close_side, close_qty, reduce_only=True, action_label="sl")
 
         _refresh_position_in_cache(broker, config)
@@ -800,6 +813,10 @@ def start_tv_executor() -> None:
         api_secret=os.getenv("TV_EXEC_KUCOIN_API_SECRET", "") or None,
         passphrase=os.getenv("TV_EXEC_KUCOIN_PASSPHRASE", "") or None,
     )
+    try:
+        _broker._order_leverage = float(_config.order_leverage)
+    except Exception as e:
+        log.warning("tv_executor failed to apply order leverage override: %s", e)
 
     t = threading.Thread(
         target=_tv_cache_refresh_loop,
