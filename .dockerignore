@@ -8,7 +8,7 @@ notebooks
 *.md
 .venv
 venv
-data
+data/*
 !data/
 !data/runs/
 !data/runs/visual_v02_seed/
