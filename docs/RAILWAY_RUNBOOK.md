@@ -275,6 +275,68 @@ bash -lc "python -u -m quant.execution.live_signal_worker --symbol SOLUSDT --sig
 Operational preference going forward:
 separate services are cleaner than one chained shell process, unless there is a strong reason to keep them combined.
 
+## Multi-bot strategy profiles
+
+The repository exposes four Railway bot profiles through
+`python -u -m quant.execution.railway_bot`:
+
+| Profile | Behavior |
+|---|---|
+| `canonical` | Production dual-regime strategy. Uses the shared daily CHOP/ADX/ER gate (Postgres → Redis → fallback). Switches between flip (countertrend) and TP2 (trendfollower). |
+| `countertrend` | Countertrend/flip only; gate forced ON. WAIT-mode SL exits flat. |
+| `countertrend_sl_reverse` | Countertrend/flip only; gate forced ON. WAIT-mode SL reverses into the opposite position and remains in WAIT. |
+| `pc3axis` | Live 3-axis state-space gate using the last documented strict `base_3of3` backtest configuration. |
+
+Create one Railway service per bot (four KuCoin sub-accounts). Procfile process names:
+
+```text
+bot-canonical
+bot-countertrend
+bot-countertrend-sl-reverse
+bot-pc3axis
+```
+
+See `docs/RAILWAY_MULTI_BOT.md` for the full four-service setup checklist.
+
+Required per-service variables:
+
+- `BOT_PROFILE=canonical`, `countertrend`, `countertrend_sl_reverse`, or `pc3axis`
+- `BOT_INSTANCE_ID` — unique stable name for state/signal/event isolation and Postgres `strategy_instance`
+- `LIVE_SYMBOL`
+- **Dedicated KuCoin sub-account credentials** (`KUCOIN_FUTURES_API_KEY`, `KUCOIN_FUTURES_API_SECRET`, `KUCOIN_FUTURES_PASSPHRASE`) — one API key triple per service
+- normal live safety controls (`LIVE_TRADING_ENABLED`, `LIVE_EXECUTOR_DRY_RUN`, allowlist, leverage, sizing)
+- shared infra: `POSTGRES_URL` (or `DATABASE_URL`), `REDIS_URL` (for canonical gate reads)
+
+The launcher isolates each instance under
+`/data/live/bots/$BOT_INSTANCE_ID` (signals, state, events) and applies the latest documented SOL
+backtest defaults for countertrend profiles unless explicitly overridden:
+
+- `LIVE_IMBA_LOOKBACK=150`
+- `LIVE_FLIP_TTP_TRAIL_PCT=0.0025`
+- `LIVE_FLIP_MIN_SL_PCT=0.010`
+- `LIVE_FLIP_MAX_SL_PCT=0.080`
+- `LIVE_FLIP_SWING_LOOKBACK=180`
+
+The `pc3axis` profile reads `PC3AXIS_STATE_SPACE_PATH`, falling back to
+`DASHBOARD_STATESPACE_PARQUET` and then
+`data/live/state_space_latest.parquet`. If that service-local cache is absent,
+it loads the last `PC3AXIS_RENKO_RETENTION_DAYS=30` days of Renko bricks from
+Postgres and computes the state space locally. Its strict live 3-of-3
+adaptation is:
+
+- `abs(X_raw)` drift rank <= `PC3AXIS_DRIFT_ABS_Q=0.55`
+- `abs(Y_res)` elasticity rank >= `PC3AXIS_ELASTICITY_Q=0.25`
+- `abs(Z_res)` instability rank <= `PC3AXIS_INSTABILITY_Q=0.35`
+- `PC3AXIS_LOOKBACK_ROWS=4000`
+
+If the cache is unavailable, the PC bot falls back to the canonical durable
+gate and includes `profile_gate_error` in its gate payload.
+
+Do not run these bots on the same symbol in the same net-position exchange
+account. Separate files do not isolate venue positions. Use separate
+subaccounts/API credentials, or distinct symbols. A shared account is
+appropriate only for dry-run/shadow comparison.
+
 ## Cronjob service
 
 Purpose:
