@@ -155,7 +155,11 @@ class KucoinFuturesBroker(BrokerAPI):
     ):
         self._key = (api_key or os.getenv("KUCOIN_FUTURES_API_KEY", "")).strip()
         self._secret = (api_secret or os.getenv("KUCOIN_FUTURES_API_SECRET", "")).strip()
-        self._pass = (passphrase or os.getenv("KUCOIN_FUTURES_PASSPHRASE", "")).strip()
+        self._pass = (
+            passphrase
+            or os.getenv("KUCOIN_FUTURES_PASSPHRASE", "")
+            or os.getenv("KUCOIN_FUTURES_API_PASSPHRASE", "")
+        ).strip()
         self._order_leverage = float(os.getenv("KUCOIN_FUTURES_ORDER_LEVERAGE", os.getenv("LIVE_EXECUTOR_LEVERAGE", "1")))
         self._margin_mode = (os.getenv("KUCOIN_FUTURES_MARGIN_MODE", "") or "").strip().lower()
         self._price_tick = float(os.getenv("KUCOIN_FUTURES_PRICE_TICK", "0.001"))
@@ -267,14 +271,17 @@ class KucoinFuturesBroker(BrokerAPI):
         contract = _symbol_to_contract(symbol)
         if contract in self._contract_multiplier_cache:
             return float(self._contract_multiplier_cache[contract])
-        try:
-            data = self._req("GET", f"/api/v1/contracts/{contract}")
-            mult = float(data.get("multiplier", 1.0) or 1.0)
-            if mult <= 0:
-                mult = 1.0
-        except Exception as e:
-            log.warning("contract multiplier lookup failed symbol=%s err=%s", contract, e)
-            mult = 1.0
+        # NOTE: never silently fall back to 1.0 here. The real SOL-USDT
+        # multiplier is 0.1, so a 1.0 fallback oversizes every order by
+        # exactly 10x. Raise instead and let the caller apply the correct
+        # configured default (LIVE_EXECUTOR_CONTRACT_MULTIPLIER).
+        data = self._req("GET", f"/api/v1/contracts/{contract}")
+        raw = data.get("multiplier")
+        if raw is None:
+            raise ValueError(f"kucoin contract {contract} returned no multiplier")
+        mult = float(raw)
+        if mult <= 0:
+            raise ValueError(f"kucoin contract {contract} returned invalid multiplier={raw!r}")
         self._contract_multiplier_cache[contract] = float(mult)
         return float(mult)
 
@@ -653,7 +660,11 @@ def list_fills(
     """Fetch recent fills (trade history) for monitoring."""
     key = (api_key or os.getenv("KUCOIN_FUTURES_API_KEY", "")).strip()
     secret = (api_secret or os.getenv("KUCOIN_FUTURES_API_SECRET", "")).strip()
-    pp = (passphrase or os.getenv("KUCOIN_FUTURES_PASSPHRASE", "")).strip()
+    pp = (
+        passphrase
+        or os.getenv("KUCOIN_FUTURES_PASSPHRASE", "")
+        or os.getenv("KUCOIN_FUTURES_API_PASSPHRASE", "")
+    ).strip()
     if not key or not secret or not pp:
         return []
 

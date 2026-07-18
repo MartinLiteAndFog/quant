@@ -673,8 +673,12 @@ def _resolve_contract_multiplier(broker: KucoinFuturesBroker, symbol: str) -> fl
         mult = float(broker.get_contract_multiplier(symbol))
         if mult > 0:
             return mult
-    except Exception:
-        pass
+        log.warning("contract multiplier for %s was non-positive (%r); using configured default", symbol, mult)
+    except Exception as e:
+        # Falling back HIGH would oversize the order, so the default is the
+        # true SOL-USDT multiplier (0.1). A wrong-but-small multiplier
+        # undersizes; a wrong-but-large one blows through the risk caps.
+        log.warning("contract multiplier lookup failed symbol=%s err=%s; using configured default", symbol, e)
     return float(os.getenv("LIVE_EXECUTOR_CONTRACT_MULTIPLIER", "0.1"))
 
 

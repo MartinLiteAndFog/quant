@@ -16,13 +16,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 
+from quant.execution.bot_profiles import (
+    active_profile,
+    strategy_config_hash,
+    strategy_instance_id,
+)
 from quant.execution.CHOPgate import get_live_gate_state
 from quant.execution.event_builders import build_action_event, build_execution_event
 from quant.execution.event_log import append_event_jsonl
 from quant.execution.event_store import insert_action_event, insert_execution_event
 from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.live_executor import (
-    _qty_from_equity_pct,
+    _live_order_qty,
     _resolve_contract_multiplier,
     _resolve_equity,
 )
@@ -56,6 +61,7 @@ class TVExecConfig:
     cache_sec: float
     cache_max_age_sec: float
     emergency_sl_pct: float
+    flip_delay_sec: float
 
     @classmethod
     def from_env(cls) -> TVExecConfig:
@@ -69,6 +75,7 @@ class TVExecConfig:
             cache_sec=float(os.getenv("TV_EXEC_CACHE_SEC", "10")),
             cache_max_age_sec=float(os.getenv("TV_EXEC_CACHE_MAX_AGE_SEC", "60")),
             emergency_sl_pct=float(os.getenv("TV_EXEC_EMERGENCY_SL_PCT", "0.023")),
+            flip_delay_sec=float(os.getenv("TV_EXEC_FLIP_DELAY_SEC", "2.0")),
         )
 
 
@@ -158,7 +165,7 @@ def _build_cache(broker: KucoinFuturesBroker, config: TVExecConfig) -> TVCache:
     mid = (bid + ask) / 2.0 if (bid > 0 and ask > 0) else (ask or bid or 0.0)
     mult = _resolve_contract_multiplier(broker, config.symbol)
 
-    qty = _qty_from_equity_pct(
+    qty = _live_order_qty(
         equity=equity,
         pos_pct=config.pos_pct,
         leverage=config.leverage,
@@ -235,7 +242,7 @@ def _refresh_position_in_cache(broker: KucoinFuturesBroker, config: TVExecConfig
         bid, ask = broker.get_best_bid_ask(config.symbol)
         mid = (bid + ask) / 2.0 if (bid > 0 and ask > 0) else (ask or bid or 0.0)
         mult = _resolve_contract_multiplier(broker, config.symbol)
-        qty = _qty_from_equity_pct(
+        qty = _live_order_qty(
             equity=equity, pos_pct=config.pos_pct,
             leverage=config.leverage, mid_price=mid,
             contract_multiplier=mult,
@@ -297,8 +304,12 @@ def _log_action(
         blocked=blocked,
         block_reason=block_reason,
     )
-    event["strategy_instance"] = "tv_executor"
-    event["config_hash"] = "tv_executor_v1"
+    # Tag with this bot's own instance so the four pilot sub-accounts stay
+    # separable in Postgres for fill analysis. A shared "tv_executor" tag
+    # would merge all of them into one indistinguishable stream.
+    event["strategy_instance"] = strategy_instance_id()
+    event["config_hash"] = strategy_config_hash()
+    event["bot_profile"] = active_profile()
     if payload:
         event["payload_json"] = payload
 
@@ -314,8 +325,8 @@ def _log_action(
             "ts": event["ts"],
             "seq": event["seq"],
             "strategy": event["strategy"],
-            "strategy_instance": "tv_executor",
-            "config_hash": "tv_executor_v1",
+            "strategy_instance": strategy_instance_id(),
+            "config_hash": strategy_config_hash(),
             "symbol": event["symbol"],
             "venue": event["venue"],
             "source_signal_event_id": None,
@@ -350,6 +361,10 @@ def _log_execution(
     qty: Optional[float] = None,
     reduce_only: Optional[bool] = None,
     status: Optional[str] = None,
+    price: Optional[float] = None,
+    mid_price: Optional[float] = None,
+    bid: Optional[float] = None,
+    ask: Optional[float] = None,
 ) -> None:
     ts = _now_iso()
     event = build_execution_event(
@@ -369,9 +384,28 @@ def _log_execution(
         qty=qty,
         reduce_only=reduce_only,
         status=status,
-        strategy_instance="tv_executor",
-        config_hash="tv_executor_v1",
+        strategy_instance=strategy_instance_id(),
+        config_hash=strategy_config_hash(),
     )
+    # Market context at decision time — required to compute realised slippage
+    # against the eventual fill. Fall back to the live cache so every call site
+    # records context without having to thread it through by hand.
+    if mid_price is None or bid is None or ask is None:
+        with _cache_lock:
+            snap = _cache
+        if snap is not None:
+            mid_price = snap.mid_price if mid_price is None else mid_price
+            bid = snap.bid if bid is None else bid
+            ask = snap.ask if ask is None else ask
+
+    ref_price = price if price is not None else mid_price
+    for key, value in (
+        ("price", ref_price), ("mid_price", mid_price), ("bid", bid), ("ask", ask),
+        ("bot_profile", active_profile()),
+    ):
+        if value is not None:
+            event[key] = value
+
     day = pd.Timestamp.now("UTC").strftime("%Y%m%d")
     out_path = _events_root() / "execution_events" / f"{day}.jsonl"
     try:
@@ -393,6 +427,10 @@ def _log_execution(
             "qty": qty,
             "reduce_only": reduce_only,
             "status": status,
+            "price": ref_price,
+            "reject_reason": None,
+            "strategy_instance": strategy_instance_id(),
+            "config_hash": strategy_config_hash(),
             "payload_json": dict(event),
         })
     except Exception as e:
@@ -741,9 +779,15 @@ def _do_flip(
         return {"ok": False, "action": "flip", "reason": "qty_zero_check_equity"}
 
     if config.dry_run:
-        total = qty + abs(int(pos)) if current_side != "flat" else qty
-        log.warning("tv_executor DRY_RUN flip %s->%s qty=%d", current_side, want_side, total)
-        return {"ok": True, "action": "flip", "reason": "dry_run", "qty": total, "side": want_side}
+        log.warning(
+            "tv_executor DRY_RUN flip %s->%s close_qty=%d wait=%.1fs open_qty=%d",
+            current_side, want_side, abs(int(pos)), config.flip_delay_sec, qty,
+        )
+        return {
+            "ok": True, "action": "flip", "reason": "dry_run", "side": want_side,
+            "close_qty": abs(int(pos)), "qty": qty,
+            "flip_delay_sec": config.flip_delay_sec,
+        }
 
     if current_side == "flat":
         oid = _place_market(broker, symbol, order_side, qty, reduce_only=False, action_label="flip_entry")
@@ -762,11 +806,54 @@ def _do_flip(
 
         return {"ok": True, "action": "flip", "side": want_side, "qty": qty, "order_id": oid}
 
-    # Net-off flip: cancel old SL, single order, place new SL
+    # Two-legged flip: close the existing position, settle, then open the
+    # opposite side. A single net-off order is faster but leaves no clean
+    # close fill to analyse, and KuCoin can partially fill the combined size
+    # and strand the position mid-flip.
     _cancel_emergency_sl(broker, symbol)
-    total_qty = qty + abs(int(pos))
-    oid = _place_market(broker, symbol, order_side, total_qty, reduce_only=False, action_label="flip")
     pos_after_i = 1 if want_side == "long" else -1
+
+    close_side = "sell" if current_side == "long" else "buy"
+    close_qty = abs(int(pos))
+    close_oid = _place_market(
+        broker, symbol, close_side, close_qty, reduce_only=True, action_label="flip_close"
+    )
+    _log_bg(_log_execution, symbol=symbol, seq=seq, kind="market_fill",
+            order_action=close_side, reason="tv_flip_close",
+            pos_before=pos_before_i, pos_after=0,
+            order_id=close_oid, side=close_side, qty=float(close_qty),
+            reduce_only=True, status="sent")
+
+    # Let the close settle so the opposite entry sizes against a flat book.
+    if config.flip_delay_sec > 0:
+        time.sleep(config.flip_delay_sec)
+
+    # Confirm we are actually flat before reversing; opening the opposite side
+    # on top of an unclosed position would double the intended exposure.
+    try:
+        pos_now = float(broker.get_position(symbol))
+    except Exception as e:
+        log.warning("tv_executor flip: position check failed after close: %s", e)
+        pos_now = 0.0
+
+    if abs(pos_now) > 0:
+        log.error(
+            "tv_executor flip aborted: still holding %.1f contracts after close leg; not reversing",
+            pos_now,
+        )
+        _refresh_position_in_cache(broker, config)
+        _log_bg(_log_action, symbol=symbol, seq=seq, action="flip_close_only",
+                action_side=want_side, reason="tv_flip_close_incomplete",
+                pos_before=pos_before_i, pos_after=pos_before_i,
+                blocked=True, block_reason=f"residual_position={pos_now}")
+        return {
+            "ok": False, "action": "flip", "reason": "close_leg_incomplete",
+            "residual_position": pos_now, "order_id": close_oid,
+        }
+
+    open_oid = _place_market(
+        broker, symbol, order_side, qty, reduce_only=False, action_label="flip_open"
+    )
 
     _place_emergency_sl(broker, symbol, want_side, qty, cache.mid_price, config.emergency_sl_pct)
     _refresh_position_in_cache(broker, config)
@@ -775,11 +862,16 @@ def _do_flip(
             action_side=want_side, reason="tv_flip",
             pos_before=pos_before_i, pos_after=pos_after_i)
     _log_bg(_log_execution, symbol=symbol, seq=seq, kind="market_fill",
-            order_action=order_side, reason="tv_flip",
-            pos_before=pos_before_i, pos_after=pos_after_i,
-            order_id=oid, side=order_side, qty=float(total_qty), reduce_only=False, status="sent")
+            order_action=order_side, reason="tv_flip_open",
+            pos_before=0, pos_after=pos_after_i,
+            order_id=open_oid, side=order_side, qty=float(qty),
+            reduce_only=False, status="sent")
 
-    return {"ok": True, "action": "flip", "side": want_side, "qty": total_qty, "order_id": oid}
+    return {
+        "ok": True, "action": "flip", "side": want_side, "qty": qty,
+        "close_order_id": close_oid, "order_id": open_oid,
+        "flip_delay_sec": config.flip_delay_sec,
+    }
 
 
 # ---------------------------------------------------------------------------

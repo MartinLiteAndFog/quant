@@ -26,15 +26,29 @@ _BACKTEST_DEFAULTS = {
 }
 
 _MICRO_PILOT_DEFAULTS = {
-    "LIVE_EXECUTOR_MAX_MARGIN_USDT": "5",
-    "LIVE_EXECUTOR_MAX_CONTRACTS": "1",
+    "LIVE_EXECUTOR_MAX_MARGIN_USDT": "15",
+    "LIVE_EXECUTOR_MAX_CONTRACTS": "20",
     "LIVE_EXECUTOR_MAX_LEVERAGE": "3",
     "LIVE_EXECUTOR_LEVERAGE": "3",
     "KUCOIN_FUTURES_ORDER_LEVERAGE": "3",
     "KUCOIN_FUTURES_MARGIN_MODE": "isolated",
     "KUCOIN_FUTURES_STRICT_MARGIN_MODE": "1",
-    "LIVE_EXECUTOR_POS_PCT": "1.0",
+    "LIVE_EXECUTOR_POS_PCT": "0.90",
 }
+
+# Absolute ceilings the pilot refuses to exceed. These are the guardrails, not
+# the operating values — raise them deliberately, per account. KuCoin itself
+# allows up to 75x on SOL-USDT, so these are our limits, not the exchange's.
+_PILOT_CEILINGS = {
+    "leverage": ("MICRO_PILOT_LEVERAGE_CEILING", 10.0),
+    "margin_usdt": ("MICRO_PILOT_MARGIN_CEILING_USDT", 20.0),
+    "contracts": ("MICRO_PILOT_CONTRACTS_CEILING", 50.0),
+}
+
+
+def _ceiling(name: str) -> float:
+    env_key, default = _PILOT_CEILINGS[name]
+    return float(os.getenv(env_key, str(default)))
 
 
 def _safe_instance_id(raw: str) -> str:
@@ -71,15 +85,48 @@ def configure_environment() -> tuple[str, str]:
         margin_mode = os.environ["KUCOIN_FUTURES_MARGIN_MODE"].strip().lower()
         if leverage <= 0 or leverage > max_leverage or order_leverage != leverage:
             raise ValueError("micro pilot requires matching executor/order leverage within the configured cap")
-        if max_leverage > 3:
-            raise ValueError("micro pilot leverage cap must not exceed 3")
-        if max_margin <= 0 or max_margin > 5:
-            raise ValueError("micro pilot margin cap must be in (0, 5] USDT")
-        if max_contracts != 1:
-            raise ValueError("SOL micro pilot requires exactly one contract maximum")
+        if max_leverage > _ceiling("leverage"):
+            raise ValueError(
+                f"micro pilot leverage cap {max_leverage} exceeds ceiling {_ceiling('leverage')}"
+            )
+        if max_margin <= 0 or max_margin > _ceiling("margin_usdt"):
+            raise ValueError(
+                f"micro pilot margin cap must be in (0, {_ceiling('margin_usdt')}] USDT, got {max_margin}"
+            )
+        if max_contracts < 1 or max_contracts > _ceiling("contracts"):
+            raise ValueError(
+                f"micro pilot contract cap must be in [1, {int(_ceiling('contracts'))}], got {max_contracts}"
+            )
         if margin_mode != "isolated":
             raise ValueError("micro pilot requires isolated margin")
+
+    if tv_webhook_mode():
+        # TV_EXEC_* defaults (pos_pct 0.50, leverage 10) are unrelated to this
+        # bot's configured risk. Inherit the live executor settings so the
+        # micro-pilot caps actually bind on the webhook path too.
+        os.environ.setdefault("TV_EXEC_POS_PCT", os.getenv("LIVE_EXECUTOR_POS_PCT", "1.0"))
+        os.environ.setdefault("TV_EXEC_LEVERAGE", os.getenv("LIVE_EXECUTOR_LEVERAGE", "1"))
+        os.environ.setdefault(
+            "TV_EXEC_DRY_RUN",
+            "0" if os.getenv("LIVE_EXECUTOR_DRY_RUN", "1").strip() == "0" else "1",
+        )
+        tv_leverage = float(os.environ["TV_EXEC_LEVERAGE"])
+        max_leverage = float(os.getenv("LIVE_EXECUTOR_MAX_LEVERAGE", "0") or 0)
+        if max_leverage > 0 and tv_leverage > max_leverage:
+            raise ValueError(
+                f"TV_EXEC_LEVERAGE={tv_leverage} exceeds LIVE_EXECUTOR_MAX_LEVERAGE={max_leverage}"
+            )
+
     return profile, instance
+
+
+def _truthy(value: str | None) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def tv_webhook_mode() -> bool:
+    """TradingView-driven mode: webhook is the sole source of buy/sell signals."""
+    return _truthy(os.getenv("TV_WEBHOOK_ENABLED"))
 
 
 def main() -> None:
@@ -87,31 +134,41 @@ def main() -> None:
     symbol = os.getenv("LIVE_SYMBOL", "SOL-USDT")
     signals_dir = os.environ["SIGNALS_DIR"]
 
-    commands = [
-        [
-            sys.executable,
-            "-u",
-            "-m",
-            "quant.execution.live_signal_worker",
-            "--symbol",
-            symbol,
-            "--signals-dir",
-            signals_dir,
-        ],
-        [
-            sys.executable,
-            "-u",
-            "-m",
-            "quant.execution.live_executor",
-            "--symbol",
-            symbol,
-            "--signals-dir",
-            signals_dir,
-        ],
-    ]
+    if tv_webhook_mode():
+        # TradingView replaces the internal Renko signal worker entirely.
+        # tv_signal_executor places orders directly, so live_executor is not
+        # started either — two controllers on one sub-account would fight.
+        os.environ.setdefault("ENABLE_TV_EXECUTOR", "1")
+        commands = [
+            [sys.executable, "-u", "-m", "quant.execution.bot_webhook"],
+        ]
+    else:
+        commands = [
+            [
+                sys.executable,
+                "-u",
+                "-m",
+                "quant.execution.live_signal_worker",
+                "--symbol",
+                symbol,
+                "--signals-dir",
+                signals_dir,
+            ],
+            [
+                sys.executable,
+                "-u",
+                "-m",
+                "quant.execution.live_executor",
+                "--symbol",
+                symbol,
+                "--signals-dir",
+                signals_dir,
+            ],
+        ]
     print(
         f"starting railway bot instance={instance} profile={profile} symbol={symbol} "
-        f"signals_dir={signals_dir} supported_profiles={sorted(SUPPORTED_PROFILES)}",
+        f"signals_dir={signals_dir} tv_webhook_mode={tv_webhook_mode()} "
+        f"supported_profiles={sorted(SUPPORTED_PROFILES)}",
         flush=True,
     )
 

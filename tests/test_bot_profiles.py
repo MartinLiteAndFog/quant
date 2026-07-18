@@ -162,11 +162,46 @@ class BotProfileTests(unittest.TestCase):
             clear=False,
         ):
             configure_environment()
-            self.assertEqual(os.environ["LIVE_EXECUTOR_MAX_MARGIN_USDT"], "5")
-            self.assertEqual(os.environ["LIVE_EXECUTOR_MAX_CONTRACTS"], "1")
+            # Pilot accounts are funded with $15 and trade 90% of equity.
+            self.assertEqual(os.environ["LIVE_EXECUTOR_MAX_MARGIN_USDT"], "15")
+            self.assertEqual(os.environ["LIVE_EXECUTOR_MAX_CONTRACTS"], "20")
+            self.assertEqual(os.environ["LIVE_EXECUTOR_POS_PCT"], "0.90")
             self.assertEqual(os.environ["LIVE_EXECUTOR_LEVERAGE"], "3")
             self.assertEqual(os.environ["KUCOIN_FUTURES_MARGIN_MODE"], "isolated")
             self.assertEqual(os.environ["KUCOIN_FUTURES_STRICT_MARGIN_MODE"], "1")
+
+    def test_micro_pilot_allows_ten_x_leverage(self) -> None:
+        """10x must be reachable: the old hard-coded cap of 3 blocked it."""
+        with patch.dict(
+            os.environ,
+            {
+                "BOT_PROFILE": "canonical",
+                "BOT_INSTANCE_ID": "micro-a",
+                "MICRO_PILOT_MODE": "1",
+                "LIVE_EXECUTOR_LEVERAGE": "10",
+                "LIVE_EXECUTOR_MAX_LEVERAGE": "10",
+                "KUCOIN_FUTURES_ORDER_LEVERAGE": "10",
+            },
+            clear=False,
+        ):
+            configure_environment()
+            self.assertEqual(os.environ["LIVE_EXECUTOR_LEVERAGE"], "10")
+
+    def test_micro_pilot_rejects_leverage_above_ceiling(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "BOT_PROFILE": "canonical",
+                "BOT_INSTANCE_ID": "micro-a",
+                "MICRO_PILOT_MODE": "1",
+                "LIVE_EXECUTOR_LEVERAGE": "25",
+                "LIVE_EXECUTOR_MAX_LEVERAGE": "25",
+                "KUCOIN_FUTURES_ORDER_LEVERAGE": "25",
+            },
+            clear=False,
+        ):
+            with self.assertRaisesRegex(ValueError, "exceeds ceiling"):
+                configure_environment()
 
     def test_micro_pilot_rejects_cross_margin(self) -> None:
         with patch.dict(

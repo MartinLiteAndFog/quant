@@ -157,6 +157,18 @@ def insert_action_event(row: Dict[str, Any]) -> None:
     on conflict (event_id) do nothing
     """
     data = dict(row)
+    # Optional columns default to NULL. Without these, a caller that omits one
+    # key raises during binding and the whole event is silently lost to the
+    # caller's except-and-warn handler.
+    for key in (
+        "strategy_instance", "venue", "source_signal_event_id", "source_event_id",
+        "action_side", "position_before", "position_after", "qty_before", "qty_after",
+        "engine_mode_before", "engine_mode_after", "reason_detail", "block_reason",
+        "regime_state", "gate_name",
+    ):
+        data.setdefault(key, None)
+    data.setdefault("config_hash", data.get("strategy") or "unknown")
+    data.setdefault("blocked", False)
     data["payload_json"] = _payload(data.get("payload_json"))
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, data)
@@ -167,15 +179,25 @@ def insert_execution_event(row: Dict[str, Any]) -> None:
     insert into execution_events (
       event_id, ts, seq, symbol, venue, source_action_event_id,
       execution_stage, order_id, client_oid, side, qty, price,
-      reduce_only, status, reject_reason, payload_json
+      reduce_only, status, reject_reason, strategy_instance, config_hash, payload_json
     ) values (
       %(event_id)s, %(ts)s, %(seq)s, %(symbol)s, %(venue)s, %(source_action_event_id)s,
       %(execution_stage)s, %(order_id)s, %(client_oid)s, %(side)s, %(qty)s, %(price)s,
-      %(reduce_only)s, %(status)s, %(reject_reason)s, %(payload_json)s::jsonb
+      %(reduce_only)s, %(status)s, %(reject_reason)s, %(strategy_instance)s,
+      %(config_hash)s, %(payload_json)s::jsonb
     )
     on conflict (event_id) do nothing
     """
     data = dict(row)
+    # `price` and `reject_reason` were referenced by this SQL but never supplied
+    # by the TradingView executor, so every one of its execution events failed
+    # to persist and was swallowed by the caller's warning handler.
+    for key in (
+        "seq", "venue", "source_action_event_id", "order_id", "client_oid",
+        "side", "qty", "price", "reduce_only", "status", "reject_reason",
+        "strategy_instance", "config_hash",
+    ):
+        data.setdefault(key, None)
     data["payload_json"] = _payload(data.get("payload_json"))
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, data)
