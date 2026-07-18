@@ -636,6 +636,30 @@ def _qty_from_equity_pct(
     return int(notional // per_contract)
 
 
+def _live_order_qty(
+    *,
+    equity: float,
+    pos_pct: float,
+    leverage: float,
+    mid_price: float,
+    contract_multiplier: float = 1.0,
+) -> int:
+    """Apply optional absolute micro-pilot caps to the normal sizing rule."""
+    max_margin = float(os.getenv("LIVE_EXECUTOR_MAX_MARGIN_USDT", "0") or 0)
+    sizing_equity = min(float(equity), max_margin) if max_margin > 0 else float(equity)
+    qty = _qty_from_equity_pct(
+        equity=sizing_equity,
+        pos_pct=pos_pct,
+        leverage=leverage,
+        mid_price=mid_price,
+        contract_multiplier=contract_multiplier,
+    )
+    max_contracts = int(float(os.getenv("LIVE_EXECUTOR_MAX_CONTRACTS", "0") or 0))
+    if max_contracts > 0:
+        qty = min(qty, max_contracts)
+    return int(qty)
+
+
 def _resolve_equity(broker: KucoinFuturesBroker) -> float:
     try:
         bal = broker.get_account_balance(currency="USDT")
@@ -1084,7 +1108,7 @@ def run_once(
     pos_pct = float(os.getenv("LIVE_EXECUTOR_POS_PCT", "0.90"))
     equity = _resolve_equity(broker)
     contract_multiplier = _resolve_contract_multiplier(broker, symbol)
-    base_qty = _qty_from_equity_pct(
+    base_qty = _live_order_qty(
         equity=equity,
         pos_pct=pos_pct,
         leverage=leverage,
@@ -1647,7 +1671,7 @@ def run_once(
                     fresh_bid, fresh_ask = broker.get_best_bid_ask(symbol)
                     fresh_mid = (fresh_bid + fresh_ask) / 2.0 if (fresh_bid and fresh_ask) else (fresh_ask or fresh_bid or mid or 0.0)
                     fresh_equity = _resolve_equity(broker)
-                    flip_qty = _qty_from_equity_pct(
+                    flip_qty = _live_order_qty(
                         equity=fresh_equity,
                         pos_pct=pos_pct,
                         leverage=leverage,

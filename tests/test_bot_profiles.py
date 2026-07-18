@@ -33,6 +33,15 @@ class BotProfileTests(unittest.TestCase):
             "LIVE_FLIP_MAX_SL_PCT",
             "LIVE_FLIP_SWING_LOOKBACK",
             "EVENTS_DIR",
+            "MICRO_PILOT_MODE",
+            "LIVE_EXECUTOR_MAX_MARGIN_USDT",
+            "LIVE_EXECUTOR_MAX_CONTRACTS",
+            "LIVE_EXECUTOR_MAX_LEVERAGE",
+            "LIVE_EXECUTOR_LEVERAGE",
+            "KUCOIN_FUTURES_ORDER_LEVERAGE",
+            "KUCOIN_FUTURES_MARGIN_MODE",
+            "KUCOIN_FUTURES_STRICT_MARGIN_MODE",
+            "LIVE_EXECUTOR_POS_PCT",
         ):
             os.environ.pop(key, None)
 
@@ -145,3 +154,30 @@ class BotProfileTests(unittest.TestCase):
         ):
             self.assertEqual(strategy_instance_id(), "pc3axis")
             self.assertEqual(strategy_config_hash(), "pc3axis_pc3axis_v1")
+
+    def test_micro_pilot_sets_fail_closed_risk_limits(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"BOT_PROFILE": "canonical", "BOT_INSTANCE_ID": "micro-a", "MICRO_PILOT_MODE": "1"},
+            clear=False,
+        ):
+            configure_environment()
+            self.assertEqual(os.environ["LIVE_EXECUTOR_MAX_MARGIN_USDT"], "5")
+            self.assertEqual(os.environ["LIVE_EXECUTOR_MAX_CONTRACTS"], "1")
+            self.assertEqual(os.environ["LIVE_EXECUTOR_LEVERAGE"], "3")
+            self.assertEqual(os.environ["KUCOIN_FUTURES_MARGIN_MODE"], "isolated")
+            self.assertEqual(os.environ["KUCOIN_FUTURES_STRICT_MARGIN_MODE"], "1")
+
+    def test_micro_pilot_rejects_cross_margin(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "BOT_PROFILE": "canonical",
+                "BOT_INSTANCE_ID": "micro-a",
+                "MICRO_PILOT_MODE": "1",
+                "KUCOIN_FUTURES_MARGIN_MODE": "cross",
+            },
+            clear=False,
+        ):
+            with self.assertRaisesRegex(ValueError, "isolated margin"):
+                configure_environment()

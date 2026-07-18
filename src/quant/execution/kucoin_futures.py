@@ -307,6 +307,29 @@ class KucoinFuturesBroker(BrokerAPI):
             return "CROSS" if cm else "ISOLATED"
         return None
 
+    def _order_margin_mode_candidates(self, symbol: str) -> List[Optional[str]]:
+        detected_mm = self._position_margin_mode(symbol)
+        configured_mm = self._margin_mode.upper() if self._margin_mode in ("isolated", "cross") else None
+        strict = str(os.getenv("KUCOIN_FUTURES_STRICT_MARGIN_MODE", "0")).strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+        if strict:
+            if configured_mm not in ("CROSS", "ISOLATED"):
+                raise RuntimeError("strict KuCoin margin mode requires KUCOIN_FUTURES_MARGIN_MODE")
+            if detected_mm in ("CROSS", "ISOLATED") and detected_mm != configured_mm:
+                raise RuntimeError(
+                    f"strict KuCoin margin mode mismatch: position={detected_mm} configured={configured_mm}"
+                )
+            return [configured_mm]
+
+        candidates: List[Optional[str]] = []
+        if detected_mm in ("CROSS", "ISOLATED"):
+            candidates.append(detected_mm)
+        if configured_mm in ("CROSS", "ISOLATED"):
+            candidates.append(configured_mm)
+        candidates.extend(["CROSS", "ISOLATED", None])
+        return candidates
+
     def cancel_all(self, symbol: str) -> Dict[str, Any]:
         contract = _symbol_to_contract(symbol)
 
@@ -441,14 +464,7 @@ class KucoinFuturesBroker(BrokerAPI):
             "postOnly": post_only,
             "leverage": str(max(1.0, float(self._order_leverage))),
         }
-        detected_mm = self._position_margin_mode(symbol)
-        configured_mm = self._margin_mode.upper() if self._margin_mode in ("isolated", "cross") else None
-        candidates: List[Optional[str]] = []
-        if detected_mm in ("CROSS", "ISOLATED"):
-            candidates.append(detected_mm)
-        if configured_mm in ("CROSS", "ISOLATED"):
-            candidates.append(configured_mm)
-        candidates.extend(["CROSS", "ISOLATED", None])
+        candidates = self._order_margin_mode_candidates(symbol)
 
         last_err: Optional[Exception] = None
         tried = set()
@@ -501,14 +517,7 @@ class KucoinFuturesBroker(BrokerAPI):
             "leverage": str(max(1.0, float(self._order_leverage))),
         }
 
-        detected_mm = self._position_margin_mode(symbol)
-        configured_mm = self._margin_mode.upper() if self._margin_mode in ("isolated", "cross") else None
-        candidates: List[Optional[str]] = []
-        if detected_mm in ("CROSS", "ISOLATED"):
-            candidates.append(detected_mm)
-        if configured_mm in ("CROSS", "ISOLATED"):
-            candidates.append(configured_mm)
-        candidates.extend(["CROSS", "ISOLATED", None])
+        candidates = self._order_margin_mode_candidates(symbol)
 
         last_err: Optional[Exception] = None
         tried = set()
@@ -588,9 +597,10 @@ class KucoinFuturesBroker(BrokerAPI):
             "reduceOnly": reduce_only,
             "leverage": str(max(1.0, float(self._order_leverage))),
         }
-        detected_mm = self._position_margin_mode(symbol)
-        if detected_mm in ("CROSS", "ISOLATED"):
-            body["marginMode"] = detected_mm
+        candidates = self._order_margin_mode_candidates(symbol)
+        selected_mm = next((mm for mm in candidates if mm in ("CROSS", "ISOLATED")), None)
+        if selected_mm:
+            body["marginMode"] = selected_mm
         data = self._req("POST", "/api/v1/st-orders", body=body)
         return str(data.get("orderId", data.get("order_id", "")))
 

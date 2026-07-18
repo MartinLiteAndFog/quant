@@ -10,7 +10,7 @@ from unittest.mock import patch
 import pandas as pd
 
 from quant.execution.live_executor import (
-    ExecutorState, run_once, _apply_live_ttp_guard,
+    ExecutorState, run_once, _apply_live_ttp_guard, _live_order_qty,
 )
 
 
@@ -111,8 +111,24 @@ class LiveExecutorTests(unittest.TestCase):
         self.tmp.cleanup()
         for key in ("LIVE_RENKO_PATH", "LIVE_FLIP_TTP_TRAIL_PCT",
                      "LIVE_FLIP_MIN_SL_PCT", "LIVE_FLIP_MAX_SL_PCT",
-                     "LIVE_EXECUTOR_POS_PCT"):
+                     "LIVE_EXECUTOR_POS_PCT", "LIVE_EXECUTOR_MAX_MARGIN_USDT",
+                     "LIVE_EXECUTOR_MAX_CONTRACTS"):
             os.environ.pop(key, None)
+
+    def test_micro_pilot_sizing_caps_margin_and_contracts(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"LIVE_EXECUTOR_MAX_MARGIN_USDT": "5", "LIVE_EXECUTOR_MAX_CONTRACTS": "1"},
+            clear=False,
+        ):
+            qty = _live_order_qty(
+                equity=1000,
+                pos_pct=1.0,
+                leverage=3.0,
+                mid_price=75.0,
+                contract_multiplier=0.1,
+            )
+        self.assertEqual(qty, 1)
 
     def test_terminal_state_short_flips_long_broker_position(self) -> None:
         """Flip engine ends in short (pos=-1) after TTP exit.  Broker is

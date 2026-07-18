@@ -33,4 +33,4 @@ COPY --from=dashboard /app/dashboard/dist /app/dashboard/dist
 ENV DASHBOARD2_DIST=/app/dashboard/dist
 
 EXPOSE 8080
-CMD ["python", "-c", "import os, uvicorn; port = int(os.environ.get('PORT', '8080')); print('Starting on 0.0.0.0:' + str(port)); uvicorn.run('quant.execution.webhook_server:app', host='0.0.0.0', port=port)"]
+CMD ["python", "-m", "quant.execution.railway_entrypoint"]
