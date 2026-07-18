@@ -162,10 +162,11 @@ class BotProfileTests(unittest.TestCase):
             clear=False,
         ):
             configure_environment()
-            # Pilot accounts are funded with $15 and trade 90% of equity.
-            self.assertEqual(os.environ["LIVE_EXECUTOR_MAX_MARGIN_USDT"], "15")
-            self.assertEqual(os.environ["LIVE_EXECUTOR_MAX_CONTRACTS"], "20")
+            # Sizing is governed purely by percentage of equity — micro pilot
+            # must NOT impose any absolute dollar or contract cap.
             self.assertEqual(os.environ["LIVE_EXECUTOR_POS_PCT"], "0.90")
+            self.assertNotIn("LIVE_EXECUTOR_MAX_MARGIN_USDT", os.environ)
+            self.assertNotIn("LIVE_EXECUTOR_MAX_CONTRACTS", os.environ)
             self.assertEqual(os.environ["LIVE_EXECUTOR_LEVERAGE"], "3")
             self.assertEqual(os.environ["KUCOIN_FUTURES_MARGIN_MODE"], "isolated")
             self.assertEqual(os.environ["KUCOIN_FUTURES_STRICT_MARGIN_MODE"], "1")

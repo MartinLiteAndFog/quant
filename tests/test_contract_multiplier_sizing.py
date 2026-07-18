@@ -65,39 +65,52 @@ class ContractMultiplierTests(unittest.TestCase):
 
 
 class PilotSizingTests(unittest.TestCase):
-    """$15 account, 90% of equity, 3x leverage must stay within the margin cap."""
+    """Sizing is governed purely by percentage of equity — no dollar cap."""
 
-    def test_sizing_respects_margin_cap_across_prices(self) -> None:
-        with patch.dict(
-            os.environ,
-            {"LIVE_EXECUTOR_MAX_MARGIN_USDT": "15", "LIVE_EXECUTOR_MAX_CONTRACTS": "20"},
-            clear=False,
-        ):
+    def _uncapped(self, **kw):
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LIVE_EXECUTOR_MAX_MARGIN_USDT", None)
+            os.environ.pop("LIVE_EXECUTOR_MAX_CONTRACTS", None)
+            return _live_order_qty(**kw)
+
+    def test_margin_never_exceeds_configured_percentage(self) -> None:
+        for equity in (15.0, 50.0, 200.0, 1000.0):
             for leverage in (3.0, 10.0):
                 for price in (100.0, 150.0, 200.0, 250.0):
-                    qty = _live_order_qty(
-                        equity=15.0, pos_pct=0.90, leverage=leverage,
+                    qty = self._uncapped(
+                        equity=equity, pos_pct=0.90, leverage=leverage,
                         mid_price=price, contract_multiplier=KUCOIN_SOL_MULTIPLIER,
                     )
                     margin = (qty * price * KUCOIN_SOL_MULTIPLIER) / leverage
                     self.assertLessEqual(
-                        margin, 15.0 * 0.90 + 1e-9,
-                        f"margin {margin} exceeded 90% of $15 at {leverage}x/${price}",
+                        margin, equity * 0.90 + 1e-9,
+                        f"margin {margin} exceeded 90% of {equity} at {leverage}x/${price}",
                     )
+
+    def test_size_scales_with_equity_not_a_fixed_cap(self) -> None:
+        """A dollar cap would flatten these; percentage sizing must not."""
+        kw = dict(pos_pct=0.90, leverage=10.0, mid_price=200.0,
+                  contract_multiplier=KUCOIN_SOL_MULTIPLIER)
+        small = self._uncapped(equity=15.0, **kw)
+        large = self._uncapped(equity=150.0, **kw)
+        self.assertGreater(large, small * 5, "size must scale with equity")
 
     def test_trades_are_possible_at_realistic_sol_prices(self) -> None:
         """The old $5 cap floored qty to 0 above ~$150/SOL."""
-        with patch.dict(
-            os.environ,
-            {"LIVE_EXECUTOR_MAX_MARGIN_USDT": "15", "LIVE_EXECUTOR_MAX_CONTRACTS": "20"},
-            clear=False,
-        ):
-            for price in (100.0, 150.0, 200.0, 250.0):
-                qty = _live_order_qty(
-                    equity=15.0, pos_pct=0.90, leverage=3.0,
-                    mid_price=price, contract_multiplier=KUCOIN_SOL_MULTIPLIER,
-                )
-                self.assertGreater(qty, 0, f"no order possible at ${price}/SOL")
+        for price in (100.0, 150.0, 200.0, 250.0):
+            qty = self._uncapped(
+                equity=15.0, pos_pct=0.90, leverage=10.0,
+                mid_price=price, contract_multiplier=KUCOIN_SOL_MULTIPLIER,
+            )
+            self.assertGreater(qty, 0, f"no order possible at ${price}/SOL")
+
+    def test_explicit_cap_still_binds_when_asked_for(self) -> None:
+        with patch.dict(os.environ, {"LIVE_EXECUTOR_MAX_MARGIN_USDT": "15"}, clear=False):
+            qty = _live_order_qty(
+                equity=1000.0, pos_pct=0.90, leverage=10.0,
+                mid_price=200.0, contract_multiplier=KUCOIN_SOL_MULTIPLIER,
+            )
+        self.assertEqual(qty, 6, "an explicit cap must still apply")
 
 
 class LeverageSourceOfTruthTests(unittest.TestCase):

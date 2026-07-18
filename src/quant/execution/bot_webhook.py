@@ -99,8 +99,14 @@ async def tv_execute(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be a JSON object")
 
-    # TradingView cannot set custom headers, so accept the token in the body too.
-    _check_token(x_webhook_token or payload.get("token"))
+    # TradingView cannot set custom headers. Accept the token from the URL query
+    # string as well as the body, so a Pine strategy's alert_message can stay
+    # pure signal JSON and the secret never has to live inside the script.
+    _check_token(
+        x_webhook_token
+        or request.query_params.get("token")
+        or payload.get("token")
+    )
 
     # Reject alerts addressed to a different bot, so one shared TradingView
     # alert template cannot accidentally fire every sub-account at once.

@@ -26,8 +26,10 @@ _BACKTEST_DEFAULTS = {
 }
 
 _MICRO_PILOT_DEFAULTS = {
-    "LIVE_EXECUTOR_MAX_MARGIN_USDT": "15",
-    "LIVE_EXECUTOR_MAX_CONTRACTS": "20",
+    # No absolute dollar or contract cap by default — position size is governed
+    # purely by LIVE_EXECUTOR_POS_PCT (percentage of equity). Set
+    # LIVE_EXECUTOR_MAX_MARGIN_USDT / _MAX_CONTRACTS explicitly to add a hard
+    # backstop on top of that.
     "LIVE_EXECUTOR_MAX_LEVERAGE": "3",
     "LIVE_EXECUTOR_LEVERAGE": "3",
     "KUCOIN_FUTURES_ORDER_LEVERAGE": "3",
@@ -80,8 +82,11 @@ def configure_environment() -> tuple[str, str]:
         leverage = float(os.environ["LIVE_EXECUTOR_LEVERAGE"])
         order_leverage = float(os.environ["KUCOIN_FUTURES_ORDER_LEVERAGE"])
         max_leverage = float(os.environ["LIVE_EXECUTOR_MAX_LEVERAGE"])
-        max_margin = float(os.environ["LIVE_EXECUTOR_MAX_MARGIN_USDT"])
-        max_contracts = int(float(os.environ["LIVE_EXECUTOR_MAX_CONTRACTS"]))
+        # 0 / unset means "no absolute cap" — sizing is governed by
+        # LIVE_EXECUTOR_POS_PCT alone. Only validate a cap that was asked for.
+        max_margin = float(os.getenv("LIVE_EXECUTOR_MAX_MARGIN_USDT", "0") or 0)
+        max_contracts = int(float(os.getenv("LIVE_EXECUTOR_MAX_CONTRACTS", "0") or 0))
+        pos_pct = float(os.environ["LIVE_EXECUTOR_POS_PCT"])
         margin_mode = os.environ["KUCOIN_FUTURES_MARGIN_MODE"].strip().lower()
         if leverage <= 0 or leverage > max_leverage or order_leverage != leverage:
             raise ValueError("micro pilot requires matching executor/order leverage within the configured cap")
@@ -89,13 +94,15 @@ def configure_environment() -> tuple[str, str]:
             raise ValueError(
                 f"micro pilot leverage cap {max_leverage} exceeds ceiling {_ceiling('leverage')}"
             )
-        if max_margin <= 0 or max_margin > _ceiling("margin_usdt"):
+        if not 0 < pos_pct <= 1:
+            raise ValueError(f"LIVE_EXECUTOR_POS_PCT must be in (0, 1], got {pos_pct}")
+        if max_margin > _ceiling("margin_usdt"):
             raise ValueError(
-                f"micro pilot margin cap must be in (0, {_ceiling('margin_usdt')}] USDT, got {max_margin}"
+                f"micro pilot margin cap {max_margin} exceeds ceiling {_ceiling('margin_usdt')} USDT"
             )
-        if max_contracts < 1 or max_contracts > _ceiling("contracts"):
+        if max_contracts > _ceiling("contracts"):
             raise ValueError(
-                f"micro pilot contract cap must be in [1, {int(_ceiling('contracts'))}], got {max_contracts}"
+                f"micro pilot contract cap {max_contracts} exceeds ceiling {int(_ceiling('contracts'))}"
             )
         if margin_mode != "isolated":
             raise ValueError("micro pilot requires isolated margin")
