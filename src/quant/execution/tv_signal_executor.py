@@ -50,6 +50,41 @@ def _truthy(v: Optional[str]) -> bool:
     return str(v).strip().lower() in ("1", "true", "yes", "on")
 
 
+def _order_leverage() -> float:
+    """The leverage actually sent to KuCoin on the order — what the exchange applies."""
+    return float(
+        os.getenv("KUCOIN_FUTURES_ORDER_LEVERAGE", os.getenv("LIVE_EXECUTOR_LEVERAGE", "1"))
+    )
+
+
+def _effective_leverage() -> float:
+    """Single source of truth for leverage.
+
+    Sizing and the order must agree. They used to be independent:
+    `TV_EXEC_LEVERAGE` defaulted to 10 and drove position sizing, while
+    `KUCOIN_FUTURES_ORDER_LEVERAGE` drove the leverage KuCoin actually applied.
+    Setting one to 10 and leaving the other at 3 sized the position for 10x but
+    opened it at 3x, requiring 3.3x more margin than budgeted.
+
+    The order leverage wins, because that is what the exchange enforces.
+    """
+    order_lev = _order_leverage()
+    raw = os.getenv("TV_EXEC_LEVERAGE")
+    if raw is None or not str(raw).strip():
+        return order_lev
+
+    sizing_lev = float(raw)
+    if abs(sizing_lev - order_lev) > 1e-9:
+        log.error(
+            "TV_EXEC_LEVERAGE=%s disagrees with the leverage sent to KuCoin (%s). "
+            "Using %s so sizing matches the exchange. Set KUCOIN_FUTURES_ORDER_LEVERAGE "
+            "and LIVE_EXECUTOR_LEVERAGE to change actual leverage.",
+            sizing_lev, order_lev, order_lev,
+        )
+        return order_lev
+    return sizing_lev
+
+
 @dataclass
 class TVExecConfig:
     symbol: str
@@ -68,7 +103,7 @@ class TVExecConfig:
         return cls(
             symbol=os.getenv("LIVE_SYMBOL", "SOL-USDT"),
             pos_pct=float(os.getenv("TV_EXEC_POS_PCT", "0.50")),
-            leverage=float(os.getenv("TV_EXEC_LEVERAGE", "10.0")),
+            leverage=_effective_leverage(),
             tp1_close_pct=float(os.getenv("TV_EXEC_TP1_PCT", "0.50")),
             dry_run=_truthy(os.getenv("TV_EXEC_DRY_RUN", "1")),
             gate_mode=os.getenv("TV_EXEC_GATE_MODE", "countertrend").strip().lower(),

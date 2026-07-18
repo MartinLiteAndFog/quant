@@ -100,5 +100,41 @@ class PilotSizingTests(unittest.TestCase):
                 self.assertGreater(qty, 0, f"no order possible at ${price}/SOL")
 
 
+class LeverageSourceOfTruthTests(unittest.TestCase):
+    """Sizing leverage must never exceed the leverage KuCoin actually applies.
+
+    TV_EXEC_LEVERAGE used to default to 10 and drive sizing independently of
+    KUCOIN_FUTURES_ORDER_LEVERAGE, which drove what the exchange applied.
+    """
+
+    def _cfg(self, env):
+        from quant.execution.tv_signal_executor import TVExecConfig
+        with patch.dict(os.environ, env, clear=False):
+            os.environ.pop("TV_EXEC_LEVERAGE", None) if "TV_EXEC_LEVERAGE" not in env else None
+            return TVExecConfig.from_env()
+
+    def test_sizing_defaults_to_order_leverage_not_ten(self) -> None:
+        cfg = self._cfg({
+            "LIVE_EXECUTOR_LEVERAGE": "3",
+            "KUCOIN_FUTURES_ORDER_LEVERAGE": "3",
+        })
+        self.assertEqual(cfg.leverage, 3.0, "sizing must not silently use 10x")
+
+    def test_mismatch_falls_back_to_exchange_leverage(self) -> None:
+        cfg = self._cfg({
+            "LIVE_EXECUTOR_LEVERAGE": "3",
+            "KUCOIN_FUTURES_ORDER_LEVERAGE": "3",
+            "TV_EXEC_LEVERAGE": "10",
+        })
+        self.assertEqual(cfg.leverage, 3.0, "must not size at 10x when exchange applies 3x")
+
+    def test_ten_x_when_set_consistently(self) -> None:
+        cfg = self._cfg({
+            "LIVE_EXECUTOR_LEVERAGE": "10",
+            "KUCOIN_FUTURES_ORDER_LEVERAGE": "10",
+        })
+        self.assertEqual(cfg.leverage, 10.0)
+
+
 if __name__ == "__main__":
     unittest.main()

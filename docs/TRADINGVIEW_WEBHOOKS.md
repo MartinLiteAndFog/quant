@@ -121,10 +121,24 @@ The webhook path uses the same caps as the internal executor
 `LIVE_EXECUTOR_POS_PCT` / `LIVE_EXECUTOR_LEVERAGE` at startup, instead of their
 own unrelated defaults (`0.50` / `10x`).
 
-## Leverage — why 10x never worked
+## Leverage — why setting 10 still gave 3x
 
-**3x was never an exchange limit.** KuCoin allows 75x on SOL-USDT. The blocker
-was a hard-coded check in `railway_bot.py` that raised
+**3x was never an exchange limit.** KuCoin allows **75x** on SOL-USDT
+(initial margin 1.4%). Two separate things caused it:
+
+**1. Leverage had two independent sources.** Sizing read `TV_EXEC_LEVERAGE`
+(default **10**); the order sent `KUCOIN_FUTURES_ORDER_LEVERAGE` (set to **3**).
+So the position was *sized* as if 10x but *opened* at 3x — needing 3.3x more
+margin than budgeted. On a $15 account that meant a $60 position wanting $20 of
+margin against a $13.50 budget, so it could not open.
+
+`TV_EXEC_LEVERAGE` is no longer an independent knob: sizing now follows the
+leverage actually sent to the exchange, and a mismatch is logged as an error.
+**To change real leverage, set `LIVE_EXECUTOR_LEVERAGE` and
+`KUCOIN_FUTURES_ORDER_LEVERAGE` together** — `TV_EXEC_LEVERAGE` alone does
+nothing.
+
+**2. A hard-coded cap** in `railway_bot.py` raised
 `"micro pilot leverage cap must not exceed 3"` whenever
 `LIVE_EXECUTOR_MAX_LEVERAGE > 3`.
 
