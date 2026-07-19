@@ -30,13 +30,26 @@ _MICRO_PILOT_DEFAULTS = {
     # purely by LIVE_EXECUTOR_POS_PCT (percentage of equity). Set
     # LIVE_EXECUTOR_MAX_MARGIN_USDT / _MAX_CONTRACTS explicitly to add a hard
     # backstop on top of that.
-    "LIVE_EXECUTOR_MAX_LEVERAGE": "3",
     "LIVE_EXECUTOR_LEVERAGE": "3",
-    "KUCOIN_FUTURES_ORDER_LEVERAGE": "3",
     "KUCOIN_FUTURES_MARGIN_MODE": "isolated",
     "KUCOIN_FUTURES_STRICT_MARGIN_MODE": "1",
     "LIVE_EXECUTOR_POS_PCT": "0.90",
 }
+
+
+def _derive_leverage_settings() -> None:
+    """LIVE_EXECUTOR_LEVERAGE is the single knob for leverage.
+
+    There used to be three variables for one concept — the sizing leverage, the
+    leverage sent to KuCoin, and the cap — and setting only some of them either
+    silently mis-sized orders or crash-looped the service on startup. The other
+    two now follow LIVE_EXECUTOR_LEVERAGE unless explicitly overridden, so the
+    normal case is one variable. MICRO_PILOT_LEVERAGE_CEILING remains the
+    deliberate backstop you must raise to go above it.
+    """
+    leverage = os.environ["LIVE_EXECUTOR_LEVERAGE"]
+    os.environ.setdefault("KUCOIN_FUTURES_ORDER_LEVERAGE", leverage)
+    os.environ.setdefault("LIVE_EXECUTOR_MAX_LEVERAGE", leverage)
 
 # Absolute ceilings the pilot refuses to exceed. These are the guardrails, not
 # the operating values — raise them deliberately, per account. KuCoin itself
@@ -79,6 +92,7 @@ def configure_environment() -> tuple[str, str]:
     if str(os.getenv("MICRO_PILOT_MODE", "0")).strip().lower() in {"1", "true", "yes", "on"}:
         for key, value in _MICRO_PILOT_DEFAULTS.items():
             os.environ.setdefault(key, value)
+        _derive_leverage_settings()
         leverage = float(os.environ["LIVE_EXECUTOR_LEVERAGE"])
         order_leverage = float(os.environ["KUCOIN_FUTURES_ORDER_LEVERAGE"])
         max_leverage = float(os.environ["LIVE_EXECUTOR_MAX_LEVERAGE"])
@@ -88,11 +102,25 @@ def configure_environment() -> tuple[str, str]:
         max_contracts = int(float(os.getenv("LIVE_EXECUTOR_MAX_CONTRACTS", "0") or 0))
         pos_pct = float(os.environ["LIVE_EXECUTOR_POS_PCT"])
         margin_mode = os.environ["KUCOIN_FUTURES_MARGIN_MODE"].strip().lower()
-        if leverage <= 0 or leverage > max_leverage or order_leverage != leverage:
-            raise ValueError("micro pilot requires matching executor/order leverage within the configured cap")
+        if leverage <= 0:
+            raise ValueError(f"LIVE_EXECUTOR_LEVERAGE must be positive, got {leverage}")
+        if order_leverage != leverage:
+            raise ValueError(
+                f"KUCOIN_FUTURES_ORDER_LEVERAGE={order_leverage} does not match "
+                f"LIVE_EXECUTOR_LEVERAGE={leverage}. Sizing and the leverage sent to "
+                f"KuCoin must agree — unset KUCOIN_FUTURES_ORDER_LEVERAGE to follow it."
+            )
+        if leverage > max_leverage:
+            raise ValueError(
+                f"LIVE_EXECUTOR_LEVERAGE={leverage} exceeds LIVE_EXECUTOR_MAX_LEVERAGE="
+                f"{max_leverage}. Unset LIVE_EXECUTOR_MAX_LEVERAGE to follow the "
+                f"configured leverage, or raise it to {leverage}."
+            )
         if max_leverage > _ceiling("leverage"):
             raise ValueError(
-                f"micro pilot leverage cap {max_leverage} exceeds ceiling {_ceiling('leverage')}"
+                f"leverage {max_leverage}x exceeds the safety ceiling "
+                f"{_ceiling('leverage')}x. Raise MICRO_PILOT_LEVERAGE_CEILING to "
+                f"{max_leverage} to allow it."
             )
         if not 0 < pos_pct <= 1:
             raise ValueError(f"LIVE_EXECUTOR_POS_PCT must be in (0, 1], got {pos_pct}")

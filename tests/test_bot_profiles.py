@@ -201,7 +201,7 @@ class BotProfileTests(unittest.TestCase):
             },
             clear=False,
         ):
-            with self.assertRaisesRegex(ValueError, "exceeds ceiling"):
+            with self.assertRaisesRegex(ValueError, "exceeds the safety ceiling"):
                 configure_environment()
 
     def test_micro_pilot_rejects_cross_margin(self) -> None:
@@ -217,3 +217,43 @@ class BotProfileTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(ValueError, "isolated margin"):
                 configure_environment()
+
+
+class LeverageSingleKnobTests(unittest.TestCase):
+    """LIVE_EXECUTOR_LEVERAGE alone must configure leverage end to end."""
+
+    BASE = {"BOT_PROFILE": "canonical", "BOT_INSTANCE_ID": "lev", "MICRO_PILOT_MODE": "1"}
+
+    def _run(self, extra):
+        env = {**self.BASE, **extra}
+        with patch.dict(os.environ, env, clear=False):
+            for k in ("KUCOIN_FUTURES_ORDER_LEVERAGE", "LIVE_EXECUTOR_MAX_LEVERAGE"):
+                if k not in env:
+                    os.environ.pop(k, None)
+            if "MICRO_PILOT_LEVERAGE_CEILING" not in env:
+                os.environ.pop("MICRO_PILOT_LEVERAGE_CEILING", None)
+            configure_environment()
+            return dict(os.environ)
+
+    def test_order_and_cap_follow_the_single_knob(self) -> None:
+        env = self._run({"LIVE_EXECUTOR_LEVERAGE": "10"})
+        self.assertEqual(env["KUCOIN_FUTURES_ORDER_LEVERAGE"], "10")
+        self.assertEqual(env["LIVE_EXECUTOR_MAX_LEVERAGE"], "10")
+
+    def test_above_ceiling_names_the_variable_to_raise(self) -> None:
+        with self.assertRaisesRegex(ValueError, "MICRO_PILOT_LEVERAGE_CEILING"):
+            self._run({"LIVE_EXECUTOR_LEVERAGE": "25"})
+
+    def test_twentyfive_x_allowed_once_ceiling_raised(self) -> None:
+        env = self._run({
+            "LIVE_EXECUTOR_LEVERAGE": "25",
+            "MICRO_PILOT_LEVERAGE_CEILING": "25",
+        })
+        self.assertEqual(env["KUCOIN_FUTURES_ORDER_LEVERAGE"], "25")
+
+    def test_mismatched_order_leverage_is_explicit(self) -> None:
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            self._run({
+                "LIVE_EXECUTOR_LEVERAGE": "10",
+                "KUCOIN_FUTURES_ORDER_LEVERAGE": "3",
+            })
