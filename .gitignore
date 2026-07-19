@@ -9,8 +9,12 @@ __pycache__/
 
 # Data / runs / outputs
 data/
+!data/
+!data/regimes/
+!data/regimes/pc_3axis_gate_latest.csv
 *.parquet
 *.csv
+!data/regimes/pc_3axis_gate_latest.csv
 *.jsonl
 *.log
 
