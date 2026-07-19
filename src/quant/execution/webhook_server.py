@@ -3382,11 +3382,23 @@ async def tv_execute_webhook(
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload must be a JSON object")
 
-    # Auth: accept token from header OR body
+    # Auth: header, URL query, or body. TradingView cannot set headers, and
+    # putting the token in the alert message means embedding a secret in the
+    # Pine script, so ?token=... in the webhook URL is the practical option.
     body_token = payload.get("token") if isinstance(payload, dict) else None
-    effective_token = x_webhook_token or body_token
+    effective_token = x_webhook_token or request.query_params.get("token") or body_token
     if _auth_required():
         _check_token(effective_token)
+    else:
+        # WEBHOOK_TOKEN unset or empty leaves this endpoint open to anyone who
+        # finds the URL — and it places real orders. Refuse rather than trade.
+        log.error(
+            "refusing tv-execute: WEBHOOK_TOKEN is not set, endpoint would be unauthenticated"
+        )
+        raise HTTPException(
+            status_code=503,
+            detail="WEBHOOK_TOKEN not configured; refusing unauthenticated order webhook",
+        )
 
     from quant.execution.tv_signal_executor import (
         parse_tv_signal,
