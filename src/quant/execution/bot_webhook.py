@@ -22,7 +22,7 @@ from typing import Any, Dict, Optional
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Request
 
-from quant.execution.bot_profiles import active_profile, strategy_instance_id
+from quant.execution.bot_profiles import active_profile, display_name, strategy_instance_id
 from quant.execution.tv_signal_executor import (
     TVExecConfig,
     execute_tv_signal,
@@ -88,7 +88,8 @@ async def _lifespan(_app: FastAPI):
     _enforce_margin_mode()
     start_tv_executor()
     log.info(
-        "bot webhook ready profile=%s instance=%s symbol=%s",
+        "bot webhook ready name=%s profile=%s instance=%s symbol=%s",
+        display_name(),
         active_profile(),
         strategy_instance_id(),
         os.getenv("LIVE_SYMBOL", "SOL-USDT"),
@@ -103,6 +104,7 @@ app = FastAPI(title="quant-bot-webhook", version="0.1.0", lifespan=_lifespan)
 def health() -> Dict[str, Any]:
     return {
         "ok": True,
+        "name": display_name(),
         "profile": active_profile(),
         "instance": strategy_instance_id(),
         "symbol": os.getenv("LIVE_SYMBOL", "SOL-USDT"),

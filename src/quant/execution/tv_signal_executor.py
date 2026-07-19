@@ -569,6 +569,23 @@ def execute_tv_signal(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
         return _execute_locked(signal, config)
 
 
+def _ensure_margin_mode_while_flat(broker: KucoinFuturesBroker, symbol: str) -> None:
+    """Correct the margin mode at the one moment it is safe to: while flat.
+
+    An account left in CROSS silently ignores the configured leverage. Startup
+    can't always fix it — if a position is open when the bot boots, the switch
+    has to wait until that position closes, which may be days later. Checking
+    here means the correction lands on the next entry instead.
+    """
+    want = str(os.getenv("KUCOIN_FUTURES_MARGIN_MODE", "")).strip()
+    if not want:
+        return
+    try:
+        broker.ensure_margin_mode(symbol, want)
+    except Exception as e:
+        log.warning("margin mode check before entry failed: %s", e)
+
+
 def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
     broker = _broker
     if broker is None:
@@ -612,6 +629,11 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
         if config.dry_run:
             log.warning("tv_executor DRY_RUN entry %s qty=%d", want_side, qty)
             return {"ok": True, "action": "entry", "reason": "dry_run", "qty": qty, "side": want_side}
+
+        # We are flat and about to open — the only safe moment to correct the
+        # margin mode. CROSS makes KuCoin ignore the configured leverage, and
+        # switching with a position open would move its liquidation price.
+        _ensure_margin_mode_while_flat(broker, signal.symbol)
 
         order_side = signal.side  # buy or sell
         oid = _place_market(broker, signal.symbol, order_side, qty, reduce_only=False, action_label="entry")

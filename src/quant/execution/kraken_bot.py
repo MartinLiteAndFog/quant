@@ -18,6 +18,12 @@ from quant.execution.event_log import append_event_jsonl
 from quant.execution.event_types import ExecutionEvent
 from quant.execution.kraken_futures import KrakenFuturesClient
 from quant.strategies.flip_engine import FlipParams as SharedFlipParams, run_flip_state_machine
+from quant.strategies.tp2_transition import (
+    TP2Observation,
+    TP2TradeState,
+    TP2TransitionPolicy,
+    transition_tp2,
+)
 from quant.utils.log import get_logger
 from quant.execution.event_store import (
     insert_equity_snapshot,
@@ -629,6 +635,227 @@ def _sync_protective_stop_from_terminal(
 # ---------------------------------------------------------------------------
 # Pure state machine logic
 # ---------------------------------------------------------------------------
+
+def run_once_logic(
+    state: BotState,
+    gate_on: int,
+    signal: int,
+    signal_ts: str,
+    mark: float,
+    swing_low: float,
+    swing_high: float,
+    target_size: float,
+    flip_p: FlipParams,
+    tp2_p: TP2Params,
+) -> Tuple[BotState, List[Dict[str, Any]]]:
+    """Pure legacy-bot adapter; TP2 transitions use the shared strategy kernel."""
+    ns = BotState(**asdict(state))
+    actions: List[Dict[str, Any]] = []
+    engine = "flip" if gate_on == 1 else "tp2"
+    ns.engine = engine
+
+    if signal_ts and signal_ts == state.last_signal_ts:
+        signal = 0
+
+    if gate_on != int(state.gate_on) and int(state.pos_side) != 0:
+        actions.append({"action": "close_all", "reason": "regime_exit"})
+        ns.pos_side = 0
+        ns.entry_px = 0.0
+        ns.best_fav = 0.0
+        ns.size_full = 0.0
+        ns.size_rem = 0.0
+        ns.tp1_done = False
+        ns.mode = "FLAT"
+        ns.gate_on = gate_on
+        return ns, actions
+
+    ns.gate_on = gate_on
+    ps = int(state.pos_side)
+    entry = float(state.entry_px or 0.0)
+    best_fav = float(state.best_fav or 0.0)
+
+    if engine == "tp2":
+        if ps != 0 and entry > 0 and float(state.size_full or 0.0) > 0:
+            tp1_filled = (
+                float(state.size_full) * float(tp2_p.tp1_frac)
+                if state.tp1_done else 0.0
+            )
+            shared_state = TP2TradeState(
+                side=ps,
+                entry_price=entry,
+                initial_qty=float(state.size_full),
+                remaining_qty=float(state.size_rem),
+                stop_price=compute_swing_sl(
+                    ps,
+                    entry,
+                    swing_low,
+                    swing_high,
+                    tp2_p.min_sl_pct,
+                    tp2_p.max_sl_pct,
+                ),
+                tp1_filled_qty=tp1_filled,
+                be_armed=state.mode == "TP2_BE",
+            )
+        else:
+            shared_state = TP2TradeState()
+
+        result = transition_tp2(
+            shared_state,
+            TP2Observation(
+                close=float(mark),
+                high=float(mark),
+                low=float(mark),
+                signal=int(np.sign(signal)),
+                entry_qty=float(target_size),
+            ),
+            TP2TransitionPolicy(
+                tp1_pct=float(tp2_p.tp1_pct),
+                tp2_pct=float(tp2_p.tp2_pct),
+                tp1_frac=float(tp2_p.tp1_frac),
+                flip_on_opposite=bool(tp2_p.flip_on_opposite),
+                be_after_tp1=True,
+            ),
+        )
+
+        for event in result.events:
+            if event.kind in ("tp2_exit", "be_exit", "sl_exit", "signal_exit"):
+                reason = "swing_sl" if event.kind == "sl_exit" else event.kind
+                actions.append({"action": "close_all", "reason": reason})
+            elif event.kind == "tp1_exit":
+                actions.append(
+                    {
+                        "action": "close_partial",
+                        "close_side": "sell" if event.side > 0 else "buy",
+                        "size": float(event.qty),
+                        "reason": "tp1_exit",
+                    }
+                )
+            elif event.kind == "entry":
+                side_name = "long" if event.side > 0 else "short"
+                actions.append(
+                    {
+                        "action": f"enter_{side_name}",
+                        "side": "buy" if event.side > 0 else "sell",
+                        "size": float(event.qty),
+                        "reason": "signal_flip" if ps != 0 else "signal_entry",
+                    }
+                )
+
+        shared_after = result.state
+        if shared_after.is_flat:
+            ns.pos_side = 0
+            ns.entry_px = 0.0
+            ns.best_fav = 0.0
+            ns.size_full = 0.0
+            ns.size_rem = 0.0
+            ns.tp1_done = False
+            ns.mode = "FLAT"
+        else:
+            ns.pos_side = int(shared_after.side)
+            ns.entry_px = float(shared_after.entry_price)
+            ns.best_fav = float(shared_after.entry_price)
+            ns.size_full = float(shared_after.initial_qty)
+            ns.size_rem = float(shared_after.remaining_qty)
+            tp1_target = shared_after.initial_qty * float(tp2_p.tp1_frac)
+            ns.tp1_done = bool(
+                tp1_target > 1e-12
+                and shared_after.tp1_filled_qty >= tp1_target - 1e-12
+            )
+            ns.mode = "TP2_BE" if shared_after.be_armed else "TP2_OPEN"
+        return ns, actions
+
+    if ps != 0 and best_fav > 0:
+        ns.best_fav = max(best_fav, mark) if ps > 0 else min(best_fav, mark)
+        best_fav = float(ns.best_fav)
+
+    if ps != 0 and signal != 0 and signal != ps:
+        actions.append({"action": "close_all", "reason": "signal_flip"})
+        side_name = "long" if signal > 0 else "short"
+        actions.append(
+            {
+                "action": f"enter_{side_name}",
+                "side": "buy" if signal > 0 else "sell",
+                "size": target_size,
+                "reason": "signal_flip",
+            }
+        )
+        ns.pos_side = 1 if signal > 0 else -1
+        ns.entry_px = mark
+        ns.best_fav = mark
+        ns.size_full = target_size
+        ns.size_rem = target_size
+        ns.tp1_done = False
+        ns.mode = "FLIP_TTP"
+        return ns, actions
+
+    if ps != 0 and signal == ps and state.mode == "FLIP_WAIT":
+        ns.mode = "FLIP_TTP"
+        ns.best_fav = mark
+        return ns, actions
+
+    if state.mode == "FLIP_TTP" and ps != 0 and entry > 0:
+        ttp_stop = (
+            best_fav * (1.0 - flip_p.ttp_trail_pct)
+            if ps > 0 else best_fav * (1.0 + flip_p.ttp_trail_pct)
+        )
+        if (ps > 0 and mark <= ttp_stop) or (ps < 0 and mark >= ttp_stop):
+            new_side = -ps
+            actions.extend(
+                [
+                    {"action": "close_all", "reason": "ttp_flip"},
+                    {
+                        "action": "enter_long" if new_side > 0 else "enter_short",
+                        "side": "buy" if new_side > 0 else "sell",
+                        "size": target_size,
+                        "reason": "ttp_flip",
+                    },
+                ]
+            )
+            ns.pos_side = new_side
+            ns.entry_px = mark
+            ns.best_fav = mark
+            ns.size_full = target_size
+            ns.size_rem = target_size
+            ns.tp1_done = False
+            ns.mode = "FLIP_WAIT"
+            return ns, actions
+
+    if state.mode == "FLIP_WAIT" and ps != 0 and entry > 0:
+        stop = compute_swing_sl(
+            ps, entry, swing_low, swing_high, flip_p.min_sl_pct, flip_p.max_sl_pct
+        )
+        if (ps > 0 and mark <= stop) or (ps < 0 and mark >= stop):
+            actions.append({"action": "close_all", "reason": "swing_sl"})
+            ns.pos_side = 0
+            ns.entry_px = 0.0
+            ns.best_fav = 0.0
+            ns.size_full = 0.0
+            ns.size_rem = 0.0
+            ns.tp1_done = False
+            ns.mode = "FLAT"
+            return ns, actions
+
+    if ps == 0 and signal != 0:
+        side_name = "long" if signal > 0 else "short"
+        actions.append(
+            {
+                "action": f"enter_{side_name}",
+                "side": "buy" if signal > 0 else "sell",
+                "size": target_size,
+                "reason": "signal_entry",
+            }
+        )
+        ns.pos_side = 1 if signal > 0 else -1
+        ns.entry_px = mark
+        ns.best_fav = mark
+        ns.size_full = target_size
+        ns.size_rem = target_size
+        ns.tp1_done = False
+        ns.mode = "FLIP_TTP"
+    elif ps == 0:
+        ns.mode = "FLAT"
+    return ns, actions
+
 
 def run_once(
     client: KrakenFuturesClient,

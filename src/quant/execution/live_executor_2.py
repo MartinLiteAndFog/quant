@@ -8,7 +8,7 @@ import os
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -19,8 +19,10 @@ from quant.execution.CHOPgate import get_live_gate_state
 from quant.execution.oms import MakerFirstOMS, OmsDefaults
 from quant.execution.event_builders import build_action_event, build_execution_event
 from quant.execution.event_log import append_event_jsonl
+from quant.execution.execution_calibration import ExecutionDecision, observe_oms_call
 from quant.execution.event_store import (
     insert_action_event,
+    insert_execution_calibration,
     insert_execution_event,
     insert_equity_snapshot,
     upsert_closed_trade,
@@ -324,6 +326,28 @@ def _events_root() -> Path:
 
 def _kraken_tracking_enabled() -> bool:
     return _truthy(os.getenv("KRAKEN_TRADE_TRACKING_ENABLED", "0"))
+
+
+def _execution_calibration_enabled() -> bool:
+    configured = os.getenv("EXECUTION_CALIBRATION_ENABLED")
+    if configured is not None:
+        return _truthy(configured)
+    return _kraken_tracking_enabled()
+
+
+def _append_execution_calibration(record: Dict[str, Any]) -> None:
+    if not _execution_calibration_enabled():
+        return
+    try:
+        ts = _safe_ts(record.get("decision_ts")) or _now_utc()
+        out_path = _events_root() / "execution_calibration" / f"{ts.strftime('%Y%m%d')}.jsonl"
+        append_event_jsonl(out_path, dict(record))
+    except Exception as exc:
+        log.warning("execution calibration jsonl append failed: %s", type(exc).__name__)
+    try:
+        insert_execution_calibration(dict(record))
+    except Exception as exc:
+        log.warning("execution calibration postgres insert failed: %s", type(exc).__name__)
 
 
 _EQUITY_SNAPSHOT_BASE_INTERVAL_SEC = float(
@@ -2057,6 +2081,39 @@ def run_once(
 
     def _execution_price(details: Dict[str, Any]) -> Optional[float]:
         return _coerce_float(details.get("price"))
+
+    def _observe_order(
+        call: Callable[[], Any],
+        *,
+        action_name: str,
+        order_side: Optional[str],
+        requested_qty: float,
+        reduce_only: bool,
+        decision_ts: Optional[str] = None,
+        exit_reason: Optional[str] = None,
+        result_selector: Optional[Callable[[Any], Any]] = None,
+    ) -> Any:
+        captured = observe_oms_call(
+            call,
+            decision=ExecutionDecision(
+                decision_ts=decision_ts or _now_iso(),
+                venue="kraken",
+                strategy="live_executor_2",
+                symbol=symbol,
+                action=action_name,
+                exit_reason=exit_reason or event_name,
+                side=order_side,
+                requested_qty=float(requested_qty),
+                reference_bid=float(bid) if bid and bid > 0 else None,
+                reference_ask=float(ask) if ask and ask > 0 else None,
+                reference_mid=float(mid) if mid and mid > 0 else None,
+                reduce_only=bool(reduce_only),
+            ),
+            sink=_append_execution_calibration,
+            result_selector=result_selector,
+        )
+        return captured.result
+
     effective_terminal_mode = str(terminal_mode)
     # Safety guard: do not auto-promote WAIT -> TTP unless explicitly enabled.
     # In production this can otherwise arm paired flip stops prematurely.
@@ -2162,7 +2219,14 @@ def run_once(
         if _pending_follow_entry_is_active(state):
             pending_side = str(state.pending_follow_entry_side or "").strip().lower()
             if float(qty) > 0:
-                res = oms.enter_market(symbol=symbol, side=pending_side, qty=float(qty))
+                res = _observe_order(
+                    lambda: oms.enter_market(symbol=symbol, side=pending_side, qty=float(qty)),
+                    action_name="follow_entry_after_close",
+                    order_side="buy" if pending_side == "long" else "sell",
+                    requested_qty=float(qty),
+                    reduce_only=False,
+                    exit_reason=state.pending_follow_entry_reason or event_name,
+                )
                 log.info(
                     "executor pending follow-entry result symbol=%s side=%s qty=%s reason=%s result=%s",
                     symbol,
@@ -2920,7 +2984,14 @@ def run_once(
         target_side_for_verify: Optional[str] = want_side if action.startswith(("enter_", "flip_to_", "scale_")) else None
 
         if action == "tp1_partial" and current_side in ("long", "short") and tp1_partial_qty > 0:
-            res = oms.partial_tp1_market(symbol=symbol, side=current_side, qty=float(tp1_partial_qty))
+            res = _observe_order(
+                lambda: oms.partial_tp1_market(symbol=symbol, side=current_side, qty=float(tp1_partial_qty)),
+                action_name=action,
+                order_side="sell" if current_side == "long" else "buy",
+                requested_qty=float(tp1_partial_qty),
+                reduce_only=True,
+                decision_ts=ts_iso,
+            )
             log.info("executor tp1 partial result=%s qty=%s", res, tp1_partial_qty)
             target_side_for_verify = current_side
             target_qty_for_verify = max(0.0, abs(float(pos)) - float(tp1_partial_qty))
@@ -2984,7 +3055,14 @@ def run_once(
                 )
 
         elif action.startswith("enter_") and want_side is not None:
-            res = oms.enter_market(symbol=symbol, side=want_side, qty=float(qty))
+            res = _observe_order(
+                lambda: oms.enter_market(symbol=symbol, side=want_side, qty=float(qty)),
+                action_name=action,
+                order_side="buy" if want_side == "long" else "sell",
+                requested_qty=float(qty),
+                reduce_only=False,
+                decision_ts=ts_iso,
+            )
             log.info("executor enter result=%s", res)
             if _ok(res):
                 if _pending_follow_entry_is_active(state):
@@ -3048,11 +3126,19 @@ def run_once(
                     oms.cancel_orders_by_kind(symbol, "flat_entry_long")
 
         elif action.startswith("flip_to_") and want_side is not None:
-            flat_res, pos_after_flat = _kraken_strict_flatten_for_flip(
-                broker=broker,
-                symbol=symbol,
-                current_side=current_side,
-                qty=abs(float(pos)),
+            flat_res, pos_after_flat = _observe_order(
+                lambda: _kraken_strict_flatten_for_flip(
+                    broker=broker,
+                    symbol=symbol,
+                    current_side=current_side,
+                    qty=abs(float(pos)),
+                ),
+                action_name="flip_flatten",
+                order_side="sell" if current_side == "long" else "buy",
+                requested_qty=abs(float(pos)),
+                reduce_only=True,
+                decision_ts=ts_iso,
+                result_selector=lambda pair: pair[0],
             )
             log.info("executor flip flatten result=%s", flat_res)
 
@@ -3170,7 +3256,14 @@ def run_once(
             except Exception as e:
                 log.warning("executor exit cancel reduce-only failed: %s", e)
 
-            res = oms.flatten_market(symbol=symbol, side=current_side, qty=abs(float(pos)))
+            res = _observe_order(
+                lambda: oms.flatten_market(symbol=symbol, side=current_side, qty=abs(float(pos))),
+                action_name=action,
+                order_side="sell" if current_side == "long" else "buy",
+                requested_qty=abs(float(pos)),
+                reduce_only=True,
+                decision_ts=ts_iso,
+            )
 
             log.info("executor exit result=%s", res)
             target_side_for_verify = None
@@ -3254,7 +3347,14 @@ def run_once(
                 add_qty = 0.0
             if add_qty > 0:
                 target_qty_for_verify = abs(float(pos)) + float(add_qty)
-                res = oms.enter_market(symbol=symbol, side=want_side, qty=add_qty)
+                res = _observe_order(
+                    lambda: oms.enter_market(symbol=symbol, side=want_side, qty=add_qty),
+                    action_name=action,
+                    order_side="buy" if want_side == "long" else "sell",
+                    requested_qty=float(add_qty),
+                    reduce_only=False,
+                    decision_ts=ts_iso,
+                )
                 log.info("executor scale result=%s add_qty=%s target_qty=%s pos_before=%s", res, add_qty, qty_effective, pos)
                 if _ok(res):
                     details = _details(res)

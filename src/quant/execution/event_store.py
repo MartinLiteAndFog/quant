@@ -432,3 +432,115 @@ def prune_live_renko_bricks_before(
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(sql, params)
         return int(cur.rowcount or 0)
+
+
+def ensure_execution_calibration_schema() -> None:
+    sql = """
+    create table if not exists execution_calibration (
+      telemetry_id text primary key,
+      decision_ts timestamptz not null,
+      submitted_ts timestamptz not null,
+      acknowledged_ts timestamptz,
+      filled_ts timestamptz,
+      result_ts timestamptz not null,
+      venue text not null,
+      strategy text not null,
+      symbol text not null,
+      action text not null,
+      exit_reason text,
+      side text,
+      reference_bid numeric,
+      reference_ask numeric,
+      reference_mid numeric,
+      requested_qty numeric not null,
+      filled_qty numeric,
+      avg_fill_price numeric,
+      order_id text,
+      client_oid text,
+      order_type text,
+      liquidity text,
+      fee numeric,
+      fee_currency text,
+      fee_bps numeric,
+      requotes integer,
+      fallback_used boolean not null default false,
+      rejected boolean not null default false,
+      reject_reason text,
+      reduce_only boolean,
+      status text not null,
+      submit_to_ack_ms numeric,
+      submit_to_fill_ms numeric,
+      decision_to_result_ms numeric,
+      slippage_bps numeric,
+      timing_precision text not null,
+      filled_qty_inferred boolean not null default false,
+      fill_price_source text,
+      fee_source text,
+      created_at timestamptz not null default now()
+    );
+    create index if not exists idx_execution_calibration_symbol_decision
+    on execution_calibration (symbol, decision_ts desc);
+    create index if not exists idx_execution_calibration_order_id
+    on execution_calibration (order_id);
+    create index if not exists idx_execution_calibration_action_decision
+    on execution_calibration (action, decision_ts desc);
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql)
+
+
+def insert_execution_calibration(row: Dict[str, Any]) -> None:
+    ensure_execution_calibration_schema()
+    sql = """
+    insert into execution_calibration (
+      telemetry_id, decision_ts, submitted_ts, acknowledged_ts, filled_ts, result_ts,
+      venue, strategy, symbol, action, exit_reason, side,
+      reference_bid, reference_ask, reference_mid, requested_qty, filled_qty, avg_fill_price,
+      order_id, client_oid, order_type, liquidity, fee, fee_currency, fee_bps, requotes,
+      fallback_used, rejected, reject_reason, reduce_only, status,
+      submit_to_ack_ms, submit_to_fill_ms, decision_to_result_ms, slippage_bps,
+      timing_precision, filled_qty_inferred, fill_price_source, fee_source
+    ) values (
+      %(telemetry_id)s, %(decision_ts)s, %(submitted_ts)s, %(acknowledged_ts)s, %(filled_ts)s, %(result_ts)s,
+      %(venue)s, %(strategy)s, %(symbol)s, %(action)s, %(exit_reason)s, %(side)s,
+      %(reference_bid)s, %(reference_ask)s, %(reference_mid)s, %(requested_qty)s, %(filled_qty)s, %(avg_fill_price)s,
+      %(order_id)s, %(client_oid)s, %(order_type)s, %(liquidity)s, %(fee)s, %(fee_currency)s, %(fee_bps)s, %(requotes)s,
+      %(fallback_used)s, %(rejected)s, %(reject_reason)s, %(reduce_only)s, %(status)s,
+      %(submit_to_ack_ms)s, %(submit_to_fill_ms)s, %(decision_to_result_ms)s, %(slippage_bps)s,
+      %(timing_precision)s, %(filled_qty_inferred)s, %(fill_price_source)s, %(fee_source)s
+    )
+    on conflict (telemetry_id) do nothing
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, dict(row))
+
+
+def load_execution_calibration(
+    *,
+    symbol: Optional[str] = None,
+    start_ts: Optional[str] = None,
+    end_ts: Optional[str] = None,
+) -> list[Dict[str, Any]]:
+    ensure_execution_calibration_schema()
+    columns = [
+        "telemetry_id", "decision_ts", "submitted_ts", "acknowledged_ts", "filled_ts", "result_ts",
+        "venue", "strategy", "symbol", "action", "exit_reason", "side",
+        "reference_bid", "reference_ask", "reference_mid", "requested_qty", "filled_qty", "avg_fill_price",
+        "order_id", "client_oid", "order_type", "liquidity", "fee", "fee_currency", "fee_bps", "requotes",
+        "fallback_used", "rejected", "reject_reason", "reduce_only", "status",
+        "submit_to_ack_ms", "submit_to_fill_ms", "decision_to_result_ms", "slippage_bps",
+        "timing_precision", "filled_qty_inferred", "fill_price_source", "fee_source",
+    ]
+    sql = f"""
+    select {', '.join(columns)}
+    from execution_calibration
+    where (%(symbol)s is null or symbol = %(symbol)s)
+      and (%(start_ts)s::timestamptz is null or decision_ts >= %(start_ts)s::timestamptz)
+      and (%(end_ts)s::timestamptz is null or decision_ts <= %(end_ts)s::timestamptz)
+    order by decision_ts, submitted_ts, telemetry_id
+    """
+    params = {"symbol": symbol, "start_ts": start_ts, "end_ts": end_ts}
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, params)
+        rows = cur.fetchall()
+    return [dict(zip(columns, row)) for row in rows]

@@ -42,6 +42,18 @@ def strategy_instance_id() -> str:
     return raw or "live_executor"
 
 
+def display_name() -> str:
+    """Human-facing label for this bot.
+
+    Deliberately separate from BOT_PROFILE (which selects behaviour) and from
+    BOT_INSTANCE_ID (which keys every row in Postgres). Renaming a bot should
+    never change what it trades or orphan its history, so the friendly name
+    lives in its own variable and can be changed freely.
+    """
+    raw = str(os.getenv("BOT_DISPLAY_NAME", "")).strip()
+    return raw or strategy_instance_id()
+
+
 def strategy_config_hash() -> str:
     profile = active_profile()
     instance = strategy_instance_id()
