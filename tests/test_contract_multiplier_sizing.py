@@ -149,5 +149,55 @@ class LeverageSourceOfTruthTests(unittest.TestCase):
         self.assertEqual(cfg.leverage, 10.0)
 
 
+
+class AvailableBalanceSizingTests(unittest.TestCase):
+    """Sizing must use spendable balance, not equity locked in a position."""
+
+    class _Bal:
+        def __init__(self, equity, available):
+            self._b = {"equity": equity, "available": available}
+
+        def get_account_balance(self, currency="USDT"):
+            return dict(self._b)
+
+    def test_uses_available_when_position_locks_margin(self) -> None:
+        from quant.execution.live_executor import _resolve_equity
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LIVE_EXECUTOR_SIZE_OFF_EQUITY", None)
+            got = _resolve_equity(self._Bal(equity=22.70, available=12.19))
+        self.assertEqual(got, 12.19, "must size off spendable balance")
+
+    def test_uses_equity_when_nothing_is_locked(self) -> None:
+        from quant.execution.live_executor import _resolve_equity
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LIVE_EXECUTOR_SIZE_OFF_EQUITY", None)
+            got = _resolve_equity(self._Bal(equity=22.70, available=22.70))
+        self.assertEqual(got, 22.70)
+
+    def test_order_fits_within_available_margin(self) -> None:
+        """The exact case KuCoin was rejecting in a loop."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LIVE_EXECUTOR_MAX_MARGIN_USDT", None)
+            os.environ.pop("LIVE_EXECUTOR_MAX_CONTRACTS", None)
+            qty = _live_order_qty(
+                equity=12.19, pos_pct=0.90, leverage=10.0,
+                mid_price=76.0, contract_multiplier=KUCOIN_SOL_MULTIPLIER,
+            )
+        margin = qty * 76.0 * KUCOIN_SOL_MULTIPLIER / 10.0
+        self.assertLessEqual(margin, 12.19, "order must fit in available balance")
+        self.assertGreater(qty, 0)
+
+    def test_smallest_order_is_affordable(self) -> None:
+        """1 contract = 0.1 SOL must be reachable on a small account."""
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("LIVE_EXECUTOR_MAX_MARGIN_USDT", None)
+            os.environ.pop("LIVE_EXECUTOR_MAX_CONTRACTS", None)
+            qty = _live_order_qty(
+                equity=2.0, pos_pct=0.90, leverage=10.0,
+                mid_price=76.0, contract_multiplier=KUCOIN_SOL_MULTIPLIER,
+            )
+        self.assertGreaterEqual(qty, 1, "0.1 SOL should be affordable with ~$2")
+
+
 if __name__ == "__main__":
     unittest.main()

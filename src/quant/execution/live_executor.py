@@ -661,11 +661,31 @@ def _live_order_qty(
 
 
 def _resolve_equity(broker: KucoinFuturesBroker) -> float:
+    """Balance available to open new exposure.
+
+    accountEquity counts margin already locked in an open position, but KuCoin
+    will only let you spend availableBalance. Sizing off equity while a position
+    is open asks for more than the account can fund and the exchange rejects the
+    order with "Order quantity is too high, insufficient" — in a retry loop,
+    because the condition never clears on its own.
+
+    Use the smaller of the two so an open position shrinks the next order
+    instead of blocking it. Set LIVE_EXECUTOR_SIZE_OFF_EQUITY=1 to restore the
+    old behaviour.
+    """
     try:
         bal = broker.get_account_balance(currency="USDT")
-        return float(bal.get("equity", 0.0) or 0.0)
     except Exception:
         return 0.0
+
+    equity = float(bal.get("equity", 0.0) or 0.0)
+    if str(os.getenv("LIVE_EXECUTOR_SIZE_OFF_EQUITY", "0")).strip().lower() in {"1", "true", "yes", "on"}:
+        return equity
+
+    available = float(bal.get("available", 0.0) or 0.0)
+    if available <= 0:
+        return equity
+    return min(equity, available)
 
 
 def _resolve_contract_multiplier(broker: KucoinFuturesBroker, symbol: str) -> float:
