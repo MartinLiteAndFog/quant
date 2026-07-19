@@ -314,6 +314,59 @@ class KucoinFuturesBroker(BrokerAPI):
             return "CROSS" if cm else "ISOLATED"
         return None
 
+    def set_margin_mode(self, symbol: str, mode: str) -> Dict[str, Any]:
+        """Set the account's margin mode for a contract.
+
+        In CROSS mode KuCoin ignores the per-order `leverage` parameter, so a
+        bot configured for 10x silently trades at whatever cross margin gives
+        it. ISOLATED is required for the configured leverage to actually apply.
+
+        KuCoin refuses the change while a position is open, so callers must be
+        flat first.
+        """
+        want = str(mode).strip().upper()
+        if want not in ("ISOLATED", "CROSS"):
+            raise ValueError(f"margin mode must be ISOLATED or CROSS, got {mode!r}")
+        contract = _symbol_to_contract(symbol)
+        return self._req(
+            "POST",
+            "/api/v2/position/changeMarginMode",
+            body={"symbol": contract, "marginMode": want},
+        )
+
+    def ensure_margin_mode(self, symbol: str, mode: str) -> Optional[str]:
+        """Bring the account to `mode` if it is flat. Returns the resulting mode.
+
+        Never changes mode with an open position — switching cross->isolated on
+        a live position moves its liquidation price.
+        """
+        want = str(mode).strip().upper()
+        current = self._position_margin_mode(symbol)
+        if current == want:
+            return current
+
+        try:
+            position = float(self.get_position(symbol))
+        except Exception as e:
+            log.warning("margin mode: cannot read position for %s: %s", symbol, e)
+            return current
+
+        if position != 0:
+            log.error(
+                "margin mode is %s but %s is configured, and %s holds %s contracts. "
+                "Not switching with an open position — flatten first.",
+                current, want, symbol, position,
+            )
+            return current
+
+        try:
+            self.set_margin_mode(symbol, want)
+            log.info("margin mode for %s set to %s", symbol, want)
+            return want
+        except Exception as e:
+            log.error("failed to set margin mode %s for %s: %s", want, symbol, e)
+            return current
+
     def _order_margin_mode_candidates(self, symbol: str) -> List[Optional[str]]:
         detected_mm = self._position_margin_mode(symbol)
         configured_mm = self._margin_mode.upper() if self._margin_mode in ("isolated", "cross") else None

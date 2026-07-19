@@ -56,10 +56,36 @@ def _check_token(supplied: Optional[str]) -> None:
         raise HTTPException(status_code=401, detail="invalid webhook token")
 
 
+def _enforce_margin_mode() -> None:
+    """Bring the sub-account to the configured margin mode before trading.
+
+    CROSS mode makes KuCoin ignore the per-order leverage, so a bot set to 10x
+    quietly trades at whatever cross gives it. Only acts when flat.
+    """
+    want = str(os.getenv("KUCOIN_FUTURES_MARGIN_MODE", "")).strip()
+    if not want:
+        return
+    try:
+        from quant.execution.kucoin_futures import KucoinFuturesBroker
+
+        broker = KucoinFuturesBroker()
+        symbol = os.getenv("LIVE_SYMBOL", "SOL-USDT")
+        result = broker.ensure_margin_mode(symbol, want)
+        if result and result.upper() != want.upper():
+            log.error(
+                "margin mode is %s but %s is configured — configured leverage "
+                "will NOT apply until this is corrected",
+                result, want.upper(),
+            )
+    except Exception as e:
+        log.warning("margin mode check skipped: %s", e)
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):
     # tv_signal_executor only arms itself when ENABLE_TV_EXECUTOR=1.
     os.environ.setdefault("ENABLE_TV_EXECUTOR", "1")
+    _enforce_margin_mode()
     start_tv_executor()
     log.info(
         "bot webhook ready profile=%s instance=%s symbol=%s",
