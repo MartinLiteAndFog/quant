@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 
 import pandas as pd
 from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -449,6 +450,21 @@ async def _lifespan(a: FastAPI):
 
 
 app = FastAPI(title="quant-webhook", version="0.1.0", lifespan=_lifespan)
+
+# Desktop fleet cockpit (Tauri/Vite) may call /api/fleet/* cross-origin.
+# Keep defaults open for GET/HEAD; credentials not required for read-token via header/query.
+_cors_origins = [
+    o.strip()
+    for o in str(os.getenv("FLEET_CORS_ORIGINS", "*,http://localhost:1420,tauri://localhost")).split(",")
+    if o.strip()
+]
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_cors_origins if "*" not in _cors_origins else ["*"],
+    allow_credentials=False,
+    allow_methods=["GET", "HEAD", "OPTIONS"],
+    allow_headers=["Authorization", "X-Webhook-Token", "Accept", "Content-Type"],
+)
 
 # Gzip dashboard JSON payloads (chart payload is typically tens to hundreds of KB).
 # Default minimum_size avoids compressing tiny health/status responses.
@@ -3467,6 +3483,125 @@ async def kraken_tv_execute_webhook(
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, execute_kraken_tv_signal, signal, config)
     return result
+
+
+def _fleet_auth_token(
+    x_webhook_token: Optional[str] = None,
+    authorization: Optional[str] = None,
+    token: Optional[str] = None,
+) -> Optional[str]:
+    if x_webhook_token:
+        return x_webhook_token
+    if token:
+        return token
+    if authorization:
+        auth = authorization.strip()
+        if auth.lower().startswith("bearer "):
+            return auth[7:].strip()
+        return auth
+    return None
+
+
+@app.get("/api/fleet/bots")
+def api_fleet_bots(
+    probe: int = 1,
+    token: Optional[str] = None,
+    x_webhook_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Configured fleet instances + optional live /health snapshot."""
+    _check_token(_fleet_auth_token(x_webhook_token, authorization, token))
+    from quant.execution.fleet_api import list_fleet_bots
+
+    try:
+        return list_fleet_bots(probe_health=int(probe) == 1)
+    except Exception as e:
+        return {"ok": False, "bots": [], "error": str(e), "ts": _now_utc_iso()}
+
+
+@app.get("/api/fleet/performance")
+def api_fleet_performance(
+    hours: float = 168.0,
+    instances: Optional[str] = None,
+    token: Optional[str] = None,
+    x_webhook_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Per-bot compounded trade PnL % + account equity % curves."""
+    _check_token(_fleet_auth_token(x_webhook_token, authorization, token))
+    from quant.execution.fleet_api import build_fleet_performance
+
+    ids = [s.strip() for s in str(instances or "").split(",") if s.strip()] or None
+    hrs: Optional[float] = None if float(hours) <= 0 else float(hours)
+    try:
+        return build_fleet_performance(hours=hrs, instance_ids=ids)
+    except Exception as e:
+        return {"ok": False, "series": [], "error": str(e), "ts": _now_utc_iso()}
+
+
+@app.get("/api/fleet/activity")
+def api_fleet_activity(
+    hours: float = 168.0,
+    limit: int = 500,
+    token: Optional[str] = None,
+    x_webhook_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Unified execution timeline across fleet strategy_instance tags."""
+    _check_token(_fleet_auth_token(x_webhook_token, authorization, token))
+    from quant.execution.fleet_api import build_fleet_activity
+
+    hrs: Optional[float] = None if float(hours) <= 0 else float(hours)
+    try:
+        return build_fleet_activity(hours=hrs, limit=int(max(1, min(limit, 2000))))
+    except Exception as e:
+        return {"ok": False, "events": [], "error": str(e), "ts": _now_utc_iso()}
+
+
+@app.get("/api/fleet/trades")
+def api_fleet_trades(
+    instance: str,
+    hours: float = 0.0,
+    limit: int = 200,
+    token: Optional[str] = None,
+    x_webhook_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Closed-trade drill-down for one fleet bot."""
+    _check_token(_fleet_auth_token(x_webhook_token, authorization, token))
+    from quant.execution.fleet_api import build_fleet_trades
+
+    hrs: Optional[float] = None if float(hours) <= 0 else float(hours)
+    try:
+        return build_fleet_trades(
+            strategy_instance=str(instance),
+            hours=hrs,
+            limit=int(max(1, min(limit, 1000))),
+        )
+    except Exception as e:
+        return {
+            "ok": False,
+            "trades": [],
+            "error": str(e),
+            "strategy_instance": instance,
+            "ts": _now_utc_iso(),
+        }
+
+
+@app.get("/api/fleet/capitalization")
+def api_fleet_capitalization(
+    token: Optional[str] = None,
+    x_webhook_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Equity + health snapshot for capitalization drawer."""
+    _check_token(_fleet_auth_token(x_webhook_token, authorization, token))
+    from quant.execution.fleet_api import build_fleet_capitalization
+
+    try:
+        return build_fleet_capitalization()
+    except Exception as e:
+        return {"ok": False, "accounts": [], "error": str(e), "ts": _now_utc_iso()}
 
 
 _DASHBOARD2_DIST = Path(

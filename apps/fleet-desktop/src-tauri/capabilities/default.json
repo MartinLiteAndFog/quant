@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.tauri.app/config/2/capability",
+  "identifier": "default",
+  "description": "Default fleet desktop capabilities",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    {
+      "identifier": "http:default",
+      "allow": [
+        { "url": "https://*" },
+        { "url": "https://*/*" },
+        { "url": "http://127.0.0.1:*" },
+        { "url": "http://127.0.0.1:*/*" },
+        { "url": "http://localhost:*" },
+        { "url": "http://localhost:*/*" }
+      ]
+    },
+    "http:allow-fetch",
+    "http:allow-fetch-send",
+    "http:allow-fetch-cancel",
+    "http:allow-fetch-read-body"
+  ]
+}

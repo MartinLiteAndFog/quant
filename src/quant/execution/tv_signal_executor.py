@@ -24,7 +24,7 @@ from quant.execution.bot_profiles import (
 from quant.execution.CHOPgate import get_live_gate_state
 from quant.execution.event_builders import build_action_event, build_execution_event
 from quant.execution.event_log import append_event_jsonl
-from quant.execution.event_store import insert_action_event, insert_execution_event
+from quant.execution.event_store import insert_action_event, insert_execution_event, upsert_closed_trade
 from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.live_executor import (
     _live_order_qty,
@@ -39,6 +39,11 @@ log = get_logger("quant.tv_executor")
 
 VALID_ACTIONS = {"entry", "exit", "flip", "tp1", "tp2", "sl"}
 VALID_SIDES = {"buy", "sell"}
+
+# Per-symbol open-leg snapshot so exits can write closed_trades (fleet % curves).
+# TV webhook mode does not run live_executor, which previously owned this write.
+_open_legs: Dict[str, Dict[str, Any]] = {}
+_open_legs_lock = threading.Lock()
 
 # ---------------------------------------------------------------------------
 # Config
@@ -309,6 +314,80 @@ def _events_root() -> Path:
 
 def _now_iso() -> str:
     return pd.Timestamp.now("UTC").strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def _record_open_leg(
+    *,
+    symbol: str,
+    side: str,
+    qty: float,
+    entry_price: Optional[float],
+) -> None:
+    if side not in ("long", "short") or qty <= 0:
+        return
+    px = float(entry_price) if entry_price and entry_price > 0 else None
+    with _open_legs_lock:
+        _open_legs[str(symbol)] = {
+            "side": side,
+            "qty": float(qty),
+            "entry_ts": _now_iso(),
+            "entry_price": px,
+        }
+
+
+def _append_tv_closed_trade(
+    *,
+    symbol: str,
+    exit_event: str,
+    exit_price: Optional[float],
+    qty: Optional[float] = None,
+) -> None:
+    """Write a closed_trades row tagged with this bot's strategy_instance."""
+    with _open_legs_lock:
+        leg = dict(_open_legs.get(str(symbol)) or {})
+        if exit_event in ("exit", "sl", "tp2", "flip_close", "flip_flatten"):
+            _open_legs.pop(str(symbol), None)
+
+    if not leg:
+        return
+    entry_px = leg.get("entry_price")
+    exit_px = float(exit_price) if exit_price and float(exit_price) > 0 else None
+    if not entry_px or not exit_px:
+        log.info("tv_executor skip closed_trade (missing prices) event=%s", exit_event)
+        return
+    side = str(leg.get("side") or "")
+    qty_realized = float(qty if qty is not None else leg.get("qty") or 0.0)
+    if qty_realized <= 0:
+        return
+    side_mult = 1.0 if side == "long" else -1.0
+    pnl_pct = ((exit_px - float(entry_px)) / float(entry_px)) * 100.0 * side_mult
+    try:
+        upsert_closed_trade(
+            {
+                "trade_id": f"{symbol}:{_now_iso()}:{exit_event}:{strategy_instance_id()}",
+                "venue": "kucoin",
+                "symbol": symbol,
+                "entry_ts": leg.get("entry_ts") or _now_iso(),
+                "exit_ts": _now_iso(),
+                "side": side,
+                "qty": qty_realized,
+                "entry_price": float(entry_px),
+                "exit_price": float(exit_px),
+                "pnl_pct": float(pnl_pct),
+                "exit_event": exit_event,
+                "strategy": "tv_executor",
+                "strategy_instance": strategy_instance_id(),
+                "config_hash": strategy_config_hash(),
+                "source_action_event_id": None,
+                "payload_json": {
+                    "kind": "closed_trade",
+                    "bot_profile": active_profile(),
+                    "exit_event": exit_event,
+                },
+            }
+        )
+    except Exception as e:
+        log.warning("tv_executor postgres closed trade failed: %s", e)
 
 
 def _log_action(
@@ -649,6 +728,12 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
                 order_action=order_side, reason="tv_entry",
                 pos_before=pos_before_i, pos_after=pos_after_i,
                 order_id=oid, side=order_side, qty=float(qty), reduce_only=False, status="sent")
+        _record_open_leg(
+            symbol=signal.symbol,
+            side=want_side,
+            qty=float(qty),
+            entry_price=cache.mid_price,
+        )
 
         return {"ok": True, "action": "entry", "side": want_side, "qty": qty, "order_id": oid}
 
@@ -677,6 +762,12 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
                 order_action=close_side, reason="tv_exit",
                 pos_before=pos_before_i, pos_after=0,
                 order_id=oid, side=close_side, qty=float(close_qty), reduce_only=True, status="sent")
+        _append_tv_closed_trade(
+            symbol=signal.symbol,
+            exit_event="exit",
+            exit_price=cache.mid_price,
+            qty=float(close_qty),
+        )
 
         return {"ok": True, "action": "exit", "qty": close_qty, "order_id": oid}
 
@@ -737,6 +828,12 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
                 order_action=close_side, reason="tv_tp2",
                 pos_before=pos_before_i, pos_after=0,
                 order_id=oid, side=close_side, qty=float(close_qty), reduce_only=True, status="sent")
+        _append_tv_closed_trade(
+            symbol=signal.symbol,
+            exit_event="tp2",
+            exit_price=cache.mid_price,
+            qty=float(close_qty),
+        )
 
         return {"ok": True, "action": "tp2", "qty": close_qty, "order_id": oid}
 
@@ -775,6 +872,12 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
                 order_action=close_side, reason="tv_sl",
                 pos_before=pos_before_i, pos_after=0,
                 order_id=oid, side=close_side, qty=float(close_qty), reduce_only=True, status="sent")
+        _append_tv_closed_trade(
+            symbol=signal.symbol,
+            exit_event="sl",
+            exit_price=cache.mid_price,
+            qty=float(close_qty),
+        )
 
         return {"ok": True, "action": "sl", "qty": close_qty, "order_id": oid}
 
@@ -829,6 +932,12 @@ def _do_flip(
                 order_action=close_side, reason="tv_flip_flatten",
                 pos_before=pos_before_i, pos_after=0,
                 order_id=oid, side=close_side, qty=float(close_qty), reduce_only=True, status="sent")
+        _append_tv_closed_trade(
+            symbol=symbol,
+            exit_event="flip_flatten",
+            exit_price=cache.mid_price,
+            qty=float(close_qty),
+        )
 
         return {"ok": True, "action": "flip", "reason": "flatten_only_gate_blocked", "qty_closed": close_qty, "order_id": oid}
 
@@ -860,6 +969,12 @@ def _do_flip(
                 order_action=order_side, reason="tv_flip_entry",
                 pos_before=0, pos_after=pos_after_i,
                 order_id=oid, side=order_side, qty=float(qty), reduce_only=False, status="sent")
+        _record_open_leg(
+            symbol=symbol,
+            side=want_side,
+            qty=float(qty),
+            entry_price=cache.mid_price,
+        )
 
         return {"ok": True, "action": "flip", "side": want_side, "qty": qty, "order_id": oid}
 
@@ -880,6 +995,12 @@ def _do_flip(
             pos_before=pos_before_i, pos_after=0,
             order_id=close_oid, side=close_side, qty=float(close_qty),
             reduce_only=True, status="sent")
+    _append_tv_closed_trade(
+        symbol=symbol,
+        exit_event="flip_close",
+        exit_price=cache.mid_price,
+        qty=float(close_qty),
+    )
 
     # Let the close settle so the opposite entry sizes against a flat book.
     if config.flip_delay_sec > 0:
@@ -923,6 +1044,12 @@ def _do_flip(
             pos_before=0, pos_after=pos_after_i,
             order_id=open_oid, side=order_side, qty=float(qty),
             reduce_only=False, status="sent")
+    _record_open_leg(
+        symbol=symbol,
+        side=want_side,
+        qty=float(qty),
+        entry_price=cache.mid_price,
+    )
 
     return {
         "ok": True, "action": "flip", "side": want_side, "qty": qty,

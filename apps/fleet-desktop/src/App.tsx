@@ -1,0 +1,396 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  fetchActivity,
+  fetchBots,
+  fetchCapitalization,
+  fetchPerformance,
+  fetchTrades,
+  probeConnection,
+  type ConnectionProbe,
+} from "./api";
+import { HeroChart } from "./components/HeroChart";
+import { DrawerShell, type DrawerId } from "./components/DrawerShell";
+import { StatusRail } from "./components/StatusRail";
+import { AccountEquityDrawer } from "./components/drawers/AccountEquityDrawer";
+import { ActivityDrawer } from "./components/drawers/ActivityDrawer";
+import { CapitalizationDrawer } from "./components/drawers/CapitalizationDrawer";
+import { SettingsDrawer } from "./components/drawers/SettingsDrawer";
+import { StatsDrawer } from "./components/drawers/StatsDrawer";
+import { TradesDrawer } from "./components/drawers/TradesDrawer";
+import { downloadCsv } from "./lib/csv";
+import {
+  type ActivityEvent,
+  type BotSeries,
+  type CapitalAccount,
+  type ClosedTrade,
+  type FleetBot,
+  type FleetConfig,
+  type RangeKey,
+  loadConfig,
+  saveConfig,
+} from "./types";
+
+const RANGES: RangeKey[] = ["24h", "7d", "30d", "all"];
+
+const DRAWER_TITLES: Record<Exclude<DrawerId, null>, string> = {
+  account: "Account equity %",
+  activity: "Activity map",
+  trades: "Trades",
+  stats: "Stats compare",
+  capital: "Capitalization & health",
+  settings: "Settings",
+};
+
+export default function App() {
+  const [config, setConfig] = useState<FleetConfig>(() => loadConfig());
+  const [range, setRange] = useState<RangeKey>("7d");
+  const [bots, setBots] = useState<FleetBot[]>([]);
+  const [series, setSeries] = useState<BotSeries[]>([]);
+  const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
+  const [isolatedId, setIsolatedId] = useState<string | null>(null);
+  const [drawer, setDrawer] = useState<DrawerId>(null);
+  const [chartMode, setChartMode] = useState<"trade" | "account">("trade");
+  const [showMaxDd, setShowMaxDd] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [activity, setActivity] = useState<ActivityEvent[]>([]);
+  const [trades, setTrades] = useState<ClosedTrade[]>([]);
+  const [tradeBotId, setTradeBotId] = useState<string | null>(null);
+  const [accounts, setAccounts] = useState<CapitalAccount[]>([]);
+  const [drawerLoading, setDrawerLoading] = useState(false);
+  const [connection, setConnection] = useState<ConnectionProbe | null>(null);
+
+  const enabledIds = useMemo(
+    () => new Set(config.bots.filter((b) => b.enabled).map((b) => b.id)),
+    [config.bots],
+  );
+
+  const persistConfig = useCallback((next: FleetConfig) => {
+    setConfig(next);
+    saveConfig(next);
+  }, []);
+
+  const refreshHealth = useCallback(async () => {
+    try {
+      const [remote, probe] = await Promise.all([
+        fetchBots(config, true),
+        probeConnection(config),
+      ]);
+      setConnection(probe);
+      const byId = new Map(remote.map((b) => [b.id, b]));
+      const merged: FleetBot[] = config.bots
+        .filter((b) => b.enabled)
+        .map((local) => {
+          const r = byId.get(local.id);
+          return {
+            ...local,
+            ...r,
+            display_name: local.display_name,
+            color: local.color || r?.color,
+            health_url: local.health_url || r?.health_url,
+          };
+        });
+      setBots(merged);
+      setVisibleIds((prev) => {
+        if (prev.size) return prev;
+        return new Set(merged.map((b) => b.id));
+      });
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [config]);
+
+  const refreshCurves = useCallback(async () => {
+    try {
+      const ids = [...enabledIds];
+      const perf = await fetchPerformance(config, range, ids);
+      setSeries(perf.series || []);
+      setUpdatedAt(perf.ts || new Date().toISOString());
+      setError(perf.error || null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [config, range, enabledIds]);
+
+  useEffect(() => {
+    void refreshHealth();
+    void refreshCurves();
+  }, [refreshHealth, refreshCurves]);
+
+  useEffect(() => {
+    const h = window.setInterval(() => void refreshHealth(), config.healthPollMs);
+    const c = window.setInterval(() => void refreshCurves(), config.curvePollMs);
+    return () => {
+      window.clearInterval(h);
+      window.clearInterval(c);
+    };
+  }, [config.healthPollMs, config.curvePollMs, refreshHealth, refreshCurves]);
+
+  useEffect(() => {
+    if (drawer !== "activity") return;
+    setDrawerLoading(true);
+    void fetchActivity(config, range)
+      .then(setActivity)
+      .catch((e) => setError(String(e)))
+      .finally(() => setDrawerLoading(false));
+  }, [drawer, config, range]);
+
+  useEffect(() => {
+    if (drawer !== "capital") return;
+    setDrawerLoading(true);
+    void fetchCapitalization(config)
+      .then(setAccounts)
+      .catch((e) => setError(String(e)))
+      .finally(() => setDrawerLoading(false));
+  }, [drawer, config]);
+
+  useEffect(() => {
+    if (drawer !== "trades" || !tradeBotId) return;
+    const bot = bots.find((b) => b.id === tradeBotId) || series.find((s) => s.id === tradeBotId);
+    const instance = bot?.strategy_instance || tradeBotId;
+    setDrawerLoading(true);
+    void fetchTrades(config, instance, range)
+      .then(setTrades)
+      .catch((e) => setError(String(e)))
+      .finally(() => setDrawerLoading(false));
+  }, [drawer, tradeBotId, bots, series, config, range]);
+
+  const openDrawer = (id: DrawerId) => {
+    setDrawer((cur) => (cur === id ? null : id));
+    if (id === "account") setChartMode("account");
+    else setChartMode("trade");
+  };
+
+  const exportCurves = () => {
+    const rows: Array<Record<string, unknown>> = [];
+    for (const s of series) {
+      if (!visibleIds.has(s.id)) continue;
+      for (const p of s.trade_curve) {
+        rows.push({
+          bot: s.display_name,
+          instance: s.strategy_instance,
+          t: p.t,
+          equity_pct: p.equity_pct,
+          mode: "trade",
+        });
+      }
+    }
+    downloadCsv("fleet-trade-curves.csv", rows);
+  };
+
+  const legend = series.filter((s) => enabledIds.has(s.id));
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <header className="flex items-end justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
+        <div>
+          <p className="text-[11px] tracking-[0.22em] text-[var(--accent)] uppercase">Fleet</p>
+          <h1 className="mt-1 font-serif text-[28px] leading-none tracking-tight text-[var(--text)]">
+            Cockpit
+          </h1>
+          {connection && (
+            <p className="mt-2 text-[10px] tracking-wide text-[var(--muted)]">
+              link:{" "}
+              <span
+                style={{
+                  color:
+                    connection.mode === "fleet_api"
+                      ? "var(--live)"
+                      : connection.mode === "direct_health"
+                        ? "var(--accent)"
+                        : "var(--down)",
+                }}
+              >
+                {connection.mode}
+              </span>
+              {connection.mode === "direct_health" && " · health only (deploy /api/fleet for curves)"}
+            </p>
+          )}
+        </div>
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="mr-2 flex border border-[var(--line)]">
+            {RANGES.map((r) => (
+              <button
+                key={r}
+                onClick={() => setRange(r)}
+                className="px-3 py-1.5 text-[11px] tracking-wide uppercase"
+                style={{
+                  background: range === r ? "rgba(196,163,90,0.18)" : "transparent",
+                  color: range === r ? "var(--accent)" : "var(--muted)",
+                }}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+          {(
+            [
+              ["account", "Equity %"],
+              ["activity", "Activity"],
+              ["trades", "Trades"],
+              ["stats", "Stats"],
+              ["capital", "Capital"],
+              ["settings", "Settings"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              onClick={() => {
+                if (id === "trades" && !tradeBotId && bots[0]) setTradeBotId(bots[0].id);
+                openDrawer(id);
+              }}
+              className="px-2 py-1.5 text-[11px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
+              style={{ color: drawer === id ? "var(--accent)" : undefined }}
+            >
+              {label}
+            </button>
+          ))}
+          <button
+            onClick={() => {
+              void refreshHealth();
+              void refreshCurves();
+            }}
+            className="border border-[var(--line)] px-3 py-1.5 text-[11px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
+          >
+            Refresh
+          </button>
+          <button
+            onClick={exportCurves}
+            className="border border-[var(--line)] px-3 py-1.5 text-[11px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
+          >
+            CSV
+          </button>
+        </div>
+      </header>
+
+      <div className="relative flex min-h-0 flex-1">
+        <StatusRail
+          bots={bots}
+          visibleIds={visibleIds}
+          isolatedId={isolatedId}
+          onToggle={(id) =>
+            setVisibleIds((prev) => {
+              const next = new Set(prev);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            })
+          }
+          onIsolate={setIsolatedId}
+          onOpenBot={(id) => {
+            setTradeBotId(id);
+            openDrawer("trades");
+          }}
+        />
+
+        <main className="relative flex min-w-0 flex-1 flex-col px-4 pb-4 pt-3">
+          <div className="mb-2 flex flex-wrap items-center gap-3">
+            {legend.map((s) => {
+              const on = visibleIds.has(s.id) || isolatedId === s.id;
+              return (
+                <button
+                  key={s.id}
+                  onClick={() =>
+                    setVisibleIds((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(s.id)) next.delete(s.id);
+                      else next.add(s.id);
+                      return next;
+                    })
+                  }
+                  onDoubleClick={() => setIsolatedId(isolatedId === s.id ? null : s.id)}
+                  className="flex items-center gap-2 text-[11px]"
+                  style={{ opacity: on ? 1 : 0.35 }}
+                >
+                  <span className="h-1.5 w-4" style={{ background: s.color || "var(--accent)" }} />
+                  <span>{s.display_name}</span>
+                  <span className="text-[var(--muted)]">
+                    {s.stats.return_pct >= 0 ? "+" : ""}
+                    {s.stats.return_pct.toFixed(2)}%
+                  </span>
+                </button>
+              );
+            })}
+            <label className="ml-auto flex items-center gap-2 text-[11px] text-[var(--muted)]">
+              <input
+                type="checkbox"
+                checked={showMaxDd}
+                onChange={(e) => setShowMaxDd(e.target.checked)}
+              />
+              Max DD markers
+            </label>
+            {updatedAt && (
+              <span className="text-[10px] text-[var(--muted)]">
+                {updatedAt.replace("T", " ").slice(0, 19)} UTC
+              </span>
+            )}
+          </div>
+
+          <div className="min-h-0 flex-1 border border-[var(--line)] bg-black/15">
+            <HeroChart
+              series={series}
+              visibleIds={visibleIds}
+              mode={chartMode}
+              isolatedId={isolatedId}
+              showMaxDd={showMaxDd}
+            />
+          </div>
+
+          {error && (
+            <p className="mt-2 text-[11px] text-[var(--down)]">
+              {error} — set API base + token in Settings if needed.
+            </p>
+          )}
+        </main>
+
+        <DrawerShell
+          open={drawer}
+          onClose={() => {
+            openDrawer(null);
+            setChartMode("trade");
+          }}
+          title={drawer ? DRAWER_TITLES[drawer] : ""}
+          widthClass={drawer === "stats" || drawer === "settings" ? "w-[480px]" : "w-[420px]"}
+        >
+          {drawer === "account" && (
+            <AccountEquityDrawer series={series} visibleIds={visibleIds} isolatedId={isolatedId} />
+          )}
+          {drawer === "activity" && <ActivityDrawer events={activity} loading={drawerLoading} />}
+          {drawer === "trades" && (
+            <div className="space-y-3">
+              <select
+                className="w-full border border-[var(--line)] bg-black/30 px-2 py-2 text-[12px]"
+                value={tradeBotId || ""}
+                onChange={(e) => setTradeBotId(e.target.value)}
+              >
+                {bots.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    {b.display_name}
+                  </option>
+                ))}
+              </select>
+              <TradesDrawer
+                trades={trades}
+                botLabel={bots.find((b) => b.id === tradeBotId)?.display_name || "bot"}
+                loading={drawerLoading}
+              />
+            </div>
+          )}
+          {drawer === "stats" && <StatsDrawer series={series} />}
+          {drawer === "capital" && (
+            <CapitalizationDrawer accounts={accounts} loading={drawerLoading} />
+          )}
+          {drawer === "settings" && (
+            <SettingsDrawer
+              config={config}
+              onChange={persistConfig}
+              lastProbe={connection}
+              onProbed={setConnection}
+            />
+          )}
+        </DrawerShell>
+      </div>
+    </div>
+  );
+}

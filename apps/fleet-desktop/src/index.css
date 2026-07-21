@@ -1,0 +1,55 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #0c0d0f;
+  --bg-elevated: #14161a;
+  --bg-panel: #12141a;
+  --line: rgba(255, 255, 255, 0.08);
+  --text: #e8e4dc;
+  --muted: #8a8680;
+  --accent: #c4a35a;
+  --live: #6b9e7a;
+  --down: #a85a4a;
+  --dry: #8a7a9a;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+@font-face {
+  font-family: "IBM Plex Sans";
+  font-style: normal;
+  font-weight: 400 600;
+  font-display: swap;
+  src: local("IBM Plex Sans"), local("Helvetica Neue");
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background:
+    radial-gradient(1200px 600px at 20% -10%, rgba(196, 163, 90, 0.08), transparent 55%),
+    radial-gradient(900px 500px at 100% 0%, rgba(91, 143, 173, 0.06), transparent 50%),
+    var(--bg);
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 0;
+}
