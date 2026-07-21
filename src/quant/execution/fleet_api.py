@@ -571,9 +571,9 @@ def build_fleet_capitalization() -> Dict[str, Any]:
             snaps = _load_equity_snapshots(venue=venue, account=None, limit=1)
             if not snaps:
                 snaps = _load_equity_snapshots(venue=venue, account="main", limit=1)
-        if not snaps and venue == "kucoin":
-            # Legacy dashboard writer used account='futures' for a single key.
-            snaps = _load_equity_snapshots(venue=venue, account="futures", limit=1)
+        # Do NOT fall back to venue-wide account='futures' here — that is the
+        # dashboard's single KuCoin key and mis-attributes capital to dry pilots
+        # that have no credentials (e.g. Counter SL Reverse with PASTE_ME keys).
         latest = snaps[-1] if snaps else None
 
         equity = float(live_equity) if live_equity is not None else (
