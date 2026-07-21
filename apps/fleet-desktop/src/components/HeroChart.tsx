@@ -112,9 +112,19 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
       if (data.length < 1) continue;
       plotted += 1;
 
+      // Single snapshot still needs two times for LWC to stroke a segment.
+      const lineData =
+        data.length === 1
+          ? [
+              data[0],
+              { ...data[0], time: ((data[0].time as number) + 60) as LineData["time"] },
+            ]
+          : data;
+
       const line = chart.addLineSeries({
         color: bot.color || "#c4a35a",
         lineWidth: 2,
+        lineType: 0, // simple continuous stroke (not stepped)
         lineVisible: true,
         pointMarkersVisible: false,
         priceLineVisible: false,
@@ -124,7 +134,7 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
         crosshairMarkerRadius: 4,
         priceFormat: { type: "price", precision: 2, minMove: 0.01 },
       });
-      line.setData(data);
+      line.setData(lineData);
       linesRef.current.set(bot.id, line);
 
       if (showMaxDd && mode === "trade" && bot.stats.max_drawdown_pct > 0 && data.length > 1) {

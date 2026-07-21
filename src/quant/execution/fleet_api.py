@@ -434,27 +434,81 @@ def _is_finite(v: Any) -> bool:
 def _downsample_points(
     points: List[Dict[str, Any]],
     *,
-    max_points: int = 360,
+    max_points: int = 180,
     value_key: str = "equity",
+    min_interval_sec: int = 900,
 ) -> List[Dict[str, Any]]:
-    """Bucket by time so charts draw continuous lines without 5k-dot clouds."""
-    if len(points) <= max_points:
-        return points
+    """Thin equity snapshots into a drawable line.
+
+    Health polls previously wrote ~30–60s snapshots; without thinning the chart
+    looks like a dense point cloud (often only on the right of a wider window).
+    Keep plateau edges, enforce a minimum spacing, then bucket to max_points.
+    """
+    if not points:
+        return []
+
+    # 1) Collapse flat plateaus — keep start + end of each constant run.
+    simple: List[Dict[str, Any]] = []
+    for p in points:
+        item = {"t": int(p["t"]), value_key: p.get(value_key)}
+        if not simple:
+            simple.append(item)
+            continue
+        try:
+            same = abs(float(item[value_key]) - float(simple[-1][value_key])) < 1e-9
+        except Exception:
+            same = False
+        if same:
+            if len(simple) >= 2:
+                try:
+                    prev_flat = (
+                        abs(float(simple[-1][value_key]) - float(simple[-2][value_key])) < 1e-9
+                    )
+                except Exception:
+                    prev_flat = False
+                if prev_flat:
+                    simple[-1] = item  # move plateau end forward
+                else:
+                    simple.append(item)  # first extension of plateau
+            else:
+                simple.append(item)
+        else:
+            simple.append(item)
+
+    if len(simple) == 1:
+        return simple
+
+    # 2) Min interval for near-duplicates only — never drop real equity changes.
+    spaced: List[Dict[str, Any]] = [simple[0]]
+    min_iv = max(60, int(min_interval_sec))
+    for p in simple[1:-1]:
+        try:
+            changed = abs(float(p[value_key]) - float(spaced[-1][value_key])) >= 1e-9
+        except Exception:
+            changed = True
+        if changed or int(p["t"]) - int(spaced[-1]["t"]) >= min_iv:
+            spaced.append(p)
+    if int(simple[-1]["t"]) != int(spaced[-1]["t"]):
+        spaced.append(simple[-1])
+
+    if len(spaced) <= max_points:
+        return spaced
     if max_points < 3:
-        return points[:max_points]
-    t0 = int(points[0]["t"])
-    t1 = int(points[-1]["t"])
+        return spaced[:max_points]
+
+    # 3) Time-bucket to max_points.
+    t0 = int(spaced[0]["t"])
+    t1 = int(spaced[-1]["t"])
     if t1 <= t0:
-        return [points[0], points[-1]]
+        return [spaced[0], spaced[-1]]
     bucket = max(1, (t1 - t0) // (max_points - 1))
-    out: List[Dict[str, Any]] = [points[0]]
+    out: List[Dict[str, Any]] = [spaced[0]]
     next_t = t0 + bucket
-    for p in points[1:-1]:
+    for p in spaced[1:-1]:
         if int(p["t"]) >= next_t:
             out.append(p)
             next_t = int(p["t"]) + bucket
-    out.append(points[-1])
-    # Dedup identical timestamps (keep last).
+    out.append(spaced[-1])
     dedup: Dict[int, Dict[str, Any]] = {}
     for p in out:
         dedup[int(p["t"])] = p
@@ -467,7 +521,7 @@ def _absolute_account_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any]
         for p in points
         if p.get("equity") is not None and _is_finite(p.get("equity"))
     ]
-    return _downsample_points(raw, max_points=360, value_key="equity")
+    return _downsample_points(raw, max_points=180, value_key="equity", min_interval_sec=900)
 
 
 def _stitch_live_equity(
@@ -644,29 +698,13 @@ def _normalize_account_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any
         return []
     base = float(points[0]["equity"])
     if base <= 0:
-        raw = [{"t": p["t"], "equity_pct": 0.0} for p in points]
+        raw = [{"t": int(p["t"]), "equity_pct": 0.0} for p in points]
     else:
         raw = [
             {"t": int(p["t"]), "equity_pct": round((float(p["equity"]) / base - 1.0) * 100.0, 6)}
             for p in points
         ]
-    # Reuse time-bucket downsampling (value key ignored for structure).
-    if len(raw) <= 360:
-        return raw
-    t0 = int(raw[0]["t"])
-    t1 = int(raw[-1]["t"])
-    if t1 <= t0:
-        return [raw[0], raw[-1]]
-    bucket = max(1, (t1 - t0) // 359)
-    out = [raw[0]]
-    next_t = t0 + bucket
-    for p in raw[1:-1]:
-        if int(p["t"]) >= next_t:
-            out.append(p)
-            next_t = int(p["t"]) + bucket
-    out.append(raw[-1])
-    return out
-
+    return _downsample_points(raw, max_points=180, value_key="equity_pct", min_interval_sec=900)
 
 def build_fleet_performance(
     *,

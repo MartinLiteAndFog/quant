@@ -134,6 +134,19 @@ class BuildFleetPerformanceFilterTests(unittest.TestCase):
         self.assertEqual(out["series"][0]["account_curve_abs"], [])
 
 
+class DownsampleCurveTests(unittest.TestCase):
+    def test_collapses_flat_high_frequency_spam(self) -> None:
+        from quant.execution.fleet_api import _downsample_points
+
+        # ~40s health polls of a flat 15 USDT balance over ~1h
+        pts = [{"t": 1_000_000 + i * 40, "equity": 15.0} for i in range(90)]
+        out = _downsample_points(pts, max_points=180, value_key="equity", min_interval_sec=900)
+        self.assertLessEqual(len(out), 4)
+        self.assertEqual(out[0]["equity"], 15.0)
+        self.assertEqual(out[-1]["equity"], 15.0)
+        self.assertGreater(out[-1]["t"], out[0]["t"])
+
+
 class LiveStitchAndAbsCurveTests(unittest.TestCase):
     def test_stitch_appends_live_equity(self) -> None:
         from quant.execution.fleet_api import _stitch_live_equity, _absolute_account_curve
