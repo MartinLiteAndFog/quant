@@ -171,6 +171,16 @@ export const DEFAULT_BOTS: FleetConfig["bots"] = [
     enabled: true,
   },
   {
+    id: "quant-main",
+    display_name: "Quant (KuCoin main)",
+    strategy_instance: "quant",
+    venue: "kucoin",
+    symbol: "SOL-USDT",
+    health_url: "https://quant-production-5533.up.railway.app/health",
+    color: "#9a8f6a",
+    enabled: true,
+  },
+  {
     id: "kraken-legacy",
     display_name: "Kraken Legacy",
     strategy_instance: "kraken_bot",
@@ -192,12 +202,31 @@ export const DEFAULT_CONFIG: FleetConfig = {
   bots: DEFAULT_BOTS,
 };
 
-const STORAGE_KEY = "fleet-cockpit-config-v3";
+const STORAGE_KEY = "fleet-cockpit-config-v4";
+
+function mergeBots(
+  saved: FleetConfig["bots"] | undefined,
+): FleetConfig["bots"] {
+  if (!Array.isArray(saved) || !saved.length) {
+    return structuredClone(DEFAULT_BOTS);
+  }
+  const byId = new Map(saved.map((b) => [b.id, b]));
+  const merged = DEFAULT_BOTS.map((def) => {
+    const prev = byId.get(def.id);
+    return prev ? { ...def, ...prev, id: def.id } : { ...def };
+  });
+  // Keep any user-added bots not in defaults.
+  for (const b of saved) {
+    if (!DEFAULT_BOTS.some((d) => d.id === b.id)) merged.push(b);
+  }
+  return merged;
+}
 
 export function loadConfig(): FleetConfig {
   try {
     const raw =
       localStorage.getItem(STORAGE_KEY) ||
+      localStorage.getItem("fleet-cockpit-config-v3") ||
       localStorage.getItem("fleet-cockpit-config-v2") ||
       localStorage.getItem("fleet-cockpit-config-v1");
     if (!raw) return structuredClone(DEFAULT_CONFIG);
@@ -208,7 +237,7 @@ export function loadConfig(): FleetConfig {
       // Fleet GETs are public by default — drop stale tokens that caused 401 banners.
       token: "",
       apiBase: (parsed.apiBase && parsed.apiBase.trim()) || DEFAULT_CONFIG.apiBase,
-      bots: Array.isArray(parsed.bots) && parsed.bots.length ? parsed.bots : DEFAULT_BOTS,
+      bots: mergeBots(parsed.bots as FleetConfig["bots"] | undefined),
     };
   } catch {
     return structuredClone(DEFAULT_CONFIG);

@@ -58,6 +58,17 @@ _DEFAULT_BOTS: List[Dict[str, Any]] = [
         "color": "#8a7a9a",
     },
     {
+        "id": "quant-main",
+        "display_name": "Quant (KuCoin main)",
+        "strategy_instance": "quant",
+        # Dashboard equity_snapshots historically used account='futures'.
+        "equity_account": "futures",
+        "venue": "kucoin",
+        "symbol": "SOL-USDT",
+        "health_url": "https://quant-production-5533.up.railway.app/health",
+        "color": "#9a8f6a",
+    },
+    {
         "id": "kraken-legacy",
         "display_name": "Kraken Legacy",
         "strategy_instance": "kraken_bot",
@@ -132,6 +143,7 @@ def list_fleet_bots(*, probe_health: bool = True) -> Dict[str, Any]:
             "id": b.get("id"),
             "display_name": b.get("display_name") or b.get("id"),
             "strategy_instance": b.get("strategy_instance"),
+            "equity_account": b.get("equity_account"),
             "venue": b.get("venue") or "kucoin",
             "symbol": b.get("symbol") or "SOL-USDT",
             "health_url": b.get("health_url"),
@@ -558,6 +570,8 @@ def build_fleet_capitalization() -> Dict[str, Any]:
     for b in bots_payload.get("bots") or []:
         venue = str(b.get("venue") or "kucoin")
         instance = str(b.get("strategy_instance") or "")
+        # Optional snapshot account override (quant dashboard wrote account='futures').
+        snap_account = str(b.get("equity_account") or instance)
         health = b.get("health") if isinstance(b.get("health"), dict) else {}
 
         live_equity = health.get("equity")
@@ -566,14 +580,15 @@ def build_fleet_capitalization() -> Dict[str, Any]:
         live_currency = health.get("currency")
         live_source = health.get("equity_source")
 
-        snaps = _load_equity_snapshots(venue=venue, account=instance, limit=1)
+        snaps = _load_equity_snapshots(venue=venue, account=snap_account, limit=1)
+        if not snaps and snap_account != instance:
+            snaps = _load_equity_snapshots(venue=venue, account=instance, limit=1)
         if not snaps and venue == "kraken":
             snaps = _load_equity_snapshots(venue=venue, account=None, limit=1)
             if not snaps:
                 snaps = _load_equity_snapshots(venue=venue, account="main", limit=1)
-        # Do NOT fall back to venue-wide account='futures' here — that is the
-        # dashboard's single KuCoin key and mis-attributes capital to dry pilots
-        # that have no credentials (e.g. Counter SL Reverse with PASTE_ME keys).
+        # Do NOT fall back to venue-wide account='futures' for arbitrary pilots —
+        # that mis-attributes the dashboard KuCoin main key.
         latest = snaps[-1] if snaps else None
 
         equity = float(live_equity) if live_equity is not None else (
