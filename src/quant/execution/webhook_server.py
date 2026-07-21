@@ -3502,6 +3502,25 @@ def _fleet_auth_token(
     return None
 
 
+def _fleet_check_auth(
+    x_webhook_token: Optional[str] = None,
+    authorization: Optional[str] = None,
+    token: Optional[str] = None,
+) -> None:
+    """Fleet GETs are read-only like /api/dashboard/* — public by default.
+
+    Set FLEET_REQUIRE_AUTH=1 to require WEBHOOK_TOKEN (Bearer / query / header).
+    """
+    require = str(os.getenv("FLEET_REQUIRE_AUTH", "0")).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+    if require:
+        _check_token(_fleet_auth_token(x_webhook_token, authorization, token))
+
+
 @app.get("/api/fleet/bots")
 def api_fleet_bots(
     probe: int = 1,
@@ -3510,7 +3529,7 @@ def api_fleet_bots(
     authorization: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     """Configured fleet instances + optional live /health snapshot."""
-    _check_token(_fleet_auth_token(x_webhook_token, authorization, token))
+    _fleet_check_auth(x_webhook_token, authorization, token)
     from quant.execution.fleet_api import list_fleet_bots
 
     try:
@@ -3528,7 +3547,7 @@ def api_fleet_performance(
     authorization: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     """Per-bot compounded trade PnL % + account equity % curves."""
-    _check_token(_fleet_auth_token(x_webhook_token, authorization, token))
+    _fleet_check_auth(x_webhook_token, authorization, token)
     from quant.execution.fleet_api import build_fleet_performance
 
     ids = [s.strip() for s in str(instances or "").split(",") if s.strip()] or None
@@ -3548,7 +3567,7 @@ def api_fleet_activity(
     authorization: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     """Unified execution timeline across fleet strategy_instance tags."""
-    _check_token(_fleet_auth_token(x_webhook_token, authorization, token))
+    _fleet_check_auth(x_webhook_token, authorization, token)
     from quant.execution.fleet_api import build_fleet_activity
 
     hrs: Optional[float] = None if float(hours) <= 0 else float(hours)
@@ -3568,7 +3587,7 @@ def api_fleet_trades(
     authorization: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     """Closed-trade drill-down for one fleet bot."""
-    _check_token(_fleet_auth_token(x_webhook_token, authorization, token))
+    _fleet_check_auth(x_webhook_token, authorization, token)
     from quant.execution.fleet_api import build_fleet_trades
 
     hrs: Optional[float] = None if float(hours) <= 0 else float(hours)
@@ -3595,7 +3614,7 @@ def api_fleet_capitalization(
     authorization: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
     """Equity + health snapshot for capitalization drawer."""
-    _check_token(_fleet_auth_token(x_webhook_token, authorization, token))
+    _fleet_check_auth(x_webhook_token, authorization, token)
     from quant.execution.fleet_api import build_fleet_capitalization
 
     try:

@@ -73,9 +73,11 @@ export async function probeConnection(cfg: FleetConfig): Promise<ConnectionProbe
       ? `fleet api ok (${payload?.bots?.length ?? 0} bots)`
       : looksLikeHtml
         ? "host reachable but /api/fleet/* not deployed (got SPA HTML)"
-        : hit.ok
-          ? `unexpected payload: ${hit.body.slice(0, 80)}`
-          : `fleet api failed: HTTP ${hit.status ?? "—"} ${hit.body.slice(0, 80)}`;
+        : hit.status === 401
+          ? "fleet api 401 — set read token in Settings, or redeploy with public fleet GETs"
+          : hit.ok
+            ? `unexpected payload: ${hit.body.slice(0, 80)}`
+            : `fleet api failed: HTTP ${hit.status ?? "—"} ${hit.body.slice(0, 80)}`;
   }
 
   const enabled = cfg.bots.filter((b) => b.enabled);

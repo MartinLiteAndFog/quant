@@ -204,7 +204,8 @@ export default function App() {
               >
                 {connection.mode}
               </span>
-              {connection.mode === "direct_health" && " · health only (deploy /api/fleet for curves)"}
+              {connection.mode === "direct_health" &&
+                " · health only (fleet API unreachable — check Settings / redeploy)"}
             </p>
           )}
         </div>

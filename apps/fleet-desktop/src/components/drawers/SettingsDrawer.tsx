@@ -87,6 +87,10 @@ export function SettingsDrawer({ config, onChange, lastProbe, onProbed }: Props)
             </ul>
           </div>
         )}
+        <p className="text-[11px] text-[var(--muted)] leading-relaxed">
+          API base should be the quant dashboard host. Leave token empty unless the
+          server sets <code>FLEET_REQUIRE_AUTH=1</code>.
+        </p>
       </section>
 
       <label className="block space-y-1">
