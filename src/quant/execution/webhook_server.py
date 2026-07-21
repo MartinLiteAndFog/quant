@@ -941,7 +941,39 @@ def root() -> Response:
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
-    return {"ok": True, "ts": _now_utc_iso()}
+    """Process liveness + optional live trading flags / account equity.
+
+    KuCoin pilots use ``bot_webhook`` (richer health). This endpoint covers the
+    dashboard host and the Kraken stack, which previously only returned ``ok``.
+    """
+    from quant.execution.live_account import live_account_snapshot, trading_mode_from_env
+
+    mode = trading_mode_from_env()
+    out: Dict[str, Any] = {
+        "ok": True,
+        "ts": _now_utc_iso(),
+        "live_trading_enabled": bool(mode.get("live_trading_enabled")),
+        "dry_run": bool(mode.get("dry_run")),
+        # webhook_server itself is not the TV executor; treat live+not-dry as ready
+        # so fleet capitalization does not show Kraken as permanently "off".
+        "executor_ready": bool(mode.get("live_trading_enabled")) and not bool(mode.get("dry_run")),
+    }
+    prefer = "kraken" if (os.getenv("KRAKEN_FUTURES_KEY") or "").strip() else (
+        "kucoin" if (os.getenv("KUCOIN_FUTURES_API_KEY") or "").strip() else None
+    )
+    if prefer:
+        out["venue"] = prefer
+        acct = live_account_snapshot(prefer=prefer, use_cache=True)
+        if acct.get("ok"):
+            out["equity"] = acct.get("equity")
+            out["available"] = acct.get("available")
+            out["wallet"] = acct.get("wallet")
+            out["unrealised_pnl"] = acct.get("unrealised_pnl")
+            out["currency"] = acct.get("currency")
+            out["equity_source"] = acct.get("source")
+        elif acct.get("error"):
+            out["equity_error"] = acct.get("error")
+    return out
 
 
 def _kucoin_broker():

@@ -96,8 +96,11 @@ export interface CapitalAccount {
   live_trading_enabled?: boolean | null;
   dry_run?: boolean | null;
   equity?: number | null;
+  available?: number | null;
+  unrealised_pnl?: number | null;
   equity_ts?: number | null;
   currency?: string | null;
+  equity_source?: string | null;
   health?: Record<string, unknown>;
 }
 
@@ -189,16 +192,21 @@ export const DEFAULT_CONFIG: FleetConfig = {
   bots: DEFAULT_BOTS,
 };
 
-const STORAGE_KEY = "fleet-cockpit-config-v2";
+const STORAGE_KEY = "fleet-cockpit-config-v3";
 
 export function loadConfig(): FleetConfig {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY) || localStorage.getItem("fleet-cockpit-config-v1");
+    const raw =
+      localStorage.getItem(STORAGE_KEY) ||
+      localStorage.getItem("fleet-cockpit-config-v2") ||
+      localStorage.getItem("fleet-cockpit-config-v1");
     if (!raw) return structuredClone(DEFAULT_CONFIG);
     const parsed = JSON.parse(raw) as Partial<FleetConfig>;
     return {
       ...DEFAULT_CONFIG,
       ...parsed,
+      // Fleet GETs are public by default — drop stale tokens that caused 401 banners.
+      token: "",
       apiBase: (parsed.apiBase && parsed.apiBase.trim()) || DEFAULT_CONFIG.apiBase,
       bots: Array.isArray(parsed.bots) && parsed.bots.length ? parsed.bots : DEFAULT_BOTS,
     };

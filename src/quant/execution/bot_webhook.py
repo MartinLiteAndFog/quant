@@ -102,16 +102,40 @@ app = FastAPI(title="quant-bot-webhook", version="0.1.0", lifespan=_lifespan)
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
-    return {
+    from quant.execution.live_account import live_account_snapshot, trading_mode_from_env
+
+    mode = trading_mode_from_env()
+    # Prefer explicit TV dry-run for this process.
+    dry = _truthy(os.getenv("TV_EXEC_DRY_RUN", "1"))
+    live = _truthy(os.getenv("LIVE_TRADING_ENABLED"))
+    out: Dict[str, Any] = {
         "ok": True,
         "name": display_name(),
         "profile": active_profile(),
         "instance": strategy_instance_id(),
         "symbol": os.getenv("LIVE_SYMBOL", "SOL-USDT"),
         "executor_ready": tv_ready.is_set(),
-        "dry_run": _truthy(os.getenv("TV_EXEC_DRY_RUN", "1")),
-        "live_trading_enabled": _truthy(os.getenv("LIVE_TRADING_ENABLED")),
+        "dry_run": dry,
+        "live_trading_enabled": live and not dry,
+        "venue": "kucoin",
     }
+    acct = live_account_snapshot(
+        prefer="kucoin",
+        persist_account=strategy_instance_id(),
+        use_cache=True,
+    )
+    if acct.get("ok"):
+        out["equity"] = acct.get("equity")
+        out["available"] = acct.get("available")
+        out["margin"] = acct.get("margin")
+        out["unrealised_pnl"] = acct.get("unrealised_pnl")
+        out["currency"] = acct.get("currency")
+        out["equity_source"] = acct.get("source")
+    elif acct.get("error"):
+        out["equity_error"] = acct.get("error")
+    # Keep mode keys consistent even if TV_EXEC_DRY_RUN overrides trading_mode_from_env.
+    out.setdefault("live_trading_enabled", mode.get("live_trading_enabled"))
+    return out
 
 
 @app.post("/webhook/tv-execute")

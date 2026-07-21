@@ -141,17 +141,29 @@ def list_fleet_bots(*, probe_health: bool = True) -> Dict[str, Any]:
             health = _fetch_health(str(b.get("health_url") or ""))
             row["health"] = health
             row["executor_ready"] = bool(health.get("executor_ready")) if health.get("ok") else False
-            row["live_trading_enabled"] = health.get("live_trading_enabled")
+            # Explicit false stays false; missing on older Kraken health was null → UI "off".
+            if "live_trading_enabled" in health:
+                row["live_trading_enabled"] = bool(health.get("live_trading_enabled"))
+            else:
+                row["live_trading_enabled"] = None
             row["dry_run"] = health.get("dry_run")
+            live_on = bool(row["live_trading_enabled"])
+            ready = bool(row["executor_ready"])
             row["status"] = (
                 "live"
-                if health.get("ok") and health.get("executor_ready") and health.get("live_trading_enabled")
+                if health.get("ok") and ready and live_on
                 else (
                     "dry"
                     if health.get("ok") and health.get("dry_run")
                     else ("up" if health.get("ok") else "down")
                 )
             )
+            # Surface live equity on bot rows for consumers that skip capitalization.
+            if health.get("equity") is not None:
+                row["equity"] = health.get("equity")
+                row["available"] = health.get("available")
+                row["currency"] = health.get("currency")
+                row["equity_source"] = health.get("equity_source")
         out.append(row)
     return {"ok": True, "bots": out, "ts": pd.Timestamp.now("UTC").isoformat()}
 
@@ -540,16 +552,41 @@ def build_fleet_trades(
 
 
 def build_fleet_capitalization() -> Dict[str, Any]:
-    """Health + latest equity snapshot per bot (capitalization drawer)."""
+    """Health + live equity (preferred) or latest equity snapshot per bot."""
     bots_payload = list_fleet_bots(probe_health=True)
     accounts = []
     for b in bots_payload.get("bots") or []:
         venue = str(b.get("venue") or "kucoin")
         instance = str(b.get("strategy_instance") or "")
+        health = b.get("health") if isinstance(b.get("health"), dict) else {}
+
+        live_equity = health.get("equity")
+        live_available = health.get("available")
+        live_upnl = health.get("unrealised_pnl")
+        live_currency = health.get("currency")
+        live_source = health.get("equity_source")
+
         snaps = _load_equity_snapshots(venue=venue, account=instance, limit=1)
         if not snaps and venue == "kraken":
             snaps = _load_equity_snapshots(venue=venue, account=None, limit=1)
+            if not snaps:
+                snaps = _load_equity_snapshots(venue=venue, account="main", limit=1)
+        if not snaps and venue == "kucoin":
+            # Legacy dashboard writer used account='futures' for a single key.
+            snaps = _load_equity_snapshots(venue=venue, account="futures", limit=1)
         latest = snaps[-1] if snaps else None
+
+        equity = float(live_equity) if live_equity is not None else (
+            float(latest["equity"]) if latest else None
+        )
+        currency = live_currency or (latest.get("currency") if latest else None)
+        equity_ts = (
+            int(health.get("ts"))
+            if isinstance(health.get("ts"), (int, float))
+            else (latest.get("t") if latest else None)
+        )
+        equity_source = live_source or ("equity_snapshots" if latest else None)
+
         accounts.append(
             {
                 "id": b.get("id"),
@@ -560,10 +597,13 @@ def build_fleet_capitalization() -> Dict[str, Any]:
                 "executor_ready": b.get("executor_ready"),
                 "live_trading_enabled": b.get("live_trading_enabled"),
                 "dry_run": b.get("dry_run"),
-                "health": b.get("health"),
-                "equity": latest.get("equity") if latest else None,
-                "equity_ts": latest.get("t") if latest else None,
-                "currency": latest.get("currency") if latest else None,
+                "health": health,
+                "equity": equity,
+                "available": float(live_available) if live_available is not None else None,
+                "unrealised_pnl": float(live_upnl) if live_upnl is not None else None,
+                "equity_ts": equity_ts,
+                "currency": currency,
+                "equity_source": equity_source,
             }
         )
     return {"ok": True, "accounts": accounts, "ts": pd.Timestamp.now("UTC").isoformat()}

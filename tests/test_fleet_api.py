@@ -133,5 +133,41 @@ class BuildFleetPerformanceFilterTests(unittest.TestCase):
         self.assertEqual(out["series"][0]["trade_curve"], [])
 
 
+class CapitalizationLiveEquityTests(unittest.TestCase):
+    def test_prefers_health_equity_over_snapshots(self) -> None:
+        from quant.execution.fleet_api import build_fleet_capitalization
+
+        bots = {
+            "ok": True,
+            "bots": [
+                {
+                    "id": "imba-runner",
+                    "display_name": "Imba Runner",
+                    "strategy_instance": "sol-pilot-canonical",
+                    "venue": "kucoin",
+                    "status": "live",
+                    "executor_ready": True,
+                    "live_trading_enabled": True,
+                    "dry_run": False,
+                    "health": {
+                        "ok": True,
+                        "equity": 250.5,
+                        "available": 180.0,
+                        "unrealised_pnl": 1.25,
+                        "currency": "USDT",
+                        "equity_source": "kucoin_live",
+                    },
+                }
+            ],
+        }
+        with patch("quant.execution.fleet_api.list_fleet_bots", return_value=bots):
+            with patch("quant.execution.fleet_api._load_equity_snapshots", return_value=[]):
+                out = build_fleet_capitalization()
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["accounts"][0]["equity"], 250.5)
+        self.assertEqual(out["accounts"][0]["available"], 180.0)
+        self.assertEqual(out["accounts"][0]["equity_source"], "kucoin_live")
+
+
 if __name__ == "__main__":
     unittest.main()

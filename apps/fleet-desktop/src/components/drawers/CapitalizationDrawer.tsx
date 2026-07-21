@@ -5,6 +5,12 @@ interface Props {
   loading?: boolean;
 }
 
+function fmt(n: number | null | undefined, ccy?: string | null): string {
+  if (n == null || !Number.isFinite(n)) return "—";
+  const suffix = ccy ? ` ${ccy}` : "";
+  return `${n.toFixed(2)}${suffix}`;
+}
+
 export function CapitalizationDrawer({ accounts, loading }: Props) {
   if (loading) return <p className="text-[12px] text-[var(--muted)]">Probing health…</p>;
   if (!accounts.length) {
@@ -13,6 +19,10 @@ export function CapitalizationDrawer({ accounts, loading }: Props) {
 
   return (
     <div className="space-y-3">
+      <p className="text-[11px] text-[var(--muted)] leading-relaxed">
+        Equity is live account equity from each bot&apos;s venue credentials (not
+        available margin). Available is free margin for new risk.
+      </p>
       {accounts.map((a) => (
         <article key={a.id} className="border border-[var(--line)] px-3 py-3">
           <div className="mb-2 flex items-baseline justify-between gap-2">
@@ -23,15 +33,19 @@ export function CapitalizationDrawer({ accounts, loading }: Props) {
           </div>
           <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-[var(--muted)]">
             <dt>Equity</dt>
-            <dd className="text-right text-[var(--text)]">
-              {a.equity == null ? "—" : `${a.equity.toFixed(2)} ${a.currency || ""}`}
-            </dd>
+            <dd className="text-right text-[var(--text)]">{fmt(a.equity, a.currency)}</dd>
+            <dt>Available</dt>
+            <dd className="text-right text-[var(--text)]">{fmt(a.available, a.currency)}</dd>
+            <dt>uPnL</dt>
+            <dd className="text-right text-[var(--text)]">{fmt(a.unrealised_pnl, a.currency)}</dd>
             <dt>Executor</dt>
             <dd className="text-right text-[var(--text)]">{a.executor_ready ? "ready" : "not ready"}</dd>
             <dt>Live</dt>
             <dd className="text-right text-[var(--text)]">
               {a.live_trading_enabled ? "on" : a.dry_run ? "dry-run" : "off"}
             </dd>
+            <dt>Source</dt>
+            <dd className="truncate text-right text-[var(--text)]">{a.equity_source || "—"}</dd>
             <dt>Instance</dt>
             <dd className="truncate text-right text-[var(--text)]">{a.strategy_instance}</dd>
           </dl>

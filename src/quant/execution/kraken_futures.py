@@ -231,15 +231,45 @@ class KrakenFuturesClient:
         data = self._req("GET", "/derivatives/api/v3/accounts", private=True)
         accts = data.get("accounts", {}) if isinstance(data, dict) else {}
         flex = accts.get("flex", accts.get("fi_xbtusd", {})) if isinstance(accts, dict) else {}
-        wallet = float(flex.get("balanceValue", flex.get("balance", 0)) or 0)
-        upnl = float(flex.get("unrealizedFunding", 0) or 0) + float(flex.get("unrealizedPnl", 0) or 0)
-        equity = float(flex.get("portfolioValue", 0) or 0)
+        if not isinstance(flex, dict):
+            flex = {}
+
+        def _f(*keys: str) -> float:
+            for k in keys:
+                if k not in flex or flex.get(k) is None:
+                    continue
+                try:
+                    v = float(flex.get(k) or 0)
+                except Exception:
+                    continue
+                if v == v:  # finite
+                    return v
+            return 0.0
+
+        # Do NOT treat availableMargin as equity — that understates capital when
+        # margin is locked in open positions.
+        wallet = _f("balanceValue", "balance", "walletBalance")
+        available = _f("availableMargin", "available", "availableBalance")
+        portfolio = _f(
+            "portfolioValue",
+            "portfolio_value",
+            "marginEquity",
+            "collateralValue",
+            "equity",
+        )
+        upnl = _f("unrealizedPnl", "unrealizedPNL") + _f("unrealizedFunding")
+        equity = portfolio
         if equity <= 0:
-            equity = wallet + upnl
+            equity = wallet + upnl if (wallet > 0 or upnl != 0) else 0.0
+        # Last resort only: some flex payloads omit portfolio/wallet.
+        if equity <= 0 and available > 0:
+            equity = available
         return {
             "wallet_usd": wallet,
             "upnl_usd": upnl,
             "equity_usd": equity,
+            "available_usd": available,
+            "portfolio_usd": portfolio,
         }
 
     # ------------------------------------------------------------------
