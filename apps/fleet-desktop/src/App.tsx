@@ -219,6 +219,7 @@ export default function App() {
 
   const setHeroMode = (mode: ChartMode) => {
     setChartMode(mode);
+    setDrawer(null); // never show a second chart panel when switching equity modes
   };
 
   const exportCurves = () => {

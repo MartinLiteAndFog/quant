@@ -3,6 +3,10 @@
 Each Railway bot owns its own API credentials. Fleet aggregation must therefore
 pull equity from each bot's `/health` (or a dedicated equity endpoint), not from
 the dashboard service's single KuCoin key.
+
+Persistence is OFF by default and rate-limited when enabled — health is polled
+often by the desktop cockpit; writing every poll fills Postgres and burns
+Railway/DB quota.
 """
 from __future__ import annotations
 
@@ -17,6 +21,7 @@ log = get_logger("quant.live_account")
 
 _LOCK = threading.Lock()
 _CACHE: Dict[str, Any] = {"ts": 0.0, "payload": None}
+_LAST_PERSIST_TS: Dict[str, float] = {}
 
 
 def _truthy(v: Optional[str]) -> bool:
@@ -25,9 +30,33 @@ def _truthy(v: Optional[str]) -> bool:
 
 def _cache_ttl_sec() -> float:
     try:
-        return max(5.0, float(os.getenv("LIVE_ACCOUNT_CACHE_SEC", "15")))
+        return max(15.0, float(os.getenv("LIVE_ACCOUNT_CACHE_SEC", "60")))
     except Exception:
-        return 15.0
+        return 60.0
+
+
+def _persist_enabled() -> bool:
+    # Default OFF — live equity is still returned for UI stitch without DB writes.
+    return _truthy(os.getenv("FLEET_PERSIST_LIVE_EQUITY", "0"))
+
+
+def _persist_min_interval_sec() -> float:
+    try:
+        return max(300.0, float(os.getenv("FLEET_EQUITY_PERSIST_SEC", "1800")))
+    except Exception:
+        return 1800.0
+
+
+def _should_persist(key: str) -> bool:
+    if not _persist_enabled():
+        return False
+    now = time.time()
+    with _LOCK:
+        last = float(_LAST_PERSIST_TS.get(key, 0.0) or 0.0)
+        if (now - last) < _persist_min_interval_sec():
+            return False
+        _LAST_PERSIST_TS[key] = now
+        return True
 
 
 def trading_mode_from_env() -> Dict[str, Any]:
@@ -53,7 +82,8 @@ def _maybe_persist_kucoin_snapshot(
 ) -> None:
     if equity <= 0 or not account:
         return
-    if not _truthy(os.getenv("FLEET_PERSIST_LIVE_EQUITY", "1")):
+    key = f"kucoin:{account}"
+    if not _should_persist(key):
         return
     try:
         import pandas as pd
@@ -114,7 +144,7 @@ def fetch_kucoin_account(*, persist_account: Optional[str] = None) -> Dict[str, 
 def _maybe_persist_kraken_snapshot(*, equity: float, payload: Dict[str, Any]) -> None:
     if equity <= 0:
         return
-    if not _truthy(os.getenv("FLEET_PERSIST_LIVE_EQUITY", "1")):
+    if not _should_persist("kraken:main"):
         return
     try:
         import pandas as pd

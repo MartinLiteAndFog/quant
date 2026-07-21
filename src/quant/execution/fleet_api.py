@@ -431,12 +431,43 @@ def _is_finite(v: Any) -> bool:
     return x == x and abs(x) != float("inf")
 
 
+def _downsample_points(
+    points: List[Dict[str, Any]],
+    *,
+    max_points: int = 360,
+    value_key: str = "equity",
+) -> List[Dict[str, Any]]:
+    """Bucket by time so charts draw continuous lines without 5k-dot clouds."""
+    if len(points) <= max_points:
+        return points
+    if max_points < 3:
+        return points[:max_points]
+    t0 = int(points[0]["t"])
+    t1 = int(points[-1]["t"])
+    if t1 <= t0:
+        return [points[0], points[-1]]
+    bucket = max(1, (t1 - t0) // (max_points - 1))
+    out: List[Dict[str, Any]] = [points[0]]
+    next_t = t0 + bucket
+    for p in points[1:-1]:
+        if int(p["t"]) >= next_t:
+            out.append(p)
+            next_t = int(p["t"]) + bucket
+    out.append(points[-1])
+    # Dedup identical timestamps (keep last).
+    dedup: Dict[int, Dict[str, Any]] = {}
+    for p in out:
+        dedup[int(p["t"])] = p
+    return [dedup[k] for k in sorted(dedup)]
+
+
 def _absolute_account_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    return [
+    raw = [
         {"t": int(p["t"]), "equity": round(float(p["equity"]), 6)}
         for p in points
         if p.get("equity") is not None and _is_finite(p.get("equity"))
     ]
+    return _downsample_points(raw, max_points=360, value_key="equity")
 
 
 def _stitch_live_equity(
@@ -613,11 +644,28 @@ def _normalize_account_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any
         return []
     base = float(points[0]["equity"])
     if base <= 0:
-        return [{"t": p["t"], "equity_pct": 0.0} for p in points]
-    return [
-        {"t": int(p["t"]), "equity_pct": round((float(p["equity"]) / base - 1.0) * 100.0, 6)}
-        for p in points
-    ]
+        raw = [{"t": p["t"], "equity_pct": 0.0} for p in points]
+    else:
+        raw = [
+            {"t": int(p["t"]), "equity_pct": round((float(p["equity"]) / base - 1.0) * 100.0, 6)}
+            for p in points
+        ]
+    # Reuse time-bucket downsampling (value key ignored for structure).
+    if len(raw) <= 360:
+        return raw
+    t0 = int(raw[0]["t"])
+    t1 = int(raw[-1]["t"])
+    if t1 <= t0:
+        return [raw[0], raw[-1]]
+    bucket = max(1, (t1 - t0) // 359)
+    out = [raw[0]]
+    next_t = t0 + bucket
+    for p in raw[1:-1]:
+        if int(p["t"]) >= next_t:
+            out.append(p)
+            next_t = int(p["t"]) + bucket
+    out.append(raw[-1])
+    return out
 
 
 def build_fleet_performance(

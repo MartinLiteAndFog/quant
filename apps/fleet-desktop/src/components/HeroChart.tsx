@@ -16,6 +16,20 @@ interface Props {
   showMaxDd: boolean;
 }
 
+function toLineData(
+  points: Array<{ t: number; value: number }>,
+): LineData[] {
+  // LWC requires strictly ascending unique times.
+  const byT = new Map<number, number>();
+  for (const p of points) {
+    if (!Number.isFinite(p.t) || !Number.isFinite(p.value)) continue;
+    byT.set(Math.floor(p.t), p.value);
+  }
+  return [...byT.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([t, value]) => ({ time: t as LineData["time"], value }));
+}
+
 export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -87,32 +101,28 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
 
     let plotted = 0;
     for (const bot of active) {
-      let data: LineData[] = [];
+      let raw: Array<{ t: number; value: number }> = [];
       if (mode === "account_abs") {
-        const curve = bot.account_curve_abs || [];
-        data = curve
-          .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.equity))
-          .map((p) => ({ time: p.t as LineData["time"], value: p.equity }));
+        raw = (bot.account_curve_abs || []).map((p) => ({ t: p.t, value: p.equity }));
       } else {
         const curve = mode === "trade" ? bot.trade_curve : bot.account_curve;
-        data = curve
-          .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.equity_pct))
-          .map((p) => ({ time: p.t as LineData["time"], value: p.equity_pct }));
+        raw = curve.map((p) => ({ t: p.t, value: p.equity_pct }));
       }
-      if (!data.length) continue;
+      const data = toLineData(raw);
+      if (data.length < 1) continue;
       plotted += 1;
 
       const line = chart.addLineSeries({
         color: bot.color || "#c4a35a",
         lineWidth: 2,
+        lineVisible: true,
+        pointMarkersVisible: false,
         priceLineVisible: false,
         lastValueVisible: true,
         title: bot.display_name,
-        crosshairMarkerRadius: 3,
-        priceFormat:
-          mode === "account_abs"
-            ? { type: "price", precision: 2, minMove: 0.01 }
-            : { type: "price", precision: 2, minMove: 0.01 },
+        crosshairMarkerVisible: true,
+        crosshairMarkerRadius: 4,
+        priceFormat: { type: "price", precision: 2, minMove: 0.01 },
       });
       line.setData(data);
       linesRef.current.set(bot.id, line);
@@ -164,7 +174,7 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
       <div ref={containerRef} className="h-full w-full min-h-[420px]" />
       {empty && (
         <p className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-[12px] text-[var(--muted)]">
-          No equity points in this window. Switch range to ALL or wait for live snapshots.
+          No equity line in this window. Use Equity $ + ALL, then Refresh.
         </p>
       )}
     </div>
