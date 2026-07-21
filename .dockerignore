@@ -19,3 +19,4 @@ data
 !data/runs/visual_v02_seed/transitions/basins_v02_components.parquet
 !data/regimes/
 !data/regimes/SOLUSDT_tv5mIMBA_gate2of3_qch0.4_qadx0.6_qer0.3_daily.csv
+!data/regimes/pc_3axis_gate_latest.csv
