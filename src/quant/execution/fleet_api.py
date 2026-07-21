@@ -1,8 +1,8 @@
-"""Fleet aggregator: multi-bot percent performance + activity for the desktop cockpit.
+"""Fleet aggregator: multi-bot performance board for the desktop cockpit.
 
-Reads shared Postgres rows tagged with ``strategy_instance``, builds compounded
-trade-PnL % curves (hero) and account-equity % curves (drawer), and fans out
-to each bot's public ``/health`` endpoint for live status.
+Reads shared Postgres rows tagged with ``strategy_instance``, builds absolute
+and percent account-equity curves (hero board), compounded trade-PnL % curves,
+a white portfolio sum line, and fans out to each bot's public ``/health``.
 """
 from __future__ import annotations
 
@@ -52,6 +52,10 @@ _DEFAULT_BOTS: List[Dict[str, Any]] = [
         "id": "counter-sl-reverse",
         "display_name": "Counter SL Reverse",
         "strategy_instance": "sol-pilot-countertrend-sl-reverse",
+        # No historic equity_snapshots / closed_trades yet in shared Postgres;
+        # account key reserved for when the pilot starts sparse equity writes.
+        "equity_account": "sol-pilot-countertrend-sl-reverse",
+        "trade_instances": ["sol-pilot-countertrend-sl-reverse"],
         "venue": "kucoin",
         "symbol": "SOL-USDT",
         "health_url": "https://sol-pilot-countertrend-sl-reverse-production.up.railway.app/health",
@@ -479,10 +483,12 @@ def _downsample_points(
         return simple
 
     # 2) Hard min interval for dense history. Tiny live wobbles must NOT keep
-    # ~20s points (that looked like a point cloud). Short spans keep shape.
+    # ~20s points (that looked like a point cloud). Already-sparse / short
+    # unique paths keep their shape.
     min_iv = max(60, int(min_interval_sec))
     span = int(simple[-1]["t"]) - int(simple[0]["t"])
-    if span < 2 * min_iv:
+    max_by_interval = max(3, (span // min_iv) + 2)
+    if len(simple) <= max_by_interval:
         spaced = simple
     else:
         spaced = [simple[0]]
@@ -707,6 +713,80 @@ def _normalize_account_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any
         ]
     return _downsample_points(raw, max_points=180, value_key="equity_pct", min_interval_sec=900)
 
+def _build_portfolio_curve(series: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Sum absolute equity curves into one portfolio line (USD/USDT nominal).
+
+    Forward-fills each bot's last known equity on the union of timestamps so the
+    white aggregate stays continuous even when bots snapshot at different times.
+    No FX conversion — Kraken USD and KuCoin USDT are treated as 1:1 nominal.
+    """
+    curves: List[List[Dict[str, Any]]] = []
+    live_sum = 0.0
+    live_n = 0
+    for s in series:
+        abs_curve = s.get("account_curve_abs") or []
+        if abs_curve:
+            curves.append(
+                [
+                    {"t": int(p["t"]), "equity": float(p["equity"])}
+                    for p in abs_curve
+                    if p.get("equity") is not None and _is_finite(p.get("equity"))
+                ]
+            )
+        le = s.get("live_equity")
+        if le is not None and _is_finite(le):
+            live_sum += float(le)
+            live_n += 1
+
+    if not curves:
+        return {
+            "id": "portfolio",
+            "display_name": "Portfolio",
+            "color": "#ffffff",
+            "currency": "USD",
+            "live_equity": live_sum if live_n else None,
+            "account_curve_abs": [],
+            "account_curve": [],
+            "bot_count": 0,
+            "note": "nominal_usd_usdt_sum",
+        }
+
+    times = sorted({int(p["t"]) for c in curves for p in c})
+    # Pointer + last value per curve
+    idxs = [0] * len(curves)
+    lasts: List[Optional[float]] = [None] * len(curves)
+    portfolio_abs: List[Dict[str, Any]] = []
+    for t in times:
+        total = 0.0
+        contributing = 0
+        for i, curve in enumerate(curves):
+            while idxs[i] < len(curve) and int(curve[idxs[i]]["t"]) <= t:
+                lasts[i] = float(curve[idxs[i]]["equity"])
+                idxs[i] += 1
+            if lasts[i] is not None:
+                total += lasts[i]
+                contributing += 1
+        if contributing:
+            portfolio_abs.append({"t": t, "equity": round(total, 6)})
+
+    portfolio_abs = _downsample_points(
+        portfolio_abs, max_points=220, value_key="equity", min_interval_sec=600
+    )
+    return {
+        "id": "portfolio",
+        "display_name": "Portfolio",
+        "color": "#ffffff",
+        "currency": "USD",
+        "live_equity": live_sum if live_n else (
+            float(portfolio_abs[-1]["equity"]) if portfolio_abs else None
+        ),
+        "account_curve_abs": portfolio_abs,
+        "account_curve": _normalize_account_curve(portfolio_abs),
+        "bot_count": len(curves),
+        "note": "nominal_usd_usdt_sum",
+    }
+
+
 def build_fleet_performance(
     *,
     hours: Optional[float] = 168.0,
@@ -774,11 +854,13 @@ def build_fleet_performance(
             }
         )
 
+    portfolio = _build_portfolio_curve(series)
     return {
         "ok": True,
         "hours": hours,
         "since": since.isoformat() if since is not None else None,
         "series": series,
+        "portfolio": portfolio,
         "ts": pd.Timestamp.now("UTC").isoformat(),
     }
 
