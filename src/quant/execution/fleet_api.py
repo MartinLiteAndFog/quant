@@ -478,18 +478,19 @@ def _downsample_points(
     if len(simple) == 1:
         return simple
 
-    # 2) Min interval for near-duplicates only — never drop real equity changes.
-    spaced: List[Dict[str, Any]] = [simple[0]]
+    # 2) Hard min interval for dense history. Tiny live wobbles must NOT keep
+    # ~20s points (that looked like a point cloud). Short spans keep shape.
     min_iv = max(60, int(min_interval_sec))
-    for p in simple[1:-1]:
-        try:
-            changed = abs(float(p[value_key]) - float(spaced[-1][value_key])) >= 1e-9
-        except Exception:
-            changed = True
-        if changed or int(p["t"]) - int(spaced[-1]["t"]) >= min_iv:
-            spaced.append(p)
-    if int(simple[-1]["t"]) != int(spaced[-1]["t"]):
-        spaced.append(simple[-1])
+    span = int(simple[-1]["t"]) - int(simple[0]["t"])
+    if span < 2 * min_iv:
+        spaced = simple
+    else:
+        spaced = [simple[0]]
+        for p in simple[1:-1]:
+            if int(p["t"]) - int(spaced[-1]["t"]) >= min_iv:
+                spaced.append(p)
+        if int(simple[-1]["t"]) != int(spaced[-1]["t"]):
+            spaced.append(simple[-1])
 
     if len(spaced) <= max_points:
         return spaced
