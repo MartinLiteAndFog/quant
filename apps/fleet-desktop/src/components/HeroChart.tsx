@@ -6,19 +6,21 @@ import {
   type ISeriesApi,
   type LineData,
 } from "lightweight-charts";
-import type { BotSeries, ChartMode } from "../types";
+import type { BotSeries, ChartMode, PortfolioSeries } from "../types";
 
 interface Props {
   series: BotSeries[];
+  portfolio: PortfolioSeries | null;
   visibleIds: Set<string>;
   mode: ChartMode;
   isolatedId: string | null;
   showMaxDd: boolean;
+  showPortfolio: boolean;
 }
 
-function toLineData(
-  points: Array<{ t: number; value: number }>,
-): LineData[] {
+const PORTFOLIO_ID = "__portfolio__";
+
+function toLineData(points: Array<{ t: number; value: number }>): LineData[] {
   // LWC requires strictly ascending unique times.
   const byT = new Map<number, number>();
   for (const p of points) {
@@ -30,7 +32,15 @@ function toLineData(
     .map(([t, value]) => ({ time: t as LineData["time"], value }));
 }
 
-export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: Props) {
+export function HeroChart({
+  series,
+  portfolio,
+  visibleIds,
+  mode,
+  isolatedId,
+  showMaxDd,
+  showPortfolio,
+}: Props) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const linesRef = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
@@ -46,12 +56,12 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
         fontSize: 11,
       },
       grid: {
-        vertLines: { color: "rgba(255,255,255,0.04)" },
-        horzLines: { color: "rgba(255,255,255,0.04)" },
+        vertLines: { color: "rgba(255,255,255,0.035)" },
+        horzLines: { color: "rgba(255,255,255,0.035)" },
       },
       rightPriceScale: {
         borderVisible: false,
-        scaleMargins: { top: 0.12, bottom: 0.08 },
+        scaleMargins: { top: 0.1, bottom: 0.08 },
       },
       timeScale: {
         borderVisible: false,
@@ -100,6 +110,34 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
     });
 
     let plotted = 0;
+
+    const plotLine = (
+      id: string,
+      title: string,
+      color: string,
+      raw: Array<{ t: number; value: number }>,
+      opts?: { width?: number; lastValueVisible?: boolean },
+    ) => {
+      const data = toLineData(raw);
+      if (data.length < 1) return;
+      plotted += 1;
+      const line = chart.addLineSeries({
+        color,
+        lineWidth: (opts?.width ?? 2) as 1 | 2 | 3 | 4,
+        lineVisible: true,
+        pointMarkersVisible: false,
+        priceLineVisible: false,
+        lastValueVisible: opts?.lastValueVisible ?? true,
+        title,
+        crosshairMarkerVisible: true,
+        crosshairMarkerRadius: 4,
+        priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+      });
+      line.setData(data);
+      linesRef.current.set(id, line);
+      return { line, data };
+    };
+
     for (const bot of active) {
       let raw: Array<{ t: number; value: number }> = [];
       if (mode === "account_abs") {
@@ -108,41 +146,19 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
         const curve = mode === "trade" ? bot.trade_curve : bot.account_curve;
         raw = curve.map((p) => ({ t: p.t, value: p.equity_pct }));
       }
-      const data = toLineData(raw);
-      if (data.length < 1) continue;
-      plotted += 1;
-
-      // Single snapshot still needs two times for LWC to stroke a segment.
-      const lineData =
-        data.length === 1
-          ? [
-              data[0],
-              { ...data[0], time: ((data[0].time as number) + 60) as LineData["time"] },
-            ]
-          : data;
-
-      const line = chart.addLineSeries({
-        color: bot.color || "#c4a35a",
-        lineWidth: 2,
-        lineType: 0, // simple continuous stroke (not stepped)
-        lineVisible: true,
-        pointMarkersVisible: false,
-        priceLineVisible: false,
-        lastValueVisible: true,
-        title: bot.display_name,
-        crosshairMarkerVisible: true,
-        crosshairMarkerRadius: 4,
-        priceFormat: { type: "price", precision: 2, minMove: 0.01 },
-      });
-      line.setData(lineData);
-      linesRef.current.set(bot.id, line);
-
-      if (showMaxDd && mode === "trade" && bot.stats.max_drawdown_pct > 0 && data.length > 1) {
+      const plottedBot = plotLine(bot.id, bot.display_name, bot.color || "#c4a35a", raw);
+      if (
+        plottedBot &&
+        showMaxDd &&
+        mode === "trade" &&
+        bot.stats.max_drawdown_pct > 0 &&
+        plottedBot.data.length > 1
+      ) {
         let peak = -Infinity;
         let peakIdx = 0;
         let troughIdx = 0;
         let maxDd = 0;
-        const vals = data.map((d) => d.value);
+        const vals = plottedBot.data.map((d) => d.value);
         for (let i = 0; i < vals.length; i++) {
           if (vals[i] > peak) {
             peak = vals[i];
@@ -155,16 +171,16 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
           }
         }
         if (maxDd > 0) {
-          line.setMarkers([
+          plottedBot.line.setMarkers([
             {
-              time: data[peakIdx].time,
+              time: plottedBot.data[peakIdx].time,
               position: "aboveBar",
               color: bot.color || "#c4a35a",
               shape: "arrowDown",
               text: "peak",
             },
             {
-              time: data[troughIdx].time,
+              time: plottedBot.data[troughIdx].time,
               position: "belowBar",
               color: "#a85a4a",
               shape: "arrowUp",
@@ -175,13 +191,38 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
       }
     }
 
+    // White portfolio aggregate — equity modes only (trade % does not sum honestly).
+    if (
+      showPortfolio &&
+      !isolatedId &&
+      portfolio &&
+      (mode === "account_abs" || mode === "account")
+    ) {
+      let raw: Array<{ t: number; value: number }> = [];
+      if (mode === "account_abs") {
+        raw = (portfolio.account_curve_abs || []).map((p) => ({
+          t: p.t,
+          value: p.equity,
+        }));
+      } else {
+        raw = (portfolio.account_curve || []).map((p) => ({
+          t: p.t,
+          value: p.equity_pct,
+        }));
+      }
+      plotLine(PORTFOLIO_ID, "Portfolio", "#ffffff", raw, {
+        width: 3,
+        lastValueVisible: true,
+      });
+    }
+
     setEmpty(plotted === 0);
     if (plotted > 0) chart.timeScale().fitContent();
-  }, [series, visibleIds, mode, isolatedId, showMaxDd]);
+  }, [series, portfolio, visibleIds, mode, isolatedId, showMaxDd, showPortfolio]);
 
   return (
-    <div className="relative h-full w-full min-h-[420px]">
-      <div ref={containerRef} className="h-full w-full min-h-[420px]" />
+    <div className="relative h-full w-full min-h-0">
+      <div ref={containerRef} className="h-full w-full min-h-0" />
       {empty && (
         <p className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-[12px] text-[var(--muted)]">
           No equity line in this window. Use Equity $ + ALL, then Refresh.

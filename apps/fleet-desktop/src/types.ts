@@ -55,11 +55,24 @@ export interface BotSeries {
   needs_backfill?: boolean;
 }
 
+export interface PortfolioSeries {
+  id: "portfolio" | string;
+  display_name: string;
+  color?: string;
+  currency?: string | null;
+  live_equity?: number | null;
+  account_curve: CurvePoint[];
+  account_curve_abs?: AbsCurvePoint[];
+  bot_count?: number;
+  note?: string;
+}
+
 export interface FleetPerformance {
   ok: boolean;
   hours: number | null;
   since?: string | null;
   series: BotSeries[];
+  portfolio?: PortfolioSeries | null;
   ts?: string;
   error?: string;
 }

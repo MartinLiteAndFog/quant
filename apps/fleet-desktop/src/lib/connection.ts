@@ -64,7 +64,11 @@ export async function probeConnection(cfg: FleetConfig): Promise<ConnectionProbe
 
   if (base) {
     const qs = cfg.token ? `?probe=0&token=${encodeURIComponent(cfg.token)}` : "?probe=0";
-    const hit = await probeUrl(`${base}/api/fleet/bots${qs}`, headers);
+    let hit = await probeUrl(`${base}/api/fleet/bots${qs}`, headers);
+    // Public fleet GETs: retry without a stale/wrong token.
+    if (hit.status === 401 && cfg.token) {
+      hit = await probeUrl(`${base}/api/fleet/bots?probe=0`, {});
+    }
     fleetApiStatus = hit.status;
     const looksLikeHtml = hit.body.trimStart().startsWith("<!");
     const payload = hit.json as { ok?: boolean; bots?: unknown[] } | undefined;
@@ -74,7 +78,7 @@ export async function probeConnection(cfg: FleetConfig): Promise<ConnectionProbe
       : looksLikeHtml
         ? "host reachable but /api/fleet/* not deployed (got SPA HTML)"
         : hit.status === 401
-          ? "fleet api 401 — set read token in Settings, or redeploy with public fleet GETs"
+          ? "fleet api 401 — clear read token (fleet GETs are public) and retry"
           : hit.ok
             ? `unexpected payload: ${hit.body.slice(0, 80)}`
             : `fleet api failed: HTTP ${hit.status ?? "—"} ${hit.body.slice(0, 80)}`;

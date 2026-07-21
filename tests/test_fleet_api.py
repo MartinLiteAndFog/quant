@@ -132,7 +132,43 @@ class BuildFleetPerformanceFilterTests(unittest.TestCase):
         self.assertTrue(out["series"][0]["needs_backfill"])
         self.assertEqual(out["series"][0]["trade_curve"], [])
         self.assertEqual(out["series"][0]["account_curve_abs"], [])
+        self.assertIn("portfolio", out)
+        self.assertEqual(out["portfolio"]["id"], "portfolio")
 
+
+class PortfolioAggregateTests(unittest.TestCase):
+    def test_sums_forward_filled_equities(self) -> None:
+        from quant.execution.fleet_api import _build_portfolio_curve
+
+        series = [
+            {
+                "id": "a",
+                "live_equity": 10.0,
+                "account_curve_abs": [
+                    {"t": 100, "equity": 10.0},
+                    {"t": 200, "equity": 12.0},
+                ],
+            },
+            {
+                "id": "b",
+                "live_equity": 20.0,
+                "account_curve_abs": [
+                    {"t": 150, "equity": 20.0},
+                    {"t": 250, "equity": 22.0},
+                ],
+            },
+        ]
+        port = _build_portfolio_curve(series)
+        self.assertEqual(port["id"], "portfolio")
+        self.assertEqual(port["color"], "#ffffff")
+        abs_curve = port["account_curve_abs"]
+        self.assertGreaterEqual(len(abs_curve), 3)
+        by_t = {p["t"]: p["equity"] for p in abs_curve}
+        self.assertAlmostEqual(by_t[100], 10.0, places=5)
+        self.assertAlmostEqual(by_t[150], 30.0, places=5)  # 10 + 20
+        self.assertAlmostEqual(by_t[200], 32.0, places=5)  # 12 + 20
+        self.assertAlmostEqual(by_t[250], 34.0, places=5)  # 12 + 22
+        self.assertAlmostEqual(port["live_equity"], 30.0, places=5)
 
 class DownsampleCurveTests(unittest.TestCase):
     def test_collapses_flat_high_frequency_spam(self) -> None:

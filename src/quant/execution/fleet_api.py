@@ -769,9 +769,11 @@ def _build_portfolio_curve(series: List[Dict[str, Any]]) -> Dict[str, Any]:
         if contributing:
             portfolio_abs.append({"t": t, "equity": round(total, 6)})
 
-    portfolio_abs = _downsample_points(
-        portfolio_abs, max_points=220, value_key="equity", min_interval_sec=600
-    )
+    # Only thin dense boards; short synthetic / sparse series stay exact.
+    if len(portfolio_abs) > 80:
+        portfolio_abs = _downsample_points(
+            portfolio_abs, max_points=220, value_key="equity", min_interval_sec=600
+        )
     return {
         "id": "portfolio",
         "display_name": "Portfolio",

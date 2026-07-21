@@ -26,6 +26,7 @@ import {
   type ClosedTrade,
   type FleetBot,
   type FleetConfig,
+  type PortfolioSeries,
   type RangeKey,
   loadConfig,
   saveConfig,
@@ -46,7 +47,7 @@ const DRAWER_TITLES: Record<Exclude<DrawerId, null>, string> = {
   settings: "Settings",
 };
 
-/** Drawers that are side panels — equity charts live on the main hero only. */
+/** Drawers that are side panels — performance board stays center. */
 const PANEL_DRAWERS = [
   ["activity", "Activity"],
   ["trades", "Trades"],
@@ -72,13 +73,31 @@ function legendValue(s: BotSeries, mode: ChartMode): string {
   return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
 }
 
+function portfolioLegendValue(p: PortfolioSeries | null, mode: ChartMode): string {
+  if (!p) return "—";
+  if (mode === "account_abs") {
+    const abs = p.account_curve_abs || [];
+    const last = abs.length ? abs[abs.length - 1].equity : p.live_equity;
+    if (last == null || !Number.isFinite(last)) return "—";
+    return `${last.toFixed(2)}`;
+  }
+  if (mode === "account") {
+    const curve = p.account_curve || [];
+    const last = curve.length ? curve[curve.length - 1].equity_pct : 0;
+    return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%`;
+  }
+  return "n/a";
+}
+
 export default function App() {
   const [config, setConfig] = useState<FleetConfig>(() => loadConfig());
   const [range, setRange] = useState<RangeKey>("all");
   const [bots, setBots] = useState<FleetBot[]>([]);
   const [series, setSeries] = useState<BotSeries[]>([]);
+  const [portfolio, setPortfolio] = useState<PortfolioSeries | null>(null);
   const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
   const [isolatedId, setIsolatedId] = useState<string | null>(null);
+  const [showPortfolio, setShowPortfolio] = useState(true);
   const [drawer, setDrawer] = useState<DrawerId>(null);
   const [chartMode, setChartMode] = useState<ChartMode>("account_abs");
   const [showMaxDd, setShowMaxDd] = useState(true);
@@ -137,6 +156,7 @@ export default function App() {
       const ids = [...enabledIds];
       const perf = await fetchPerformance(config, range, ids);
       setSeries(perf.series || []);
+      setPortfolio(perf.portfolio || null);
       setUpdatedAt(perf.ts || new Date().toISOString());
       setError(perf.error || null);
     } catch (e) {
@@ -219,7 +239,7 @@ export default function App() {
 
   const setHeroMode = (mode: ChartMode) => {
     setChartMode(mode);
-    setDrawer(null); // never show a second chart panel when switching equity modes
+    setDrawer(null);
   };
 
   const exportCurves = () => {
@@ -254,46 +274,49 @@ export default function App() {
         });
       }
     }
+    if (portfolio) {
+      for (const p of portfolio.account_curve_abs || []) {
+        rows.push({
+          bot: "Portfolio",
+          instance: "portfolio",
+          t: p.t,
+          equity: p.equity,
+          mode: "account_abs",
+        });
+      }
+    }
     downloadCsv("fleet-equity-curves.csv", rows);
   };
 
   const legend = series.filter((s) => enabledIds.has(s.id));
+  const portfolioOn =
+    showPortfolio && !isolatedId && (chartMode === "account_abs" || chartMode === "account");
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-end justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
-        <div>
-          <p className="text-[11px] tracking-[0.22em] text-[var(--accent)] uppercase">Fleet</p>
-          <h1 className="mt-1 font-serif text-[28px] leading-none tracking-tight text-[var(--text)]">
-            Cockpit
+      <header className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-2.5">
+        <div className="min-w-0">
+          <h1 className="font-serif text-[22px] leading-none tracking-tight text-[var(--text)]">
+            Fleet <span className="text-[var(--accent)]">Cockpit</span>
           </h1>
           {connection && (
-            <p className="mt-2 text-[10px] tracking-wide text-[var(--muted)]">
-              link:{" "}
-              <span
-                style={{
-                  color:
-                    connection.mode === "fleet_api"
-                      ? "var(--live)"
-                      : connection.mode === "direct_health"
-                        ? "var(--accent)"
-                        : "var(--down)",
-                }}
-              >
-                {connection.mode}
-              </span>
-              {connection.mode === "direct_health" &&
-                " · health only (fleet API unreachable — check Settings / redeploy)"}
+            <p className="mt-1 text-[10px] tracking-wide text-[var(--muted)]">
+              {connection.mode === "fleet_api"
+                ? "live board"
+                : connection.mode === "direct_health"
+                  ? "health only — fleet API unreachable"
+                  : "offline"}
+              {updatedAt ? ` · ${updatedAt.replace("T", " ").slice(0, 19)} UTC` : ""}
             </p>
           )}
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <div className="mr-2 flex border border-[var(--line)]">
+        <div className="flex flex-wrap items-center justify-end gap-1.5">
+          <div className="flex border border-[var(--line)]">
             {RANGES.map((r) => (
               <button
                 key={r}
                 onClick={() => setRange(r)}
-                className="px-3 py-1.5 text-[11px] tracking-wide uppercase"
+                className="px-2.5 py-1 text-[10px] tracking-wide uppercase"
                 style={{
                   background: range === r ? "rgba(196,163,90,0.18)" : "transparent",
                   color: range === r ? "var(--accent)" : "var(--muted)",
@@ -303,12 +326,12 @@ export default function App() {
               </button>
             ))}
           </div>
-          <div className="mr-2 flex border border-[var(--line)]">
+          <div className="flex border border-[var(--line)]">
             {CHART_MODES.map((m) => (
               <button
                 key={m.id}
                 onClick={() => setHeroMode(m.id)}
-                className="px-3 py-1.5 text-[11px] tracking-wide"
+                className="px-2.5 py-1 text-[10px] tracking-wide"
                 style={{
                   background: chartMode === m.id ? "rgba(196,163,90,0.18)" : "transparent",
                   color: chartMode === m.id ? "var(--accent)" : "var(--muted)",
@@ -325,7 +348,7 @@ export default function App() {
                 if (id === "trades" && !tradeBotId) setTradeBotId("__all__");
                 openDrawer(id);
               }}
-              className="px-2 py-1.5 text-[11px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
+              className="px-2 py-1 text-[10px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
               style={{ color: drawer === id ? "var(--accent)" : undefined }}
             >
               {label}
@@ -336,13 +359,13 @@ export default function App() {
               void refreshHealth();
               void refreshCurves();
             }}
-            className="border border-[var(--line)] px-3 py-1.5 text-[11px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
+            className="border border-[var(--line)] px-2.5 py-1 text-[10px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
           >
             Refresh
           </button>
           <button
             onClick={exportCurves}
-            className="border border-[var(--line)] px-3 py-1.5 text-[11px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
+            className="border border-[var(--line)] px-2.5 py-1 text-[10px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
           >
             CSV
           </button>
@@ -369,8 +392,23 @@ export default function App() {
           }}
         />
 
-        <main className="relative flex min-w-0 flex-1 flex-col px-4 pb-4 pt-3">
-          <div className="mb-2 flex flex-wrap items-center gap-3">
+        <main className="relative flex min-w-0 flex-1 flex-col px-3 pb-3 pt-2">
+          <div className="mb-2 flex min-h-[28px] flex-wrap items-center gap-x-3 gap-y-1.5">
+            <button
+              onClick={() => setShowPortfolio((v) => !v)}
+              className="flex items-center gap-2 text-[11px]"
+              style={{
+                opacity: portfolioOn ? 1 : 0.35,
+                display: chartMode === "trade" ? "none" : undefined,
+              }}
+              title="Combined portfolio (sum of strategy equities)"
+            >
+              <span className="h-1.5 w-5 bg-white" />
+              <span className="font-medium text-[var(--text)]">Portfolio</span>
+              <span className="text-[var(--muted)]">
+                {portfolioLegendValue(portfolio, chartMode)}
+              </span>
+            </button>
             {legend.map((s) => {
               const on = visibleIds.has(s.id) || isolatedId === s.id;
               return (
@@ -394,35 +432,25 @@ export default function App() {
                 </button>
               );
             })}
-            <label className="ml-auto flex items-center gap-2 text-[11px] text-[var(--muted)]">
+            <label className="ml-auto flex items-center gap-2 text-[10px] text-[var(--muted)]">
               <input
                 type="checkbox"
                 checked={showMaxDd}
                 onChange={(e) => setShowMaxDd(e.target.checked)}
               />
-              Max DD markers
+              Max DD
             </label>
-            {updatedAt && (
-              <span className="text-[10px] text-[var(--muted)]">
-                {updatedAt.replace("T", " ").slice(0, 19)} UTC
-              </span>
-            )}
           </div>
 
-          <p className="mb-2 text-[11px] text-[var(--muted)]">
-            {chartMode === "account_abs"
-              ? "Main chart: absolute account equity (USDT / USD) from snapshots + live balance."
-              : chartMode === "account"
-                ? "Main chart: account equity % rebased to 0 at window start."
-                : "Main chart: compounded closed-trade PnL %. Empty until bots record closed_trades."}
-          </p>
-          <div className="min-h-0 flex-1 border border-[var(--line)] bg-black/15">
+          <div className="relative min-h-0 flex-1 border border-[var(--line)] bg-black/20">
             <HeroChart
               series={series}
+              portfolio={portfolio}
               visibleIds={visibleIds}
               mode={chartMode}
               isolatedId={isolatedId}
               showMaxDd={showMaxDd}
+              showPortfolio={showPortfolio}
             />
           </div>
 

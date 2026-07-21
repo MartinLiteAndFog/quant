@@ -107,6 +107,7 @@ export async function fetchPerformance(
       ok: false,
       hours: RANGE_HOURS[range],
       series: [],
+      portfolio: null,
       error: String(e),
       ts: new Date().toISOString(),
     };
