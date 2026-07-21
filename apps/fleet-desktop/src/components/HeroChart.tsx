@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ColorType,
   createChart,
@@ -6,12 +6,12 @@ import {
   type ISeriesApi,
   type LineData,
 } from "lightweight-charts";
-import type { BotSeries } from "../types";
+import type { BotSeries, ChartMode } from "../types";
 
 interface Props {
   series: BotSeries[];
   visibleIds: Set<string>;
-  mode: "trade" | "account";
+  mode: ChartMode;
   isolatedId: string | null;
   showMaxDd: boolean;
 }
@@ -20,6 +20,7 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
   const linesRef = useRef<Map<string, ISeriesApi<"Line">>>(new Map());
+  const [empty, setEmpty] = useState(false);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -84,12 +85,22 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
       return visibleIds.has(s.id);
     });
 
+    let plotted = 0;
     for (const bot of active) {
-      const curve = mode === "trade" ? bot.trade_curve : bot.account_curve;
-      const data: LineData[] = curve
-        .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.equity_pct))
-        .map((p) => ({ time: p.t as LineData["time"], value: p.equity_pct }));
+      let data: LineData[] = [];
+      if (mode === "account_abs") {
+        const curve = bot.account_curve_abs || [];
+        data = curve
+          .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.equity))
+          .map((p) => ({ time: p.t as LineData["time"], value: p.equity }));
+      } else {
+        const curve = mode === "trade" ? bot.trade_curve : bot.account_curve;
+        data = curve
+          .filter((p) => Number.isFinite(p.t) && Number.isFinite(p.equity_pct))
+          .map((p) => ({ time: p.t as LineData["time"], value: p.equity_pct }));
+      }
       if (!data.length) continue;
+      plotted += 1;
 
       const line = chart.addLineSeries({
         color: bot.color || "#c4a35a",
@@ -98,6 +109,10 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
         lastValueVisible: true,
         title: bot.display_name,
         crosshairMarkerRadius: 3,
+        priceFormat:
+          mode === "account_abs"
+            ? { type: "price", precision: 2, minMove: 0.01 }
+            : { type: "price", precision: 2, minMove: 0.01 },
       });
       line.setData(data);
       linesRef.current.set(bot.id, line);
@@ -140,8 +155,18 @@ export function HeroChart({ series, visibleIds, mode, isolatedId, showMaxDd }: P
       }
     }
 
-    chart.timeScale().fitContent();
+    setEmpty(plotted === 0);
+    if (plotted > 0) chart.timeScale().fitContent();
   }, [series, visibleIds, mode, isolatedId, showMaxDd]);
 
-  return <div ref={containerRef} className="h-full w-full min-h-[420px]" />;
+  return (
+    <div className="relative h-full w-full min-h-[420px]">
+      <div ref={containerRef} className="h-full w-full min-h-[420px]" />
+      {empty && (
+        <p className="pointer-events-none absolute inset-0 flex items-center justify-center px-6 text-center text-[12px] text-[var(--muted)]">
+          No equity points in this window. Switch range to ALL or wait for live snapshots.
+        </p>
+      )}
+    </div>
+  );
 }

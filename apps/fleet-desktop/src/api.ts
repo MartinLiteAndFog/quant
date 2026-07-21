@@ -27,36 +27,53 @@ function looksLikeSpaHtml(text: string): boolean {
   return t.startsWith("<!doctype") || t.startsWith("<html");
 }
 
-async function getJson<T>(
+async function getJsonOnce<T>(
   path: string,
   cfg: FleetConfig,
-  query: Record<string, string | number | undefined> = {},
+  query: Record<string, string | number | undefined>,
+  token: string,
 ): Promise<T> {
   const base = (cfg.apiBase || "").replace(/\/$/, "");
-  if (!base && path.startsWith("/api/")) {
-    // Vite proxy / same-origin when apiBase empty
-  }
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(query)) {
     if (v === undefined || v === "") continue;
     qs.set(k, String(v));
   }
-  if (cfg.token) qs.set("token", cfg.token);
+  if (token) qs.set("token", token);
   const url = `${base}${path}${qs.toString() ? `?${qs}` : ""}`;
-  const res = await fleetFetch(url, { headers: { ...authHeaders(cfg.token) } });
+  const res = await fleetFetch(url, { headers: { ...authHeaders(token) } });
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(`${path} → ${res.status}`);
+    const err = new Error(`${path} → ${res.status}`) as Error & { status?: number };
+    err.status = res.status;
+    throw err;
   }
   if (looksLikeSpaHtml(text)) {
     throw new Error(
-      `${path} returned SPA HTML — fleet API not deployed on this host yet`,
+      `${path} returned SPA HTML — set API base to the quant dashboard host`,
     );
   }
   try {
     return JSON.parse(text) as T;
   } catch {
     throw new Error(`${path} → invalid JSON`);
+  }
+}
+
+async function getJson<T>(
+  path: string,
+  cfg: FleetConfig,
+  query: Record<string, string | number | undefined> = {},
+): Promise<T> {
+  try {
+    return await getJsonOnce<T>(path, cfg, query, cfg.token || "");
+  } catch (e) {
+    const status = (e as { status?: number })?.status;
+    // Stale/wrong read token should not block public fleet GETs.
+    if (status === 401 && cfg.token) {
+      return getJsonOnce<T>(path, cfg, query, "");
+    }
+    throw e;
   }
 }
 
@@ -126,6 +143,27 @@ export async function fetchTrades(
   } catch {
     return [];
   }
+}
+
+/** Fetch closed trades for many bots and merge newest-first. */
+export async function fetchTradesForBots(
+  cfg: FleetConfig,
+  bots: Array<{ id: string; strategy_instance: string; display_name: string }>,
+  range: RangeKey,
+): Promise<ClosedTrade[]> {
+  const chunks = await Promise.all(
+    bots.map(async (b) => {
+      const trades = await fetchTrades(cfg, b.strategy_instance || b.id, range);
+      return trades.map((t) => ({
+        ...t,
+        bot_id: t.bot_id || b.id,
+        display_name: t.display_name || b.display_name,
+      }));
+    }),
+  );
+  return chunks
+    .flat()
+    .sort((a, b) => String(b.exit_ts || "").localeCompare(String(a.exit_ts || "")));
 }
 
 export async function fetchCapitalization(cfg: FleetConfig): Promise<CapitalAccount[]> {

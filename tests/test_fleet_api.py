@@ -119,11 +119,11 @@ class BuildFleetPerformanceFilterTests(unittest.TestCase):
     def test_instance_filter_and_empty_backfill_hint(self) -> None:
         empty = pd.DataFrame()
 
-        def _fake_load(**kwargs: Any) -> pd.DataFrame:
-            return empty
-
-        with patch("quant.execution.fleet_api._load_closed_trades_for_instance", side_effect=_fake_load), patch(
-            "quant.execution.fleet_api._load_equity_snapshots", return_value=[]
+        with patch("quant.execution.fleet_api._load_closed_trades_for_bot", return_value=empty), patch(
+            "quant.execution.fleet_api._load_account_points_for_bot", return_value=[]
+        ), patch(
+            "quant.execution.fleet_api.list_fleet_bots",
+            return_value={"ok": True, "bots": []},
         ):
             out = build_fleet_performance(hours=24.0, instance_ids=["imba-runner"])
         self.assertTrue(out["ok"])
@@ -131,6 +131,114 @@ class BuildFleetPerformanceFilterTests(unittest.TestCase):
         self.assertEqual(out["series"][0]["id"], "imba-runner")
         self.assertTrue(out["series"][0]["needs_backfill"])
         self.assertEqual(out["series"][0]["trade_curve"], [])
+        self.assertEqual(out["series"][0]["account_curve_abs"], [])
+
+
+class LiveStitchAndAbsCurveTests(unittest.TestCase):
+    def test_stitch_appends_live_equity(self) -> None:
+        from quant.execution.fleet_api import _stitch_live_equity, _absolute_account_curve
+
+        pts = [{"t": 100, "equity": 100.0}]
+        out = _stitch_live_equity(pts, live_equity=120.5, now_ts=200)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(out[-1]["equity"], 120.5)
+        self.assertEqual(out[-1]["t"], 200)
+        abs_curve = _absolute_account_curve(out)
+        self.assertEqual(abs_curve[-1]["equity"], 120.5)
+
+    def test_performance_uses_equity_account_and_live_stitch(self) -> None:
+        empty = pd.DataFrame()
+        snaps = [{"t": 1000, "equity": 20.0, "currency": "USDT"}]
+        health = {
+            "ok": True,
+            "bots": [
+                {
+                    "id": "quant-main",
+                    "equity": 22.5,
+                    "currency": "USDT",
+                    "health": {"ok": True, "equity": 22.5},
+                }
+            ],
+        }
+
+        with patch("quant.execution.fleet_api._load_closed_trades_for_bot", return_value=empty), patch(
+            "quant.execution.fleet_api._load_account_points_for_bot", return_value=snaps
+        ), patch("quant.execution.fleet_api.list_fleet_bots", return_value=health):
+            out = build_fleet_performance(hours=0, instance_ids=["quant-main"])
+        s = out["series"][0]
+        self.assertEqual(s["id"], "quant-main")
+        self.assertGreaterEqual(len(s["account_curve_abs"]), 2)
+        self.assertAlmostEqual(s["account_curve_abs"][-1]["equity"], 22.5, places=5)
+        self.assertAlmostEqual(s["live_equity"], 22.5, places=5)
+
+
+class MultiInstanceTradesTests(unittest.TestCase):
+    def test_loads_union_of_trade_instances(self) -> None:
+        from quant.execution.fleet_api import _load_closed_trades_for_bot
+
+        df_a = pd.DataFrame(
+            [
+                {
+                    "trade_id": "a",
+                    "venue": "kucoin",
+                    "symbol": "SOLUSDT",
+                    "entry_ts": "2026-07-01T10:00:00Z",
+                    "exit_ts": "2026-07-01T11:00:00Z",
+                    "side": "long",
+                    "qty": 1,
+                    "entry_price": 1,
+                    "exit_price": 1.1,
+                    "pnl_pct": 10.0,
+                    "exit_event": "tp",
+                    "strategy": "x",
+                    "strategy_instance": "quant",
+                }
+            ]
+        )
+        df_b = pd.DataFrame(
+            [
+                {
+                    "trade_id": "b",
+                    "venue": "kucoin",
+                    "symbol": "SOLUSDT",
+                    "entry_ts": "2026-07-02T10:00:00Z",
+                    "exit_ts": "2026-07-02T11:00:00Z",
+                    "side": "long",
+                    "qty": 1,
+                    "entry_price": 1,
+                    "exit_price": 1.05,
+                    "pnl_pct": 5.0,
+                    "exit_event": "tp",
+                    "strategy": "x",
+                    "strategy_instance": "live_executor",
+                }
+            ]
+        )
+
+        def _fake_load(**kwargs: Any) -> pd.DataFrame:
+            inst = kwargs.get("strategy_instance")
+            if inst == "quant":
+                return df_a
+            if inst == "live_executor":
+                return df_b
+            return pd.DataFrame()
+
+        bot = {
+            "strategy_instance": "quant",
+            "trade_instances": ["quant", "live_executor"],
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+        }
+        with patch(
+            "quant.execution.fleet_api._load_closed_trades_for_instance",
+            side_effect=_fake_load,
+        ), patch(
+            "quant.execution.fleet_api._load_closed_trades_null_instance",
+            return_value=pd.DataFrame(),
+        ):
+            out = _load_closed_trades_for_bot(bot)
+        self.assertEqual(len(out), 2)
+        self.assertEqual(set(out["trade_id"]), {"a", "b"})
 
 
 class CapitalizationLiveEquityTests(unittest.TestCase):

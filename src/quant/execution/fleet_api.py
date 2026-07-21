@@ -63,6 +63,9 @@ _DEFAULT_BOTS: List[Dict[str, Any]] = [
         "strategy_instance": "quant",
         # Dashboard equity_snapshots historically used account='futures'.
         "equity_account": "futures",
+        "trade_instances": ["quant", "live_executor"],
+        # Legacy dashboard closed_trades often lack strategy_instance.
+        "include_null_instance_trades": True,
         "venue": "kucoin",
         "symbol": "SOL-USDT",
         "health_url": "https://quant-production-5533.up.railway.app/health",
@@ -72,6 +75,9 @@ _DEFAULT_BOTS: List[Dict[str, Any]] = [
         "id": "kraken-legacy",
         "display_name": "Kraken Legacy",
         "strategy_instance": "kraken_bot",
+        "equity_account": "main",
+        "trade_instances": ["kraken_bot", "live_executor_2"],
+        "venue_trade_fallback": True,
         "venue": "kraken",
         "symbol": "SOL-USD",
         "health_url": "https://kraken-production-cb57.up.railway.app/health",
@@ -144,6 +150,7 @@ def list_fleet_bots(*, probe_health: bool = True) -> Dict[str, Any]:
             "display_name": b.get("display_name") or b.get("id"),
             "strategy_instance": b.get("strategy_instance"),
             "equity_account": b.get("equity_account"),
+            "trade_instances": b.get("trade_instances"),
             "venue": b.get("venue") or "kucoin",
             "symbol": b.get("symbol") or "SOL-USDT",
             "health_url": b.get("health_url"),
@@ -240,6 +247,243 @@ def _load_closed_trades_for_instance(
     except Exception as e:
         log.warning("fleet closed_trades load failed for %s: %s", strategy_instance, e)
         return pd.DataFrame()
+
+
+def _load_closed_trades_null_instance(
+    *,
+    venue: str,
+    symbol: Optional[str] = None,
+    since: Optional[pd.Timestamp] = None,
+    limit: int = 5000,
+) -> pd.DataFrame:
+    """Legacy dashboard rows where strategy_instance was never set."""
+    where = ["venue = %(venue)s", "(strategy_instance is null or strategy_instance = '')"]
+    params: Dict[str, Any] = {"venue": str(venue), "limit": int(max(1, limit))}
+    if symbol:
+        where.append(
+            "replace(replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', ''), '.', '') = %(symbol_norm)s"
+        )
+        params["symbol_norm"] = _normalize_symbol_token(symbol)
+    if since is not None:
+        where.append("exit_ts >= %(since)s")
+        params["since"] = since.to_pydatetime()
+    sql = f"""
+        select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
+               entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance
+        from closed_trades
+        where {' and '.join(where)}
+        order by exit_ts asc
+        limit %(limit)s
+    """
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall() or []
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame(
+            rows,
+            columns=[
+                "trade_id",
+                "venue",
+                "symbol",
+                "entry_ts",
+                "exit_ts",
+                "side",
+                "qty",
+                "entry_price",
+                "exit_price",
+                "pnl_pct",
+                "exit_event",
+                "strategy",
+                "strategy_instance",
+            ],
+        )
+    except Exception as e:
+        log.warning("fleet null-instance closed_trades load failed: %s", e)
+        return pd.DataFrame()
+
+
+def _load_closed_trades_by_venue(
+    *,
+    venue: str,
+    symbol: Optional[str] = None,
+    since: Optional[pd.Timestamp] = None,
+    limit: int = 5000,
+) -> pd.DataFrame:
+    where = ["venue = %(venue)s"]
+    params: Dict[str, Any] = {"venue": str(venue), "limit": int(max(1, limit))}
+    if symbol:
+        where.append(
+            "replace(replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', ''), '.', '') = %(symbol_norm)s"
+        )
+        params["symbol_norm"] = _normalize_symbol_token(symbol)
+    if since is not None:
+        where.append("exit_ts >= %(since)s")
+        params["since"] = since.to_pydatetime()
+    sql = f"""
+        select trade_id, venue, symbol, entry_ts, exit_ts, side, qty,
+               entry_price, exit_price, pnl_pct, exit_event, strategy, strategy_instance
+        from closed_trades
+        where {' and '.join(where)}
+        order by exit_ts asc
+        limit %(limit)s
+    """
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall() or []
+        if not rows:
+            return pd.DataFrame()
+        return pd.DataFrame(
+            rows,
+            columns=[
+                "trade_id",
+                "venue",
+                "symbol",
+                "entry_ts",
+                "exit_ts",
+                "side",
+                "qty",
+                "entry_price",
+                "exit_price",
+                "pnl_pct",
+                "exit_event",
+                "strategy",
+                "strategy_instance",
+            ],
+        )
+    except Exception as e:
+        log.warning("fleet venue closed_trades load failed for %s: %s", venue, e)
+        return pd.DataFrame()
+
+
+def _trade_instances_for_bot(bot: Dict[str, Any]) -> List[str]:
+    raw = bot.get("trade_instances")
+    if isinstance(raw, list) and raw:
+        return [str(x) for x in raw if str(x).strip()]
+    inst = str(bot.get("strategy_instance") or "").strip()
+    return [inst] if inst else []
+
+
+def _load_closed_trades_for_bot(
+    bot: Dict[str, Any],
+    *,
+    since: Optional[pd.Timestamp] = None,
+    limit: int = 5000,
+) -> pd.DataFrame:
+    venue = str(bot.get("venue") or "kucoin")
+    symbol = str(bot.get("symbol") or "SOL-USDT")
+    frames: List[pd.DataFrame] = []
+    for inst in _trade_instances_for_bot(bot):
+        df = _load_closed_trades_for_instance(
+            strategy_instance=inst,
+            venue=venue,
+            symbol=symbol if venue != "kraken" else None,
+            since=since,
+            limit=limit,
+        )
+        if df.empty and venue == "kraken":
+            df = _load_closed_trades_for_instance(
+                strategy_instance=inst,
+                venue=venue,
+                since=since,
+                limit=limit,
+            )
+        if not df.empty:
+            frames.append(df)
+
+    if bot.get("include_null_instance_trades"):
+        null_df = _load_closed_trades_null_instance(
+            venue=venue,
+            symbol=symbol,
+            since=since,
+            limit=limit,
+        )
+        if not null_df.empty:
+            frames.append(null_df)
+
+    if not frames and bot.get("venue_trade_fallback"):
+        venue_df = _load_closed_trades_by_venue(
+            venue=venue,
+            symbol=None if venue == "kraken" else symbol,
+            since=since,
+            limit=limit,
+        )
+        if not venue_df.empty:
+            frames.append(venue_df)
+
+    if not frames:
+        return pd.DataFrame()
+    out = pd.concat(frames, ignore_index=True)
+    if "trade_id" in out.columns:
+        out = out.drop_duplicates(subset=["trade_id"], keep="last")
+    elif "exit_ts" in out.columns:
+        out = out.drop_duplicates(subset=["exit_ts", "side", "pnl_pct"], keep="last")
+    return out.sort_values("exit_ts") if "exit_ts" in out.columns else out
+
+
+def _is_finite(v: Any) -> bool:
+    try:
+        x = float(v)
+    except Exception:
+        return False
+    return x == x and abs(x) != float("inf")
+
+
+def _absolute_account_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        {"t": int(p["t"]), "equity": round(float(p["equity"]), 6)}
+        for p in points
+        if p.get("equity") is not None and _is_finite(p.get("equity"))
+    ]
+
+
+def _stitch_live_equity(
+    points: List[Dict[str, Any]],
+    *,
+    live_equity: Optional[float],
+    now_ts: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    if live_equity is None:
+        return list(points)
+    try:
+        eq = float(live_equity)
+    except Exception:
+        return list(points)
+    if not _is_finite(eq) or eq <= 0:
+        return list(points)
+    t = int(now_ts if now_ts is not None else pd.Timestamp.now("UTC").timestamp())
+    out = list(points)
+    if out and int(out[-1]["t"]) >= t:
+        out[-1] = {
+            "t": t,
+            "equity": eq,
+            "currency": out[-1].get("currency"),
+            "account": out[-1].get("account"),
+            "source": "live_stitch",
+        }
+    else:
+        out.append({"t": t, "equity": eq, "source": "live_stitch"})
+    return out
+
+
+def _load_account_points_for_bot(
+    bot: Dict[str, Any],
+    *,
+    since: Optional[pd.Timestamp] = None,
+) -> List[Dict[str, Any]]:
+    venue = str(bot.get("venue") or "kucoin")
+    instance = str(bot.get("strategy_instance") or "")
+    snap_account = str(bot.get("equity_account") or instance)
+    acct_pts = _load_equity_snapshots(venue=venue, account=snap_account, since=since)
+    if not acct_pts and snap_account != instance:
+        acct_pts = _load_equity_snapshots(venue=venue, account=instance, since=since)
+    if not acct_pts and venue == "kraken":
+        acct_pts = _load_equity_snapshots(venue=venue, account="main", since=since)
+        if not acct_pts:
+            acct_pts = _load_equity_snapshots(venue=venue, account=None, since=since)
+    return acct_pts
 
 
 def _compounded_trade_curve(df: pd.DataFrame) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
@@ -391,39 +635,34 @@ def build_fleet_performance(
         ]
 
     since = _hours_cutoff_ts(hours)
+    # One health fan-out for live equity stitch (also keeps curves fresh).
+    health_by_id: Dict[str, Dict[str, Any]] = {}
+    try:
+        probed = list_fleet_bots(probe_health=True)
+        for row in probed.get("bots") or []:
+            health_by_id[str(row.get("id"))] = row if isinstance(row, dict) else {}
+    except Exception as e:
+        log.warning("fleet performance health probe failed: %s", e)
+
+    now_ts = int(pd.Timestamp.now("UTC").timestamp())
     series = []
     for b in registry:
         instance = str(b.get("strategy_instance"))
         venue = str(b.get("venue") or "kucoin")
         symbol = str(b.get("symbol") or "SOL-USDT")
-        trades = _load_closed_trades_for_instance(
-            strategy_instance=instance,
-            venue=venue,
-            symbol=symbol if venue != "kraken" else None,
-            since=since,
-        )
-        # Kraken symbol variants — retry without strict symbol filter if empty
-        if trades.empty and venue == "kraken":
-            trades = _load_closed_trades_for_instance(
-                strategy_instance=instance,
-                venue=venue,
-                since=since,
-            )
+        bot_id = str(b.get("id") or instance)
 
+        trades = _load_closed_trades_for_bot(b, since=since)
         trade_curve, stats = _compounded_trade_curve(trades)
 
-        # Account equity: prefer account=strategy_instance, else venue-level snapshots
-        acct_pts = _load_equity_snapshots(
-            venue=venue,
-            account=instance,
-            since=since,
-        )
-        if not acct_pts:
-            acct_pts = _load_equity_snapshots(venue=venue, account=None, since=since)
-            # Only attach shared venue curve for single-account venues (kraken)
-            if venue == "kucoin" and len(registry) > 1:
-                acct_pts = []
+        acct_pts = _load_account_points_for_bot(b, since=since)
+        live_row = health_by_id.get(bot_id) or {}
+        live_eq = live_row.get("equity")
+        if live_eq is None and isinstance(live_row.get("health"), dict):
+            live_eq = live_row["health"].get("equity")
+        acct_pts = _stitch_live_equity(acct_pts, live_equity=live_eq, now_ts=now_ts)
 
+        account_curve_abs = _absolute_account_curve(acct_pts)
         account_curve = _normalize_account_curve(acct_pts)
 
         series.append(
@@ -434,8 +673,15 @@ def build_fleet_performance(
                 "venue": venue,
                 "symbol": symbol,
                 "color": b.get("color"),
+                "currency": live_row.get("currency")
+                or (acct_pts[-1].get("currency") if acct_pts else None)
+                or ("USD" if venue == "kraken" else "USDT"),
+                "live_equity": float(live_eq) if live_eq is not None else (
+                    float(acct_pts[-1]["equity"]) if acct_pts else None
+                ),
                 "trade_curve": trade_curve,
                 "account_curve": account_curve,
+                "account_curve_abs": account_curve_abs,
                 "stats": stats,
                 "needs_backfill": bool(trades.empty),
             }
@@ -518,20 +764,26 @@ def build_fleet_trades(
     limit: int = 200,
 ) -> Dict[str, Any]:
     bot = next(
-        (b for b in fleet_bot_registry() if str(b.get("strategy_instance")) == strategy_instance or str(b.get("id")) == strategy_instance),
+        (
+            b
+            for b in fleet_bot_registry()
+            if str(b.get("strategy_instance")) == strategy_instance
+            or str(b.get("id")) == strategy_instance
+        ),
         None,
     )
     instance = str((bot or {}).get("strategy_instance") or strategy_instance)
     venue = str((bot or {}).get("venue") or "kucoin")
     since = _hours_cutoff_ts(hours)
-    df = _load_closed_trades_for_instance(
-        strategy_instance=instance,
-        venue=venue,
-        since=since,
-        limit=limit,
-    )
-    if df.empty and venue == "kraken":
-        df = _load_closed_trades_for_instance(strategy_instance=instance, venue=venue, since=since, limit=limit)
+    if bot:
+        df = _load_closed_trades_for_bot(bot, since=since, limit=max(limit * 3, limit))
+    else:
+        df = _load_closed_trades_for_instance(
+            strategy_instance=instance,
+            venue=venue,
+            since=since,
+            limit=limit,
+        )
 
     trades = []
     if not df.empty:
@@ -551,6 +803,8 @@ def build_fleet_trades(
                     "strategy_instance": r.get("strategy_instance"),
                     "venue": r.get("venue"),
                     "symbol": r.get("symbol"),
+                    "bot_id": (bot or {}).get("id"),
+                    "display_name": (bot or {}).get("display_name") or instance,
                 }
             )
     return {

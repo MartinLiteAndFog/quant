@@ -111,7 +111,32 @@ def fetch_kucoin_account(*, persist_account: Optional[str] = None) -> Dict[str, 
         return {"ok": False, "error": str(e), "source": "kucoin_live"}
 
 
-def fetch_kraken_account() -> Dict[str, Any]:
+def _maybe_persist_kraken_snapshot(*, equity: float, payload: Dict[str, Any]) -> None:
+    if equity <= 0:
+        return
+    if not _truthy(os.getenv("FLEET_PERSIST_LIVE_EQUITY", "1")):
+        return
+    try:
+        import pandas as pd
+        from quant.execution.event_store import insert_equity_snapshot
+
+        insert_equity_snapshot(
+            {
+                "ts": pd.Timestamp.now("UTC"),
+                "venue": "kraken",
+                "account": "main",
+                "symbol": None,
+                "equity": float(equity),
+                "currency": "USD",
+                "source": "live_account.kraken_health",
+                "payload_json": payload,
+            }
+        )
+    except Exception as e:
+        log.debug("kraken equity snapshot persist skipped: %s", e)
+
+
+def fetch_kraken_account(*, persist: bool = True) -> Dict[str, Any]:
     key = (os.getenv("KRAKEN_FUTURES_KEY") or "").strip()
     if not key:
         return {"ok": False, "error": "kraken_credentials_missing", "source": "kraken_live"}
@@ -129,6 +154,8 @@ def fetch_kraken_account() -> Dict[str, Any]:
             "unrealised_pnl": float(eq.get("upnl_usd", 0) or 0),
             "ts": time.time(),
         }
+        if persist:
+            _maybe_persist_kraken_snapshot(equity=float(out["equity"]), payload=out)
         return out
     except Exception as e:
         log.warning("kraken live account fetch failed: %s", e)
@@ -157,7 +184,7 @@ def live_account_snapshot(
             return {"ok": False, "error": "no_venue_credentials", "source": "none"}
 
     if venue == "kraken":
-        payload = fetch_kraken_account()
+        payload = fetch_kraken_account(persist=True)
     else:
         payload = fetch_kucoin_account(persist_account=persist_account)
 

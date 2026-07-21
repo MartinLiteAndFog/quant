@@ -22,6 +22,13 @@ export interface CurvePoint {
   equity_pct: number;
 }
 
+export interface AbsCurvePoint {
+  t: number;
+  equity: number;
+}
+
+export type ChartMode = "trade" | "account" | "account_abs";
+
 export interface BotStats {
   return_pct: number;
   max_drawdown_pct: number;
@@ -39,8 +46,11 @@ export interface BotSeries {
   venue: string;
   symbol: string;
   color?: string;
+  currency?: string | null;
+  live_equity?: number | null;
   trade_curve: CurvePoint[];
   account_curve: CurvePoint[];
+  account_curve_abs?: AbsCurvePoint[];
   stats: BotStats;
   needs_backfill?: boolean;
 }
@@ -84,6 +94,8 @@ export interface ClosedTrade {
   strategy_instance?: string;
   venue?: string;
   symbol?: string;
+  bot_id?: string;
+  display_name?: string;
 }
 
 export interface CapitalAccount {

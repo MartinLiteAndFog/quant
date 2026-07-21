@@ -5,9 +5,10 @@ interface Props {
   trades: ClosedTrade[];
   botLabel: string;
   loading?: boolean;
+  showBotColumn?: boolean;
 }
 
-export function TradesDrawer({ trades, botLabel, loading }: Props) {
+export function TradesDrawer({ trades, botLabel, loading, showBotColumn }: Props) {
   if (loading) return <p className="text-[12px] text-[var(--muted)]">Loading trades…</p>;
 
   return (
@@ -33,6 +34,7 @@ export function TradesDrawer({ trades, botLabel, loading }: Props) {
         <table className="w-full border-collapse text-left text-[11px]">
           <thead className="text-[var(--muted)]">
             <tr className="border-b border-[var(--line)]">
+              {showBotColumn && <th className="py-2 font-medium">Bot</th>}
               <th className="py-2 font-medium">Exit</th>
               <th className="py-2 font-medium">Side</th>
               <th className="py-2 font-medium">PnL %</th>
@@ -42,6 +44,11 @@ export function TradesDrawer({ trades, botLabel, loading }: Props) {
           <tbody>
             {trades.map((t) => (
               <tr key={t.trade_id} className="border-b border-[var(--line)]/60">
+                {showBotColumn && (
+                  <td className="py-2 pr-2 text-[var(--text)]">
+                    {t.display_name || t.strategy_instance || "—"}
+                  </td>
+                )}
                 <td className="py-2 pr-2 text-[var(--text)]">
                   {(t.exit_ts || "").replace("T", " ").slice(0, 16)}
                 </td>

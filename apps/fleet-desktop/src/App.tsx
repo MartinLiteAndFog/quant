@@ -5,6 +5,7 @@ import {
   fetchCapitalization,
   fetchPerformance,
   fetchTrades,
+  fetchTradesForBots,
   probeConnection,
   type ConnectionProbe,
 } from "./api";
@@ -22,6 +23,7 @@ import {
   type ActivityEvent,
   type BotSeries,
   type CapitalAccount,
+  type ChartMode,
   type ClosedTrade,
   type FleetBot,
   type FleetConfig,
@@ -31,6 +33,11 @@ import {
 } from "./types";
 
 const RANGES: RangeKey[] = ["24h", "7d", "30d", "all"];
+const CHART_MODES: Array<{ id: ChartMode; label: string }> = [
+  { id: "account_abs", label: "Equity $" },
+  { id: "account", label: "Equity %" },
+  { id: "trade", label: "Trade %" },
+];
 
 const DRAWER_TITLES: Record<Exclude<DrawerId, null>, string> = {
   account: "Account equity %",
@@ -41,21 +48,38 @@ const DRAWER_TITLES: Record<Exclude<DrawerId, null>, string> = {
   settings: "Settings",
 };
 
+function legendValue(s: BotSeries, mode: ChartMode): string {
+  if (mode === "account_abs") {
+    const abs = s.account_curve_abs || [];
+    const last = abs.length ? abs[abs.length - 1].equity : s.live_equity;
+    if (last == null || !Number.isFinite(last)) return "—";
+    const ccy = s.currency || (s.venue === "kraken" ? "USD" : "USDT");
+    return `${last.toFixed(2)} ${ccy}`;
+  }
+  if (mode === "account") {
+    const curve = s.account_curve || [];
+    const last = curve.length ? curve[curve.length - 1].equity_pct : 0;
+    return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%`;
+  }
+  const pct = s.stats?.return_pct ?? 0;
+  return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+}
+
 export default function App() {
   const [config, setConfig] = useState<FleetConfig>(() => loadConfig());
-  const [range, setRange] = useState<RangeKey>("7d");
+  const [range, setRange] = useState<RangeKey>("all");
   const [bots, setBots] = useState<FleetBot[]>([]);
   const [series, setSeries] = useState<BotSeries[]>([]);
   const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
   const [isolatedId, setIsolatedId] = useState<string | null>(null);
   const [drawer, setDrawer] = useState<DrawerId>(null);
-  const [chartMode, setChartMode] = useState<"trade" | "account">("trade");
+  const [chartMode, setChartMode] = useState<ChartMode>("account_abs");
   const [showMaxDd, setShowMaxDd] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [trades, setTrades] = useState<ClosedTrade[]>([]);
-  const [tradeBotId, setTradeBotId] = useState<string | null>(null);
+  const [tradeBotId, setTradeBotId] = useState<string | null>("__all__");
   const [accounts, setAccounts] = useState<CapitalAccount[]>([]);
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [connection, setConnection] = useState<ConnectionProbe | null>(null);
@@ -146,26 +170,69 @@ export default function App() {
   }, [drawer, config]);
 
   useEffect(() => {
-    if (drawer !== "trades" || !tradeBotId) return;
-    const bot = bots.find((b) => b.id === tradeBotId) || series.find((s) => s.id === tradeBotId);
-    const instance = bot?.strategy_instance || tradeBotId;
+    if (drawer !== "trades") return;
     setDrawerLoading(true);
-    void fetchTrades(config, instance, range)
-      .then(setTrades)
-      .catch((e) => setError(String(e)))
-      .finally(() => setDrawerLoading(false));
+    const run = async () => {
+      try {
+        if (!tradeBotId || tradeBotId === "__all__") {
+          const list = bots.length
+            ? bots
+            : config.bots.filter((b) => b.enabled).map((b) => ({
+                id: b.id,
+                strategy_instance: b.strategy_instance,
+                display_name: b.display_name,
+              }));
+          setTrades(await fetchTradesForBots(config, list, range));
+        } else {
+          const bot =
+            bots.find((b) => b.id === tradeBotId) ||
+            series.find((s) => s.id === tradeBotId);
+          const instance = bot?.strategy_instance || tradeBotId;
+          const rows = await fetchTrades(config, instance, range);
+          setTrades(
+            rows.map((t) => ({
+              ...t,
+              bot_id: t.bot_id || tradeBotId,
+              display_name: t.display_name || bot?.display_name,
+            })),
+          );
+        }
+      } catch (e) {
+        setError(String(e));
+      } finally {
+        setDrawerLoading(false);
+      }
+    };
+    void run();
   }, [drawer, tradeBotId, bots, series, config, range]);
 
   const openDrawer = (id: DrawerId) => {
     setDrawer((cur) => (cur === id ? null : id));
     if (id === "account") setChartMode("account");
-    else setChartMode("trade");
   };
 
   const exportCurves = () => {
     const rows: Array<Record<string, unknown>> = [];
     for (const s of series) {
       if (!visibleIds.has(s.id)) continue;
+      for (const p of s.account_curve_abs || []) {
+        rows.push({
+          bot: s.display_name,
+          instance: s.strategy_instance,
+          t: p.t,
+          equity: p.equity,
+          mode: "account_abs",
+        });
+      }
+      for (const p of s.account_curve) {
+        rows.push({
+          bot: s.display_name,
+          instance: s.strategy_instance,
+          t: p.t,
+          equity_pct: p.equity_pct,
+          mode: "account",
+        });
+      }
       for (const p of s.trade_curve) {
         rows.push({
           bot: s.display_name,
@@ -176,7 +243,7 @@ export default function App() {
         });
       }
     }
-    downloadCsv("fleet-trade-curves.csv", rows);
+    downloadCsv("fleet-equity-curves.csv", rows);
   };
 
   const legend = series.filter((s) => enabledIds.has(s.id));
@@ -225,6 +292,21 @@ export default function App() {
               </button>
             ))}
           </div>
+          <div className="mr-2 flex border border-[var(--line)]">
+            {CHART_MODES.map((m) => (
+              <button
+                key={m.id}
+                onClick={() => setChartMode(m.id)}
+                className="px-3 py-1.5 text-[11px] tracking-wide"
+                style={{
+                  background: chartMode === m.id ? "rgba(196,163,90,0.18)" : "transparent",
+                  color: chartMode === m.id ? "var(--accent)" : "var(--muted)",
+                }}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
           {(
             [
               ["account", "Equity %"],
@@ -238,7 +320,7 @@ export default function App() {
             <button
               key={id}
               onClick={() => {
-                if (id === "trades" && !tradeBotId && bots[0]) setTradeBotId(bots[0].id);
+                if (id === "trades" && !tradeBotId) setTradeBotId("__all__");
                 openDrawer(id);
               }}
               className="px-2 py-1.5 text-[11px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
@@ -306,10 +388,7 @@ export default function App() {
                 >
                   <span className="h-1.5 w-4" style={{ background: s.color || "var(--accent)" }} />
                   <span>{s.display_name}</span>
-                  <span className="text-[var(--muted)]">
-                    {s.stats.return_pct >= 0 ? "+" : ""}
-                    {s.stats.return_pct.toFixed(2)}%
-                  </span>
+                  <span className="text-[var(--muted)]">{legendValue(s, chartMode)}</span>
                 </button>
               );
             })}
@@ -340,7 +419,10 @@ export default function App() {
 
           {error && (
             <p className="mt-2 text-[11px] text-[var(--down)]">
-              {error} — set API base + token in Settings if needed.
+              {error}
+              {/401/.test(error)
+                ? " — Settings → Railway quant, clear token, Test connection, then Refresh."
+                : " — check Settings → API base (quant dashboard host)."}
             </p>
           )}
         </main>
@@ -349,7 +431,6 @@ export default function App() {
           open={drawer}
           onClose={() => {
             openDrawer(null);
-            setChartMode("trade");
           }}
           title={drawer ? DRAWER_TITLES[drawer] : ""}
           widthClass={drawer === "stats" || drawer === "settings" ? "w-[480px]" : "w-[420px]"}
@@ -362,9 +443,10 @@ export default function App() {
             <div className="space-y-3">
               <select
                 className="w-full border border-[var(--line)] bg-black/30 px-2 py-2 text-[12px]"
-                value={tradeBotId || ""}
+                value={tradeBotId || "__all__"}
                 onChange={(e) => setTradeBotId(e.target.value)}
               >
+                <option value="__all__">All bots</option>
                 {bots.map((b) => (
                   <option key={b.id} value={b.id}>
                     {b.display_name}
@@ -373,8 +455,13 @@ export default function App() {
               </select>
               <TradesDrawer
                 trades={trades}
-                botLabel={bots.find((b) => b.id === tradeBotId)?.display_name || "bot"}
+                botLabel={
+                  tradeBotId && tradeBotId !== "__all__"
+                    ? bots.find((b) => b.id === tradeBotId)?.display_name || "bot"
+                    : "All bots"
+                }
                 loading={drawerLoading}
+                showBotColumn={!tradeBotId || tradeBotId === "__all__"}
               />
             </div>
           )}
