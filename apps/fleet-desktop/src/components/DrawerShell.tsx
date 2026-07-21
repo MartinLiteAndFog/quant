@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 
 export type DrawerId =
-  | "account"
   | "activity"
   | "trades"
   | "stats"

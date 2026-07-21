@@ -12,7 +12,6 @@ import {
 import { HeroChart } from "./components/HeroChart";
 import { DrawerShell, type DrawerId } from "./components/DrawerShell";
 import { StatusRail } from "./components/StatusRail";
-import { AccountEquityDrawer } from "./components/drawers/AccountEquityDrawer";
 import { ActivityDrawer } from "./components/drawers/ActivityDrawer";
 import { CapitalizationDrawer } from "./components/drawers/CapitalizationDrawer";
 import { SettingsDrawer } from "./components/drawers/SettingsDrawer";
@@ -40,13 +39,21 @@ const CHART_MODES: Array<{ id: ChartMode; label: string }> = [
 ];
 
 const DRAWER_TITLES: Record<Exclude<DrawerId, null>, string> = {
-  account: "Account equity %",
   activity: "Activity map",
   trades: "Trades",
   stats: "Stats compare",
   capital: "Capitalization & health",
   settings: "Settings",
 };
+
+/** Drawers that are side panels — equity charts live on the main hero only. */
+const PANEL_DRAWERS = [
+  ["activity", "Activity"],
+  ["trades", "Trades"],
+  ["stats", "Stats"],
+  ["capital", "Capital"],
+  ["settings", "Settings"],
+] as const;
 
 function legendValue(s: BotSeries, mode: ChartMode): string {
   if (mode === "account_abs") {
@@ -208,7 +215,10 @@ export default function App() {
 
   const openDrawer = (id: DrawerId) => {
     setDrawer((cur) => (cur === id ? null : id));
-    if (id === "account") setChartMode("account");
+  };
+
+  const setHeroMode = (mode: ChartMode) => {
+    setChartMode(mode);
   };
 
   const exportCurves = () => {
@@ -296,7 +306,7 @@ export default function App() {
             {CHART_MODES.map((m) => (
               <button
                 key={m.id}
-                onClick={() => setChartMode(m.id)}
+                onClick={() => setHeroMode(m.id)}
                 className="px-3 py-1.5 text-[11px] tracking-wide"
                 style={{
                   background: chartMode === m.id ? "rgba(196,163,90,0.18)" : "transparent",
@@ -307,16 +317,7 @@ export default function App() {
               </button>
             ))}
           </div>
-          {(
-            [
-              ["account", "Equity %"],
-              ["activity", "Activity"],
-              ["trades", "Trades"],
-              ["stats", "Stats"],
-              ["capital", "Capital"],
-              ["settings", "Settings"],
-            ] as const
-          ).map(([id, label]) => (
+          {PANEL_DRAWERS.map(([id, label]) => (
             <button
               key={id}
               onClick={() => {
@@ -407,6 +408,13 @@ export default function App() {
             )}
           </div>
 
+          <p className="mb-2 text-[11px] text-[var(--muted)]">
+            {chartMode === "account_abs"
+              ? "Main chart: absolute account equity (USDT / USD) from snapshots + live balance."
+              : chartMode === "account"
+                ? "Main chart: account equity % rebased to 0 at window start."
+                : "Main chart: compounded closed-trade PnL %. Empty until bots record closed_trades."}
+          </p>
           <div className="min-h-0 flex-1 border border-[var(--line)] bg-black/15">
             <HeroChart
               series={series}
@@ -435,9 +443,6 @@ export default function App() {
           title={drawer ? DRAWER_TITLES[drawer] : ""}
           widthClass={drawer === "stats" || drawer === "settings" ? "w-[480px]" : "w-[420px]"}
         >
-          {drawer === "account" && (
-            <AccountEquityDrawer series={series} visibleIds={visibleIds} isolatedId={isolatedId} />
-          )}
           {drawer === "activity" && <ActivityDrawer events={activity} loading={drawerLoading} />}
           {drawer === "trades" && (
             <div className="space-y-3">
