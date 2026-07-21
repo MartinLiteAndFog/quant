@@ -11,6 +11,8 @@ __pycache__/
 data/
 *.parquet
 *.csv
+!deploy/assets/pc_3axis_gate_latest.csv
+!data/regimes/pc_3axis_gate_latest.csv
 *.jsonl
 *.log
 
