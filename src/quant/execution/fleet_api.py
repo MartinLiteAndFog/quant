@@ -127,6 +127,33 @@ def _hours_cutoff_ts(hours: Optional[float]) -> Optional[pd.Timestamp]:
     return pd.Timestamp.now("UTC") - pd.Timedelta(hours=float(hours))
 
 
+def _history_start_ts() -> Optional[pd.Timestamp]:
+    """Global floor for fleet history (FLEET_HISTORY_START, ISO date).
+
+    Pre-cutoff Postgres rows are relics from earlier experiments (old seeds,
+    retired bots); the board counts from the fresh start (2026-07-22 audit).
+    Set FLEET_HISTORY_START=off to include everything.
+    """
+    raw = (os.getenv("FLEET_HISTORY_START") or "2026-07-16").strip()
+    if raw.lower() in {"", "0", "off", "none", "all"}:
+        return None
+    try:
+        ts = pd.Timestamp(raw)
+        return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
+    except Exception:
+        return None
+
+
+def _effective_since(hours: Optional[float]) -> Optional[pd.Timestamp]:
+    since = _hours_cutoff_ts(hours)
+    floor = _history_start_ts()
+    if floor is None:
+        return since
+    if since is None or floor > since:
+        return floor
+    return since
+
+
 def _fetch_health(url: str, timeout: float = 8.0) -> Dict[str, Any]:
     if not url:
         return {"ok": False, "error": "no_health_url"}
@@ -651,8 +678,11 @@ def _align_series_to_shared_clock(
         row = dict(s)
         abs_curve = s.get("account_curve_abs") or []
         if abs_curve:
+            # Never invent history past a bot's last real observation: filling
+            # a stale series to "now" painted month-old equity as current.
+            fill_end = min(t1, int(abs_curve[-1]["t"]))
             row["account_curve_abs"] = _forward_fill_on_grid(
-                abs_curve, value_key="equity", t0=t0, t1=t1, interval_sec=interval
+                abs_curve, value_key="equity", t0=t0, t1=fill_end, interval_sec=interval
             )
             # Forward-fill the precomputed % curve (TWR, deposit-adjusted).
             # Recomputing % from the abs curve here reintroduced deposit
@@ -663,7 +693,7 @@ def _align_series_to_shared_clock(
                     pct_curve,
                     value_key="equity_pct",
                     t0=t0,
-                    t1=t1,
+                    t1=fill_end,
                     interval_sec=interval,
                 )
             else:
@@ -677,7 +707,7 @@ def _align_series_to_shared_clock(
                 trade_curve,
                 value_key="equity_pct",
                 t0=t0,
-                t1=t1,
+                t1=min(t1, int(trade_curve[-1]["t"])),
                 interval_sec=interval,
             )
         aligned.append(row)
@@ -1057,7 +1087,7 @@ def build_fleet_performance(
             if str(b.get("id")) in want or str(b.get("strategy_instance")) in want
         ]
 
-    since = _hours_cutoff_ts(hours)
+    since = _effective_since(hours)
     # One health fan-out for live equity stitch (also keeps curves fresh).
     health_by_id: Dict[str, Dict[str, Any]] = {}
     try:
@@ -1153,7 +1183,7 @@ def build_fleet_activity(
     hours: Optional[float] = 168.0,
     limit: int = 500,
 ) -> Dict[str, Any]:
-    since = _hours_cutoff_ts(hours)
+    since = _effective_since(hours)
     registry = {str(b["strategy_instance"]): b for b in fleet_bot_registry()}
     instances = list(registry.keys())
     if not instances:
@@ -1226,7 +1256,7 @@ def build_fleet_trades(
     )
     instance = str((bot or {}).get("strategy_instance") or strategy_instance)
     venue = str((bot or {}).get("venue") or "kucoin")
-    since = _hours_cutoff_ts(hours)
+    since = _effective_since(hours)
     if bot:
         df = _load_closed_trades_for_bot(bot, since=since, limit=max(limit * 3, limit))
     else:

@@ -293,8 +293,9 @@ class ForwardFillGridTests(unittest.TestCase):
         )
         self.assertEqual(clock["t1"], 1_001_200)
         self.assertGreater(clock["interval_sec"], 0)
-        # Both series end on the shared clock end.
-        self.assertEqual(aligned[0]["account_curve_abs"][-1]["t"], 1_001_200)
+        # No invented history PAST a bot's last real observation: A stops at
+        # its last snapshot instead of being dragged to the clock end.
+        self.assertLessEqual(aligned[0]["account_curve_abs"][-1]["t"], 1_000_900)
         self.assertEqual(aligned[1]["account_curve_abs"][-1]["t"], 1_001_200)
         # Bot B does not invent points before its first observation.
         self.assertGreaterEqual(aligned[1]["account_curve_abs"][0]["t"], 1_000_500)
