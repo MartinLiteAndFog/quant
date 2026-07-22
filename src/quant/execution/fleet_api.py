@@ -967,6 +967,7 @@ def _build_portfolio_curve(
     thousands of percent while every bot is still near ± a few percent.
     """
     curves: List[List[Dict[str, Any]]] = []
+    twr_pcts: List[Optional[List[Dict[str, Any]]]] = []
     live_sum = 0.0
     live_n = 0
     for s in series:
@@ -979,6 +980,14 @@ def _build_portfolio_curve(
                     if p.get("equity") is not None and _is_finite(p.get("equity"))
                 ]
             )
+            # Prefer the bot's deposit-adjusted (TWR) % curve when present so
+            # portfolio % inherits it; recomputing from abs re-added deposits.
+            pc = [
+                {"t": int(p["t"]), "equity_pct": float(p["equity_pct"])}
+                for p in (s.get("account_curve") or [])
+                if p.get("equity_pct") is not None and _is_finite(p.get("equity_pct"))
+            ]
+            twr_pcts.append(pc or None)
         le = s.get("live_equity")
         if le is not None and _is_finite(le):
             live_sum += float(le)
@@ -997,9 +1006,13 @@ def _build_portfolio_curve(
             "note": "equal_weight_pct_mean_abs_sum",
         }
 
-    # Per-bot % relative to that bot's first equity (same basis as bot lines).
+    # Per-bot %: use the bot's own (TWR) curve when available; else fall back
+    # to first-equity base from the abs curve.
     pct_curves: List[List[Dict[str, Any]]] = []
-    for curve in curves:
+    for curve, twr in zip(curves, twr_pcts):
+        if twr:
+            pct_curves.append(twr)
+            continue
         base = float(curve[0]["equity"])
         if base <= 0:
             pct_curves.append(
