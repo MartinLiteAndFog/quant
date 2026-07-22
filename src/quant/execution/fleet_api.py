@@ -654,7 +654,20 @@ def _align_series_to_shared_clock(
             row["account_curve_abs"] = _forward_fill_on_grid(
                 abs_curve, value_key="equity", t0=t0, t1=t1, interval_sec=interval
             )
-            row["account_curve"] = _pct_from_abs_curve(row["account_curve_abs"])
+            # Forward-fill the precomputed % curve (TWR, deposit-adjusted).
+            # Recomputing % from the abs curve here reintroduced deposit
+            # jumps as fake returns and silently discarded the TWR result.
+            pct_curve = s.get("account_curve") or []
+            if pct_curve:
+                row["account_curve"] = _forward_fill_on_grid(
+                    pct_curve,
+                    value_key="equity_pct",
+                    t0=t0,
+                    t1=t1,
+                    interval_sec=interval,
+                )
+            else:
+                row["account_curve"] = _pct_from_abs_curve(row["account_curve_abs"])
         else:
             row["account_curve_abs"] = []
             row["account_curve"] = []
