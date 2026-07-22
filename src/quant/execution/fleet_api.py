@@ -522,6 +522,161 @@ def _downsample_points(
     return [dedup[k] for k in sorted(dedup)]
 
 
+def _choose_grid_sec(span_sec: int, *, target_points: int = 280) -> int:
+    """Pick a regular clock step so the chart axis is uniform, not event-spaced."""
+    span = max(60, int(span_sec))
+    target = max(40, int(target_points))
+    # Prefer human-friendly steps, then stretch if the window is huge.
+    for step in (60, 300, 900, 1800, 3600, 7200, 14400, 21600, 43200, 86400):
+        if (span // step) + 1 <= target:
+            return step
+    return max(86400, span // max(1, target - 1))
+
+
+def _forward_fill_on_grid(
+    points: List[Dict[str, Any]],
+    *,
+    value_key: str,
+    t0: int,
+    t1: int,
+    interval_sec: int,
+) -> List[Dict[str, Any]]:
+    """Resample sparse snapshots onto a uniform UTC grid with forward-fill.
+
+    Points before the series' first real observation are omitted (no invented
+    history). From the first observation through ``t1``, values hold until the
+    next observation — so bots share one clock even when flat.
+    """
+    if not points or int(t1) < int(t0) or int(interval_sec) <= 0:
+        return []
+    by_t: Dict[int, float] = {}
+    for p in points:
+        try:
+            t = int(p["t"])
+            v = float(p[value_key])
+        except Exception:
+            continue
+        if not _is_finite(v):
+            continue
+        by_t[t] = v
+    if not by_t:
+        return []
+    times = sorted(by_t)
+    first_t = times[0]
+    end = int(t1)
+    step = max(1, int(interval_sec))
+    # First emitted sample is the real first observation (may be mid-bucket).
+    start = max(int(first_t), int(t0))
+    out: List[Dict[str, Any]] = []
+    idx = 0
+    last = by_t[times[0]]
+    # Walk a regular grid from the next step boundary after start, but always
+    # keep the exact first observation so the line origin is honest.
+    out.append({"t": start, value_key: round(last, 6)})
+    # Next grid tick strictly after start, aligned to epoch step.
+    nxt = ((start // step) + 1) * step
+    t = nxt
+    while t <= end:
+        while idx + 1 < len(times) and times[idx + 1] <= t:
+            idx += 1
+            last = by_t[times[idx]]
+        out.append({"t": int(t), value_key: round(last, 6)})
+        t += step
+    # Pin the window end so all series share the same last timestamp.
+    while idx + 1 < len(times) and times[idx + 1] <= end:
+        idx += 1
+        last = by_t[times[idx]]
+    if end >= start:
+        if out and int(out[-1]["t"]) == end:
+            out[-1] = {"t": end, value_key: round(last, 6)}
+        else:
+            out.append({"t": end, value_key: round(last, 6)})
+    dedup: Dict[int, Dict[str, Any]] = {}
+    for p in out:
+        dedup[int(p["t"])] = p
+    return [dedup[k] for k in sorted(dedup)]
+
+
+def _pct_from_abs_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Rebase absolute equity to % without thinning (preserves uniform grid)."""
+    if not points:
+        return []
+    base = float(points[0]["equity"])
+    if base <= 0:
+        return [{"t": int(p["t"]), "equity_pct": 0.0} for p in points]
+    return [
+        {
+            "t": int(p["t"]),
+            "equity_pct": round((float(p["equity"]) / base - 1.0) * 100.0, 6),
+        }
+        for p in points
+    ]
+
+
+def _shared_curve_window(
+    series: List[Dict[str, Any]],
+    *,
+    hours: Optional[float],
+    now_ts: int,
+) -> Tuple[int, int, int]:
+    """Return (t0, t1, interval_sec) for a uniform shared clock."""
+    t1 = int(now_ts)
+    if hours is not None and float(hours) > 0:
+        t0 = t1 - int(float(hours) * 3600)
+    else:
+        firsts: List[int] = []
+        for s in series:
+            for key in ("account_curve_abs", "account_curve", "trade_curve"):
+                curve = s.get(key) or []
+                if curve:
+                    firsts.append(int(curve[0]["t"]))
+                    break
+        t0 = min(firsts) if firsts else t1 - 7 * 86400
+    if t0 >= t1:
+        t0 = t1 - 3600
+    interval = _choose_grid_sec(t1 - t0)
+    return t0, t1, interval
+
+
+def _align_series_to_shared_clock(
+    series: List[Dict[str, Any]],
+    *,
+    hours: Optional[float],
+    now_ts: int,
+) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    """Forward-fill every bot onto one regular UTC grid for true-time charts."""
+    t0, t1, interval = _shared_curve_window(series, hours=hours, now_ts=now_ts)
+    aligned: List[Dict[str, Any]] = []
+    for s in series:
+        row = dict(s)
+        abs_curve = s.get("account_curve_abs") or []
+        if abs_curve:
+            row["account_curve_abs"] = _forward_fill_on_grid(
+                abs_curve, value_key="equity", t0=t0, t1=t1, interval_sec=interval
+            )
+            row["account_curve"] = _pct_from_abs_curve(row["account_curve_abs"])
+        else:
+            row["account_curve_abs"] = []
+            row["account_curve"] = []
+        trade_curve = s.get("trade_curve") or []
+        if trade_curve:
+            row["trade_curve"] = _forward_fill_on_grid(
+                trade_curve,
+                value_key="equity_pct",
+                t0=t0,
+                t1=t1,
+                interval_sec=interval,
+            )
+        aligned.append(row)
+    meta = {
+        "t0": t0,
+        "t1": t1,
+        "interval_sec": interval,
+        "note": "forward_fill_uniform_utc_grid",
+    }
+    return aligned, meta
+
+
 def _absolute_account_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     raw = [
         {"t": int(p["t"]), "equity": round(float(p["equity"]), 6)}
@@ -713,12 +868,20 @@ def _normalize_account_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any
         ]
     return _downsample_points(raw, max_points=180, value_key="equity_pct", min_interval_sec=900)
 
-def _build_portfolio_curve(series: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Sum absolute equity curves into one portfolio line (USD/USDT nominal).
+def _build_portfolio_curve(
+    series: List[Dict[str, Any]],
+    *,
+    thin: bool = True,
+) -> Dict[str, Any]:
+    """Build portfolio abs sum + equal-weight % of bot returns.
 
-    Forward-fills each bot's last known equity on the union of timestamps so the
-    white aggregate stays continuous even when bots snapshot at different times.
-    No FX conversion — Kraken USD and KuCoin USDT are treated as 1:1 nominal.
+    Absolute (Equity $): sum forward-filled equities (nominal USD/USDT 1:1).
+
+    Percent (Equity %): equal-weight mean of each bot's own-base equity_pct,
+    forward-filled on the union of timestamps. Do NOT normalize the summed
+    absolute curve from its first point — when a large account (e.g. Kraken
+    ~$360) joins after tiny pilots (~$15), that false rebase spikes to
+    thousands of percent while every bot is still near ± a few percent.
     """
     curves: List[List[Dict[str, Any]]] = []
     live_sum = 0.0
@@ -748,31 +911,69 @@ def _build_portfolio_curve(series: List[Dict[str, Any]]) -> Dict[str, Any]:
             "account_curve_abs": [],
             "account_curve": [],
             "bot_count": 0,
-            "note": "nominal_usd_usdt_sum",
+            "note": "equal_weight_pct_mean_abs_sum",
         }
 
+    # Per-bot % relative to that bot's first equity (same basis as bot lines).
+    pct_curves: List[List[Dict[str, Any]]] = []
+    for curve in curves:
+        base = float(curve[0]["equity"])
+        if base <= 0:
+            pct_curves.append(
+                [{"t": int(p["t"]), "equity_pct": 0.0} for p in curve]
+            )
+        else:
+            pct_curves.append(
+                [
+                    {
+                        "t": int(p["t"]),
+                        "equity_pct": round((float(p["equity"]) / base - 1.0) * 100.0, 6),
+                    }
+                    for p in curve
+                ]
+            )
+
     times = sorted({int(p["t"]) for c in curves for p in c})
-    # Pointer + last value per curve
-    idxs = [0] * len(curves)
-    lasts: List[Optional[float]] = [None] * len(curves)
+    abs_idxs = [0] * len(curves)
+    abs_lasts: List[Optional[float]] = [None] * len(curves)
+    pct_idxs = [0] * len(pct_curves)
+    pct_lasts: List[Optional[float]] = [None] * len(pct_curves)
     portfolio_abs: List[Dict[str, Any]] = []
+    portfolio_pct: List[Dict[str, Any]] = []
     for t in times:
         total = 0.0
         contributing = 0
         for i, curve in enumerate(curves):
-            while idxs[i] < len(curve) and int(curve[idxs[i]]["t"]) <= t:
-                lasts[i] = float(curve[idxs[i]]["equity"])
-                idxs[i] += 1
-            if lasts[i] is not None:
-                total += lasts[i]
+            while abs_idxs[i] < len(curve) and int(curve[abs_idxs[i]]["t"]) <= t:
+                abs_lasts[i] = float(curve[abs_idxs[i]]["equity"])
+                abs_idxs[i] += 1
+            if abs_lasts[i] is not None:
+                total += abs_lasts[i]
                 contributing += 1
         if contributing:
             portfolio_abs.append({"t": t, "equity": round(total, 6)})
 
-    # Only thin dense boards; short synthetic / sparse series stay exact.
-    if len(portfolio_abs) > 80:
+        pct_vals: List[float] = []
+        for i, curve in enumerate(pct_curves):
+            while pct_idxs[i] < len(curve) and int(curve[pct_idxs[i]]["t"]) <= t:
+                pct_lasts[i] = float(curve[pct_idxs[i]]["equity_pct"])
+                pct_idxs[i] += 1
+            if pct_lasts[i] is not None:
+                pct_vals.append(pct_lasts[i])
+        if pct_vals:
+            portfolio_pct.append(
+                {"t": t, "equity_pct": round(sum(pct_vals) / len(pct_vals), 6)}
+            )
+
+    # Only thin dense boards when caller has not already put curves on a
+    # uniform shared clock (thin=False preserves true-time regularity).
+    if thin and len(portfolio_abs) > 80:
         portfolio_abs = _downsample_points(
             portfolio_abs, max_points=220, value_key="equity", min_interval_sec=600
+        )
+    if thin and len(portfolio_pct) > 80:
+        portfolio_pct = _downsample_points(
+            portfolio_pct, max_points=220, value_key="equity_pct", min_interval_sec=600
         )
     return {
         "id": "portfolio",
@@ -783,9 +984,9 @@ def _build_portfolio_curve(series: List[Dict[str, Any]]) -> Dict[str, Any]:
             float(portfolio_abs[-1]["equity"]) if portfolio_abs else None
         ),
         "account_curve_abs": portfolio_abs,
-        "account_curve": _normalize_account_curve(portfolio_abs),
+        "account_curve": portfolio_pct,
         "bot_count": len(curves),
-        "note": "nominal_usd_usdt_sum",
+        "note": "equal_weight_pct_mean_abs_sum",
     }
 
 
@@ -814,6 +1015,16 @@ def build_fleet_performance(
         log.warning("fleet performance health probe failed: %s", e)
 
     now_ts = int(pd.Timestamp.now("UTC").timestamp())
+    # Live equity is only stitched onto curves whose snapshots are fresh.
+    # Stitching onto a stale seed fabricates a flat-line-plus-cliff "curve"
+    # (audit 2026-07-22: +261% jumps from Nov-2025 seeds). Stale series are
+    # reported honestly via needs_backfill + snapshot_age_sec instead.
+    try:
+        stitch_max_age_sec = max(
+            300.0, float(os.getenv("FLEET_STITCH_MAX_AGE_SEC", "3600"))
+        )
+    except Exception:
+        stitch_max_age_sec = 3600.0
     series = []
     for b in registry:
         instance = str(b.get("strategy_instance"))
@@ -825,11 +1036,19 @@ def build_fleet_performance(
         trade_curve, stats = _compounded_trade_curve(trades)
 
         acct_pts = _load_account_points_for_bot(b, since=since)
+        last_snapshot_ts = int(acct_pts[-1]["t"]) if acct_pts else None
+        snapshot_age_sec = (
+            max(0, now_ts - last_snapshot_ts) if last_snapshot_ts is not None else None
+        )
+        snapshots_fresh = (
+            snapshot_age_sec is not None and snapshot_age_sec <= stitch_max_age_sec
+        )
         live_row = health_by_id.get(bot_id) or {}
         live_eq = live_row.get("equity")
         if live_eq is None and isinstance(live_row.get("health"), dict):
             live_eq = live_row["health"].get("equity")
-        acct_pts = _stitch_live_equity(acct_pts, live_equity=live_eq, now_ts=now_ts)
+        if snapshots_fresh:
+            acct_pts = _stitch_live_equity(acct_pts, live_equity=live_eq, now_ts=now_ts)
 
         account_curve_abs = _absolute_account_curve(acct_pts)
         account_curve = _normalize_account_curve(acct_pts)
@@ -852,17 +1071,25 @@ def build_fleet_performance(
                 "account_curve": account_curve,
                 "account_curve_abs": account_curve_abs,
                 "stats": stats,
-                "needs_backfill": bool(trades.empty),
+                "needs_backfill": bool(trades.empty) or not snapshots_fresh,
+                "last_snapshot_ts": last_snapshot_ts,
+                "snapshot_age_sec": snapshot_age_sec,
             }
         )
 
-    portfolio = _build_portfolio_curve(series)
+    # Uniform UTC clock + forward-fill so sparse bots share one time domain.
+    # (Persist may be off — live stitch alone leaves 2–3 uneven snapshot times.)
+    series, clock = _align_series_to_shared_clock(
+        series, hours=hours, now_ts=now_ts
+    )
+    portfolio = _build_portfolio_curve(series, thin=False)
     return {
         "ok": True,
         "hours": hours,
         "since": since.isoformat() if since is not None else None,
         "series": series,
         "portfolio": portfolio,
+        "clock": clock,
         "ts": pd.Timestamp.now("UTC").isoformat(),
     }
 

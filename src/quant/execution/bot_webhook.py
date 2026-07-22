@@ -87,6 +87,16 @@ async def _lifespan(_app: FastAPI):
     os.environ.setdefault("ENABLE_TV_EXECUTOR", "1")
     _enforce_margin_mode()
     start_tv_executor()
+    # Fleet curves need equity history on a fixed clock, not just /health-poll
+    # side effects (audit 2026-07-22). Default ON for pilots; opt out with
+    # FLEET_EQUITY_WRITER_ENABLED=0.
+    from quant.execution.equity_snapshot_writer import start_equity_snapshot_writer
+
+    start_equity_snapshot_writer(
+        venue="kucoin",
+        account=strategy_instance_id(),
+        default_enabled=True,
+    )
     log.info(
         "bot webhook ready name=%s profile=%s instance=%s symbol=%s",
         display_name(),

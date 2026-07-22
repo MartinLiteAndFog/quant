@@ -788,6 +788,25 @@ def _start_live_signal_worker_if_enabled() -> None:
     )
 
 
+def _start_equity_snapshot_writer_if_enabled() -> None:
+    """Optional autonomous equity snapshot loop for the dashboard service.
+
+    Pilots start theirs in bot_webhook (default ON). Here it defaults OFF to
+    avoid double-writing next to dashboard_state's own snapshot path — enable
+    with FLEET_EQUITY_WRITER_ENABLED=1 when this service should also persist
+    its account equity for fleet curves.
+    """
+    if not _truthy(os.getenv("FLEET_EQUITY_WRITER_ENABLED", "0")):
+        return
+    from quant.execution.equity_snapshot_writer import start_equity_snapshot_writer
+
+    start_equity_snapshot_writer(
+        venue=os.getenv("FLEET_EQUITY_WRITER_VENUE", "kucoin"),
+        account=os.getenv("FLEET_EQUITY_WRITER_ACCOUNT", "futures"),
+        default_enabled=False,
+    )
+
+
 def _start_live_executor_if_enabled() -> None:
     if not _truthy(os.getenv("ENABLE_LIVE_EXECUTOR", "0")):
         return
@@ -1103,6 +1122,52 @@ async def api_manual_order(
         return {"ok": True, "result": result, "ts": _now_utc_iso()}
     except Exception as e:
         return {"ok": False, "symbol": symbol, "action": action, "error": str(e), "ts": _now_utc_iso()}
+
+
+@app.get("/api/gate/override")
+def api_gate_override_get() -> Dict[str, Any]:
+    """Current force-countertrend override state (read-only, no auth)."""
+    from quant.execution.CHOPgate import get_force_countertrend
+
+    state = get_force_countertrend()
+    return {"ok": True, **state, "ts": _now_utc_iso()}
+
+
+@app.post("/api/gate/override")
+async def api_gate_override_set(
+    request: Request,
+    x_webhook_token: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Toggle the fleet-wide force-countertrend gate override.
+
+    Body: {"enabled": true|false, "token": "<WEBHOOK_TOKEN>"}. Requires the
+    webhook token (fail-closed) — this changes live trading regime for every
+    bot that reads the shared gate.
+    """
+    try:
+        payload = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid json")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="payload must be a JSON object")
+
+    if _auth_required():
+        _check_token(x_webhook_token or payload.get("token"))
+    else:
+        raise HTTPException(
+            status_code=503,
+            detail="WEBHOOK_TOKEN not configured; refusing unauthenticated gate override",
+        )
+
+    if "enabled" not in payload:
+        raise HTTPException(status_code=400, detail="missing 'enabled' (true|false)")
+    enabled = bool(payload.get("enabled"))
+
+    from quant.execution.CHOPgate import set_force_countertrend
+
+    result = set_force_countertrend(enabled, actor="dashboard")
+    log.info("gate override set enabled=%s result=%s", enabled, result.get("ok"))
+    return {**result, "ts": _now_utc_iso()}
 
 
 @app.get("/api/regime/latest")
@@ -3711,6 +3776,7 @@ def main() -> None:
     _start_renko_cache_updater_if_enabled()
     _start_live_signal_worker_if_enabled()
     _start_live_executor_if_enabled()
+    _start_equity_snapshot_writer_if_enabled()
     port = int(os.environ.get("PORT", str(args.port)))
     uvicorn.run(
         "quant.execution.webhook_server:app",

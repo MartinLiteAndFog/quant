@@ -169,6 +169,107 @@ class PortfolioAggregateTests(unittest.TestCase):
         self.assertAlmostEqual(by_t[200], 32.0, places=5)  # 12 + 20
         self.assertAlmostEqual(by_t[250], 34.0, places=5)  # 12 + 22
         self.assertAlmostEqual(port["live_equity"], 30.0, places=5)
+        # Equal-weight % of each bot's own-base return (not sum-then-rebase).
+        pct_by_t = {p["t"]: p["equity_pct"] for p in port["account_curve"]}
+        self.assertAlmostEqual(pct_by_t[100], 0.0, places=5)
+        self.assertAlmostEqual(pct_by_t[150], 0.0, places=5)  # A 0% + B 0%
+        self.assertAlmostEqual(pct_by_t[200], 10.0, places=5)  # A +20% + B 0%
+        self.assertAlmostEqual(pct_by_t[250], 15.0, places=5)  # A +20% + B +10%
+        self.assertEqual(port["note"], "equal_weight_pct_mean_abs_sum")
+
+    def test_portfolio_pct_ignores_late_large_account_join_spike(self) -> None:
+        """Regression: pilots ~$15 then Kraken ~$360 must not rebase to +2000%+."""
+        from quant.execution.fleet_api import _build_portfolio_curve
+
+        series = [
+            {
+                "id": "pilot",
+                "live_equity": 14.7,
+                "account_curve_abs": [
+                    {"t": 100, "equity": 15.0},
+                    {"t": 200, "equity": 14.7},  # -2%
+                    {"t": 300, "equity": 14.7},
+                ],
+            },
+            {
+                "id": "kraken",
+                "live_equity": 366.3,
+                "account_curve_abs": [
+                    {"t": 250, "equity": 360.0},
+                    {"t": 300, "equity": 366.3},  # +1.75%
+                ],
+            },
+        ]
+        port = _build_portfolio_curve(series)
+        pct_by_t = {p["t"]: p["equity_pct"] for p in port["account_curve"]}
+        # Old bug: (14.7+366.3)/15 - 1 ≈ +2440%. Equal-weight stays near bot %.
+        self.assertAlmostEqual(pct_by_t[200], -2.0, places=5)
+        self.assertAlmostEqual(pct_by_t[250], -1.0, places=5)  # (-2 + 0) / 2
+        self.assertAlmostEqual(pct_by_t[300], (-2.0 + 1.75) / 2.0, places=5)
+        self.assertLess(abs(pct_by_t[300]), 5.0)
+        # Abs sum still honest about total capital step-up when Kraken joins.
+        abs_by_t = {p["t"]: p["equity"] for p in port["account_curve_abs"]}
+        self.assertAlmostEqual(abs_by_t[100], 15.0, places=5)
+        self.assertAlmostEqual(abs_by_t[250], 14.7 + 360.0, places=5)
+
+class ForwardFillGridTests(unittest.TestCase):
+    def test_uniform_steps_and_holds_value(self) -> None:
+        from quant.execution.fleet_api import _forward_fill_on_grid
+
+        pts = [
+            {"t": 1_000, "equity": 10.0},
+            {"t": 1_250, "equity": 12.0},
+        ]
+        out = _forward_fill_on_grid(
+            pts, value_key="equity", t0=1_000, t1=1_400, interval_sec=100
+        )
+        self.assertGreaterEqual(len(out), 4)
+        by_t = {p["t"]: p["equity"] for p in out}
+        self.assertAlmostEqual(by_t[1_000], 10.0, places=5)
+        # Mid-gap holds prior value until the 1250 observation is reached.
+        self.assertAlmostEqual(by_t[1_100], 10.0, places=5)
+        self.assertAlmostEqual(by_t[1_300], 12.0, places=5)
+        self.assertAlmostEqual(by_t[1_400], 12.0, places=5)
+        # No invented history before first observation even if t0 is earlier.
+        early = _forward_fill_on_grid(
+            pts, value_key="equity", t0=500, t1=1_200, interval_sec=100
+        )
+        self.assertEqual(early[0]["t"], 1_000)
+
+    def test_align_series_shares_clock(self) -> None:
+        from quant.execution.fleet_api import _align_series_to_shared_clock
+
+        series = [
+            {
+                "id": "a",
+                "account_curve_abs": [
+                    {"t": 1_000_000, "equity": 10.0},
+                    {"t": 1_000_900, "equity": 11.0},
+                ],
+                "account_curve": [],
+                "trade_curve": [],
+            },
+            {
+                "id": "b",
+                "account_curve_abs": [
+                    {"t": 1_000_500, "equity": 20.0},
+                    {"t": 1_001_200, "equity": 22.0},
+                ],
+                "account_curve": [],
+                "trade_curve": [],
+            },
+        ]
+        aligned, clock = _align_series_to_shared_clock(
+            series, hours=1.0, now_ts=1_001_200
+        )
+        self.assertEqual(clock["t1"], 1_001_200)
+        self.assertGreater(clock["interval_sec"], 0)
+        # Both series end on the shared clock end.
+        self.assertEqual(aligned[0]["account_curve_abs"][-1]["t"], 1_001_200)
+        self.assertEqual(aligned[1]["account_curve_abs"][-1]["t"], 1_001_200)
+        # Bot B does not invent points before its first observation.
+        self.assertGreaterEqual(aligned[1]["account_curve_abs"][0]["t"], 1_000_500)
+
 
 class DownsampleCurveTests(unittest.TestCase):
     def test_collapses_flat_high_frequency_spam(self) -> None:
@@ -197,7 +298,9 @@ class LiveStitchAndAbsCurveTests(unittest.TestCase):
 
     def test_performance_uses_equity_account_and_live_stitch(self) -> None:
         empty = pd.DataFrame()
-        snaps = [{"t": 1000, "equity": 20.0, "currency": "USDT"}]
+        # Fresh snapshot (60s old) → live equity is stitched onto the curve.
+        now_ts = int(pd.Timestamp.now("UTC").timestamp())
+        snaps = [{"t": now_ts - 60, "equity": 20.0, "currency": "USDT"}]
         health = {
             "ok": True,
             "bots": [
@@ -219,6 +322,41 @@ class LiveStitchAndAbsCurveTests(unittest.TestCase):
         self.assertGreaterEqual(len(s["account_curve_abs"]), 2)
         self.assertAlmostEqual(s["account_curve_abs"][-1]["equity"], 22.5, places=5)
         self.assertAlmostEqual(s["live_equity"], 22.5, places=5)
+        self.assertIsNotNone(s["last_snapshot_ts"])
+        self.assertLessEqual(s["snapshot_age_sec"], 120)
+
+    def test_performance_does_not_stitch_onto_stale_snapshots(self) -> None:
+        """Regression: stale seed + live stitch fabricated flat-line-plus-cliff
+        curves (audit 2026-07-22, +261% jumps from Nov-2025 seeds)."""
+        empty = pd.DataFrame()
+        now_ts = int(pd.Timestamp.now("UTC").timestamp())
+        stale_ts = now_ts - 30 * 24 * 3600  # 30 days old
+        snaps = [{"t": stale_ts, "equity": 15.0, "currency": "USDT"}]
+        health = {
+            "ok": True,
+            "bots": [
+                {
+                    "id": "quant-main",
+                    "equity": 54.2,
+                    "currency": "USDT",
+                    "health": {"ok": True, "equity": 54.2},
+                }
+            ],
+        }
+
+        with patch("quant.execution.fleet_api._load_closed_trades_for_bot", return_value=empty), patch(
+            "quant.execution.fleet_api._load_account_points_for_bot", return_value=snaps
+        ), patch("quant.execution.fleet_api.list_fleet_bots", return_value=health):
+            out = build_fleet_performance(hours=0, instance_ids=["quant-main"])
+        s = out["series"][0]
+        # No fabricated cliff: curve ends on the stale snapshot, not live equity.
+        self.assertAlmostEqual(s["account_curve_abs"][-1]["equity"], 15.0, places=5)
+        # Honest flags instead.
+        self.assertTrue(s["needs_backfill"])
+        self.assertEqual(s["last_snapshot_ts"], stale_ts)
+        self.assertGreater(s["snapshot_age_sec"], 3600)
+        # Live equity still reported for the legend/capitalization readouts.
+        self.assertAlmostEqual(s["live_equity"], 54.2, places=5)
 
 
 class MultiInstanceTradesTests(unittest.TestCase):
