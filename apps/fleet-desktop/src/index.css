@@ -1,27 +1,28 @@
 @import "tailwindcss";
 
 :root {
-  --bg: #0c0d0f;
-  --bg-elevated: #14161a;
-  --bg-panel: #12141a;
-  --line: rgba(255, 255, 255, 0.08);
-  --text: #e8e4dc;
-  --muted: #8a8680;
-  --accent: #c4a35a;
-  --live: #6b9e7a;
-  --down: #a85a4a;
-  --dry: #8a7a9a;
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  /* Warm charcoal instrument panel — not pure black void */
+  --bg: #101114;
+  --bg-elevated: #17191f;
+  --bg-panel: #14161c;
+  --bg-chart: #0e1014;
+  --line: rgba(232, 228, 220, 0.1);
+  --line-strong: rgba(232, 228, 220, 0.16);
+  /* Stylebook 01 "Instrument HUD" tokens (2026-07-22) */
+  --text: #ebe7df;
+  --muted: #a6a198;
+  --accent: #d4a84b;
+  --accent-soft: rgba(212, 168, 75, 0.16);
+  --live: #7fb98a;
+  --down: #d3705b;
+  --dry: #8f7fa3;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --duration: 220ms;
+  font-family: "Manrope", "Segoe UI", sans-serif;
   color: var(--text);
   background: var(--bg);
-}
-
-@font-face {
-  font-family: "IBM Plex Sans";
-  font-style: normal;
-  font-weight: 400 600;
-  font-display: swap;
-  src: local("IBM Plex Sans"), local("Helvetica Neue");
+  font-feature-settings: "ss01" on, "cv11" on;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -34,15 +35,250 @@ body,
   margin: 0;
   height: 100%;
   background:
-    radial-gradient(1200px 600px at 20% -10%, rgba(196, 163, 90, 0.08), transparent 55%),
-    radial-gradient(900px 500px at 100% 0%, rgba(91, 143, 173, 0.06), transparent 50%),
-    var(--bg);
+    radial-gradient(1100px 520px at 12% -8%, rgba(201, 166, 90, 0.07), transparent 55%),
+    radial-gradient(900px 480px at 92% 0%, rgba(91, 143, 173, 0.05), transparent 48%),
+    linear-gradient(180deg, #12141a 0%, var(--bg) 42%, #0c0d11 100%);
 }
 
 button {
   font: inherit;
   color: inherit;
   cursor: pointer;
+  transition:
+    color var(--duration) var(--ease-out),
+    background-color var(--duration) var(--ease-out),
+    border-color var(--duration) var(--ease-out),
+    opacity var(--duration) var(--ease-out),
+    transform 160ms var(--ease-out);
+}
+
+button:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.font-mono {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+.chip-group {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+}
+
+.chip {
+  position: relative;
+  padding: 0.35rem 0.7rem;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.chip[data-active="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.chip:hover:not([data-active="true"]) {
+  color: var(--text);
+}
+
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text);
+  opacity: 1;
+  transition: opacity var(--duration) var(--ease-out);
+}
+
+.legend-item[data-off="true"] {
+  opacity: 0.38;
+}
+
+.legend-swatch {
+  display: inline-block;
+  height: 2px;
+  width: 14px;
+  border-radius: 1px;
+}
+
+.legend-swatch.portfolio {
+  width: 18px;
+  background: #fff;
+}
+
+/* Persistent telemetry readouts (stylebook §06/§08) */
+.readout-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1.6rem;
+  padding: 0.45rem 1rem;
+  border-bottom: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.16);
+}
+
+.readout {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 90px;
+}
+
+.readout .k {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.readout .v {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 14px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+
+.readout .v[data-tone="up"] {
+  color: var(--live);
+}
+
+.readout .v[data-tone="down"] {
+  color: var(--down);
+}
+
+.readout .v[data-tone="warn"] {
+  color: var(--accent);
+}
+
+/* Honest empty state — never fake a curve (stylebook §10 / audit 3.7) */
+.hero-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.4rem;
+  text-align: center;
+  pointer-events: none;
+}
+
+.hero-empty .headline {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.hero-empty .hint {
+  max-width: 420px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  border: 2px solid var(--line-strong);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.stale-tag {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.12em;
+  padding: 0 4px;
+  border: 1px solid var(--down);
+  color: var(--down);
+}
+
+.drawer-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: rgba(6, 7, 10, 0.45);
+  animation: fade-in var(--duration) var(--ease-out);
+}
+
+.drawer-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 31;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--line-strong);
+  background: var(--bg-panel);
+  box-shadow: -20px 0 40px rgba(0, 0, 0, 0.28);
+  animation: slide-in var(--duration) var(--ease-out);
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-in {
+  from {
+    transform: translateX(18px);
+    opacity: 0.85;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes legend-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.legend-row > * {
+  animation: legend-in 280ms var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 28ms);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+
+  button:active:not(:disabled) {
+    transform: none;
+  }
 }
 
 ::-webkit-scrollbar {

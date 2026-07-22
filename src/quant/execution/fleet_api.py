@@ -855,6 +855,46 @@ def _load_equity_snapshots(
         return []
 
 
+def _twr_account_curve(
+    points: List[Dict[str, Any]],
+    *,
+    jump_threshold_pct: Optional[float] = None,
+) -> List[Dict[str, Any]]:
+    """Time-weighted return %: deposits/withdrawals are excluded.
+
+    Any single-step equity change larger than FLEET_TWR_JUMP_PCT (default 10%)
+    is treated as a transfer, not trading PnL, and contributes 0% to the
+    compounded curve. The absolute $ curve stays honest about capital steps;
+    this % curve shows only what trading earned (Martin's decision 2026-07-22).
+    """
+    if jump_threshold_pct is None:
+        try:
+            jump_threshold_pct = max(
+                1.0, float(os.getenv("FLEET_TWR_JUMP_PCT", "10"))
+            )
+        except Exception:
+            jump_threshold_pct = 10.0
+    clean = [
+        {"t": int(p["t"]), "equity": float(p["equity"])}
+        for p in points
+        if p.get("equity") is not None
+        and _is_finite(p.get("equity"))
+        and float(p["equity"]) > 0
+    ]
+    clean.sort(key=lambda p: p["t"])
+    if not clean:
+        return []
+    growth = 1.0
+    out = [{"t": clean[0]["t"], "equity_pct": 0.0}]
+    for prev, cur in zip(clean, clean[1:]):
+        r = cur["equity"] / prev["equity"] - 1.0
+        if abs(r) * 100.0 > jump_threshold_pct:
+            r = 0.0  # transfer (deposit/withdrawal), not PnL
+        growth *= 1.0 + r
+        out.append({"t": cur["t"], "equity_pct": round((growth - 1.0) * 100.0, 6)})
+    return out
+
+
 def _normalize_account_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not points:
         return []
@@ -1051,7 +1091,8 @@ def build_fleet_performance(
             acct_pts = _stitch_live_equity(acct_pts, live_equity=live_eq, now_ts=now_ts)
 
         account_curve_abs = _absolute_account_curve(acct_pts)
-        account_curve = _normalize_account_curve(acct_pts)
+        # % curve is deposit-adjusted (TWR): transfers don't count as returns.
+        account_curve = _twr_account_curve(acct_pts)
 
         series.append(
             {

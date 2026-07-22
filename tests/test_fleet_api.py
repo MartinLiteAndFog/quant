@@ -89,6 +89,35 @@ class NormalizeAccountCurveTests(unittest.TestCase):
         self.assertAlmostEqual(out[2]["equity_pct"], -10.0, places=5)
 
 
+class TwrAccountCurveTests(unittest.TestCase):
+    def test_deposit_jump_excluded_from_returns(self) -> None:
+        from quant.execution.fleet_api import _twr_account_curve
+
+        pts = [
+            {"t": 100, "equity": 100.0},
+            {"t": 200, "equity": 102.0},  # +2% trading
+            {"t": 300, "equity": 300.0},  # deposit (+194%) → excluded
+            {"t": 400, "equity": 306.0},  # +2% trading
+        ]
+        out = _twr_account_curve(pts, jump_threshold_pct=10.0)
+        self.assertEqual(out[0]["equity_pct"], 0.0)
+        self.assertAlmostEqual(out[1]["equity_pct"], 2.0, places=5)
+        self.assertAlmostEqual(out[2]["equity_pct"], 2.0, places=5)  # flat over deposit
+        self.assertAlmostEqual(out[3]["equity_pct"], 4.04, places=5)  # 1.02*1.02
+
+    def test_withdrawal_jump_excluded(self) -> None:
+        from quant.execution.fleet_api import _twr_account_curve
+
+        pts = [
+            {"t": 100, "equity": 300.0},
+            {"t": 200, "equity": 100.0},  # withdrawal (-66%) → excluded
+            {"t": 300, "equity": 99.0},  # -1% trading
+        ]
+        out = _twr_account_curve(pts, jump_threshold_pct=10.0)
+        self.assertAlmostEqual(out[1]["equity_pct"], 0.0, places=5)
+        self.assertAlmostEqual(out[2]["equity_pct"], -1.0, places=5)
+
+
 class FleetRegistryTests(unittest.TestCase):
     def test_default_registry_includes_pilots_and_kraken(self) -> None:
         with patch.dict(os.environ, {"FLEET_BOTS_JSON": ""}, clear=False):

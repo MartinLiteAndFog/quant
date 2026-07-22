@@ -289,6 +289,25 @@ def _resolve_trade_exit_price(details: Dict[str, Any], fallback_px: Optional[flo
     return None
 
 
+def _coerce_entry_ts(raw: Any) -> Any:
+    """entry_bar_ts is often unix seconds; bare to_datetime reads bare ints as
+    NANOseconds and produced 1970-01-01 entry timestamps in closed_trades."""
+    if raw is None:
+        return pd.NaT
+    v: Optional[float] = None
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        v = float(raw)
+    elif isinstance(raw, str):
+        try:
+            v = float(raw)
+        except ValueError:
+            v = None
+    if v is not None and v > 1e8:  # plausible epoch (1973+)
+        unit = "ms" if v > 1e12 else "s"
+        return pd.to_datetime(v, utc=True, unit=unit, errors="coerce")
+    return pd.to_datetime(raw, utc=True, errors="coerce")
+
+
 def _append_closed_trade(
     *,
     symbol: str,
@@ -310,7 +329,7 @@ def _append_closed_trade(
     qty_realized = _coerce_float(details.get("qty", qty_default))
 
     entry_ts_raw = prior_entry_bar_ts if prior_entry_bar_ts is not None else (terminal or {}).get("entry_bar_ts")
-    entry_ts = pd.to_datetime(entry_ts_raw, utc=True, errors="coerce")
+    entry_ts = _coerce_entry_ts(entry_ts_raw)
     exit_ts = pd.to_datetime(_now_iso(), utc=True)
 
     if entry_px_realized is None or exit_px_realized is None or qty_realized is None:

@@ -53,6 +53,10 @@ export interface BotSeries {
   account_curve_abs?: AbsCurvePoint[];
   stats: BotStats;
   needs_backfill?: boolean;
+  /** Unix seconds of the newest persisted equity snapshot (null = none). */
+  last_snapshot_ts?: number | null;
+  /** Seconds since last snapshot at response time (null = no snapshots). */
+  snapshot_age_sec?: number | null;
 }
 
 export interface PortfolioSeries {
@@ -67,12 +71,20 @@ export interface PortfolioSeries {
   note?: string;
 }
 
+export interface FleetClock {
+  t0: number;
+  t1: number;
+  interval_sec: number;
+  note?: string;
+}
+
 export interface FleetPerformance {
   ok: boolean;
   hours: number | null;
   since?: string | null;
   series: BotSeries[];
   portfolio?: PortfolioSeries | null;
+  clock?: FleetClock | null;
   ts?: string;
   error?: string;
 }

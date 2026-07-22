@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type CSSProperties,
+} from "react";
 import {
   fetchActivity,
   fetchBots,
@@ -25,6 +31,7 @@ import {
   type ChartMode,
   type ClosedTrade,
   type FleetBot,
+  type FleetClock,
   type FleetConfig,
   type PortfolioSeries,
   type RangeKey,
@@ -47,7 +54,7 @@ const DRAWER_TITLES: Record<Exclude<DrawerId, null>, string> = {
   settings: "Settings",
 };
 
-/** Drawers that are side panels — performance board stays center. */
+/** Secondary surfaces only — never a second performance chart. */
 const PANEL_DRAWERS = [
   ["activity", "Activity"],
   ["trades", "Trades"],
@@ -91,11 +98,15 @@ function portfolioLegendValue(p: PortfolioSeries | null, mode: ChartMode): strin
 
 export default function App() {
   const [config, setConfig] = useState<FleetConfig>(() => loadConfig());
+  // Prefer full history + absolute equity so sparse pilots still draw something useful.
   const [range, setRange] = useState<RangeKey>("all");
   const [bots, setBots] = useState<FleetBot[]>([]);
   const [series, setSeries] = useState<BotSeries[]>([]);
   const [portfolio, setPortfolio] = useState<PortfolioSeries | null>(null);
-  const [visibleIds, setVisibleIds] = useState<Set<string>>(new Set());
+  const [clock, setClock] = useState<FleetClock | null>(null);
+  const [visibleIds, setVisibleIds] = useState<Set<string>>(
+    () => new Set(loadConfig().bots.filter((b) => b.enabled).map((b) => b.id)),
+  );
   const [isolatedId, setIsolatedId] = useState<string | null>(null);
   const [showPortfolio, setShowPortfolio] = useState(true);
   const [drawer, setDrawer] = useState<DrawerId>(null);
@@ -109,6 +120,7 @@ export default function App() {
   const [accounts, setAccounts] = useState<CapitalAccount[]>([]);
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [connection, setConnection] = useState<ConnectionProbe | null>(null);
+  const [booting, setBooting] = useState(true);
 
   const enabledIds = useMemo(
     () => new Set(config.bots.filter((b) => b.enabled).map((b) => b.id)),
@@ -122,28 +134,38 @@ export default function App() {
 
   const refreshHealth = useCallback(async () => {
     try {
+      // probe=false: the client probes health URLs itself (probeConnection);
+      // asking the server to fan out to the same 6 URLs every poll doubled
+      // every health check and could take longer than the poll interval.
       const [remote, probe] = await Promise.all([
-        fetchBots(config, true),
+        fetchBots(config, false),
         probeConnection(config),
       ]);
       setConnection(probe);
       const byId = new Map(remote.map((b) => [b.id, b]));
+      const hitById = new Map(probe.healthHits.map((h) => [h.id, h]));
       const merged: FleetBot[] = config.bots
         .filter((b) => b.enabled)
         .map((local) => {
           const r = byId.get(local.id);
+          const hit = hitById.get(local.id);
           return {
             ...local,
             ...r,
             display_name: local.display_name,
             color: local.color || r?.color,
             health_url: local.health_url || r?.health_url,
+            status: hit?.status ?? r?.status,
           };
         });
       setBots(merged);
       setVisibleIds((prev) => {
-        if (prev.size) return prev;
-        return new Set(merged.map((b) => b.id));
+        const next = new Set(prev);
+        for (const b of merged) {
+          if (!prev.size) next.add(b.id);
+        }
+        if (!next.size) return new Set(merged.map((b) => b.id));
+        return next;
       });
       setError(null);
     } catch (e) {
@@ -157,10 +179,13 @@ export default function App() {
       const perf = await fetchPerformance(config, range, ids);
       setSeries(perf.series || []);
       setPortfolio(perf.portfolio || null);
+      setClock(perf.clock || null);
       setUpdatedAt(perf.ts || new Date().toISOString());
       setError(perf.error || null);
     } catch (e) {
       setError(String(e));
+    } finally {
+      setBooting(false);
     }
   }, [config, range, enabledIds]);
 
@@ -177,6 +202,9 @@ export default function App() {
       window.clearInterval(c);
     };
   }, [config.healthPollMs, config.curvePollMs, refreshHealth, refreshCurves]);
+
+  // No auto-escalation: an empty window renders an honest empty state
+  // (stylebook §10) instead of silently switching mode/range for the user.
 
   useEffect(() => {
     if (drawer !== "activity") return;
@@ -237,9 +265,14 @@ export default function App() {
     setDrawer((cur) => (cur === id ? null : id));
   };
 
+  /** Chart modes only change the hero series — they never open a side chart panel. */
   const setHeroMode = (mode: ChartMode) => {
     setChartMode(mode);
     setDrawer(null);
+  };
+
+  const pickRange = (r: RangeKey) => {
+    setRange(r);
   };
 
   const exportCurves = () => {
@@ -292,85 +325,148 @@ export default function App() {
   const portfolioOn =
     showPortfolio && !isolatedId && (chartMode === "account_abs" || chartMode === "account");
 
+  // Telemetry readouts (stylebook §06): the numbers the operator steers by.
+  const liveBotCount = bots.filter((b) => b.status === "live").length;
+  const portfolioPct = (() => {
+    const curve = portfolio?.account_curve || [];
+    return curve.length ? curve[curve.length - 1].equity_pct : null;
+  })();
+  const worstSnapshotAge = (() => {
+    let worst: number | null = null;
+    for (const s of legend) {
+      const age = s.snapshot_age_sec;
+      if (age == null) continue;
+      if (worst == null || age > worst) worst = age;
+    }
+    return worst;
+  })();
+  const formatAge = (sec: number | null): string => {
+    if (sec == null) return "—";
+    if (sec < 90) return "live";
+    if (sec < 3600) return `${Math.round(sec / 60)}m`;
+    if (sec < 48 * 3600) return `${Math.round(sec / 3600)}h`;
+    return `${Math.round(sec / 86400)}d`;
+  };
+
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center justify-between gap-3 border-b border-[var(--line)] px-4 py-2.5">
+      <header className="flex items-end justify-between gap-4 border-b border-[var(--line)] px-4 pb-3 pt-3.5">
         <div className="min-w-0">
-          <h1 className="font-serif text-[22px] leading-none tracking-tight text-[var(--text)]">
-            Fleet <span className="text-[var(--accent)]">Cockpit</span>
+          <h1 className="text-[20px] font-semibold leading-none tracking-[-0.02em] text-[var(--text)]">
+            Fleet Cockpit
           </h1>
           {connection && (
-            <p className="mt-1 text-[10px] tracking-wide text-[var(--muted)]">
+            <p className="mt-1.5 text-[11px] text-[var(--muted)]">
               {connection.mode === "fleet_api"
-                ? "live board"
+                ? "Live board"
                 : connection.mode === "direct_health"
-                  ? "health only — fleet API unreachable"
-                  : "offline"}
+                  ? "Health only — fleet API unreachable"
+                  : "Offline"}
               {updatedAt ? ` · ${updatedAt.replace("T", " ").slice(0, 19)} UTC` : ""}
             </p>
           )}
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-1.5">
-          <div className="flex border border-[var(--line)]">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="chip-group" role="group" aria-label="Time range">
             {RANGES.map((r) => (
               <button
                 key={r}
-                onClick={() => setRange(r)}
-                className="px-2.5 py-1 text-[10px] tracking-wide uppercase"
-                style={{
-                  background: range === r ? "rgba(196,163,90,0.18)" : "transparent",
-                  color: range === r ? "var(--accent)" : "var(--muted)",
-                }}
+                type="button"
+                className="chip"
+                data-active={range === r}
+                onClick={() => pickRange(r)}
               >
                 {r}
               </button>
             ))}
           </div>
-          <div className="flex border border-[var(--line)]">
+          <div className="chip-group" role="group" aria-label="Chart mode">
             {CHART_MODES.map((m) => (
               <button
                 key={m.id}
+                type="button"
+                className="chip"
+                data-active={chartMode === m.id}
                 onClick={() => setHeroMode(m.id)}
-                className="px-2.5 py-1 text-[10px] tracking-wide"
-                style={{
-                  background: chartMode === m.id ? "rgba(196,163,90,0.18)" : "transparent",
-                  color: chartMode === m.id ? "var(--accent)" : "var(--muted)",
-                }}
               >
                 {m.label}
               </button>
             ))}
           </div>
-          {PANEL_DRAWERS.map(([id, label]) => (
-            <button
-              key={id}
-              onClick={() => {
-                if (id === "trades" && !tradeBotId) setTradeBotId("__all__");
-                openDrawer(id);
-              }}
-              className="px-2 py-1 text-[10px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
-              style={{ color: drawer === id ? "var(--accent)" : undefined }}
-            >
-              {label}
-            </button>
-          ))}
+          <div className="chip-group" role="group" aria-label="Panels">
+            {PANEL_DRAWERS.map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                className="chip"
+                data-active={drawer === id}
+                onClick={() => {
+                  if (id === "trades" && !tradeBotId) setTradeBotId("__all__");
+                  openDrawer(id);
+                }}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           <button
+            type="button"
             onClick={() => {
               void refreshHealth();
               void refreshCurves();
             }}
-            className="border border-[var(--line)] px-2.5 py-1 text-[10px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
+            className="border border-[var(--line)] px-2.5 py-1.5 text-[10px] font-semibold tracking-[0.08em] uppercase text-[var(--muted)] hover:text-[var(--text)]"
           >
             Refresh
           </button>
           <button
+            type="button"
             onClick={exportCurves}
-            className="border border-[var(--line)] px-2.5 py-1 text-[10px] tracking-wide text-[var(--muted)] hover:text-[var(--text)]"
+            className="border border-[var(--line)] px-2.5 py-1.5 text-[10px] font-semibold tracking-[0.08em] uppercase text-[var(--muted)] hover:text-[var(--text)]"
           >
             CSV
           </button>
         </div>
       </header>
+
+      <div className="readout-strip" role="status" aria-label="Fleet telemetry">
+        <div className="readout">
+          <span className="k">Portfolio</span>
+          <span className="v">
+            {portfolio?.live_equity != null ? portfolio.live_equity.toFixed(2) : "—"}
+          </span>
+        </div>
+        <div className="readout">
+          <span className="k">Return</span>
+          <span
+            className="v"
+            data-tone={
+              portfolioPct == null ? undefined : portfolioPct >= 0 ? "up" : "down"
+            }
+          >
+            {portfolioPct == null
+              ? "—"
+              : `${portfolioPct >= 0 ? "+" : ""}${portfolioPct.toFixed(2)}%`}
+          </span>
+        </div>
+        <div className="readout">
+          <span className="k">Bots live</span>
+          <span className="v" data-tone={liveBotCount ? "up" : "down"}>
+            {liveBotCount}/{bots.length || config.bots.filter((b) => b.enabled).length}
+          </span>
+        </div>
+        <div className="readout">
+          <span className="k">Data age</span>
+          <span
+            className="v"
+            data-tone={
+              worstSnapshotAge != null && worstSnapshotAge > 3600 ? "warn" : undefined
+            }
+          >
+            {formatAge(worstSnapshotAge)}
+          </span>
+        </div>
+      </div>
 
       <div className="relative flex min-h-0 flex-1">
         <StatusRail
@@ -393,27 +489,32 @@ export default function App() {
         />
 
         <main className="relative flex min-w-0 flex-1 flex-col px-3 pb-3 pt-2">
-          <div className="mb-2 flex min-h-[28px] flex-wrap items-center gap-x-3 gap-y-1.5">
+          <div className="legend-row mb-2 flex min-h-[28px] flex-wrap items-center gap-x-3 gap-y-1.5">
             <button
+              type="button"
               onClick={() => setShowPortfolio((v) => !v)}
-              className="flex items-center gap-2 text-[11px]"
-              style={{
-                opacity: portfolioOn ? 1 : 0.35,
-                display: chartMode === "trade" ? "none" : undefined,
-              }}
-              title="Combined portfolio (sum of strategy equities)"
+              className="legend-item"
+              data-off={!portfolioOn}
+              title="Combined portfolio: $ = sum of equities; % = equal-weight average of bot returns"
+              style={
+                {
+                  "--i": 0,
+                  display: chartMode === "trade" ? "none" : undefined,
+                } as CSSProperties
+              }
             >
-              <span className="h-1.5 w-5 bg-white" />
-              <span className="font-medium text-[var(--text)]">Portfolio</span>
-              <span className="text-[var(--muted)]">
+              <span className="legend-swatch portfolio" />
+              <span>Portfolio</span>
+              <span className="font-mono text-[var(--muted)]">
                 {portfolioLegendValue(portfolio, chartMode)}
               </span>
             </button>
-            {legend.map((s) => {
+            {legend.map((s, i) => {
               const on = visibleIds.has(s.id) || isolatedId === s.id;
               return (
                 <button
                   key={s.id}
+                  type="button"
                   onClick={() =>
                     setVisibleIds((prev) => {
                       const next = new Set(prev);
@@ -423,35 +524,55 @@ export default function App() {
                     })
                   }
                   onDoubleClick={() => setIsolatedId(isolatedId === s.id ? null : s.id)}
-                  className="flex items-center gap-2 text-[11px]"
-                  style={{ opacity: on ? 1 : 0.35 }}
+                  className="legend-item"
+                  data-off={!on}
+                  style={{ "--i": i + 1 } as CSSProperties}
                 >
-                  <span className="h-1.5 w-4" style={{ background: s.color || "var(--accent)" }} />
+                  <span
+                    className="legend-swatch"
+                    style={{ background: s.color || "var(--accent)" }}
+                  />
                   <span>{s.display_name}</span>
-                  <span className="text-[var(--muted)]">{legendValue(s, chartMode)}</span>
+                  <span className="font-mono text-[var(--muted)]">
+                    {legendValue(s, chartMode)}
+                  </span>
+                  {s.snapshot_age_sec != null && s.snapshot_age_sec > 3600 && (
+                    <span className="stale-tag" title="Last equity snapshot older than 1h">
+                      STALE
+                    </span>
+                  )}
                 </button>
               );
             })}
-            <label className="ml-auto flex items-center gap-2 text-[10px] text-[var(--muted)]">
+            <label className="ml-auto flex items-center gap-2 text-[10px] font-medium tracking-wide text-[var(--muted)]">
               <input
                 type="checkbox"
                 checked={showMaxDd}
                 onChange={(e) => setShowMaxDd(e.target.checked)}
               />
-              Max DD
+              Max DD markers
             </label>
           </div>
 
-          <div className="relative min-h-0 flex-1 border border-[var(--line)] bg-black/20">
+          {/* Single full-bleed hero — drawers overlay this; they never replace it with a second chart */}
+          <div className="relative min-h-0 flex-1 overflow-hidden border border-[var(--line)] bg-[var(--bg-chart)]">
             <HeroChart
               series={series}
               portfolio={portfolio}
               visibleIds={visibleIds}
               mode={chartMode}
+              rangeKey={range}
               isolatedId={isolatedId}
               showMaxDd={showMaxDd}
               showPortfolio={showPortfolio}
+              clock={clock}
             />
+            {booting && (
+              <div className="hero-empty">
+                <span className="spinner" aria-label="Loading" />
+                <p className="hint">Loading fleet data…</p>
+              </div>
+            )}
           </div>
 
           {error && (
@@ -466,9 +587,7 @@ export default function App() {
 
         <DrawerShell
           open={drawer}
-          onClose={() => {
-            openDrawer(null);
-          }}
+          onClose={() => openDrawer(null)}
           title={drawer ? DRAWER_TITLES[drawer] : ""}
           widthClass={drawer === "stats" || drawer === "settings" ? "w-[480px]" : "w-[420px]"}
         >

@@ -16,25 +16,32 @@ interface Props {
   widthClass?: string;
 }
 
-export function DrawerShell({ open, onClose, title, children, widthClass = "w-[420px]" }: Props) {
+/** Slide-over panel only — never a second chart competing with the hero board. */
+export function DrawerShell({
+  open,
+  onClose,
+  title,
+  children,
+  widthClass = "w-[420px]",
+}: Props) {
   if (!open) return null;
   return (
-    <div className="absolute inset-y-0 right-0 z-30 flex">
+    <>
       <button
+        type="button"
         aria-label="Close drawer"
-        className="flex-1 cursor-default bg-black/30"
+        className="drawer-backdrop cursor-default border-0 p-0"
         onClick={onClose}
       />
-      <section
-        className={`${widthClass} flex h-full flex-col border-l border-[var(--line)] bg-[var(--bg-panel)] shadow-[-24px_0_48px_rgba(0,0,0,0.35)]`}
-      >
+      <section className={`drawer-panel ${widthClass}`} role="dialog" aria-modal="true">
         <header className="flex items-center justify-between border-b border-[var(--line)] px-5 py-4">
-          <h2 className="text-[13px] font-medium tracking-[0.14em] uppercase text-[var(--muted)]">
+          <h2 className="text-[12px] font-semibold tracking-[0.12em] uppercase text-[var(--muted)]">
             {title}
           </h2>
           <button
+            type="button"
             onClick={onClose}
-            className="text-[var(--muted)] transition hover:text-[var(--text)]"
+            className="px-2 py-1 text-[var(--muted)] hover:text-[var(--text)]"
             aria-label="Close"
           >
             ✕
@@ -42,6 +49,6 @@ export function DrawerShell({ open, onClose, title, children, widthClass = "w-[4
         </header>
         <div className="min-h-0 flex-1 overflow-auto px-5 py-4">{children}</div>
       </section>
-    </div>
+    </>
   );
 }

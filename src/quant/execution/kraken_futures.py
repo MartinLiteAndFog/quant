@@ -257,10 +257,20 @@ class KrakenFuturesClient:
             "collateralValue",
             "equity",
         )
-        upnl = _f("unrealizedPnl", "unrealizedPNL") + _f("unrealizedFunding")
+        # Flex accounts report open-position PnL as "totalUnrealized"; the old
+        # "unrealizedPnl" keys are legacy per-market payloads. Missing this key
+        # made equity ignore the running trade (showed margin only).
+        upnl = _f("totalUnrealized", "unrealizedPnl", "unrealizedPNL") + _f(
+            "unrealizedFunding"
+        )
+        # Some payload variants report portfolioValue WITHOUT open-position PnL
+        # (it then tracks wallet). True equity = capital + running trade.
         equity = portfolio
         if equity <= 0:
             equity = wallet + upnl if (wallet > 0 or upnl != 0) else 0.0
+        elif upnl != 0 and wallet > 0 and abs(equity - wallet) < abs(upnl) * 0.5:
+            # portfolio ≈ wallet although a position is open → PnL missing.
+            equity = wallet + upnl
         # Last resort only: some flex payloads omit portfolio/wallet.
         if equity <= 0 and available > 0:
             equity = available
