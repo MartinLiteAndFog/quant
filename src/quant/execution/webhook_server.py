@@ -444,6 +444,10 @@ async def _lifespan(a: FastAPI):
     else:
         log.info("chart precompute disabled (set DASHBOARD_CHART_PRECOMPUTE_ENABLED=1 to enable)")
     _start_renko_cache_updater_if_enabled()
+    # Must run here too: the quant service starts via `uvicorn …:app`, so main()
+    # (which also calls this) never runs — without it the equity writer never
+    # started and the dashboard account showed a stale snapshot.
+    _start_equity_snapshot_writer_if_enabled()
     from quant.execution.tv_signal_executor import start_tv_executor
     start_tv_executor()
     yield
