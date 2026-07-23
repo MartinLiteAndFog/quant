@@ -196,8 +196,13 @@ export function HeroChart({
     const chart = chartRef.current;
     if (!chart) return;
 
-    // Preserve the user's visible TIME window across series rebuilds.
-    const prevRange = chart.timeScale().getVisibleRange();
+    // Preserve the user's view across series rebuilds. Use the LOGICAL
+    // (bar-index) range, not the time range: with rightOffset whitespace the
+    // visible range's `to` is a timestamp past the last point, so
+    // setVisibleRange() throws (no bar there) and the pan/zoom silently
+    // snapped back on every poll. Logical range handles whitespace and
+    // right-edge appends correctly.
+    const prevLogical = chart.timeScale().getVisibleLogicalRange();
 
     // Never drop series just because visibility hasn't hydrated yet.
     const active = series.filter((s) => {
@@ -336,10 +341,11 @@ export function HeroChart({
           chart.timeScale().fitContent();
         }
         fittedKeyRef.current = fitKey;
-      } else if (prevRange) {
-        // Preserve pan/zoom across live data refreshes.
+      } else if (prevLogical) {
+        // Preserve pan/zoom across live data refreshes (bar-index space,
+        // robust to right-edge whitespace and newly appended points).
         try {
-          chart.timeScale().setVisibleRange(prevRange);
+          chart.timeScale().setVisibleLogicalRange(prevLogical);
         } catch {
           /* range may briefly be invalid while series swap */
         }

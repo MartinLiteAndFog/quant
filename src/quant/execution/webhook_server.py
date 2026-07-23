@@ -448,6 +448,12 @@ async def _lifespan(a: FastAPI):
     # (which also calls this) never runs — without it the equity writer never
     # started and the dashboard account showed a stale snapshot.
     _start_equity_snapshot_writer_if_enabled()
+    # Centralized fleet equity backbone: one 15-min poll of every bot's /health
+    # equity, persisted as equity_snapshots so fleet charts have history (and a
+    # fresh row to live-stitch onto). Fixes empty Kraken-legacy curve + funded
+    # KuCoin pilots that never persisted their own snapshots. Default ON on this
+    # (fleet) host; set FLEET_EQUITY_POLL_ENABLED=0 on non-fleet deployments.
+    _start_fleet_equity_poller_if_enabled()
     from quant.execution.tv_signal_executor import start_tv_executor
     start_tv_executor()
     yield
@@ -809,6 +815,18 @@ def _start_equity_snapshot_writer_if_enabled() -> None:
         account=os.getenv("FLEET_EQUITY_WRITER_ACCOUNT", "futures"),
         default_enabled=False,
     )
+
+
+def _start_fleet_equity_poller_if_enabled() -> None:
+    """Centralized 15-min equity backbone for the fleet cockpit.
+
+    Persists one equity_snapshots row per bot from the health fan-out this
+    service already performs. Default ON here (the fleet API host); disable on
+    other webhook_server deployments with FLEET_EQUITY_POLL_ENABLED=0.
+    """
+    from quant.execution.fleet_equity_poller import start_fleet_equity_poller
+
+    start_fleet_equity_poller(default_enabled=True)
 
 
 def _start_live_executor_if_enabled() -> None:
@@ -3781,6 +3799,7 @@ def main() -> None:
     _start_live_signal_worker_if_enabled()
     _start_live_executor_if_enabled()
     _start_equity_snapshot_writer_if_enabled()
+    _start_fleet_equity_poller_if_enabled()
     port = int(os.environ.get("PORT", str(args.port)))
     uvicorn.run(
         "quant.execution.webhook_server:app",
