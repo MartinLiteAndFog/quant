@@ -24,7 +24,12 @@ from quant.execution.bot_profiles import (
 from quant.execution.CHOPgate import get_live_gate_state
 from quant.execution.event_builders import build_action_event, build_execution_event
 from quant.execution.event_log import append_event_jsonl
-from quant.execution.event_store import insert_action_event, insert_execution_event, upsert_closed_trade
+from quant.execution.event_store import (
+    insert_action_event,
+    insert_execution_event,
+    load_open_leg_from_execution_events,
+    upsert_closed_trade,
+)
 from quant.execution.kucoin_futures import KucoinFuturesBroker
 from quant.execution.live_executor import (
     _live_order_qty,
@@ -349,6 +354,26 @@ def _append_tv_closed_trade(
             _open_legs.pop(str(symbol), None)
 
     if not leg:
+        # The in-memory leg is wiped on every redeploy, so a close that lands
+        # after a restart would otherwise never write closed_trades. Recover the
+        # entry from the durable execution_events (Plan A). The caller only
+        # reaches here with a live position, so the latest opening fill is it.
+        try:
+            leg = load_open_leg_from_execution_events(
+                strategy_instance=strategy_instance_id(),
+                symbol=str(symbol),
+            ) or {}
+        except Exception as e:
+            log.warning("tv_executor open-leg reconstruct failed: %s", e)
+            leg = {}
+        if leg:
+            log.info(
+                "tv_executor reconstructed open leg from execution_events "
+                "event=%s side=%s qty=%s entry_px=%s",
+                exit_event, leg.get("side"), leg.get("qty"), leg.get("entry_price"),
+            )
+
+    if not leg:
         return
     entry_px = leg.get("entry_price")
     exit_px = float(exit_price) if exit_price and float(exit_price) > 0 else None
@@ -383,6 +408,7 @@ def _append_tv_closed_trade(
                     "kind": "closed_trade",
                     "bot_profile": active_profile(),
                     "exit_event": exit_event,
+                    "leg_reconstructed": bool(leg.get("reconstructed")),
                 },
             }
         )

@@ -203,6 +203,75 @@ def insert_execution_event(row: Dict[str, Any]) -> None:
         cur.execute(sql, data)
 
 
+def load_open_leg_from_execution_events(
+    *,
+    strategy_instance: str,
+    symbol: str,
+) -> Optional[Dict[str, Any]]:
+    """Reconstruct the currently-open entry leg from persisted execution_events.
+
+    tv_signal_executor pairs each exit against an in-memory ``_open_legs`` dict
+    that is wiped on every redeploy, so a close landing after a restart cannot
+    find its entry and silently never writes a ``closed_trades`` row. The entry
+    is still durably recorded as an opening execution event, so recover it here.
+
+    Opening fills are ``reduce_only = false`` market fills; partial/full closes
+    are ``reduce_only = true`` and are skipped. Because the caller only reaches
+    this path with a live position open on the exchange (exit handlers early-out
+    when flat), the most recent opening fill for this instance+symbol IS the
+    entry of the position now being closed.
+
+    Returns a leg dict shaped like the in-memory one
+    (``side``/``qty``/``entry_ts``/``entry_price``) or ``None`` if unavailable.
+    """
+    sql = """
+    select ts, side, qty, price
+    from execution_events
+    where strategy_instance = %(instance)s
+      and replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', '') = %(symbol_norm)s
+      and coalesce(reduce_only, false) = false
+      and side is not null
+    order by ts desc
+    limit 1
+    """
+    params = {
+        "instance": strategy_instance,
+        "symbol_norm": _normalize_symbol_token(symbol),
+    }
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            row = cur.fetchone()
+    except Exception:
+        return None
+    if not row:
+        return None
+    ts, order_side, qty, price = row
+    order_side = str(order_side or "").lower()
+    if order_side == "buy":
+        side = "long"
+    elif order_side == "sell":
+        side = "short"
+    else:
+        return None
+    try:
+        qty_f = float(qty) if qty is not None else 0.0
+    except Exception:
+        qty_f = 0.0
+    try:
+        entry_px = float(price) if price is not None and float(price) > 0 else None
+    except Exception:
+        entry_px = None
+    entry_ts = ts.isoformat() if hasattr(ts, "isoformat") else (str(ts) if ts is not None else None)
+    return {
+        "side": side,
+        "qty": qty_f,
+        "entry_ts": entry_ts,
+        "entry_price": entry_px,
+        "reconstructed": True,
+    }
+
+
 def insert_equity_snapshot(row: Dict[str, Any]) -> None:
     sql = """
     insert into equity_snapshots (

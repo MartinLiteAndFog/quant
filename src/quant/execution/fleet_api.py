@@ -23,7 +23,7 @@ log = get_logger("quant.fleet_api")
 _DEFAULT_BOTS: List[Dict[str, Any]] = [
     {
         "id": "imba-runner",
-        "display_name": "Imba Runner",
+        "display_name": "imba5",
         "strategy_instance": "sol-pilot-canonical",
         "venue": "kucoin",
         "symbol": "SOL-USDT",
@@ -32,7 +32,7 @@ _DEFAULT_BOTS: List[Dict[str, Any]] = [
     },
     {
         "id": "pure-imbatp",
-        "display_name": "Pure ImbaTP",
+        "display_name": "imbatp",
         "strategy_instance": "sol-pilot-pc3axis",
         "venue": "kucoin",
         "symbol": "SOL-USDT",

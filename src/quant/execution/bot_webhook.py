@@ -109,6 +109,13 @@ async def _lifespan(_app: FastAPI):
 
 app = FastAPI(title="quant-bot-webhook", version="0.1.0", lifespan=_lifespan)
 
+# Read-only KuCoin Futures diagnostics (/kucoin/diag|positions|fills|orders|account),
+# token-guarded by BOT_WEBHOOK_TOKEN. Exposes real positions/fills the /health
+# endpoint cannot show (equity + armed flags only).
+from quant.execution.kucoin_diag import router as kucoin_diag_router
+
+app.include_router(kucoin_diag_router)
+
 
 @app.get("/health")
 def health() -> Dict[str, Any]:
