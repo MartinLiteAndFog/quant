@@ -218,13 +218,21 @@ def _build_cache(broker: KucoinFuturesBroker, config: TVExecConfig) -> TVCache:
         contract_multiplier=mult,
     )
 
-    gate = get_live_gate_state()
-    gate_on = int(gate.get("gate_on", 0) or 0)
+    # Gate decoupled from quant. Only the "block_all" mode actually uses the
+    # gate decision; in every other mode (countertrend / default) the result is
+    # ignored, so we skip get_live_gate_state() entirely. That call reaches into
+    # quant's shared Postgres daily_gate_history (+ Redis) on every refresh, and
+    # the pilots are meant to simply execute the TradingView orders with no
+    # quant-computed gate. Skipping it removes that coupling from the hot loop.
+    gate_on = 0
     gate_allows = True
-    if config.gate_mode == "countertrend":
-        gate_allows = True
-    elif config.gate_mode == "block_all" and gate_on == 1:
-        gate_allows = False
+    gate_source = "disabled"
+    if config.gate_mode == "block_all":
+        gate = get_live_gate_state()
+        gate_on = int(gate.get("gate_on", 0) or 0)
+        gate_source = str(gate.get("source", ""))
+        if gate_on == 1:
+            gate_allows = False
 
     return TVCache(
         position=pos,
@@ -237,7 +245,7 @@ def _build_cache(broker: KucoinFuturesBroker, config: TVExecConfig) -> TVCache:
         qty=int(qty),
         gate_on=gate_on,
         gate_allows_entry=gate_allows,
-        gate_source=str(gate.get("source", "")),
+        gate_source=gate_source,
         updated_at=time.time(),
     )
 

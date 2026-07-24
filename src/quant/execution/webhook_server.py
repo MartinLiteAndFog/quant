@@ -484,8 +484,10 @@ app.add_middleware(GZipMiddleware, minimum_size=1024)
 # token-guarded by BOT_WEBHOOK_TOKEN. Serves the KuCoin main account (quant) real
 # positions/fills that /health cannot show (equity + armed flags only).
 from quant.execution.kucoin_diag import router as kucoin_diag_router
+from quant.execution.signal_diag import router as signal_diag_router
 
 app.include_router(kucoin_diag_router)
+app.include_router(signal_diag_router)
 
 DEFAULT_SYMBOL = os.getenv("DASHBOARD_SYMBOL", "SOL-USDT")
 

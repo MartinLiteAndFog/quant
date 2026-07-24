@@ -16,7 +16,9 @@ Env:
 from __future__ import annotations
 
 import os
+import time
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 import uvicorn
@@ -37,6 +39,58 @@ log = get_logger("quant.bot_webhook")
 
 def _truthy(v: Optional[str]) -> bool:
     return str(v or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _log_inbound_signal(payload: Dict[str, Any], *, disposition: str, detail: str = "") -> None:
+    """Best-effort record of every inbound TradingView signal and how it was
+    dispositioned. Signals that never reach the executor — bot_mismatch,
+    not_ready, parse_error — leave no action/execution event, so without this
+    they vanish silently. Written to signal_events, surfaced by /diag/timeline.
+    TradingView signals are sparse, so the extra write is negligible.
+    """
+    try:
+        from quant.execution.event_store import insert_signal_event
+
+        action = str(payload.get("action", "")).strip().lower()
+        side = str(payload.get("side", "")).strip().lower()
+        sym = ""
+        for k in ("symbol", "ticker", "pair"):
+            v = payload.get(k)
+            if isinstance(v, str) and v.strip():
+                sym = v.strip().replace("-", "")
+                break
+        if not sym:
+            sym = os.getenv("LIVE_SYMBOL", "SOL-USDT").replace("-", "")
+        inst = strategy_instance_id()
+        ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        insert_signal_event(
+            {
+                "event_id": f"tvin:{inst}:{ts}:{disposition}",
+                "ts": ts,
+                "seq": int(time.time() * 1000),
+                "strategy": "tv_executor",
+                "strategy_instance": inst,
+                "symbol": sym,
+                "venue": "kucoin",
+                "signal": action or "unknown",
+                "signal_side": side or None,
+                "signal_family": "tradingview",
+                "signal_kind": "webhook",
+                "source_event_id": None,
+                "position_before": None,
+                "engine_mode_before": None,
+                "payload_json": {
+                    "kind": "inbound_signal",
+                    "disposition": disposition,
+                    "detail": detail,
+                    "bot_target": str(payload.get("bot", "")).strip(),
+                    "profile": active_profile(),
+                },
+            }
+        )
+    except Exception:
+        # Never let diagnostics logging interfere with signal execution.
+        pass
 
 
 def _expected_token() -> str:
@@ -113,8 +167,10 @@ app = FastAPI(title="quant-bot-webhook", version="0.1.0", lifespan=_lifespan)
 # token-guarded by BOT_WEBHOOK_TOKEN. Exposes real positions/fills the /health
 # endpoint cannot show (equity + armed flags only).
 from quant.execution.kucoin_diag import router as kucoin_diag_router
+from quant.execution.signal_diag import router as signal_diag_router
 
 app.include_router(kucoin_diag_router)
+app.include_router(signal_diag_router)
 
 
 @app.get("/health")
@@ -183,9 +239,11 @@ async def tv_execute(
     # if this bot's executor is still warming up.
     target = str(payload.get("bot", "")).strip().lower()
     if target and target not in {strategy_instance_id().lower(), active_profile()}:
+        _log_inbound_signal(payload, disposition="skipped_bot_mismatch", detail=f"target={target}")
         return {"ok": True, "skipped": "bot_mismatch", "instance": strategy_instance_id()}
 
     if not tv_ready.is_set():
+        _log_inbound_signal(payload, disposition="rejected_not_ready")
         raise HTTPException(status_code=503, detail="tv_executor not ready")
 
     config = TVExecConfig.from_env()
@@ -193,7 +251,10 @@ async def tv_execute(
     try:
         signal = parse_tv_signal(payload, default_symbol=config.symbol)
     except ValueError as e:
+        _log_inbound_signal(payload, disposition="rejected_parse_error", detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
+
+    _log_inbound_signal(payload, disposition="accepted", detail=f"action={signal.action} side={signal.side}")
 
     import asyncio
 
