@@ -88,6 +88,16 @@ class KrakenTVConfig:
     cancel_reduce_only_on_flip: bool
     verify_after_order: bool
     refill_partial: bool
+    # Reopening after a close races Kraken's margin release: the position reads
+    # flat while the margin it used is still locked, so sizing off total equity
+    # asks for money that is not available yet and Kraken rejects the order with
+    # `insufficientavailablefunds`. These bound the wait and the fallback sizing.
+    # Defaulted so existing construction sites keep working; `from_env` sets them
+    # explicitly from the environment.
+    margin_buffer: float = 0.98
+    margin_wait_attempts: int = 8
+    margin_wait_delay_sec: float = 0.5
+    open_retry_attempts: int = 3
 
     @classmethod
     def from_env(cls) -> "KrakenTVConfig":
@@ -112,6 +122,10 @@ class KrakenTVConfig:
             ),
             verify_after_order=_truthy(_env_first("KRAKEN_TV_VERIFY_AFTER_ORDER", default="1")),
             refill_partial=_truthy(_env_first("KRAKEN_TV_REFILL_PARTIAL", default="0")),
+            margin_buffer=float(_env_first("KRAKEN_TV_MARGIN_BUFFER", default="0.98")),
+            margin_wait_attempts=int(float(_env_first("KRAKEN_TV_MARGIN_WAIT_ATTEMPTS", default="8"))),
+            margin_wait_delay_sec=float(_env_first("KRAKEN_TV_MARGIN_WAIT_DELAY_SEC", default="0.5")),
+            open_retry_attempts=int(float(_env_first("KRAKEN_TV_OPEN_RETRY_ATTEMPTS", default="3"))),
         )
 
 
@@ -201,6 +215,106 @@ def _position_snapshot(client: KrakenFuturesClient, venue_symbol: str) -> Tuple[
     return pos, float(pos.get("size_signed", 0.0) or 0.0)
 
 
+def _available_margin_usd(client: KrakenFuturesClient) -> Optional[float]:
+    """Free collateral, as opposed to total equity.
+
+    Equity counts margin still locked in a position; only this can back a new
+    order. Returns None when the venue does not report it (or the call fails) —
+    deliberately *not* 0.0, because "unknown" must not read as "broke". Treating
+    a missing field as zero would skip the reopen entirely, which is the very
+    failure this sizing exists to prevent.
+    """
+    try:
+        acct = client.get_account_equity()
+    except Exception:
+        return None
+    if not isinstance(acct, dict) or acct.get("available_usd") is None:
+        return None
+    try:
+        return float(acct.get("available_usd") or 0.0)
+    except Exception:
+        return None
+
+
+def _margin_required_usd(size_abs: float, mark_price: float, leverage: float) -> float:
+    if leverage <= 0 or mark_price <= 0:
+        return 0.0
+    return abs(float(size_abs)) * float(mark_price) / float(leverage)
+
+
+def _is_insufficient_funds(exc: BaseException) -> bool:
+    text = "".join(ch for ch in str(exc).lower() if ch.isalnum())
+    return "insufficientavailablefunds" in text or "insufficientfunds" in text
+
+
+def _wait_for_available_margin(
+    client: KrakenFuturesClient,
+    needed_usd: float,
+    attempts: int,
+    delay_sec: float,
+) -> Optional[float]:
+    """Poll until free collateral covers `needed_usd`, or attempts run out.
+
+    Closing a position frees its margin asynchronously on Kraken: the position
+    endpoint reports flat before the collateral is released. Waiting only for
+    flat (`_wait_for_flat`) is therefore not enough to safely reopen at full
+    size. Returns the last observed available balance either way — the caller
+    sizes to whatever actually came back rather than failing outright, and None
+    if the venue never reported it (waiting on an unknown is pointless).
+    """
+    available = _available_margin_usd(client)
+    if available is None or needed_usd <= 0:
+        return available
+    for attempt in range(max(1, int(attempts))):
+        if available is None or available >= needed_usd:
+            return available
+        if attempt < int(attempts) - 1:
+            time.sleep(max(0.0, float(delay_sec)))
+            available = _available_margin_usd(client)
+    return available
+
+
+def _size_within_available(
+    *,
+    equity_usd: float,
+    available_usd: Optional[float],
+    mark_price: float,
+    leverage: float,
+    pos_pct: float,
+    step: float,
+    buffer: float,
+) -> float:
+    """Intended target size, capped to what free collateral can actually back.
+
+    Two invariants, both about never making things worse than the unguarded
+    behaviour:
+
+    * it can only ever *shrink* the order relative to `compute_target_size`, so
+      it cannot increase risk beyond the configured sizing; and
+    * it never returns 0 for a would-be non-zero target. If free collateral is
+      unknown, or too small to fund even one step, we fall back to the intended
+      target and let Kraken accept or reject it. Silently opening nothing is the
+      failure mode being fixed here — a rejection is at least visible and
+      retryable.
+    """
+    target = compute_target_size(
+        equity_usd=equity_usd,
+        mark_price=mark_price,
+        leverage=leverage,
+        pos_pct=pos_pct,
+        step=step,
+    )
+    if target <= 0 or mark_price <= 0 or leverage <= 0:
+        return target
+    if available_usd is None:
+        return target
+    usable = max(0.0, float(available_usd)) * max(0.0, min(float(buffer), 1.0))
+    if _margin_required_usd(target, mark_price, leverage) <= usable:
+        return target
+    capped = _floor_to_step(usable * float(leverage) / float(mark_price), step)
+    return capped if capped > 0 else target
+
+
 def _order_status(result: Optional[Dict[str, Any]]) -> str:
     if not isinstance(result, dict):
         return ""
@@ -256,6 +370,66 @@ def _place_market_checked(
 ) -> Dict[str, Any]:
     result = client.place_market(side, size=size, symbol=symbol, reduce_only=reduce_only)
     return _assert_order_accepted(result, label)
+
+
+def _place_open_with_margin_retry(
+    client: KrakenFuturesClient,
+    config: "KrakenTVConfig",
+    *,
+    side: str,
+    size: float,
+    mark_price: float,
+    equity_usd: float,
+) -> Tuple[Optional[Dict[str, Any]], float]:
+    """Place the reopen, shrinking to fit if Kraken still reports insufficient funds.
+
+    Margin release can lag past the bounded wait, so a first attempt may still be
+    rejected. Rather than losing the signal entirely — which is what happened on
+    2026-07-25, leaving the account flat after a successful close — re-read free
+    collateral and retry at a size it can actually back. The size never grows
+    between attempts. Returns the order result and the size actually sent.
+    """
+    attempts = max(1, int(config.open_retry_attempts))
+    current = float(size)
+    for attempt in range(attempts):
+        if current <= 0:
+            return None, 0.0
+        try:
+            result = _place_market_checked(
+                client,
+                side,
+                size=current,
+                symbol=config.venue_symbol,
+                reduce_only=False,
+                label="kraken tv fallback open",
+            )
+            return result, current
+        except RuntimeError as exc:
+            if not _is_insufficient_funds(exc) or attempt == attempts - 1:
+                raise
+            time.sleep(max(0.0, float(config.margin_wait_delay_sec)))
+            resized = _size_within_available(
+                equity_usd=equity_usd,
+                available_usd=_available_margin_usd(client),
+                mark_price=mark_price,
+                leverage=config.leverage,
+                pos_pct=config.pos_pct,
+                step=config.size_step,
+                buffer=config.margin_buffer,
+            )
+            # Never grow the order on a retry — only ever fit it to what is free.
+            resized = min(resized, current)
+            if resized <= 0:
+                raise
+            log.warning(
+                "kraken tv fallback open rejected for funds (attempt %s/%s): retrying %s -> %s",
+                attempt + 1,
+                attempts,
+                current,
+                resized,
+            )
+            current = resized
+    return None, 0.0
 
 
 def _wait_for_flat(
@@ -398,6 +572,8 @@ def _execute_target_side(
     net_order_error: Optional[str] = None
     fallback_used = False
     fallback_reason: Optional[str] = None
+    fallback_sized_down = False
+    fallback_available_usd: Optional[float] = None
     refill_result: Optional[Dict[str, Any]] = None
     position_after = None
     order_plan = [
@@ -495,19 +671,47 @@ def _execute_target_side(
                     pos_pct=config.pos_pct,
                     step=config.size_step,
                 )
-                desired_signed = target_abs if signal.side == "buy" else -target_abs
-                order_size = target_abs
-                order_side = signal.side
-                order_plan[-1]["size"] = target_abs
-                if order_size > 0:
-                    refill_result = _place_market_checked(
-                        client,
-                        order_side,
-                        size=order_size,
-                        symbol=config.venue_symbol,
-                        reduce_only=False,
-                        label="kraken tv fallback open",
+                # The close above releases margin asynchronously. Wait for the
+                # collateral to actually come back before sizing, so the normal
+                # case still reopens at full target instead of a shrunken one.
+                fallback_available_usd = _wait_for_available_margin(
+                    client,
+                    _margin_required_usd(target_abs, mark, config.leverage),
+                    config.margin_wait_attempts,
+                    config.margin_wait_delay_sec,
+                )
+                order_size = _size_within_available(
+                    equity_usd=equity_usd,
+                    available_usd=fallback_available_usd,
+                    mark_price=mark,
+                    leverage=config.leverage,
+                    pos_pct=config.pos_pct,
+                    step=config.size_step,
+                    buffer=config.margin_buffer,
+                )
+                if order_size < target_abs:
+                    fallback_sized_down = True
+                    log.warning(
+                        "kraken tv fallback open sized down %s -> %s (equity=%.2f available=%.2f mark=%.4f)",
+                        target_abs,
+                        order_size,
+                        equity_usd,
+                        fallback_available_usd,
+                        mark,
                     )
+                order_side = signal.side
+                order_plan[-1]["size"] = order_size
+                if order_size > 0:
+                    refill_result, order_size = _place_open_with_margin_retry(
+                        client,
+                        config,
+                        side=order_side,
+                        size=order_size,
+                        mark_price=mark,
+                        equity_usd=equity_usd,
+                    )
+                    order_plan[-1]["size"] = order_size
+                desired_signed = order_size if signal.side == "buy" else -order_size
             elif fallback_reason == "net_order_partial_refill":
                 fallback_used = True
                 after_signed = float(net_signed_after or 0.0)
@@ -601,6 +805,8 @@ def _execute_target_side(
         "cancel_reduce_only_result": cancel_result,
         "fallback_used": fallback_used,
         "fallback_reason": fallback_reason,
+        "fallback_sized_down": fallback_sized_down,
+        "fallback_available_usd": fallback_available_usd,
         "net_order_error": net_order_error,
         "net_position_after": net_position_after,
         "net_signed_after": net_signed_after,
