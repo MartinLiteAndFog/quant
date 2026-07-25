@@ -41,12 +41,35 @@ def _truthy(v: Optional[str]) -> bool:
     return str(v or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _signal_code(action: str, side: str) -> int:
+    """Map a TradingView action/side pair onto the signal_events `signal`
+    column, which is a smallint constrained to (-1, 0, 1).
+
+    Directional actions (entry, flip) carry the side: buy -> long (+1),
+    sell -> short (-1). Reducing actions (exit, tp1, tp2, sl) target flat (0),
+    as does anything unrecognised — an unparseable signal asserts no direction.
+    """
+    if action in ("entry", "flip"):
+        if side == "buy":
+            return 1
+        if side == "sell":
+            return -1
+    return 0
+
+
+_SIGNAL_SIDE_BY_CODE = {1: "long", -1: "short", 0: "flat"}
+
+
 def _log_inbound_signal(payload: Dict[str, Any], *, disposition: str, detail: str = "") -> None:
     """Best-effort record of every inbound TradingView signal and how it was
     dispositioned. Signals that never reach the executor — bot_mismatch,
     not_ready, parse_error — leave no action/execution event, so without this
     they vanish silently. Written to signal_events, surfaced by /diag/timeline.
     TradingView signals are sparse, so the extra write is negligible.
+
+    The raw action/side strings are kept in payload_json: the typed columns
+    only model direction, so "which of tp1/tp2/sl fired" would otherwise be
+    lost.
     """
     try:
         from quant.execution.event_store import insert_signal_event
@@ -63,6 +86,7 @@ def _log_inbound_signal(payload: Dict[str, Any], *, disposition: str, detail: st
             sym = os.getenv("LIVE_SYMBOL", "SOL-USDT").replace("-", "")
         inst = strategy_instance_id()
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+        code = _signal_code(action, side)
         insert_signal_event(
             {
                 "event_id": f"tvin:{inst}:{ts}:{disposition}",
@@ -72,10 +96,11 @@ def _log_inbound_signal(payload: Dict[str, Any], *, disposition: str, detail: st
                 "strategy_instance": inst,
                 "symbol": sym,
                 "venue": "kucoin",
-                "signal": action or "unknown",
-                "signal_side": side or None,
+                "signal": code,
+                "signal_side": _SIGNAL_SIDE_BY_CODE[code],
                 "signal_family": "tradingview",
-                "signal_kind": "webhook",
+                "signal_kind": action or "unknown",
+                "source_type": "tv_webhook",
                 "source_event_id": None,
                 "position_before": None,
                 "engine_mode_before": None,
@@ -83,14 +108,22 @@ def _log_inbound_signal(payload: Dict[str, Any], *, disposition: str, detail: st
                     "kind": "inbound_signal",
                     "disposition": disposition,
                     "detail": detail,
+                    "action": action,
+                    "raw_side": side,
                     "bot_target": str(payload.get("bot", "")).strip(),
                     "profile": active_profile(),
                 },
             }
         )
-    except Exception:
-        # Never let diagnostics logging interfere with signal execution.
-        pass
+    except Exception as e:
+        # Never let diagnostics logging interfere with signal execution — but do
+        # not fail silently either: a swallowed schema error here is exactly why
+        # signal_events sat empty fleet-wide while signals were arriving.
+        print(
+            f"[bot_webhook] inbound signal logging failed "
+            f"(disposition={disposition}): {type(e).__name__}: {e}",
+            flush=True,
+        )
 
 
 def _expected_token() -> str:

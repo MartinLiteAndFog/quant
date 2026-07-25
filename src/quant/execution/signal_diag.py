@@ -87,9 +87,22 @@ def _query(sql: str, params: Dict[str, Any]) -> List[tuple]:
         return list(cur.fetchall() or [])
 
 
-def _fetch_signals(instance: str, hours: float, limit: int) -> List[Dict[str, Any]]:
+def _record_error(errors: Optional[Dict[str, str]], stream: str, exc: Exception) -> None:
+    """A failed stream read must never be indistinguishable from an empty one.
+
+    Returning a bare [] on error is what let a broken signal_events writer read
+    as "no signals arrived" for a full day. Callers surface this map in the
+    response so an empty result is always attributable.
+    """
+    if errors is not None:
+        errors[stream] = f"{type(exc).__name__}: {exc}"
+
+
+def _fetch_signals(
+    instance: str, hours: float, limit: int, errors: Optional[Dict[str, str]] = None
+) -> List[Dict[str, Any]]:
     sql = """
-        select ts, symbol, signal, signal_side, source_type, payload_json
+        select ts, symbol, signal, signal_side, source_type, payload_json, signal_kind
         from signal_events
         where strategy_instance = %(inst)s
           and ts >= now() - (%(hours)s || ' hours')::interval
@@ -98,7 +111,8 @@ def _fetch_signals(instance: str, hours: float, limit: int) -> List[Dict[str, An
     """
     try:
         rows = _query(sql, {"inst": instance, "hours": hours, "limit": limit})
-    except Exception:
+    except Exception as e:
+        _record_error(errors, "signals", e)
         return []
     out = []
     for r in rows:
@@ -111,6 +125,7 @@ def _fetch_signals(instance: str, hours: float, limit: int) -> List[Dict[str, An
                 "signal": r[2],
                 "side": r[3],
                 "source_type": r[4],
+                "action": payload.get("action") or r[6],
                 "disposition": payload.get("disposition"),
                 "detail": payload.get("detail"),
             }
@@ -118,7 +133,9 @@ def _fetch_signals(instance: str, hours: float, limit: int) -> List[Dict[str, An
     return out
 
 
-def _fetch_actions(instance: str, hours: float, limit: int) -> List[Dict[str, Any]]:
+def _fetch_actions(
+    instance: str, hours: float, limit: int, errors: Optional[Dict[str, str]] = None
+) -> List[Dict[str, Any]]:
     sql = """
         select ts, symbol, engine_action, action_side, reason_code,
                blocked, block_reason, position_before, position_after
@@ -130,7 +147,8 @@ def _fetch_actions(instance: str, hours: float, limit: int) -> List[Dict[str, An
     """
     try:
         rows = _query(sql, {"inst": instance, "hours": hours, "limit": limit})
-    except Exception:
+    except Exception as e:
+        _record_error(errors, "actions", e)
         return []
     out = []
     for r in rows:
@@ -151,7 +169,9 @@ def _fetch_actions(instance: str, hours: float, limit: int) -> List[Dict[str, An
     return out
 
 
-def _fetch_executions(instance: str, hours: float, limit: int) -> List[Dict[str, Any]]:
+def _fetch_executions(
+    instance: str, hours: float, limit: int, errors: Optional[Dict[str, str]] = None
+) -> List[Dict[str, Any]]:
     sql = """
         select ts, symbol, execution_stage, side, qty, price, reduce_only, status, order_id
         from execution_events
@@ -162,7 +182,8 @@ def _fetch_executions(instance: str, hours: float, limit: int) -> List[Dict[str,
     """
     try:
         rows = _query(sql, {"inst": instance, "hours": hours, "limit": limit})
-    except Exception:
+    except Exception as e:
+        _record_error(errors, "executions", e)
         return []
     out = []
     for r in rows:
@@ -189,7 +210,15 @@ def diag_signals(
 ) -> Dict[str, Any]:
     _require_token(token)
     inst = (instance or _this_instance()).strip()
-    return {"ok": True, "instance": inst, "hours": hours, "signals": _fetch_signals(inst, hours, limit)}
+    errors: Dict[str, str] = {}
+    signals = _fetch_signals(inst, hours, limit, errors)
+    return {
+        "ok": not errors,
+        "instance": inst,
+        "hours": hours,
+        "errors": errors,
+        "signals": signals,
+    }
 
 
 @router.get("/actions")
@@ -198,7 +227,15 @@ def diag_actions(
 ) -> Dict[str, Any]:
     _require_token(token)
     inst = (instance or _this_instance()).strip()
-    return {"ok": True, "instance": inst, "hours": hours, "actions": _fetch_actions(inst, hours, limit)}
+    errors: Dict[str, str] = {}
+    actions = _fetch_actions(inst, hours, limit, errors)
+    return {
+        "ok": not errors,
+        "instance": inst,
+        "hours": hours,
+        "errors": errors,
+        "actions": actions,
+    }
 
 
 @router.get("/timeline")
@@ -210,19 +247,21 @@ def diag_timeline(
     go / in what order did the bot act?" view."""
     _require_token(token)
     inst = (instance or _this_instance()).strip()
+    errors: Dict[str, str] = {}
     events: List[Dict[str, Any]] = []
-    events += _fetch_signals(inst, hours, limit)
-    events += _fetch_actions(inst, hours, limit)
-    events += _fetch_executions(inst, hours, limit)
+    events += _fetch_signals(inst, hours, limit, errors)
+    events += _fetch_actions(inst, hours, limit, errors)
+    events += _fetch_executions(inst, hours, limit, errors)
     # Sort newest-first; None timestamps sink to the bottom.
     events.sort(key=lambda e: (e.get("ts") or ""), reverse=True)
     if limit and len(events) > limit:
         events = events[:limit]
     blocked = [e for e in events if e.get("kind") == "action" and e.get("blocked")]
     return {
-        "ok": True,
+        "ok": not errors,
         "instance": inst,
         "hours": hours,
+        "errors": errors,
         "counts": {
             "signals": sum(1 for e in events if e["kind"] == "signal"),
             "actions": sum(1 for e in events if e["kind"] == "action"),
