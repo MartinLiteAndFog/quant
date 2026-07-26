@@ -1951,4 +1951,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    from quant.execution.runtime_mode import fleet_api_only
+
+    if fleet_api_only():
+        log.info("fleet API-only mode enabled; live executor exiting")
+    else:
+        main()
