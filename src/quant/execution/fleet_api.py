@@ -525,15 +525,29 @@ def _trades_from_execution_activity(
         inst = str(row.get("strategy_instance") or "").strip()
         symbol = str(row.get("symbol") or bot.get("symbol") or "")
         key = (inst, _normalize_symbol_token(symbol))
-        if not bool(row.get("reduce_only")):
-            open_by_key[key] = row
+        is_reducing = bool(row.get("reduce_only"))
+        if not is_reducing:
+            opened = open_by_key.get(key)
+            opened_side = str((opened or {}).get("side") or "").strip().lower()
+            if opened is not None and opened_side != side:
+                # Historic pilot reversals were persisted as a new opening fill
+                # (reduce_only=false, position_before=0) even though the
+                # opposite-side transaction completed the prior displayed leg.
+                # Close the read-model leg at this activity, then keep the same
+                # activity as the opening of the new direction.
+                open_by_key.pop(key, None)
+            else:
+                open_by_key[key] = row
+                continue
+        else:
+            opened = open_by_key.pop(key, None)
+        if is_reducing and _activity_execution_is_partial(row):
+            if opened is not None:
+                open_by_key[key] = opened
             continue
-        if _activity_execution_is_partial(row):
-            continue
-
-        opened = open_by_key.pop(key, None)
         if opened is None:
             continue
+
         entry_ts = pd.Timestamp(opened.get("ts"))
         exit_ts = pd.Timestamp(row.get("ts"))
         if since is not None and exit_ts < since:
@@ -547,7 +561,11 @@ def _trades_from_execution_activity(
             direction = 1.0 if trade_side == "long" else -1.0
             pnl_pct = (exit_price / entry_price - 1.0) * 100.0 * direction
         payload = _execution_payload(row.get("payload_json"))
-        exit_event = str(payload.get("reason_code") or "activity_close")
+        exit_event = (
+            str(payload.get("reason_code") or "activity_close")
+            if is_reducing
+            else "activity_reversal"
+        )
         trades.append(
             {
                 "trade_id": f"activity:{row.get('event_id')}",
@@ -566,6 +584,8 @@ def _trades_from_execution_activity(
                 "display_source": "execution_activity",
             }
         )
+        if not is_reducing:
+            open_by_key[key] = row
     return pd.DataFrame(trades)
 
 

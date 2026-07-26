@@ -575,6 +575,57 @@ class ExecutionActivityTradeTests(unittest.TestCase):
         self.assertEqual(list(out["trade_id"]), ["activity:close"])
         self.assertAlmostEqual(float(out.iloc[0]["pnl_pct"]), 4.0)
 
+    def test_opposite_open_activity_closes_prior_display_leg(self) -> None:
+        from quant.execution.fleet_api import _trades_from_execution_activity
+
+        rows = [
+            self._row(
+                event_id="open-long",
+                ts="2026-07-22T01:00:00Z",
+                side="buy",
+                reduce_only=False,
+                reason="flip_entry",
+                before=0,
+                after=1,
+                price=100.0,
+            ),
+            self._row(
+                event_id="reverse-short",
+                ts="2026-07-22T02:00:00Z",
+                side="sell",
+                reduce_only=False,
+                reason="flip_entry",
+                before=0,
+                after=-1,
+                price=102.0,
+            ),
+            self._row(
+                event_id="reverse-long",
+                ts="2026-07-22T03:00:00Z",
+                side="buy",
+                reduce_only=False,
+                reason="flip_entry",
+                before=0,
+                after=1,
+                price=99.0,
+            ),
+        ]
+        bot = {
+            "id": "pure-imbatp",
+            "strategy_instance": "sol-pilot-pc3axis",
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+        }
+        out = _trades_from_execution_activity(rows, bot=bot)
+        self.assertEqual(
+            list(out["trade_id"]),
+            ["activity:reverse-short", "activity:reverse-long"],
+        )
+        self.assertEqual(list(out["side"]), ["long", "short"])
+        self.assertEqual(set(out["exit_event"]), {"activity_reversal"})
+        self.assertAlmostEqual(float(out.iloc[0]["pnl_pct"]), 2.0)
+        self.assertAlmostEqual(float(out.iloc[1]["pnl_pct"]), 100.0 * (1.0 - 99.0 / 102.0))
+
     def test_closed_trade_wins_over_matching_activity_inference(self) -> None:
         from quant.execution.fleet_api import _load_display_trades_for_bot
 
