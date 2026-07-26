@@ -88,6 +88,12 @@ class NormalizeAccountCurveTests(unittest.TestCase):
         self.assertAlmostEqual(out[1]["equity_pct"], 10.0, places=5)
         self.assertAlmostEqual(out[2]["equity_pct"], -10.0, places=5)
 
+    def test_large_jump_remains_visible_in_raw_equity_percent(self) -> None:
+        out = _normalize_account_curve(
+            [{"t": 1, "equity": 100.0}, {"t": 2, "equity": 200.0}]
+        )
+        self.assertAlmostEqual(out[-1]["equity_pct"], 100.0, places=5)
+
 
 class TwrAccountCurveTests(unittest.TestCase):
     def test_deposit_jump_excluded_from_returns(self) -> None:
@@ -116,6 +122,187 @@ class TwrAccountCurveTests(unittest.TestCase):
         out = _twr_account_curve(pts, jump_threshold_pct=10.0)
         self.assertAlmostEqual(out[1]["equity_pct"], 0.0, places=5)
         self.assertAlmostEqual(out[2]["equity_pct"], -1.0, places=5)
+
+
+class CashflowCorrectedReturnTests(unittest.TestCase):
+    def test_deposit_is_removed_without_using_jump_threshold(self) -> None:
+        from quant.execution.fleet_api import _cashflow_corrected_return
+
+        points = [{"t": 100, "equity": 100.0}, {"t": 200, "equity": 160.0}]
+        flows = [{"t": 150, "reporting_amount": 50.0, "equity_after": None}]
+        self.assertAlmostEqual(
+            _cashflow_corrected_return(points, flows) or 0.0,
+            10.0,
+            places=5,
+        )
+
+    def test_withdrawal_is_removed_from_interval_return(self) -> None:
+        from quant.execution.fleet_api import _cashflow_corrected_return
+
+        points = [{"t": 100, "equity": 100.0}, {"t": 200, "equity": 72.0}]
+        flows = [{"t": 150, "reporting_amount": -20.0, "equity_after": None}]
+        self.assertAlmostEqual(
+            _cashflow_corrected_return(points, flows) or 0.0,
+            -8.0,
+            places=5,
+        )
+
+    def test_event_equity_segments_true_subperiods(self) -> None:
+        from quant.execution.fleet_api import _cashflow_corrected_return
+
+        points = [{"t": 100, "equity": 100.0}, {"t": 200, "equity": 165.0}]
+        flows = [{"t": 150, "reporting_amount": 50.0, "equity_after": 155.0}]
+        expected = ((105.0 / 100.0) * (165.0 / 155.0) - 1.0) * 100.0
+        self.assertAlmostEqual(
+            _cashflow_corrected_return(points, flows) or 0.0,
+            expected,
+            places=5,
+        )
+
+    def test_portfolio_is_value_weighted_and_excludes_unavailable_bot(self) -> None:
+        from quant.execution.fleet_api import _build_cashflow_return
+
+        series = [
+            {
+                "id": "a",
+                "strategy_instance": "a",
+                "venue": "kucoin",
+                "account_curve_abs": [
+                    {"t": 100, "equity": 100.0},
+                    {"t": 200, "equity": 160.0},
+                ],
+            },
+            {
+                "id": "b",
+                "strategy_instance": "b",
+                "venue": "kucoin",
+                "account_curve_abs": [
+                    {"t": 100, "equity": 200.0},
+                    {"t": 200, "equity": 220.0},
+                ],
+            },
+        ]
+        registry = [
+            {"id": "a", "strategy_instance": "a", "venue": "kucoin"},
+            {"id": "b", "strategy_instance": "b", "venue": "kucoin"},
+            {
+                "id": "counter-sl-reverse",
+                "strategy_instance": "missing",
+                "venue": "kucoin",
+                "cashflow_return_excluded": True,
+            },
+        ]
+        state = {
+            "coverage_start": pd.Timestamp(90, unit="s", tz="UTC"),
+            "coverage_end": pd.Timestamp(200, unit="s", tz="UTC"),
+            "last_success_at": pd.Timestamp(200, unit="s", tz="UTC"),
+            "last_error": None,
+            "source": "test",
+        }
+
+        def load(*, venue, account, since, until):
+            flows = (
+                [
+                    {
+                        "t": 150,
+                        "reporting_amount": 50.0,
+                        "currency": "USDT",
+                    }
+                ]
+                if account == "a"
+                else []
+            )
+            return flows, state
+
+        with patch("quant.execution.fleet_api._load_cashflow_data", side_effect=load):
+            metric = _build_cashflow_return(
+                series,
+                registry,
+                since=pd.Timestamp(100, unit="s", tz="UTC"),
+                now_ts=200,
+            )
+        self.assertTrue(metric["available"])
+        self.assertAlmostEqual(metric["return_pct"], 10.0, places=5)
+        self.assertEqual(metric["net_cashflow"], 50.0)
+        self.assertEqual(metric["flow_count"], 1)
+        self.assertEqual(metric["excluded_bot_ids"], ["counter-sl-reverse"])
+
+    def test_common_scope_start_does_not_create_a_late_join_jump(self) -> None:
+        from quant.execution.fleet_api import _build_cashflow_return
+
+        series = [
+            {
+                "id": "early",
+                "strategy_instance": "early",
+                "venue": "kucoin",
+                "account_curve_abs": [
+                    {"t": 90, "equity": 100.0},
+                    {"t": 190, "equity": 110.0},
+                ],
+            },
+            {
+                "id": "late",
+                "strategy_instance": "late",
+                "venue": "kucoin",
+                "account_curve_abs": [
+                    {"t": 100, "equity": 200.0},
+                    {"t": 190, "equity": 220.0},
+                ],
+            },
+        ]
+        registry = [
+            {"id": "early", "strategy_instance": "early", "venue": "kucoin"},
+            {"id": "late", "strategy_instance": "late", "venue": "kucoin"},
+        ]
+        state = {
+            "coverage_start": pd.Timestamp(80, unit="s", tz="UTC"),
+            "coverage_end": pd.Timestamp(190, unit="s", tz="UTC"),
+            "last_success_at": pd.Timestamp(190, unit="s", tz="UTC"),
+            "last_error": None,
+            "source": "test",
+        }
+        with patch(
+            "quant.execution.fleet_api._load_cashflow_data",
+            return_value=([], state),
+        ):
+            metric = _build_cashflow_return(
+                series,
+                registry,
+                since=pd.Timestamp(80, unit="s", tz="UTC"),
+                now_ts=190,
+            )
+        self.assertTrue(metric["available"])
+        self.assertAlmostEqual(metric["return_pct"], 10.0, places=5)
+
+    def test_missing_sync_is_unavailable_instead_of_inferred(self) -> None:
+        from quant.execution.fleet_api import _build_cashflow_return
+
+        series = [
+            {
+                "id": "a",
+                "strategy_instance": "a",
+                "venue": "kucoin",
+                "account_curve_abs": [
+                    {"t": 100, "equity": 100.0},
+                    {"t": 200, "equity": 200.0},
+                ],
+            }
+        ]
+        registry = [{"id": "a", "strategy_instance": "a", "venue": "kucoin"}]
+        with patch(
+            "quant.execution.fleet_api._load_cashflow_data",
+            return_value=([], None),
+        ):
+            metric = _build_cashflow_return(
+                series,
+                registry,
+                since=pd.Timestamp(100, unit="s", tz="UTC"),
+                now_ts=200,
+            )
+        self.assertFalse(metric["available"])
+        self.assertIsNone(metric["return_pct"])
+        self.assertEqual(metric["reason"], "ledger_sync_unavailable")
+        self.assertEqual(metric["unavailable_bot_ids"], ["a"])
 
 
 class FleetRegistryTests(unittest.TestCase):
@@ -204,7 +391,7 @@ class PortfolioAggregateTests(unittest.TestCase):
         self.assertAlmostEqual(pct_by_t[150], 0.0, places=5)  # A 0% + B 0%
         self.assertAlmostEqual(pct_by_t[200], 10.0, places=5)  # A +20% + B 0%
         self.assertAlmostEqual(pct_by_t[250], 15.0, places=5)  # A +20% + B +10%
-        self.assertEqual(port["note"], "equal_weight_pct_mean_abs_sum")
+        self.assertEqual(port["note"], "equal_weight_raw_pct_mean_abs_sum")
 
     def test_portfolio_pct_ignores_late_large_account_join_spike(self) -> None:
         """Regression: pilots ~$15 then Kraken ~$360 must not rebase to +2000%+."""

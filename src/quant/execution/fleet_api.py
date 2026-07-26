@@ -60,6 +60,8 @@ _DEFAULT_BOTS: List[Dict[str, Any]] = [
         "symbol": "SOL-USDT",
         "health_url": "https://sol-pilot-countertrend-sl-reverse-production.up.railway.app/health",
         "color": "#8a7a9a",
+        "cashflow_return_excluded": True,
+        "cashflow_unavailable_reason": "ledger_credentials_unavailable",
     },
     {
         "id": "quant-main",
@@ -910,9 +912,7 @@ def _align_series_to_shared_clock(
             row["account_curve_abs"] = _forward_fill_on_grid(
                 abs_curve, value_key="equity", t0=t0, t1=fill_end, interval_sec=interval
             )
-            # Forward-fill the precomputed % curve (TWR, deposit-adjusted).
-            # Recomputing % from the abs curve here reintroduced deposit
-            # jumps as fake returns and silently discarded the TWR result.
+            # Forward-fill the precomputed raw own-base equity % curve.
             pct_curve = s.get("account_curve") or []
             if pct_curve:
                 row["account_curve"] = _forward_fill_on_grid(
@@ -1124,6 +1124,283 @@ def _load_equity_snapshots(
         return []
 
 
+def _load_cashflow_data(
+    *,
+    venue: str,
+    account: str,
+    since: pd.Timestamp,
+    until: pd.Timestamp,
+) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Load confirmed flows plus the authoritative coverage of their sync."""
+    state_sql = """
+        select coverage_start, coverage_end, last_success_at, last_error, source
+        from cashflow_sync_state
+        where venue = %(venue)s and account = %(account)s
+        limit 1
+    """
+    flow_sql = """
+        select ts, amount, reporting_amount, currency, direction, flow_type,
+               status, equity_after, source_ref
+        from cashflow_events
+        where venue = %(venue)s
+          and account = %(account)s
+          and ts >= %(since)s
+          and ts <= %(until)s
+          and lower(status) in ('completed', 'success')
+        order by ts asc, event_id asc
+    """
+    params = {
+        "venue": str(venue),
+        "account": str(account),
+        "since": since.to_pydatetime(),
+        "until": until.to_pydatetime(),
+    }
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(state_sql, params)
+            state_row = cur.fetchone()
+            cur.execute(flow_sql, params)
+            rows = cur.fetchall() or []
+    except Exception as exc:
+        log.warning(
+            "fleet cashflow load failed venue=%s account=%s error=%s",
+            venue,
+            account,
+            type(exc).__name__,
+        )
+        return [], None
+
+    state = None
+    if state_row:
+        state = {
+            "coverage_start": state_row[0],
+            "coverage_end": state_row[1],
+            "last_success_at": state_row[2],
+            "last_error": state_row[3],
+            "source": state_row[4],
+        }
+    flows = [
+        {
+            "t": int(pd.Timestamp(row[0]).timestamp()),
+            "amount": float(row[1]),
+            "reporting_amount": float(row[2]) if row[2] is not None else None,
+            "currency": row[3],
+            "direction": row[4],
+            "flow_type": row[5],
+            "status": row[6],
+            "equity_after": float(row[7]) if row[7] is not None else None,
+            "source_ref": row[8],
+            "venue": venue,
+            "account": account,
+        }
+        for row in rows
+    ]
+    return flows, state
+
+
+def _cashflow_corrected_return(
+    points: List[Dict[str, Any]],
+    cashflows: List[Dict[str, Any]],
+) -> Optional[float]:
+    """Chain equity changes after subtracting confirmed timestamped cashflows."""
+    clean = [
+        {"t": int(point["t"]), "equity": float(point["equity"])}
+        for point in points
+        if point.get("equity") is not None
+        and _is_finite(point.get("equity"))
+        and float(point["equity"]) > 0
+    ]
+    clean.sort(key=lambda point: point["t"])
+    if len(clean) < 2:
+        return None
+    flows = sorted(
+        [
+            flow
+            for flow in cashflows
+            if flow.get("reporting_amount") is not None
+            and _is_finite(flow.get("reporting_amount"))
+        ],
+        key=lambda flow: int(flow["t"]),
+    )
+    growth = 1.0
+    flow_index = 0
+    last_value = clean[0]["equity"]
+    for point in clean[1:]:
+        interval_flows: List[Dict[str, Any]] = []
+        while flow_index < len(flows) and int(flows[flow_index]["t"]) <= point["t"]:
+            if int(flows[flow_index]["t"]) > clean[0]["t"]:
+                interval_flows.append(flows[flow_index])
+            flow_index += 1
+        unresolved = 0.0
+        for flow in interval_flows:
+            amount = float(flow["reporting_amount"])
+            equity_after = flow.get("equity_after")
+            if equity_after is None or not _is_finite(equity_after) or float(equity_after) <= 0:
+                unresolved += amount
+                continue
+            before = float(equity_after) - amount
+            if before <= 0 or last_value <= 0:
+                return None
+            growth *= before / last_value
+            last_value = float(equity_after)
+        adjusted_end = float(point["equity"]) - unresolved
+        if adjusted_end <= 0 or last_value <= 0:
+            return None
+        growth *= adjusted_end / last_value
+        last_value = float(point["equity"])
+    return round((growth - 1.0) * 100.0, 6)
+
+
+def _build_cashflow_return(
+    series: List[Dict[str, Any]],
+    registry: List[Dict[str, Any]],
+    *,
+    since: Optional[pd.Timestamp],
+    now_ts: int,
+) -> Dict[str, Any]:
+    """Build a value-weighted return for the explicitly visible futures scope."""
+    registry_by_id = {str(row.get("id")): row for row in registry}
+    excluded = [
+        str(row.get("id"))
+        for row in registry
+        if row.get("cashflow_return_excluded")
+    ]
+    excluded_set = set(excluded)
+    eligible = [
+        row
+        for row in series
+        if row.get("account_curve_abs") and str(row.get("id")) not in excluded_set
+    ]
+    base = {
+        "available": False,
+        "return_pct": None,
+        "net_cashflow": None,
+        "flow_count": 0,
+        "scope_label": f"{len(eligible)} futures accounts",
+        "boundary_note": (
+            "KuCoin Funding↔Futures and Kraken Spot↔Futures boundaries; "
+            "ultimate spot-wallet origin is outside scope"
+        ),
+        "method": "ledger_segmented_equity",
+        "excluded_bot_ids": excluded,
+        "unavailable_bot_ids": [],
+        "reason": None,
+        "as_of": None,
+    }
+    if not eligible:
+        return {**base, "reason": "no_equity_history"}
+
+    first_equity_ts = max(int(row["account_curve_abs"][0]["t"]) for row in eligible)
+    requested_start = int(since.timestamp()) if since is not None else first_equity_ts
+    start_ts = max(first_equity_ts, requested_start)
+    requested_end = int(now_ts)
+    all_flows: List[Dict[str, Any]] = []
+    state_ends: List[int] = []
+    unavailable: List[str] = []
+    for row in eligible:
+        bot_id = str(row.get("id"))
+        config = registry_by_id.get(bot_id) or {}
+        venue = str(config.get("venue") or row.get("venue") or "kucoin")
+        account = str(
+            config.get("equity_account")
+            or config.get("strategy_instance")
+            or row.get("strategy_instance")
+            or ""
+        )
+        flows, state = _load_cashflow_data(
+            venue=venue,
+            account=account,
+            since=pd.Timestamp(start_ts, unit="s", tz="UTC"),
+            until=pd.Timestamp(requested_end, unit="s", tz="UTC"),
+        )
+        if not state or not state.get("last_success_at") or not state.get("coverage_end"):
+            unavailable.append(bot_id)
+            continue
+        coverage_start = state.get("coverage_start")
+        if coverage_start is None or int(pd.Timestamp(coverage_start).timestamp()) > start_ts:
+            unavailable.append(bot_id)
+            continue
+        state_ends.append(int(pd.Timestamp(state["coverage_end"]).timestamp()))
+        all_flows.extend(flows)
+    if unavailable:
+        return {
+            **base,
+            "unavailable_bot_ids": unavailable,
+            "reason": "ledger_sync_unavailable",
+        }
+
+    end_ts = min([requested_end, *state_ends])
+    scoped_series = []
+    for row in eligible:
+        curve = row["account_curve_abs"]
+        prior = [point for point in curve if int(point["t"]) <= start_ts]
+        clipped = (
+            [
+                {
+                    "t": start_ts,
+                    "equity": float(prior[-1]["equity"]),
+                }
+            ]
+            if prior
+            else []
+        )
+        clipped.extend(
+            point
+            for point in curve
+            if start_ts < int(point["t"]) <= end_ts
+        )
+        if len(clipped) < 2:
+            unavailable.append(str(row.get("id")))
+        else:
+            scoped_series.append({**row, "account_curve_abs": clipped})
+    if unavailable:
+        return {
+            **base,
+            "unavailable_bot_ids": sorted(set(unavailable)),
+            "reason": "insufficient_equity_coverage",
+        }
+
+    scoped_flows = [
+        flow for flow in all_flows if start_ts < int(flow["t"]) <= end_ts
+    ]
+    unsupported = sorted(
+        {
+            str(flow.get("currency") or "unknown")
+            for flow in scoped_flows
+            if flow.get("reporting_amount") is None
+        }
+    )
+    if unsupported:
+        return {
+            **base,
+            "reason": "reporting_currency_conversion_unavailable",
+            "unsupported_currencies": unsupported,
+        }
+    scope_curve = _build_portfolio_curve(scoped_series, thin=False)[
+        "account_curve_abs"
+    ]
+    scope_curve = [
+        point for point in scope_curve if start_ts <= int(point["t"]) <= end_ts
+    ]
+    # ``equity_after`` is account-local (KuCoin) while this is the aggregate
+    # portfolio curve, so remove flows from their enclosing portfolio interval.
+    aggregate_flows = [{**flow, "equity_after": None} for flow in scoped_flows]
+    return_pct = _cashflow_corrected_return(scope_curve, aggregate_flows)
+    if return_pct is None:
+        return {**base, "reason": "insufficient_equity_coverage"}
+    return {
+        **base,
+        "available": True,
+        "return_pct": return_pct,
+        "net_cashflow": round(
+            sum(float(flow["reporting_amount"]) for flow in scoped_flows), 6
+        ),
+        "flow_count": len(scoped_flows),
+        "reason": None,
+        "as_of": pd.Timestamp(end_ts, unit="s", tz="UTC").isoformat(),
+    }
+
+
 def _twr_account_curve(
     points: List[Dict[str, Any]],
     *,
@@ -1206,8 +1483,7 @@ def _build_portfolio_curve(
                     if p.get("equity") is not None and _is_finite(p.get("equity"))
                 ]
             )
-            # Prefer the bot's deposit-adjusted (TWR) % curve when present so
-            # portfolio % inherits it; recomputing from abs re-added deposits.
+            # Preserve the bot's raw own-base equity % series.
             pc = [
                 {"t": int(p["t"]), "equity_pct": float(p["equity_pct"])}
                 for p in (s.get("account_curve") or [])
@@ -1229,7 +1505,7 @@ def _build_portfolio_curve(
             "account_curve_abs": [],
             "account_curve": [],
             "bot_count": 0,
-            "note": "equal_weight_pct_mean_abs_sum",
+            "note": "equal_weight_raw_pct_mean_abs_sum",
         }
 
     # Per-bot %: use the bot's own (TWR) curve when available; else fall back
@@ -1308,7 +1584,7 @@ def _build_portfolio_curve(
         "account_curve_abs": portfolio_abs,
         "account_curve": portfolio_pct,
         "bot_count": len(curves),
-        "note": "equal_weight_pct_mean_abs_sum",
+        "note": "equal_weight_raw_pct_mean_abs_sum",
     }
 
 
@@ -1373,8 +1649,8 @@ def build_fleet_performance(
             acct_pts = _stitch_live_equity(acct_pts, live_equity=live_eq, now_ts=now_ts)
 
         account_curve_abs = _absolute_account_curve(acct_pts)
-        # % curve is deposit-adjusted (TWR): transfers don't count as returns.
-        account_curve = _twr_account_curve(acct_pts)
+        # Equity % remains a raw own-base view. Corrected Return is separate.
+        account_curve = _normalize_account_curve(acct_pts)
 
         series.append(
             {
@@ -1397,6 +1673,15 @@ def build_fleet_performance(
                 "needs_backfill": bool(trades.empty) or not snapshots_fresh,
                 "last_snapshot_ts": last_snapshot_ts,
                 "snapshot_age_sec": snapshot_age_sec,
+                "cashflow_scope": {
+                    "available": not bool(b.get("cashflow_return_excluded")),
+                    "reason": (
+                        b.get("cashflow_unavailable_reason")
+                        if b.get("cashflow_return_excluded")
+                        else None
+                    ),
+                    "boundary": "futures",
+                },
             }
         )
 
@@ -1406,6 +1691,12 @@ def build_fleet_performance(
         series, hours=hours, now_ts=now_ts
     )
     portfolio = _build_portfolio_curve(series, thin=False)
+    portfolio["cashflow_return"] = _build_cashflow_return(
+        series,
+        registry,
+        since=since,
+        now_ts=now_ts,
+    )
     return {
         "ok": True,
         "hours": hours,

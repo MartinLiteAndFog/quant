@@ -461,6 +461,7 @@ async def _lifespan(a: FastAPI):
     # KuCoin pilots that never persisted their own snapshots. Default ON on this
     # (fleet) host; set FLEET_EQUITY_POLL_ENABLED=0 on non-fleet deployments.
     _start_fleet_equity_poller_if_enabled()
+    _start_cashflow_sync_if_available()
     yield
 
 
@@ -841,6 +842,29 @@ def _start_fleet_equity_poller_if_enabled() -> None:
     from quant.execution.fleet_equity_poller import start_fleet_equity_poller
 
     start_fleet_equity_poller(default_enabled=True)
+
+
+def _start_cashflow_sync_if_available() -> None:
+    """Start read-only ledger sync for the venue credentials on this service."""
+    from quant.execution.cashflow_sync import start_cashflow_sync
+
+    if (os.getenv("KUCOIN_FUTURES_API_KEY") or "").strip():
+        account = (
+            os.getenv("FLEET_EQUITY_WRITER_ACCOUNT")
+            or os.getenv("BOT_INSTANCE_ID")
+            or "futures"
+        )
+        start_cashflow_sync(
+            venue="kucoin",
+            account=str(account),
+            default_enabled=True,
+        )
+    if (os.getenv("KRAKEN_FUTURES_KEY") or "").strip():
+        start_cashflow_sync(
+            venue="kraken",
+            account="main",
+            default_enabled=True,
+        )
 
 
 def _start_live_executor_if_enabled() -> None:
@@ -3814,6 +3838,7 @@ def main() -> None:
     _start_live_executor_if_enabled()
     _start_equity_snapshot_writer_if_enabled()
     _start_fleet_equity_poller_if_enabled()
+    _start_cashflow_sync_if_available()
     port = int(os.environ.get("PORT", str(args.port)))
     uvicorn.run(
         "quant.execution.webhook_server:app",

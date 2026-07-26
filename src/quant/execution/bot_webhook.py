@@ -184,6 +184,15 @@ async def _lifespan(_app: FastAPI):
         account=strategy_instance_id(),
         default_enabled=True,
     )
+    # Read-only: persist confirmed Funding↔Futures ledger transfers alongside
+    # equity snapshots so Fleet can calculate cashflow-corrected performance.
+    from quant.execution.cashflow_sync import start_cashflow_sync
+
+    start_cashflow_sync(
+        venue="kucoin",
+        account=strategy_instance_id(),
+        default_enabled=True,
+    )
     log.info(
         "bot webhook ready name=%s profile=%s instance=%s symbol=%s",
         display_name(),

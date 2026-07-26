@@ -288,6 +288,136 @@ def insert_equity_snapshot(row: Dict[str, Any]) -> None:
         cur.execute(sql, data)
 
 
+def ensure_cashflow_schema() -> None:
+    """Create the read-only ledger cache used by Fleet performance."""
+    sql = """
+    create table if not exists cashflow_events (
+      event_id text primary key,
+      ts timestamptz not null,
+      venue text not null,
+      account text not null,
+      currency text not null,
+      amount numeric not null,
+      reporting_currency text not null default 'USD',
+      reporting_amount numeric,
+      fee numeric not null default 0,
+      direction text not null check (direction in ('in', 'out')),
+      flow_type text not null,
+      status text not null,
+      source_ref text,
+      equity_after numeric,
+      boundary_scope text not null default 'futures',
+      payload_json jsonb not null default '{}'::jsonb,
+      created_at timestamptz not null default now()
+    );
+    create index if not exists idx_cashflow_events_account_ts
+    on cashflow_events (venue, account, ts);
+    create table if not exists cashflow_sync_state (
+      venue text not null,
+      account text not null,
+      boundary_scope text not null default 'futures',
+      coverage_start timestamptz,
+      coverage_end timestamptz,
+      last_success_at timestamptz,
+      last_error text,
+      source text not null,
+      updated_at timestamptz not null default now(),
+      primary key (venue, account)
+    );
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql)
+
+
+def upsert_cashflow_event(row: Dict[str, Any]) -> None:
+    ensure_cashflow_schema()
+    sql = """
+    insert into cashflow_events (
+      event_id, ts, venue, account, currency, amount, reporting_currency,
+      reporting_amount, fee, direction, flow_type, status, source_ref,
+      equity_after, boundary_scope, payload_json
+    ) values (
+      %(event_id)s, %(ts)s, %(venue)s, %(account)s, %(currency)s, %(amount)s,
+      %(reporting_currency)s, %(reporting_amount)s, %(fee)s, %(direction)s,
+      %(flow_type)s, %(status)s, %(source_ref)s, %(equity_after)s,
+      %(boundary_scope)s, %(payload_json)s::jsonb
+    )
+    on conflict (event_id) do update set
+      ts = excluded.ts,
+      amount = excluded.amount,
+      reporting_amount = excluded.reporting_amount,
+      fee = excluded.fee,
+      status = excluded.status,
+      equity_after = excluded.equity_after,
+      payload_json = excluded.payload_json
+    """
+    data = dict(row)
+    data.setdefault("reporting_currency", "USD")
+    data.setdefault("reporting_amount", None)
+    data.setdefault("fee", 0.0)
+    data.setdefault("source_ref", None)
+    data.setdefault("equity_after", None)
+    data.setdefault("boundary_scope", "futures")
+    data["payload_json"] = _payload(data.get("payload_json"))
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(sql, data)
+
+
+def upsert_cashflow_sync_state(
+    *,
+    venue: str,
+    account: str,
+    coverage_start: Optional[datetime],
+    coverage_end: Optional[datetime],
+    source: str,
+    last_error: Optional[str],
+) -> None:
+    ensure_cashflow_schema()
+    sql = """
+    insert into cashflow_sync_state (
+      venue, account, coverage_start, coverage_end, last_success_at,
+      last_error, source, updated_at
+    ) values (
+      %(venue)s, %(account)s, %(coverage_start)s, %(coverage_end)s,
+      case when %(last_error)s is null then now() else null end,
+      %(last_error)s, %(source)s, now()
+    )
+    on conflict (venue, account) do update set
+      coverage_start = case
+        when excluded.last_success_at is not null then
+          case
+            when cashflow_sync_state.coverage_start is null then excluded.coverage_start
+            else least(cashflow_sync_state.coverage_start, excluded.coverage_start)
+          end
+        else cashflow_sync_state.coverage_start
+      end,
+      coverage_end = case
+        when excluded.last_success_at is not null then
+          case
+            when cashflow_sync_state.coverage_end is null then excluded.coverage_end
+            else greatest(cashflow_sync_state.coverage_end, excluded.coverage_end)
+          end
+        else cashflow_sync_state.coverage_end
+      end,
+      last_success_at = coalesce(excluded.last_success_at, cashflow_sync_state.last_success_at),
+      last_error = excluded.last_error,
+      source = excluded.source,
+      updated_at = now()
+    """
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            sql,
+            {
+                "venue": venue,
+                "account": account,
+                "coverage_start": coverage_start,
+                "coverage_end": coverage_end,
+                "last_error": last_error,
+                "source": source,
+            },
+        )
+
+
 def upsert_closed_trade(row: Dict[str, Any]) -> None:
     sql = """
     insert into closed_trades (
