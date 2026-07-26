@@ -228,5 +228,168 @@ class ParseStrategyStopTests(unittest.TestCase):
                 base.update(payload)
                 self.assertIsNone(parse_tv_signal(base).sl_price)
 
+class _LiqBroker:
+    """Broker stub that reports a liquidation price, like the real position feed."""
+
+    def __init__(self, liq, fails_before_visible: int = 0):
+        self.liq = liq
+        self._left = fails_before_visible
+        self.placed = {}
+        self.reads = 0
+
+    def get_position_info(self, symbol):
+        self.reads += 1
+        if self._left > 0:
+            self._left -= 1
+            return {"raw": {"liquidationPrice": 0}}
+        return {"raw": {"liquidationPrice": self.liq}}
+
+    def place_stop_market(self, **kw):
+        self.placed.update(kw)
+        return "oid"
+
+    def get_order(self, order_id):
+        return {"stop": "down", "status": "open"}
+
+
+class ClampStopInsideLiquidationTests(unittest.TestCase):
+    """A stop at or past liquidation is not protection — the exchange closes the
+    position first, so the stop never fires and the loss is the whole margin."""
+
+    def test_long_stop_too_close_to_liquidation_is_tightened(self) -> None:
+        # 25x: entry 75.0715, liq 72.616 -> only a 2.46 gap.
+        out = ktv._clamp_stop_inside_liquidation(73.1947, "long", 75.0715, 72.616, 0.25)
+        self.assertAlmostEqual(out, 72.616 + (75.0715 - 72.616) * 0.25, places=6)
+        self.assertGreater(out, 73.1947, "clamp must move the stop away from liquidation")
+
+    def test_long_stop_already_inside_is_untouched(self) -> None:
+        # 10x: entry 75.0525, liq 68.063 -> the 2.5% stop is comfortably inside.
+        out = ktv._clamp_stop_inside_liquidation(73.1762, "long", 75.0525, 68.063, 0.25)
+        self.assertAlmostEqual(out, 73.1762, places=6)
+
+    def test_short_stop_too_close_to_liquidation_is_tightened(self) -> None:
+        out = ktv._clamp_stop_inside_liquidation(77.9, "short", 75.0, 78.0, 0.25)
+        self.assertAlmostEqual(out, 78.0 - (78.0 - 75.0) * 0.25, places=6)
+        self.assertLess(out, 77.9)
+
+    def test_short_stop_already_inside_is_untouched(self) -> None:
+        out = ktv._clamp_stop_inside_liquidation(76.0, "short", 75.0, 85.0, 0.25)
+        self.assertAlmostEqual(out, 76.0, places=6)
+
+    def test_clamp_only_ever_tightens(self) -> None:
+        # A stop nowhere near liquidation must not be widened toward it.
+        out = ktv._clamp_stop_inside_liquidation(74.9, "long", 75.0, 60.0, 0.25)
+        self.assertAlmostEqual(out, 74.9, places=6)
+
+    def test_zero_buffer_disables_the_clamp(self) -> None:
+        out = ktv._clamp_stop_inside_liquidation(73.1947, "long", 75.0715, 72.616, 0.0)
+        self.assertAlmostEqual(out, 73.1947, places=6)
+
+    def test_missing_liquidation_price_leaves_the_stop_alone(self) -> None:
+        for liq in (None, 0, -1):
+            with self.subTest(liq=liq):
+                out = ktv._clamp_stop_inside_liquidation(73.1947, "long", 75.0715, liq, 0.25)
+                self.assertAlmostEqual(out, 73.1947, places=6)
+
+    def test_nonsensical_liquidation_side_is_not_applied(self) -> None:
+        # A long whose liquidation sits above entry is impossible; don't act on it.
+        out = ktv._clamp_stop_inside_liquidation(73.1947, "long", 75.0715, 80.0, 0.25)
+        self.assertAlmostEqual(out, 73.1947, places=6)
+        out = ktv._clamp_stop_inside_liquidation(76.0, "short", 75.0, 70.0, 0.25)
+        self.assertAlmostEqual(out, 76.0, places=6)
+
+
+class LiquidationAwarePlacementTests(unittest.TestCase):
+    """End-to-end through _place_emergency_sl, with the live pilot numbers."""
+
+    def test_canonical_25x_stop_is_pulled_inside_liquidation(self) -> None:
+        b = _LiqBroker(72.616)
+        ktv._place_emergency_sl(b, "SOL-USDT", "long", 158, 75.0715, 0.025,
+                                None, 0.25)
+        expected = round(72.616 + (75.0715 - 72.616) * 0.25, 4)
+        self.assertAlmostEqual(b.placed["stop_price"], expected, places=4)
+
+    def test_pc3axis_10x_stop_is_unchanged(self) -> None:
+        b = _LiqBroker(68.063)
+        ktv._place_emergency_sl(b, "SOL-USDT", "long", 63, 75.0525, 0.025,
+                                None, 0.25)
+        self.assertAlmostEqual(b.placed["stop_price"], round(75.0525 * 0.975, 4), places=4)
+
+    def test_a_strategy_stop_past_liquidation_is_pulled_inside(self) -> None:
+        # The dangerous case: the strategy's own level is honoured even when it
+        # is wider than the backstop, and at 25x "wider" can mean past the point
+        # where the exchange has already closed the position.
+        b = _LiqBroker(72.616)
+        ktv._place_emergency_sl(b, "SOL-USDT", "long", 158, 75.0715, 0.025,
+                                72.0, 0.25)
+        expected = round(72.616 + (75.0715 - 72.616) * 0.25, 4)
+        self.assertAlmostEqual(b.placed["stop_price"], expected, places=4)
+        self.assertGreater(b.placed["stop_price"], 72.616)
+
+    def test_short_strategy_stop_past_liquidation_is_pulled_inside(self) -> None:
+        b = _LiqBroker(78.0)
+        ktv._place_emergency_sl(b, "SOL-USDT", "short", 100, 75.0, 0.025,
+                                79.0, 0.25)
+        expected = round(78.0 - (78.0 - 75.0) * 0.25, 4)
+        self.assertAlmostEqual(b.placed["stop_price"], expected, places=4)
+
+    def test_zero_buffer_keeps_the_old_behaviour(self) -> None:
+        b = _LiqBroker(72.616)
+        ktv._place_emergency_sl(b, "SOL-USDT", "long", 158, 75.0715, 0.025,
+                                None, 0.0)
+        self.assertAlmostEqual(b.placed["stop_price"], round(75.0715 * 0.975, 4), places=4)
+        self.assertEqual(b.reads, 0, "no position lookup when the clamp is off")
+
+    def test_a_buffer_that_would_swallow_the_stop_is_refused(self) -> None:
+        # buffer=1.0 puts the floor at the entry price: the stop would trigger
+        # instantly. Keep the backstop and shout instead.
+        b = _LiqBroker(72.616)
+        ktv._place_emergency_sl(b, "SOL-USDT", "long", 158, 75.0715, 0.025,
+                                None, 1.0)
+        self.assertAlmostEqual(b.placed["stop_price"], round(75.0715 * 0.975, 4), places=4)
+
+    def test_stop_is_still_placed_when_liquidation_is_unavailable(self) -> None:
+        class _NoPos:
+            def __init__(self):
+                self.placed = {}
+
+            def get_position_info(self, symbol):
+                raise RuntimeError("kucoin down")
+
+            def place_stop_market(self, **kw):
+                self.placed.update(kw)
+                return "oid"
+
+            def get_order(self, order_id):
+                return {"stop": "down", "status": "open"}
+
+        b = _NoPos()
+        oid = ktv._place_emergency_sl(b, "SOL-USDT", "long", 158, 75.0715, 0.025,
+                                      None, 0.25)
+        self.assertEqual(oid, "oid")
+        self.assertAlmostEqual(b.placed["stop_price"], round(75.0715 * 0.975, 4), places=4)
+
+
+class LiquidationPriceLookupTests(unittest.TestCase):
+    def test_retries_until_the_position_is_visible(self) -> None:
+        # The stop is placed right after the fill, so the first read can be empty.
+        b = _LiqBroker(72.616, fails_before_visible=2)
+        self.assertAlmostEqual(
+            ktv._liquidation_price(b, "SOL-USDT", attempts=3, delay_sec=0.0), 72.616
+        )
+        self.assertEqual(b.reads, 3)
+
+    def test_returns_none_when_never_visible(self) -> None:
+        b = _LiqBroker(72.616, fails_before_visible=99)
+        self.assertIsNone(ktv._liquidation_price(b, "SOL-USDT", attempts=2, delay_sec=0.0))
+
+    def test_lookup_failure_never_raises(self) -> None:
+        class _Boom:
+            def get_position_info(self, symbol):
+                raise RuntimeError("kucoin down")
+
+        self.assertIsNone(ktv._liquidation_price(_Boom(), "SOL-USDT", attempts=2, delay_sec=0.0))
+
+
 if __name__ == "__main__":
     unittest.main()

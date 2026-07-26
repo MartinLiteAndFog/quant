@@ -39,6 +39,7 @@ def _config(guard: float = 5.0) -> TVExecConfig:
         emergency_sl_pct=0.023,
         flip_delay_sec=2.0,
         exit_after_open_guard_sec=guard,
+        sl_liq_buffer_frac=0.25,
     )
 
 

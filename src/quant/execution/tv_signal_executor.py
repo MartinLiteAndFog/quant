@@ -113,6 +113,13 @@ class TVExecConfig:
     # round-trip that pays two lots of fees and holds nothing. Ignore an exit
     # this soon after an open; 0 disables the guard.
     exit_after_open_guard_sec: float
+    # A percentage stop is blind to leverage. At 25x the liquidation price sits
+    # ~3% from entry, so a 2.5% backstop leaves almost no room, and any stop
+    # wider than that (a strategy's own level, say) would sit *past* liquidation
+    # — the exchange closes the position first and the stop never fires. Keep
+    # the stop at least this fraction of the entry->liquidation distance on the
+    # safe side of liquidation. 0 disables the clamp.
+    sl_liq_buffer_frac: float
 
     @classmethod
     def from_env(cls) -> TVExecConfig:
@@ -129,6 +136,9 @@ class TVExecConfig:
             flip_delay_sec=float(os.getenv("TV_EXEC_FLIP_DELAY_SEC", "2.0")),
             exit_after_open_guard_sec=float(
                 os.getenv("TV_EXEC_EXIT_AFTER_OPEN_GUARD_SEC", "5.0")
+            ),
+            sl_liq_buffer_frac=float(
+                os.getenv("TV_EXEC_SL_LIQ_BUFFER_FRAC", "0.25")
             ),
         )
 
@@ -710,6 +720,104 @@ def _verify_stop_registered(
     return False
 
 
+def _liquidation_price(
+    broker: KucoinFuturesBroker,
+    symbol: str,
+    attempts: int = 3,
+    delay_sec: float = 0.2,
+) -> Optional[float]:
+    """Read the exchange's liquidation price for the open position.
+
+    Called right after the entry fills, so the position may not be visible on
+    the very first read — hence the short retry. Best-effort and never raises:
+    without a liquidation price the caller keeps the plain percentage stop,
+    which is what it did before this existed.
+    """
+    for attempt in range(max(1, attempts)):
+        try:
+            info = broker.get_position_info(symbol)
+        except Exception as e:
+            log.warning("tv_executor could not read position for liq price: %s", e)
+            return None
+        raw = (info or {}).get("raw") or {}
+        try:
+            liq = float(raw.get("liquidationPrice") or 0)
+        except (TypeError, ValueError):
+            liq = 0.0
+        if liq > 0:
+            return liq
+        if attempt < attempts - 1:
+            time.sleep(delay_sec)
+    log.warning(
+        "tv_executor no liquidation price for %s after %d attempts — "
+        "emergency SL will not be liquidation-clamped",
+        symbol, attempts,
+    )
+    return None
+
+
+def _clamp_stop_inside_liquidation(
+    sl_price: float,
+    position_side: str,
+    mid_price: float,
+    liq_price: Optional[float],
+    buffer_frac: float,
+) -> float:
+    """Pull a stop back inside the liquidation price.
+
+    A stop at or beyond liquidation is not protection: the exchange closes the
+    position at the liquidation price first, so the stop never triggers and the
+    loss is the whole margin instead of the intended slice. This only ever
+    tightens the stop — a stop already comfortably inside is returned untouched.
+
+    The buffer is a fraction of the entry->liquidation distance rather than a
+    flat percentage so it scales with leverage on its own: wide at 5x, tight at
+    25x, always proportional to the room actually available.
+    """
+    if buffer_frac <= 0 or liq_price is None or liq_price <= 0 or mid_price <= 0:
+        return sl_price
+
+    if position_side == "long":
+        gap = mid_price - liq_price
+        if gap <= 0:
+            log.error(
+                "tv_executor liquidation price %.4f is not below a long entry at %.4f — "
+                "cannot clamp; leaving stop at %.4f",
+                liq_price, mid_price, sl_price,
+            )
+            return sl_price
+        floor = liq_price + gap * buffer_frac
+        if sl_price >= floor:
+            return sl_price
+        log.warning(
+            "tv_executor emergency SL %.4f sits too close to liquidation %.4f "
+            "(long, entry %.4f) — tightening to %.4f (%.0f%% of the entry->liq gap)",
+            sl_price, liq_price, mid_price, floor, buffer_frac * 100,
+        )
+        return floor
+
+    if position_side == "short":
+        gap = liq_price - mid_price
+        if gap <= 0:
+            log.error(
+                "tv_executor liquidation price %.4f is not above a short entry at %.4f — "
+                "cannot clamp; leaving stop at %.4f",
+                liq_price, mid_price, sl_price,
+            )
+            return sl_price
+        ceiling = liq_price - gap * buffer_frac
+        if sl_price <= ceiling:
+            return sl_price
+        log.warning(
+            "tv_executor emergency SL %.4f sits too close to liquidation %.4f "
+            "(short, entry %.4f) — tightening to %.4f (%.0f%% of the entry->liq gap)",
+            sl_price, liq_price, mid_price, ceiling, buffer_frac * 100,
+        )
+        return ceiling
+
+    return sl_price
+
+
 def _place_emergency_sl(
     broker: KucoinFuturesBroker,
     symbol: str,
@@ -718,6 +826,7 @@ def _place_emergency_sl(
     mid_price: float,
     sl_pct: float,
     strategy_sl_price: Optional[float] = None,
+    liq_buffer_frac: float = 0.0,
 ) -> Optional[str]:
     if sl_pct <= 0 or qty <= 0 or mid_price <= 0:
         return None
@@ -754,6 +863,28 @@ def _place_emergency_sl(
                 strategy_sl_price, position_side, mid_price, sl_pct * 100, sl_price,
             )
 
+    # Whatever level we arrived at — percentage backstop or the strategy's own
+    # stop — it is only protection if it triggers before the exchange
+    # liquidates. Checked last so it constrains both paths.
+    if liq_buffer_frac > 0:
+        liq_price = _liquidation_price(broker, symbol)
+        clamped = _clamp_stop_inside_liquidation(
+            sl_price, position_side, mid_price, liq_price, liq_buffer_frac
+        )
+        still_protective = (
+            clamped < mid_price if position_side == "long" else clamped > mid_price
+        )
+        if not still_protective:
+            log.error(
+                "tv_executor CANNOT PLACE A SAFE STOP for %s at %.4f: liquidation %.4f is so "
+                "close that any stop inside it would trigger immediately. Leverage is too high "
+                "for a meaningful stop — placing the %.2f%% backstop at %.4f anyway, but this "
+                "position is effectively protected by liquidation only",
+                position_side, mid_price, liq_price or 0.0, sl_pct * 100, sl_price,
+            )
+        else:
+            sl_price = clamped
+
     cid = _client_oid("emergency_sl")
     try:
         oid = broker.place_stop_market(
@@ -764,9 +895,10 @@ def _place_emergency_sl(
             reduce_only=True,
             client_id=cid,
         )
+        effective_pct = abs(mid_price - sl_price) / mid_price * 100 if mid_price > 0 else 0.0
         log.info(
-            "tv_executor emergency SL placed: side=%s qty=%d sl_price=%.4f (%.1f%% from %.4f) order_id=%s",
-            sl_side, qty, sl_price, sl_pct * 100, mid_price, oid,
+            "tv_executor emergency SL placed: side=%s qty=%d sl_price=%.4f (%.2f%% from %.4f) order_id=%s",
+            sl_side, qty, sl_price, effective_pct, mid_price, oid,
         )
         _verify_stop_registered(broker, oid, sl_price)
         return oid
@@ -860,7 +992,8 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
         pos_after_i = 1 if want_side == "long" else -1
 
         _place_emergency_sl(broker, signal.symbol, want_side, qty, cache.mid_price,
-                            config.emergency_sl_pct, signal.sl_price)
+                            config.emergency_sl_pct, signal.sl_price,
+                            config.sl_liq_buffer_frac)
         _refresh_position_in_cache(broker, config)
 
         _log_bg(_log_action, symbol=signal.symbol, seq=seq, action="entry",
@@ -1130,7 +1263,8 @@ def _do_flip(
         pos_after_i = 1 if want_side == "long" else -1
 
         _place_emergency_sl(broker, symbol, want_side, qty, cache.mid_price,
-                            config.emergency_sl_pct, strategy_sl_price)
+                            config.emergency_sl_pct, strategy_sl_price,
+                            config.sl_liq_buffer_frac)
         _refresh_position_in_cache(broker, config)
 
         _log_bg(_log_action, symbol=symbol, seq=seq, action="flip_entry",
@@ -1205,7 +1339,8 @@ def _do_flip(
     )
 
     _place_emergency_sl(broker, symbol, want_side, qty, cache.mid_price,
-                            config.emergency_sl_pct, strategy_sl_price)
+                        config.emergency_sl_pct, strategy_sl_price,
+                        config.sl_liq_buffer_frac)
     _refresh_position_in_cache(broker, config)
 
     _log_bg(_log_action, symbol=symbol, seq=seq, action="flip",
