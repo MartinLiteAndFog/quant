@@ -454,6 +454,212 @@ def _load_closed_trades_for_bot(
     return out.sort_values("exit_ts") if "exit_ts" in out.columns else out
 
 
+def _execution_payload(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _activity_execution_is_partial(row: Dict[str, Any]) -> bool:
+    """True when a reducing activity is a partial TP, not a completed trade."""
+    payload = _execution_payload(row.get("payload_json"))
+    reason = str(payload.get("reason_code") or "").strip().lower()
+    client_oid = str(row.get("client_oid") or "").strip().lower()
+    if reason in {"tv_tp1", "tp1", "tp1_partial"} or ":tp1:" in client_oid:
+        return True
+    before = payload.get("position_before")
+    after = payload.get("position_after")
+    try:
+        return float(before) != 0.0 and float(after) == float(before)
+    except (TypeError, ValueError):
+        return False
+
+
+def _trades_from_execution_activity(
+    rows: Sequence[Sequence[Any]],
+    *,
+    bot: Dict[str, Any],
+    since: Optional[pd.Timestamp] = None,
+) -> pd.DataFrame:
+    """Infer completed round trips from the Fleet execution activity stream.
+
+    This is a read-model fallback for historic pilot activity that predates
+    durable ``closed_trades`` writes. Opening market activity is paired with a
+    later full reducing activity for the same instance and symbol. Partial TP1
+    reductions deliberately leave the leg open and do not become standalone
+    trades.
+    """
+    columns = [
+        "event_id",
+        "ts",
+        "venue",
+        "symbol",
+        "strategy_instance",
+        "side",
+        "qty",
+        "price",
+        "reduce_only",
+        "status",
+        "client_oid",
+        "payload_json",
+    ]
+    records = [dict(zip(columns, row)) for row in rows]
+    records.sort(key=lambda row: pd.Timestamp(row.get("ts") or 0))
+    open_by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    trades: List[Dict[str, Any]] = []
+    accepted_statuses = {"sent", "filled", "done", "success", "completed", "closed", "ok"}
+
+    for row in records:
+        status = str(row.get("status") or "").strip().lower()
+        if status and status not in accepted_statuses:
+            continue
+        side = str(row.get("side") or "").strip().lower()
+        if side not in {"buy", "sell"}:
+            continue
+        inst = str(row.get("strategy_instance") or "").strip()
+        symbol = str(row.get("symbol") or bot.get("symbol") or "")
+        key = (inst, _normalize_symbol_token(symbol))
+        if not bool(row.get("reduce_only")):
+            open_by_key[key] = row
+            continue
+        if _activity_execution_is_partial(row):
+            continue
+
+        opened = open_by_key.pop(key, None)
+        if opened is None:
+            continue
+        entry_ts = pd.Timestamp(opened.get("ts"))
+        exit_ts = pd.Timestamp(row.get("ts"))
+        if since is not None and exit_ts < since:
+            continue
+        entry_side = str(opened.get("side") or "").strip().lower()
+        trade_side = "long" if entry_side == "buy" else "short"
+        entry_price = float(opened["price"]) if _is_finite(opened.get("price")) else None
+        exit_price = float(row["price"]) if _is_finite(row.get("price")) else None
+        pnl_pct = None
+        if entry_price is not None and entry_price > 0 and exit_price is not None:
+            direction = 1.0 if trade_side == "long" else -1.0
+            pnl_pct = (exit_price / entry_price - 1.0) * 100.0 * direction
+        payload = _execution_payload(row.get("payload_json"))
+        exit_event = str(payload.get("reason_code") or "activity_close")
+        trades.append(
+            {
+                "trade_id": f"activity:{row.get('event_id')}",
+                "venue": row.get("venue") or bot.get("venue"),
+                "symbol": symbol,
+                "entry_ts": entry_ts,
+                "exit_ts": exit_ts,
+                "side": trade_side,
+                "qty": row.get("qty"),
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "pnl_pct": pnl_pct,
+                "exit_event": exit_event,
+                "strategy": "execution_activity",
+                "strategy_instance": inst or bot.get("strategy_instance"),
+                "display_source": "execution_activity",
+            }
+        )
+    return pd.DataFrame(trades)
+
+
+def _load_execution_activity_trades_for_bot(
+    bot: Dict[str, Any],
+    *,
+    since: Optional[pd.Timestamp] = None,
+    limit: int = 5000,
+) -> pd.DataFrame:
+    instances = _trade_instances_for_bot(bot)
+    if not instances:
+        return pd.DataFrame()
+    venue = str(bot.get("venue") or "kucoin")
+    symbol = str(bot.get("symbol") or "SOL-USDT")
+    # Read from the global display-history floor rather than the selected range
+    # so a close inside the range can still pair with its earlier opening leg.
+    query_since = _history_start_ts()
+    where = [
+        "strategy_instance = any(%(instances)s::text[])",
+        "venue = %(venue)s",
+        "execution_stage = 'market_fill'",
+        "lower(coalesce(side, '')) in ('buy', 'sell')",
+    ]
+    params: Dict[str, Any] = {
+        "instances": instances,
+        "venue": venue,
+        "limit": int(max(2, limit * 4)),
+    }
+    if venue != "kraken":
+        where.append(
+            "replace(replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', ''), '.', '') = %(symbol_norm)s"
+        )
+        params["symbol_norm"] = _normalize_symbol_token(symbol)
+    if query_since is not None:
+        where.append("ts >= %(query_since)s")
+        params["query_since"] = query_since.to_pydatetime()
+    sql = f"""
+        select event_id, ts, venue, symbol, strategy_instance, side, qty, price,
+               reduce_only, status, client_oid, payload_json
+        from execution_events
+        where {' and '.join(where)}
+        order by ts asc
+        limit %(limit)s
+    """
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall() or []
+    except Exception as e:
+        log.warning("fleet execution activity load failed for %s: %s", bot.get("id"), e)
+        return pd.DataFrame()
+    return _trades_from_execution_activity(rows, bot=bot, since=since)
+
+
+def _load_display_trades_for_bot(
+    bot: Dict[str, Any],
+    *,
+    since: Optional[pd.Timestamp] = None,
+    limit: int = 5000,
+) -> pd.DataFrame:
+    """Closed-trade SoT supplemented by missing completed activity round trips."""
+    closed = _load_closed_trades_for_bot(bot, since=since, limit=limit)
+    inferred = _load_execution_activity_trades_for_bot(bot, since=since, limit=limit)
+    if inferred.empty:
+        return closed
+    if closed.empty:
+        return inferred.sort_values("exit_ts")
+
+    # Durable closed_trades remain authoritative. Suppress an inferred copy
+    # when its close activity lands within five seconds of an existing close.
+    closed_exit: List[Tuple[pd.Timestamp, str]] = []
+    for _, row in closed.iterrows():
+        ts = pd.to_datetime(row.get("exit_ts"), utc=True, errors="coerce")
+        if pd.isna(ts):
+            continue
+        closed_exit.append((ts, _normalize_symbol_token(str(row.get("symbol") or ""))))
+    keep: List[bool] = []
+    for _, row in inferred.iterrows():
+        ts = pd.to_datetime(row.get("exit_ts"), utc=True, errors="coerce")
+        symbol = _normalize_symbol_token(str(row.get("symbol") or ""))
+        duplicate = any(
+            other_symbol == symbol and abs((ts - other_ts).total_seconds()) <= 5.0
+            for other_ts, other_symbol in closed_exit
+        )
+        keep.append(not duplicate)
+    supplemental = inferred.loc[keep]
+    if supplemental.empty:
+        return closed
+    out = pd.concat([closed, supplemental], ignore_index=True)
+    if "trade_id" in out.columns:
+        out = out.drop_duplicates(subset=["trade_id"], keep="first")
+    return out.sort_values("exit_ts").tail(int(max(1, limit)))
+
+
 def _is_finite(v: Any) -> bool:
     try:
         x = float(v)
@@ -1128,7 +1334,7 @@ def build_fleet_performance(
         symbol = str(b.get("symbol") or "SOL-USDT")
         bot_id = str(b.get("id") or instance)
 
-        trades = _load_closed_trades_for_bot(b, since=since)
+        trades = _load_display_trades_for_bot(b, since=since)
         trade_curve, stats = _compounded_trade_curve(trades)
 
         acct_pts = _load_account_points_for_bot(b, since=since)
@@ -1271,7 +1477,7 @@ def build_fleet_trades(
     venue = str((bot or {}).get("venue") or "kucoin")
     since = _effective_since(hours)
     if bot:
-        df = _load_closed_trades_for_bot(bot, since=since, limit=max(limit * 3, limit))
+        df = _load_display_trades_for_bot(bot, since=since, limit=max(limit * 3, limit))
     else:
         df = _load_closed_trades_for_instance(
             strategy_instance=instance,

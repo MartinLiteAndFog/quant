@@ -458,6 +458,195 @@ class MultiInstanceTradesTests(unittest.TestCase):
         self.assertEqual(set(out["trade_id"]), {"a", "b"})
 
 
+class ExecutionActivityTradeTests(unittest.TestCase):
+    @staticmethod
+    def _row(
+        *,
+        event_id: str,
+        ts: str,
+        side: str,
+        reduce_only: bool,
+        reason: str,
+        before: int,
+        after: int,
+        price: float,
+        instance: str = "sol-pilot-canonical",
+    ) -> tuple[Any, ...]:
+        return (
+            event_id,
+            pd.Timestamp(ts),
+            "kucoin",
+            "SOLUSDT",
+            instance,
+            side,
+            1.0,
+            price,
+            reduce_only,
+            "sent",
+            f"quant:tv:{reason}:1",
+            {
+                "reason_code": f"tv_{reason}",
+                "position_before": before,
+                "position_after": after,
+            },
+        )
+
+    def test_completed_activity_round_trip_becomes_display_trade(self) -> None:
+        from quant.execution.fleet_api import _trades_from_execution_activity
+
+        rows = [
+            self._row(
+                event_id="open",
+                ts="2026-07-22T01:00:00Z",
+                side="buy",
+                reduce_only=False,
+                reason="entry",
+                before=0,
+                after=1,
+                price=100.0,
+            ),
+            self._row(
+                event_id="close",
+                ts="2026-07-22T02:00:00Z",
+                side="sell",
+                reduce_only=True,
+                reason="exit",
+                before=1,
+                after=0,
+                price=102.0,
+            ),
+        ]
+        bot = {
+            "id": "imba-runner",
+            "strategy_instance": "sol-pilot-canonical",
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+        }
+        out = _trades_from_execution_activity(rows, bot=bot)
+        self.assertEqual(len(out), 1)
+        trade = out.iloc[0]
+        self.assertEqual(trade["trade_id"], "activity:close")
+        self.assertEqual(trade["side"], "long")
+        self.assertAlmostEqual(float(trade["pnl_pct"]), 2.0)
+        self.assertEqual(trade["display_source"], "execution_activity")
+
+    def test_partial_take_profit_does_not_complete_trade(self) -> None:
+        from quant.execution.fleet_api import _trades_from_execution_activity
+
+        rows = [
+            self._row(
+                event_id="open",
+                ts="2026-07-22T01:00:00Z",
+                side="sell",
+                reduce_only=False,
+                reason="entry",
+                before=0,
+                after=-1,
+                price=100.0,
+            ),
+            self._row(
+                event_id="partial",
+                ts="2026-07-22T01:30:00Z",
+                side="buy",
+                reduce_only=True,
+                reason="tp1",
+                before=-1,
+                after=-1,
+                price=98.0,
+            ),
+            self._row(
+                event_id="close",
+                ts="2026-07-22T02:00:00Z",
+                side="buy",
+                reduce_only=True,
+                reason="tp2",
+                before=-1,
+                after=0,
+                price=96.0,
+            ),
+        ]
+        bot = {
+            "id": "imba-runner",
+            "strategy_instance": "sol-pilot-canonical",
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+        }
+        out = _trades_from_execution_activity(rows, bot=bot)
+        self.assertEqual(list(out["trade_id"]), ["activity:close"])
+        self.assertAlmostEqual(float(out.iloc[0]["pnl_pct"]), 4.0)
+
+    def test_closed_trade_wins_over_matching_activity_inference(self) -> None:
+        from quant.execution.fleet_api import _load_display_trades_for_bot
+
+        exit_ts = pd.Timestamp("2026-07-22T02:00:00Z")
+        closed = pd.DataFrame(
+            [
+                {
+                    **_trade(exit_ts.isoformat(), 1.5, "durable"),
+                    "symbol": "SOLUSDT",
+                }
+            ]
+        )
+        inferred = pd.DataFrame(
+            [
+                {
+                    **_trade((exit_ts + pd.Timedelta(seconds=2)).isoformat(), 1.4, "activity:close"),
+                    "symbol": "SOL-USDT",
+                    "display_source": "execution_activity",
+                }
+            ]
+        )
+        bot = {
+            "id": "imba-runner",
+            "strategy_instance": "sol-pilot-canonical",
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+        }
+        with patch(
+            "quant.execution.fleet_api._load_closed_trades_for_bot",
+            return_value=closed,
+        ), patch(
+            "quant.execution.fleet_api._load_execution_activity_trades_for_bot",
+            return_value=inferred,
+        ):
+            out = _load_display_trades_for_bot(bot)
+        self.assertEqual(list(out["trade_id"]), ["durable"])
+
+    def test_fleet_trade_view_uses_activity_fallback(self) -> None:
+        from quant.execution.fleet_api import build_fleet_trades
+
+        bot = {
+            "id": "imba-runner",
+            "display_name": "imba5",
+            "strategy_instance": "sol-pilot-canonical",
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+        }
+        inferred = pd.DataFrame(
+            [
+                {
+                    **_trade("2026-07-22T02:00:00Z", 2.0, "activity:close"),
+                    "strategy_instance": "sol-pilot-canonical",
+                }
+            ]
+        )
+        with patch(
+            "quant.execution.fleet_api.fleet_bot_registry",
+            return_value=[bot],
+        ), patch(
+            "quant.execution.fleet_api._load_display_trades_for_bot",
+            return_value=inferred,
+        ):
+            out = build_fleet_trades(
+                strategy_instance="sol-pilot-canonical",
+                hours=0,
+            )
+        self.assertEqual(out["count"], 1)
+        self.assertEqual(out["trades"][0]["trade_id"], "activity:close")
+        self.assertEqual(out["trades"][0]["bot_id"], "imba-runner")
+        self.assertEqual(out["trades"][0]["display_name"], "imba5")
+
+
 class CapitalizationLiveEquityTests(unittest.TestCase):
     def test_prefers_health_equity_over_snapshots(self) -> None:
         from quant.execution.fleet_api import build_fleet_capitalization
