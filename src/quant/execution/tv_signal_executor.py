@@ -125,7 +125,7 @@ class TVExecConfig:
             gate_mode=os.getenv("TV_EXEC_GATE_MODE", "countertrend").strip().lower(),
             cache_sec=float(os.getenv("TV_EXEC_CACHE_SEC", "10")),
             cache_max_age_sec=float(os.getenv("TV_EXEC_CACHE_MAX_AGE_SEC", "60")),
-            emergency_sl_pct=float(os.getenv("TV_EXEC_EMERGENCY_SL_PCT", "0.023")),
+            emergency_sl_pct=float(os.getenv("TV_EXEC_EMERGENCY_SL_PCT", "0.025")),
             flip_delay_sec=float(os.getenv("TV_EXEC_FLIP_DELAY_SEC", "2.0")),
             exit_after_open_guard_sec=float(
                 os.getenv("TV_EXEC_EXIT_AFTER_OPEN_GUARD_SEC", "5.0")
@@ -142,6 +142,12 @@ class TVSignal:
     action: str   # entry | exit | flip | tp1 | tp2 | sl
     side: str     # buy | sell | "" (not needed for exit/tp/sl)
     symbol: str
+    # Absolute stop price from the strategy, when the alert carries one. The
+    # emergency stop is only a backstop for a flash crash that TradingView is
+    # too slow to react to; if the strategy states where its own stop sits, that
+    # is the more accurate level — and it may legitimately be wider than the
+    # percentage fallback. Optional, so alerts without it keep working.
+    sl_price: Optional[float] = None
 
 
 def parse_tv_signal(payload: Dict[str, Any], default_symbol: str = "") -> TVSignal:
@@ -162,7 +168,20 @@ def parse_tv_signal(payload: Dict[str, Any], default_symbol: str = "") -> TVSign
     if not sym:
         sym = default_symbol or "SOL-USDT"
 
-    return TVSignal(action=action, side=side, symbol=sym)
+    sl_price: Optional[float] = None
+    for k in ("sl_price", "sl", "stop_price", "stop", "stoploss", "stop_loss"):
+        v = payload.get(k)
+        if v is None or isinstance(v, bool) or (isinstance(v, str) and not v.strip()):
+            continue
+        try:
+            parsed = float(v)
+        except (TypeError, ValueError):
+            continue
+        if parsed > 0:
+            sl_price = parsed
+            break
+
+    return TVSignal(action=action, side=side, symbol=sym, sl_price=sl_price)
 
 
 # ---------------------------------------------------------------------------
@@ -651,6 +670,46 @@ def _cancel_emergency_sl(broker: KucoinFuturesBroker, symbol: str) -> None:
         log.warning("tv_executor cancel emergency SL failed: %s", e)
 
 
+def _verify_stop_registered(
+    broker: KucoinFuturesBroker,
+    order_id: Optional[str],
+    expected_stop_price: float,
+) -> bool:
+    """Confirm the exchange actually accepted the order as a resting stop.
+
+    The failure this catches is silent and expensive: sent to the wrong
+    endpoint, KuCoin drops the trigger and keeps the rest, leaving a plain
+    reduce-only market order that fills at once and flattens the position it
+    was meant to protect. A registered stop comes back with `stop` set to
+    'down'/'up'; an empty `stop`, or a status showing it already filled, means
+    there is no protection on this position.
+
+    Best-effort and never raises — a failed check must not undo a good entry.
+    """
+    if not order_id:
+        return False
+    try:
+        order = broker.get_order(str(order_id))
+    except Exception as e:
+        log.warning("tv_executor could not verify emergency SL %s: %s", order_id, e)
+        return False
+    stop = str(order.get("stop") or "").strip().lower()
+    filled = str(order.get("status") or "").strip().lower() == "done"
+    if stop in ("down", "up") and not filled:
+        log.info(
+            "tv_executor emergency SL verified resting: order_id=%s stop=%s stopPrice=%s",
+            order_id, stop, order.get("stopPrice"),
+        )
+        return True
+    log.error(
+        "tv_executor EMERGENCY SL DID NOT REGISTER AS A STOP: order_id=%s stop=%r status=%r "
+        "size=%s expected_stop=%.4f — the position is UNPROTECTED and this order may have "
+        "filled immediately at market",
+        order_id, order.get("stop"), order.get("status"), order.get("size"), expected_stop_price,
+    )
+    return False
+
+
 def _place_emergency_sl(
     broker: KucoinFuturesBroker,
     symbol: str,
@@ -658,6 +717,7 @@ def _place_emergency_sl(
     qty: int,
     mid_price: float,
     sl_pct: float,
+    strategy_sl_price: Optional[float] = None,
 ) -> Optional[str]:
     if sl_pct <= 0 or qty <= 0 or mid_price <= 0:
         return None
@@ -670,6 +730,29 @@ def _place_emergency_sl(
         sl_side = "buy"
     else:
         return None
+
+    # Prefer the strategy's own stop when the alert states one — it is the real
+    # level, and may sit wider than the percentage backstop. Only accept it if
+    # it is on the protective side of the current price: a stop on the wrong
+    # side triggers the instant it is placed, which is precisely the failure
+    # this whole path just had to be fixed for.
+    if strategy_sl_price is not None and strategy_sl_price > 0:
+        protective = (
+            strategy_sl_price < mid_price if position_side == "long"
+            else strategy_sl_price > mid_price
+        )
+        if protective:
+            log.info(
+                "tv_executor emergency SL using strategy stop %.4f (backstop would be %.4f)",
+                strategy_sl_price, sl_price,
+            )
+            sl_price = float(strategy_sl_price)
+        else:
+            log.warning(
+                "tv_executor ignoring strategy stop %.4f for %s at %.4f — wrong side of price, "
+                "would trigger immediately; falling back to %.2f%% backstop at %.4f",
+                strategy_sl_price, position_side, mid_price, sl_pct * 100, sl_price,
+            )
 
     cid = _client_oid("emergency_sl")
     try:
@@ -685,6 +768,7 @@ def _place_emergency_sl(
             "tv_executor emergency SL placed: side=%s qty=%d sl_price=%.4f (%.1f%% from %.4f) order_id=%s",
             sl_side, qty, sl_price, sl_pct * 100, mid_price, oid,
         )
+        _verify_stop_registered(broker, oid, sl_price)
         return oid
     except Exception as e:
         log.error("tv_executor emergency SL placement failed: %s", e)
@@ -749,7 +833,7 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
 
         if side != "flat":
             # Opposite position: treat as flip
-            return _do_flip(broker, config, signal.symbol, signal.side, cache, seq)
+            return _do_flip(broker, config, signal.symbol, signal.side, cache, seq, signal.sl_price)
 
         if not cache.gate_allows_entry:
             _log_bg(_log_action, symbol=signal.symbol, seq=seq, action="entry",
@@ -775,7 +859,8 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
         oid = _place_market(broker, signal.symbol, order_side, qty, reduce_only=False, action_label="entry")
         pos_after_i = 1 if want_side == "long" else -1
 
-        _place_emergency_sl(broker, signal.symbol, want_side, qty, cache.mid_price, config.emergency_sl_pct)
+        _place_emergency_sl(broker, signal.symbol, want_side, qty, cache.mid_price,
+                            config.emergency_sl_pct, signal.sl_price)
         _refresh_position_in_cache(broker, config)
 
         _log_bg(_log_action, symbol=signal.symbol, seq=seq, action="entry",
@@ -857,7 +942,7 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
 
     # ----- flip -----
     if signal.action == "flip":
-        return _do_flip(broker, config, signal.symbol, signal.side, cache, seq)
+        return _do_flip(broker, config, signal.symbol, signal.side, cache, seq, signal.sl_price)
 
     # ----- tp1 -----
     if signal.action == "tp1":
@@ -975,6 +1060,7 @@ def _do_flip(
     order_side: str,
     cache: TVCache,
     seq: int,
+    strategy_sl_price: Optional[float] = None,
 ) -> Dict[str, Any]:
     """Flip: single net-off market order (close + open opposite in one shot)."""
     want_side = "long" if order_side == "buy" else "short"
@@ -1043,7 +1129,8 @@ def _do_flip(
         oid = _place_market(broker, symbol, order_side, qty, reduce_only=False, action_label="flip_entry")
         pos_after_i = 1 if want_side == "long" else -1
 
-        _place_emergency_sl(broker, symbol, want_side, qty, cache.mid_price, config.emergency_sl_pct)
+        _place_emergency_sl(broker, symbol, want_side, qty, cache.mid_price,
+                            config.emergency_sl_pct, strategy_sl_price)
         _refresh_position_in_cache(broker, config)
 
         _log_bg(_log_action, symbol=symbol, seq=seq, action="flip_entry",
@@ -1117,7 +1204,8 @@ def _do_flip(
         broker, symbol, order_side, qty, reduce_only=False, action_label="flip_open"
     )
 
-    _place_emergency_sl(broker, symbol, want_side, qty, cache.mid_price, config.emergency_sl_pct)
+    _place_emergency_sl(broker, symbol, want_side, qty, cache.mid_price,
+                            config.emergency_sl_pct, strategy_sl_price)
     _refresh_position_in_cache(broker, config)
 
     _log_bg(_log_action, symbol=symbol, seq=seq, action="flip",

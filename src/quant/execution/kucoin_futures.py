@@ -643,6 +643,19 @@ class KucoinFuturesBroker(BrokerAPI):
         """Place a stop-market (conditional) order on KuCoin Futures.
 
         stop_price_type: "TP" (mark price), "IP" (index price), "MP" (last traded price).
+
+        Must be POSTed to /api/v1/orders. This previously went to
+        /api/v1/st-orders, which is KuCoin's *attached* TP/SL endpoint and keys
+        off `triggerStopUpPrice` / `triggerStopDownPrice`. Given `stop` /
+        `stopPrice` instead, it silently dropped the trigger and accepted what
+        remained: a plain reduce-only market order, which fills immediately.
+
+        On 2026-07-25 that flattened every pilot entry roughly 300 ms after it
+        opened (imba5 19:05:36, imbatp 20:10:07 — both closed by a
+        `quant-tv-emergency_sl-*` order that came back `type=market stop=''`),
+        so the bots round-tripped on fees and ran with no stop protection at
+        all. A correctly registered stop returns `stop='down'`/`'up'`; an empty
+        `stop` on the placed order means the trigger was not accepted.
         """
         contract = _symbol_to_contract(symbol)
         body = {
@@ -661,8 +674,13 @@ class KucoinFuturesBroker(BrokerAPI):
         selected_mm = next((mm for mm in candidates if mm in ("CROSS", "ISOLATED")), None)
         if selected_mm:
             body["marginMode"] = selected_mm
-        data = self._req("POST", "/api/v1/st-orders", body=body)
+        data = self._req("POST", "/api/v1/orders", body=body)
         return str(data.get("orderId", data.get("order_id", "")))
+
+    def get_order(self, order_id: str) -> Dict[str, Any]:
+        """Fetch a single order by id (used to verify a stop actually registered)."""
+        data = self._req("GET", f"/api/v1/orders/{order_id}")
+        return data if isinstance(data, dict) else {}
 
     def cancel_all_stop_orders(self, symbol: str) -> Dict[str, Any]:
         """Cancel all stop/conditional orders for a symbol."""
