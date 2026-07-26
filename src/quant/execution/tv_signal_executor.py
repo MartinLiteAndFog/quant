@@ -107,6 +107,12 @@ class TVExecConfig:
     cache_max_age_sec: float
     emergency_sl_pct: float
     flip_delay_sec: float
+    # A flip already closes the old position and opens the new one. When
+    # TradingView also sends the matching `exit`, the two land milliseconds
+    # apart and the exit flattens the position the flip just opened — a
+    # round-trip that pays two lots of fees and holds nothing. Ignore an exit
+    # this soon after an open; 0 disables the guard.
+    exit_after_open_guard_sec: float
 
     @classmethod
     def from_env(cls) -> TVExecConfig:
@@ -121,6 +127,9 @@ class TVExecConfig:
             cache_max_age_sec=float(os.getenv("TV_EXEC_CACHE_MAX_AGE_SEC", "60")),
             emergency_sl_pct=float(os.getenv("TV_EXEC_EMERGENCY_SL_PCT", "0.023")),
             flip_delay_sec=float(os.getenv("TV_EXEC_FLIP_DELAY_SEC", "2.0")),
+            exit_after_open_guard_sec=float(
+                os.getenv("TV_EXEC_EXIT_AFTER_OPEN_GUARD_SEC", "5.0")
+            ),
         )
 
 
@@ -345,7 +354,21 @@ def _record_open_leg(
             "qty": float(qty),
             "entry_ts": _now_iso(),
             "entry_price": px,
+            # Monotonic stamp for the exit-after-flip guard. Wall-clock is not
+            # safe here: an NTP step could make a fresh position look old and
+            # let the guard through.
+            "opened_monotonic": time.monotonic(),
         }
+
+
+def _seconds_since_open(symbol: str) -> Optional[float]:
+    """Age of the currently tracked open leg, or None if there isn't one."""
+    with _open_legs_lock:
+        leg = _open_legs.get(str(symbol)) or {}
+    opened = leg.get("opened_monotonic")
+    if opened is None:
+        return None
+    return max(0.0, time.monotonic() - float(opened))
 
 
 def _append_tv_closed_trade(
@@ -779,6 +802,33 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
         close_qty = abs(int(pos))
         if close_qty <= 0:
             return {"ok": True, "action": "exit", "reason": "already_flat"}
+
+        # A flip closes the old position and opens the new one by itself. If
+        # TradingView also sends the matching `exit` for that same reversal, it
+        # arrives milliseconds later and flattens the position the flip just
+        # opened — the bot ends up flat having paid entry+exit fees for nothing.
+        # An exit belongs to the position it was computed against, so one that
+        # lands this soon after an open cannot have been meant for it.
+        age = _seconds_since_open(signal.symbol)
+        guard = float(config.exit_after_open_guard_sec or 0.0)
+        if guard > 0 and age is not None and age < guard:
+            _log_bg(_log_action, symbol=signal.symbol, seq=seq, action="exit",
+                    action_side=side, reason="tv_exit",
+                    pos_before=pos_before_i, pos_after=pos_before_i,
+                    blocked=True,
+                    block_reason=f"exit_after_open_guard:{age:.2f}s<{guard:.2f}s")
+            log.warning(
+                "tv_executor exit ignored: position opened %.2fs ago (< %.2fs guard) "
+                "— treating as the redundant exit of a flip, not a close of this position",
+                age, guard,
+            )
+            return {
+                "ok": True,
+                "action": "exit",
+                "reason": "exit_after_open_guard",
+                "position_age_sec": age,
+                "guard_sec": guard,
+            }
 
         if config.dry_run:
             log.warning("tv_executor DRY_RUN exit %s qty=%d", side, close_qty)
