@@ -370,6 +370,48 @@ class LiquidationAwarePlacementTests(unittest.TestCase):
         self.assertAlmostEqual(b.placed["stop_price"], round(75.0715 * 0.975, 4), places=4)
 
 
+class LiquidationBufferDefaultTests(unittest.TestCase):
+    """The buffer is a guard rail, not a stop-placement policy — it should bind
+    as rarely as possible and otherwise leave the chosen level alone."""
+
+    def _default(self):
+        import os
+        from quant.execution.tv_signal_executor import TVExecConfig
+
+        old = os.environ.pop("TV_EXEC_SL_LIQ_BUFFER_FRAC", None)
+        try:
+            return TVExecConfig.from_env().sl_liq_buffer_frac
+        finally:
+            if old is not None:
+                os.environ["TV_EXEC_SL_LIQ_BUFFER_FRAC"] = old
+
+    def test_default_is_ten_percent(self) -> None:
+        self.assertAlmostEqual(self._default(), 0.10, places=6)
+
+    def test_default_floor_for_the_canonical_pilot(self) -> None:
+        # liq 72.616 against a 75.0715 entry -> the stop may sit as low as 72.862.
+        floor = ktv._clamp_stop_inside_liquidation(
+            10.0, "long", 75.0715, 72.616, self._default()
+        )
+        self.assertAlmostEqual(floor, 72.8616, places=3)
+
+    def test_default_leaves_the_plain_backstop_alone(self) -> None:
+        # The 2.5% backstop at 73.1947 is already inside the 72.862 floor, so
+        # nothing is dragged tighter than it needs to be.
+        b = _LiqBroker(72.616)
+        ktv._place_emergency_sl(b, "SOL-USDT", "long", 158, 75.0715, 0.025,
+                                None, self._default())
+        self.assertAlmostEqual(b.placed["stop_price"], round(75.0715 * 0.975, 4), places=4)
+
+    def test_default_still_catches_a_stop_past_liquidation(self) -> None:
+        # The case the guard exists for: a level below the liquidation price.
+        b = _LiqBroker(72.616)
+        ktv._place_emergency_sl(b, "SOL-USDT", "long", 158, 75.0715, 0.025,
+                                72.0, self._default())
+        self.assertAlmostEqual(b.placed["stop_price"], 72.8616, places=3)
+        self.assertGreater(b.placed["stop_price"], 72.616)
+
+
 class LiquidationPriceLookupTests(unittest.TestCase):
     def test_retries_until_the_position_is_visible(self) -> None:
         # The stop is placed right after the fill, so the first read can be empty.

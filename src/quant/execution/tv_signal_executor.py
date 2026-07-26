@@ -114,11 +114,19 @@ class TVExecConfig:
     # this soon after an open; 0 disables the guard.
     exit_after_open_guard_sec: float
     # A percentage stop is blind to leverage. At 25x the liquidation price sits
-    # ~3% from entry, so a 2.5% backstop leaves almost no room, and any stop
-    # wider than that (a strategy's own level, say) would sit *past* liquidation
-    # — the exchange closes the position first and the stop never fires. Keep
-    # the stop at least this fraction of the entry->liquidation distance on the
-    # safe side of liquidation. 0 disables the clamp.
+    # ~3% from entry, so any stop wider than that (a strategy's own level, say)
+    # would sit *past* liquidation — the exchange closes the position first and
+    # the stop never fires. Keep the stop at least this fraction of the
+    # entry->liquidation distance on the safe side of liquidation.
+    #
+    # Deliberately small: this is a last-resort guard rail, not a stop-placement
+    # policy. Its job is only to stop a level ending up on the wrong side of
+    # liquidation, so it should bind as rarely as possible and otherwise leave
+    # the strategy's own level alone. At 10% a long entered at 75.07 against a
+    # liquidation of 72.616 can place its stop as low as 72.862; at 25% it would
+    # have been dragged all the way up to 73.230, tighter than the plain
+    # percentage backstop and tighter than the strategy ever asked for.
+    # 0 disables the clamp.
     sl_liq_buffer_frac: float
 
     @classmethod
@@ -138,7 +146,7 @@ class TVExecConfig:
                 os.getenv("TV_EXEC_EXIT_AFTER_OPEN_GUARD_SEC", "5.0")
             ),
             sl_liq_buffer_frac=float(
-                os.getenv("TV_EXEC_SL_LIQ_BUFFER_FRAC", "0.25")
+                os.getenv("TV_EXEC_SL_LIQ_BUFFER_FRAC", "0.10")
             ),
         )
 
