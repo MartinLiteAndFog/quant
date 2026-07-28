@@ -23,6 +23,7 @@ import unittest
 
 from quant.execution.kraken_tv_executor import (
     KrakenTVConfig,
+    _force_shrink_size,
     _is_insufficient_funds,
     _margin_required_usd,
     _place_open_with_margin_retry,
@@ -57,6 +58,7 @@ def _config(**overrides) -> KrakenTVConfig:
         margin_wait_attempts=3,
         margin_wait_delay_sec=0.0,
         open_retry_attempts=3,
+        open_retry_shrink_factor=0.90,
     )
     base.update(overrides)
     return KrakenTVConfig(**base)
@@ -247,6 +249,26 @@ class TestPlaceOpenWithMarginRetry(unittest.TestCase):
         )
         self.assertIsNotNone(result)
         self.assertEqual(size, 58.3)
+
+    def test_force_shrinks_when_available_still_reports_full(self) -> None:
+        # Incident 2026-07-28: availableMargin still looked large enough for the
+        # full target, Kraken rejected anyway, and retries logged `90.7 -> 90.7`.
+        # Available-based sizing alone must not leave the size unchanged.
+        client = _FakeClient([EQUITY], reject_below=AVAILABLE_AT_FAILURE)
+        result, size = _place_open_with_margin_retry(
+            client, _config(), side="buy", size=58.3, mark_price=MARK, equity_usd=EQUITY,
+        )
+        self.assertIsNotNone(result)
+        self.assertLess(size, 58.3)
+        self.assertEqual(client.orders[0]["size"], 58.3)
+        self.assertLess(client.orders[1]["size"], 58.3)
+        self.assertAlmostEqual(client.orders[1]["size"], _force_shrink_size(58.3, STEP, 0.90), places=6)
+        self.assertLessEqual(_margin_required_usd(size, MARK, LEVERAGE), AVAILABLE_AT_FAILURE)
+
+    def test_force_shrink_helper_drops_at_least_one_step(self) -> None:
+        self.assertAlmostEqual(_force_shrink_size(90.7, 0.1, 0.90), 81.6, places=6)
+        self.assertLess(_force_shrink_size(1.0, 0.1, 0.99), 1.0)
+        self.assertEqual(_force_shrink_size(0.1, 0.1, 0.90), 0.0)
 
 
 if __name__ == "__main__":

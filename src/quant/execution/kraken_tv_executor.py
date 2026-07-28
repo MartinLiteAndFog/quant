@@ -98,6 +98,10 @@ class KrakenTVConfig:
     margin_wait_attempts: int = 8
     margin_wait_delay_sec: float = 0.5
     open_retry_attempts: int = 3
+    # When Kraken rejects for funds but availableMargin still looks large enough
+    # (Incident 2026-07-28: retries logged 90.7 -> 90.7), force-shrink by this
+    # factor so the next attempt is strictly smaller.
+    open_retry_shrink_factor: float = 0.90
 
     @classmethod
     def from_env(cls) -> "KrakenTVConfig":
@@ -126,6 +130,9 @@ class KrakenTVConfig:
             margin_wait_attempts=int(float(_env_first("KRAKEN_TV_MARGIN_WAIT_ATTEMPTS", default="8"))),
             margin_wait_delay_sec=float(_env_first("KRAKEN_TV_MARGIN_WAIT_DELAY_SEC", default="0.5")),
             open_retry_attempts=int(float(_env_first("KRAKEN_TV_OPEN_RETRY_ATTEMPTS", default="3"))),
+            open_retry_shrink_factor=float(
+                _env_first("KRAKEN_TV_OPEN_RETRY_SHRINK", default="0.90")
+            ),
         )
 
 
@@ -372,6 +379,23 @@ def _place_market_checked(
     return _assert_order_accepted(result, label)
 
 
+def _force_shrink_size(size: float, step: float, factor: float) -> float:
+    """Strictly smaller size after a funds reject, floored to the venue step.
+
+    Prefer `size * factor`. If that does not drop by at least one step (tiny
+    sizes, or factor too close to 1), fall back to `size - step`.
+    """
+    step = max(float(step), 0.0)
+    current = float(size)
+    if current <= 0 or step <= 0:
+        return 0.0
+    factor = max(0.0, min(float(factor), 1.0))
+    shrunk = _floor_to_step(current * factor, step)
+    if shrunk >= current - 1e-12:
+        shrunk = _floor_to_step(current - step, step)
+    return max(0.0, shrunk)
+
+
 def _place_open_with_margin_retry(
     client: KrakenFuturesClient,
     config: "KrakenTVConfig",
@@ -388,9 +412,17 @@ def _place_open_with_margin_retry(
     2026-07-25, leaving the account flat after a successful close — re-read free
     collateral and retry at a size it can actually back. The size never grows
     between attempts. Returns the order result and the size actually sent.
+
+    Incident 2026-07-28: availableMargin can still look large enough for the full
+    target while the venue rejects the order. In that case available-based sizing
+    alone leaves the size unchanged (logged as `90.7 -> 90.7`). After a funds
+    reject we therefore always force a strictly smaller size when the available
+    fit did not shrink.
     """
     attempts = max(1, int(config.open_retry_attempts))
     current = float(size)
+    step = float(config.size_step)
+    shrink_factor = float(getattr(config, "open_retry_shrink_factor", 0.90) or 0.90)
     for attempt in range(attempts):
         if current <= 0:
             return None, 0.0
@@ -414,11 +446,15 @@ def _place_open_with_margin_retry(
                 mark_price=mark_price,
                 leverage=config.leverage,
                 pos_pct=config.pos_pct,
-                step=config.size_step,
+                step=step,
                 buffer=config.margin_buffer,
             )
             # Never grow the order on a retry — only ever fit it to what is free.
             resized = min(resized, current)
+            # If availableMargin still claims the full size fits (stale / lag),
+            # force a hard shrink so we do not retry the identical reject.
+            if resized >= current - 1e-12:
+                resized = _force_shrink_size(current, step, shrink_factor)
             if resized <= 0:
                 raise
             log.warning(
