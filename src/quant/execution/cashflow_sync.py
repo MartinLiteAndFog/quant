@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, List, Optional
 import pandas as pd
 
 from quant.execution.event_store import (
+    delete_closed_trade,
     ensure_cashflow_schema,
     upsert_closed_trade,
     upsert_cashflow_event,
@@ -209,13 +210,21 @@ def normalize_kraken_closed_trades(
                     * (1.0 if old_side > 0 else -1.0)
                 )
                 source_ref = str(
-                    wrapper.get("uid")
-                    or update.get("executionUid")
+                    update.get("executionUid")
                     or f"{int(ts_ms)}:{old_position}:{new_position}"
                 )
                 out.append(
                     {
                         "trade_id": f"kraken-position:{source_ref}",
+                        # The first deployed version incorrectly treated this
+                        # account-scoped uid as an event uid.  Carry the exact
+                        # generated id privately so sync can remove that one
+                        # stale row without broad historical deletion.
+                        "_legacy_trade_id": (
+                            f"kraken-position:{wrapper.get('uid')}"
+                            if wrapper.get("uid")
+                            else None
+                        ),
                         "venue": "kraken",
                         "symbol": "SOL-USD",
                         "entry_ts": (active_entry_ts or ts).to_pydatetime(),
@@ -371,6 +380,13 @@ def sync_once(*, venue: str, account: str, initial: bool = True) -> int:
                     coverage_start=start,
                     coverage_end=now,
                 )
+                legacy_ids = {
+                    str(trade.pop("_legacy_trade_id"))
+                    for trade in trades
+                    if trade.get("_legacy_trade_id")
+                }
+                for trade_id in legacy_ids:
+                    delete_closed_trade(trade_id=trade_id)
                 for trade in trades:
                     upsert_closed_trade(trade)
                 log.info(

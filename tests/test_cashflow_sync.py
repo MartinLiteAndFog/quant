@@ -128,6 +128,7 @@ class KrakenClosedTradeNormalizationTests(unittest.TestCase):
                     "executionSize": str(
                         abs(float(new_position) - float(old_position))
                     ),
+                    "executionUid": uid,
                     "positionChange": change,
                     "updateReason": reason,
                     "realizedPnL": "5",
@@ -168,6 +169,10 @@ class KrakenClosedTradeNormalizationTests(unittest.TestCase):
             [trade["trade_id"] for trade in trades],
             ["kraken-position:reverse", "kraken-position:close"],
         )
+        self.assertEqual(
+            {trade["_legacy_trade_id"] for trade in trades},
+            {"kraken-position:reverse", "kraken-position:close"},
+        )
         self.assertEqual([trade["side"] for trade in trades], ["long", "short"])
         self.assertEqual([trade["qty"] for trade in trades], [2.0, 3.0])
         self.assertEqual(trades[0]["entry_ts"].timestamp(), 1.0)
@@ -198,6 +203,7 @@ class KrakenClosedTradeNormalizationTests(unittest.TestCase):
 
 class KrakenSyncTests(unittest.TestCase):
     @patch("quant.execution.cashflow_sync.upsert_cashflow_sync_state")
+    @patch("quant.execution.cashflow_sync.delete_closed_trade")
     @patch("quant.execution.cashflow_sync.upsert_closed_trade")
     @patch("quant.execution.cashflow_sync.upsert_cashflow_event")
     @patch("quant.execution.cashflow_sync._fetch_kraken_closed_trades")
@@ -210,17 +216,28 @@ class KrakenSyncTests(unittest.TestCase):
         fetch_trades,
         upsert_cashflow,
         upsert_trade,
+        delete_trade,
         upsert_state,
     ) -> None:
         fetch_cashflows.return_value = [{"event_id": "flow"}]
-        fetch_trades.return_value = [{"trade_id": "trade"}]
+        fetch_trades.return_value = [
+            {
+                "trade_id": "kraken-position:execution",
+                "_legacy_trade_id": "kraken-position:account",
+            }
+        ]
 
         count = sync_once(venue="kraken", account="main")
 
         self.assertEqual(count, 1)
         ensure_schema.assert_called_once()
         upsert_cashflow.assert_called_once_with({"event_id": "flow"})
-        upsert_trade.assert_called_once_with({"trade_id": "trade"})
+        delete_trade.assert_called_once_with(
+            trade_id="kraken-position:account"
+        )
+        upsert_trade.assert_called_once_with(
+            {"trade_id": "kraken-position:execution"}
+        )
         self.assertIsNone(upsert_state.call_args.kwargs["last_error"])
 
     @patch("quant.execution.cashflow_sync.upsert_cashflow_sync_state")

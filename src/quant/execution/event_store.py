@@ -454,6 +454,15 @@ def upsert_closed_trade(row: Dict[str, Any]) -> None:
         cur.execute(sql, data)
 
 
+def delete_closed_trade(*, trade_id: str) -> None:
+    """Delete one exactly identified Fleet read-model trade."""
+    with get_conn() as conn, conn.cursor() as cur:
+        cur.execute(
+            "delete from closed_trades where trade_id = %(trade_id)s",
+            {"trade_id": str(trade_id)},
+        )
+
+
 def upsert_daily_gate_history(row: Dict[str, Any]) -> None:
     ensure_daily_gate_history_schema()
     sql = """
