@@ -71,7 +71,9 @@ _DEFAULT_BOTS: List[Dict[str, Any]] = [
         # Quant was intentionally retired/reset on 2026-07-28. Keep its live
         # account equity visible, but start every display-performance metric
         # from this clean boundary so a later restart begins at 0%.
-        "performance_start": "2026-07-28T10:00:00Z",
+        # Re-anchored again after a cash withdrawal (not trading PnL) so the
+        # account % curve does not treat the withdraw as a -50% loss.
+        "performance_start": "2026-07-28T16:59:00Z",
         "cashflow_return_excluded": True,
         "cashflow_unavailable_reason": "performance_reset",
         # Dashboard equity_snapshots historically used account='futures'.
