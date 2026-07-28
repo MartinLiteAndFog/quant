@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from contextlib import contextmanager
 from unittest.mock import patch
 
 from quant.execution.cashflow_sync import (
@@ -245,6 +246,53 @@ class KrakenSyncTests(unittest.TestCase):
         self.assertEqual(count, 1)
         upsert_cashflow.assert_called_once_with({"event_id": "flow"})
         self.assertIsNone(upsert_state.call_args.kwargs["last_error"])
+
+
+class CashflowSyncStateSqlTests(unittest.TestCase):
+    def test_null_error_parameter_has_explicit_postgres_type(self) -> None:
+        from quant.execution.event_store import upsert_cashflow_sync_state
+
+        captured: dict = {}
+
+        class Cursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def execute(self, sql, params):
+                captured["sql"] = sql
+                captured["params"] = params
+
+        class Connection:
+            def cursor(self):
+                return Cursor()
+
+        @contextmanager
+        def fake_conn():
+            yield Connection()
+
+        with patch(
+            "quant.execution.event_store.ensure_cashflow_schema"
+        ), patch(
+            "quant.execution.event_store.get_conn",
+            side_effect=fake_conn,
+        ):
+            upsert_cashflow_sync_state(
+                venue="kraken",
+                account="main",
+                coverage_start=None,
+                coverage_end=None,
+                source="test",
+                last_error=None,
+            )
+
+        self.assertIn(
+            "case when %(last_error)s::text is null",
+            captured["sql"],
+        )
+        self.assertIsNone(captured["params"]["last_error"])
 
 
 if __name__ == "__main__":

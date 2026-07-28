@@ -379,7 +379,7 @@ def upsert_cashflow_sync_state(
       last_error, source, updated_at
     ) values (
       %(venue)s, %(account)s, %(coverage_start)s, %(coverage_end)s,
-      case when %(last_error)s is null then now() else null end,
+      case when %(last_error)s::text is null then now() else null end,
       %(last_error)s, %(source)s, now()
     )
     on conflict (venue, account) do update set
