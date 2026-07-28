@@ -68,6 +68,12 @@ _DEFAULT_BOTS: List[Dict[str, Any]] = [
         "id": "quant-main",
         "display_name": "Quant (KuCoin main)",
         "strategy_instance": "quant",
+        # Quant was intentionally retired/reset on 2026-07-28. Keep its live
+        # account equity visible, but start every display-performance metric
+        # from this clean boundary so a later restart begins at 0%.
+        "performance_start": "2026-07-28T10:00:00Z",
+        "cashflow_return_excluded": True,
+        "cashflow_unavailable_reason": "performance_reset",
         # Dashboard equity_snapshots historically used account='futures'.
         "equity_account": "futures",
         "trade_instances": ["quant", "live_executor"],
@@ -150,6 +156,28 @@ def _effective_since(hours: Optional[float]) -> Optional[pd.Timestamp]:
     return since
 
 
+def _bot_effective_since(
+    bot: Dict[str, Any],
+    since: Optional[pd.Timestamp],
+) -> Optional[pd.Timestamp]:
+    """Apply an optional bot-specific display reset without touching trading."""
+    raw = str(bot.get("performance_start") or "").strip()
+    if not raw:
+        return since
+    try:
+        reset = pd.Timestamp(raw)
+        if reset.tzinfo is None:
+            reset = reset.tz_localize("UTC")
+        else:
+            reset = reset.tz_convert("UTC")
+    except Exception:
+        log.warning("invalid performance_start bot=%s value=%s", bot.get("id"), raw)
+        return since
+    if since is None or reset > since:
+        return reset
+    return since
+
+
 def _fetch_health(url: str, timeout: float = 8.0) -> Dict[str, Any]:
     if not url:
         return {"ok": False, "error": "no_health_url"}
@@ -182,6 +210,7 @@ def list_fleet_bots(*, probe_health: bool = True) -> Dict[str, Any]:
             "symbol": b.get("symbol") or "SOL-USDT",
             "health_url": b.get("health_url"),
             "color": b.get("color"),
+            "performance_start": b.get("performance_start"),
         }
         if probe_health:
             health = _fetch_health(str(b.get("health_url") or ""))
@@ -741,8 +770,18 @@ def _downsample_points(
         spaced = simple
     else:
         spaced = [simple[0]]
-        for p in simple[1:-1]:
-            if int(p["t"]) - int(spaced[-1]["t"]) >= min_iv:
+        for idx, p in enumerate(simple[1:-1], start=1):
+            try:
+                starts_plateau = (
+                    abs(float(p[value_key]) - float(simple[idx + 1][value_key])) < 1e-9
+                    and abs(float(p[value_key]) - float(simple[idx - 1][value_key])) >= 1e-9
+                )
+            except Exception:
+                starts_plateau = False
+            if (
+                int(p["t"]) - int(spaced[-1]["t"]) >= min_iv
+                or starts_plateau
+            ):
                 spaced.append(p)
         if int(simple[-1]["t"]) != int(spaced[-1]["t"]):
             spaced.append(simple[-1])
@@ -760,8 +799,15 @@ def _downsample_points(
     bucket = max(1, (t1 - t0) // (max_points - 1))
     out: List[Dict[str, Any]] = [spaced[0]]
     next_t = t0 + bucket
-    for p in spaced[1:-1]:
-        if int(p["t"]) >= next_t:
+    for idx, p in enumerate(spaced[1:-1], start=1):
+        try:
+            starts_plateau = (
+                abs(float(p[value_key]) - float(spaced[idx + 1][value_key])) < 1e-9
+                and abs(float(p[value_key]) - float(spaced[idx - 1][value_key])) >= 1e-9
+            )
+        except Exception:
+            starts_plateau = False
+        if int(p["t"]) >= next_t or starts_plateau:
             out.append(p)
             next_t = int(p["t"]) + bucket
     out.append(spaced[-1])
@@ -1265,12 +1311,24 @@ def _build_cashflow_return(
         for row in series
         if row.get("account_curve_abs") and str(row.get("id")) not in excluded_set
     ]
+    ledger_rows = [
+        row
+        for row in series
+        if row.get("account_curve_abs")
+        and (
+            registry_by_id.get(str(row.get("id")), {}).get(
+                "cashflow_unavailable_reason"
+            )
+            != "ledger_credentials_unavailable"
+        )
+    ]
     base = {
         "available": False,
         "return_pct": None,
         "net_cashflow": None,
         "flow_count": 0,
         "scope_label": f"{len(eligible)} futures accounts",
+        "flow_scope_label": f"{len(ledger_rows)} recorded futures accounts",
         "boundary_note": (
             "KuCoin Funding↔Futures and Kraken Spot↔Futures boundaries; "
             "ultimate spot-wallet origin is outside scope"
@@ -1291,7 +1349,7 @@ def _build_cashflow_return(
     all_flows: List[Dict[str, Any]] = []
     state_ends: List[int] = []
     unavailable: List[str] = []
-    for row in eligible:
+    for row in ledger_rows:
         bot_id = str(row.get("id"))
         config = registry_by_id.get(bot_id) or {}
         venue = str(config.get("venue") or row.get("venue") or "kucoin")
@@ -1304,14 +1362,17 @@ def _build_cashflow_return(
         flows, state = _load_cashflow_data(
             venue=venue,
             account=account,
-            since=pd.Timestamp(start_ts, unit="s", tz="UTC"),
+            since=pd.Timestamp(requested_start, unit="s", tz="UTC"),
             until=pd.Timestamp(requested_end, unit="s", tz="UTC"),
         )
         if not state or not state.get("last_success_at") or not state.get("coverage_end"):
             unavailable.append(bot_id)
             continue
         coverage_start = state.get("coverage_start")
-        if coverage_start is None or int(pd.Timestamp(coverage_start).timestamp()) > start_ts:
+        if (
+            coverage_start is None
+            or int(pd.Timestamp(coverage_start).timestamp()) > requested_start
+        ):
             unavailable.append(bot_id)
             continue
         state_ends.append(int(pd.Timestamp(state["coverage_end"]).timestamp()))
@@ -1357,6 +1418,9 @@ def _build_cashflow_return(
     scoped_flows = [
         flow for flow in all_flows if start_ts < int(flow["t"]) <= end_ts
     ]
+    selected_range_flows = [
+        flow for flow in all_flows if requested_start < int(flow["t"]) <= end_ts
+    ]
     unsupported = sorted(
         {
             str(flow.get("currency") or "unknown")
@@ -1387,9 +1451,9 @@ def _build_cashflow_return(
         "available": True,
         "return_pct": return_pct,
         "net_cashflow": round(
-            sum(float(flow["reporting_amount"]) for flow in scoped_flows), 6
+            sum(float(flow["reporting_amount"]) for flow in selected_range_flows), 6
         ),
-        "flow_count": len(scoped_flows),
+        "flow_count": len(selected_range_flows),
         "reason": None,
         "as_of": pd.Timestamp(end_ts, unit="s", tz="UTC").isoformat(),
     }
@@ -1623,11 +1687,12 @@ def build_fleet_performance(
         venue = str(b.get("venue") or "kucoin")
         symbol = str(b.get("symbol") or "SOL-USDT")
         bot_id = str(b.get("id") or instance)
+        bot_since = _bot_effective_since(b, since)
 
-        trades = _load_display_trades_for_bot(b, since=since)
+        trades = _load_display_trades_for_bot(b, since=bot_since)
         trade_curve, stats = _compounded_trade_curve(trades)
 
-        acct_pts = _load_account_points_for_bot(b, since=since)
+        acct_pts = _load_account_points_for_bot(b, since=bot_since)
         last_snapshot_ts = int(acct_pts[-1]["t"]) if acct_pts else None
         snapshot_age_sec = (
             max(0, now_ts - last_snapshot_ts) if last_snapshot_ts is not None else None
@@ -1676,6 +1741,11 @@ def build_fleet_performance(
                     ),
                     "boundary": "futures",
                 },
+                "performance_start": (
+                    bot_since.isoformat()
+                    if b.get("performance_start") and bot_since is not None
+                    else None
+                ),
             }
         )
 

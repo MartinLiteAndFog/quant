@@ -12,6 +12,7 @@ import pandas as pd
 
 from quant.execution.fleet_api import (
     _compounded_trade_curve,
+    _downsample_points,
     _normalize_account_curve,
     build_fleet_performance,
     fleet_bot_registry,
@@ -93,6 +94,33 @@ class NormalizeAccountCurveTests(unittest.TestCase):
             [{"t": 1, "equity": 100.0}, {"t": 2, "equity": 200.0}]
         )
         self.assertAlmostEqual(out[-1]["equity_pct"], 100.0, places=5)
+
+
+class DownsampleAccountCurveTests(unittest.TestCase):
+    def test_preserves_start_of_new_flat_level(self) -> None:
+        """A durable new balance must not appear only at the live endpoint."""
+        points = [
+            {"t": i * 60, "equity": 100.0 + (i % 7)}
+            for i in range(220)
+        ]
+        points.extend(
+            [
+                {"t": 220 * 60, "equity": 68.0},
+                {"t": 221 * 60, "equity": 68.0},
+                {"t": 400 * 60, "equity": 68.0},
+            ]
+        )
+
+        out = _downsample_points(
+            points,
+            max_points=40,
+            value_key="equity",
+            min_interval_sec=900,
+        )
+
+        first_new_level = next(p for p in out if p["equity"] == 68.0)
+        self.assertEqual(first_new_level["t"], 220 * 60)
+        self.assertEqual(out[-1], {"t": 400 * 60, "equity": 68.0})
 
 
 class TwrAccountCurveTests(unittest.TestCase):
@@ -261,9 +289,26 @@ class CashflowCorrectedReturnTests(unittest.TestCase):
             "last_error": None,
             "source": "test",
         }
+        seen_since: list[pd.Timestamp] = []
+
+        def load(*, venue, account, since, until):
+            seen_since.append(since)
+            flows = (
+                [
+                    {
+                        "t": 95,
+                        "reporting_amount": 50.0,
+                        "currency": "USDT",
+                    }
+                ]
+                if account == "early"
+                else []
+            )
+            return flows, state
+
         with patch(
             "quant.execution.fleet_api._load_cashflow_data",
-            return_value=([], state),
+            side_effect=load,
         ):
             metric = _build_cashflow_return(
                 series,
@@ -273,6 +318,17 @@ class CashflowCorrectedReturnTests(unittest.TestCase):
             )
         self.assertTrue(metric["available"])
         self.assertAlmostEqual(metric["return_pct"], 10.0, places=5)
+        # The TWR common equity scope starts at t=100, but Net Flows describes
+        # the user's selected range beginning at t=80.
+        self.assertEqual(metric["net_cashflow"], 50.0)
+        self.assertEqual(metric["flow_count"], 1)
+        self.assertEqual(
+            seen_since,
+            [
+                pd.Timestamp(80, unit="s", tz="UTC"),
+                pd.Timestamp(80, unit="s", tz="UTC"),
+            ],
+        )
 
     def test_missing_sync_is_unavailable_instead_of_inferred(self) -> None:
         from quant.execution.fleet_api import _build_cashflow_return
@@ -350,6 +406,66 @@ class BuildFleetPerformanceFilterTests(unittest.TestCase):
         self.assertEqual(out["series"][0]["account_curve_abs"], [])
         self.assertIn("portfolio", out)
         self.assertEqual(out["portfolio"]["id"], "portfolio")
+
+    def test_bot_performance_reset_rebases_metrics_but_keeps_live_equity(self) -> None:
+        bot = {
+            "id": "quant-main",
+            "display_name": "Quant (KuCoin main)",
+            "strategy_instance": "quant",
+            "equity_account": "futures",
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+            "performance_start": "2026-07-28T10:00:00Z",
+            "cashflow_return_excluded": True,
+        }
+        seen_trade_since: list[pd.Timestamp] = []
+        seen_equity_since: list[pd.Timestamp] = []
+
+        def _load_trades(_bot: Dict[str, Any], *, since=None, limit=5000):
+            seen_trade_since.append(since)
+            return pd.DataFrame()
+
+        def _load_equity(_bot: Dict[str, Any], *, since=None):
+            seen_equity_since.append(since)
+            return [{"t": 1785232801, "equity": 43.772525}]
+
+        with patch(
+            "quant.execution.fleet_api.fleet_bot_registry",
+            return_value=[bot],
+        ), patch(
+            "quant.execution.fleet_api.list_fleet_bots",
+            return_value={
+                "ok": True,
+                "bots": [
+                    {
+                        "id": "quant-main",
+                        "equity": 43.772525,
+                        "currency": "USDT",
+                    }
+                ],
+            },
+        ), patch(
+            "quant.execution.fleet_api._load_display_trades_for_bot",
+            side_effect=_load_trades,
+        ), patch(
+            "quant.execution.fleet_api._load_account_points_for_bot",
+            side_effect=_load_equity,
+        ):
+            out = build_fleet_performance(hours=0)
+
+        reset = pd.Timestamp("2026-07-28T10:00:00Z")
+        self.assertEqual(seen_trade_since, [reset])
+        self.assertEqual(seen_equity_since, [reset])
+        quant = out["series"][0]
+        self.assertEqual(quant["live_equity"], 43.772525)
+        self.assertEqual(quant["stats"]["trade_count"], 0)
+        self.assertEqual(quant["stats"]["return_pct"], 0.0)
+        self.assertEqual(quant["trade_curve"], [])
+        self.assertEqual(quant["account_curve"][-1]["equity_pct"], 0.0)
+        self.assertEqual(
+            quant["performance_start"],
+            "2026-07-28T10:00:00+00:00",
+        )
 
 
 class PortfolioAggregateTests(unittest.TestCase):
