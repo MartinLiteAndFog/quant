@@ -15,6 +15,7 @@ from urllib.request import Request, urlopen
 import pandas as pd
 
 from quant.execution.event_store import get_conn
+from quant.execution.fleet_history import fleet_history_start
 from quant.utils.log import get_logger
 
 log = get_logger("quant.fleet_api")
@@ -136,14 +137,7 @@ def _history_start_ts() -> Optional[pd.Timestamp]:
     retired bots); the board counts from the fresh start (2026-07-22 audit).
     Set FLEET_HISTORY_START=off to include everything.
     """
-    raw = (os.getenv("FLEET_HISTORY_START") or "2026-07-16").strip()
-    if raw.lower() in {"", "0", "off", "none", "all"}:
-        return None
-    try:
-        ts = pd.Timestamp(raw)
-        return ts.tz_localize("UTC") if ts.tzinfo is None else ts.tz_convert("UTC")
-    except Exception:
-        return None
+    return fleet_history_start()
 
 
 def _effective_since(hours: Optional[float]) -> Optional[pd.Timestamp]:

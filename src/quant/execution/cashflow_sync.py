@@ -20,9 +20,11 @@ import pandas as pd
 
 from quant.execution.event_store import (
     ensure_cashflow_schema,
+    upsert_closed_trade,
     upsert_cashflow_event,
     upsert_cashflow_sync_state,
 )
+from quant.execution.fleet_history import fleet_history_start
 from quant.utils.log import get_logger
 
 log = get_logger("quant.cashflow_sync")
@@ -150,6 +152,107 @@ def normalize_kraken_cashflows(
     return out
 
 
+def normalize_kraken_closed_trades(
+    rows: Iterable[Dict[str, Any]],
+    *,
+    symbol: str = "PF_SOLUSD",
+) -> List[Dict[str, Any]]:
+    """Convert authoritative Kraken position closes/reversals to Fleet trades.
+
+    Kraken emits a position update for every fill fragment.  Only ``close`` and
+    ``reverse`` complete the prior position; ``decrease`` is deliberately
+    ignored so partial take-profit fills never become standalone trades.
+    """
+    wrappers = [row for row in rows if isinstance(row, dict)]
+    wrappers.sort(key=lambda row: _to_float(row.get("timestamp")) or 0.0)
+    out: List[Dict[str, Any]] = []
+    active_side = 0
+    active_entry_ts: Optional[pd.Timestamp] = None
+
+    for wrapper in wrappers:
+        event = wrapper.get("event")
+        update = event.get("PositionUpdate") if isinstance(event, dict) else None
+        if not isinstance(update, dict):
+            continue
+        if str(update.get("tradeable") or "").upper() != str(symbol).upper():
+            continue
+        if str(update.get("updateReason") or "").strip().lower() != "trade":
+            continue
+
+        ts_ms = _to_float(update.get("timestamp") or wrapper.get("timestamp"))
+        old_position = _to_float(update.get("oldPosition"))
+        new_position = _to_float(update.get("newPosition"))
+        if ts_ms is None or old_position is None or new_position is None:
+            continue
+        ts = pd.Timestamp(ts_ms, unit="ms", tz="UTC")
+        old_side = 1 if old_position > 0 else -1 if old_position < 0 else 0
+        new_side = 1 if new_position > 0 else -1 if new_position < 0 else 0
+
+        fill_ms = _to_float(update.get("fillTime"))
+        fill_ts = pd.Timestamp(fill_ms, unit="ms", tz="UTC") if fill_ms else ts
+        if old_side and (
+            active_side != old_side
+            or active_entry_ts is None
+            or fill_ts < active_entry_ts
+        ):
+            active_side = old_side
+            active_entry_ts = fill_ts
+
+        position_change = str(update.get("positionChange") or "").strip().lower()
+        if position_change in {"close", "reverse"} and old_side:
+            entry_price = _to_float(update.get("oldAverageEntryPrice"))
+            exit_price = _to_float(update.get("executionPrice"))
+            if entry_price is not None and entry_price > 0 and exit_price is not None:
+                pnl_pct = (
+                    (exit_price / entry_price - 1.0)
+                    * 100.0
+                    * (1.0 if old_side > 0 else -1.0)
+                )
+                source_ref = str(
+                    wrapper.get("uid")
+                    or update.get("executionUid")
+                    or f"{int(ts_ms)}:{old_position}:{new_position}"
+                )
+                out.append(
+                    {
+                        "trade_id": f"kraken-position:{source_ref}",
+                        "venue": "kraken",
+                        "symbol": "SOL-USD",
+                        "entry_ts": (active_entry_ts or ts).to_pydatetime(),
+                        "exit_ts": ts.to_pydatetime(),
+                        "side": "long" if old_side > 0 else "short",
+                        "qty": abs(old_position),
+                        "entry_price": entry_price,
+                        "exit_price": exit_price,
+                        "pnl_pct": pnl_pct,
+                        "exit_event": f"kraken_position_{position_change}",
+                        "strategy": "kraken_tv_executor",
+                        "strategy_instance": "kraken_bot",
+                        "config_hash": "kraken_tv_executor_v1",
+                        "source_action_event_id": None,
+                        "payload_json": {
+                            "position_change": position_change,
+                            "realized_pnl": _to_float(update.get("realizedPnL")),
+                            "fee": _to_float(update.get("fee")),
+                            "fee_currency": update.get("feeCurrency"),
+                            "trade_type": update.get("tradeType"),
+                        },
+                    }
+                )
+
+        if new_side == 0:
+            active_side = 0
+            active_entry_ts = None
+        elif new_side != old_side:
+            active_side = new_side
+            active_entry_ts = ts
+        elif active_entry_ts is None:
+            active_side = new_side
+            active_entry_ts = fill_ts
+
+    return out
+
+
 def _kucoin_rows(start_ms: int, end_ms: int) -> List[Dict[str, Any]]:
     from quant.execution.kucoin_futures import KucoinFuturesBroker
 
@@ -212,17 +315,32 @@ def _fetch_kraken_cashflows(
     ]
 
 
+def _fetch_kraken_closed_trades(
+    *,
+    coverage_start: pd.Timestamp,
+    coverage_end: pd.Timestamp,
+) -> List[Dict[str, Any]]:
+    from quant.execution.kraken_futures import KrakenFuturesClient
+
+    client = KrakenFuturesClient()
+    client.timeout_s = max(client.timeout_s, 40)
+    # The authenticated history endpoint defaults to the latest 1,000 position
+    # events.  That currently reaches past Fleet's configured history floor;
+    # filtering is repeated locally because the legacy signer does not include
+    # GET query parameters in its authentication payload.
+    payload = client._req("GET", "/api/history/v3/positions", private=True)
+    normalized = normalize_kraken_closed_trades(payload.get("elements") or [])
+    return [
+        row
+        for row in normalized
+        if coverage_start <= pd.Timestamp(row["exit_ts"]) <= coverage_end
+    ]
+
+
 def _coverage_start(now: pd.Timestamp, *, initial: bool) -> pd.Timestamp:
     if not initial:
         return now - pd.Timedelta(days=2)
-    raw = str(os.getenv("FLEET_HISTORY_START") or "2026-07-16").strip()
-    if raw.lower() in {"", "0", "off", "none", "all"}:
-        return now - pd.Timedelta(days=90)
-    try:
-        parsed = pd.Timestamp(raw)
-        return parsed.tz_localize("UTC") if parsed.tzinfo is None else parsed.tz_convert("UTC")
-    except Exception:
-        return now - pd.Timedelta(days=90)
+    return fleet_history_start() or (now - pd.Timedelta(days=90))
 
 
 def sync_once(*, venue: str, account: str, initial: bool = True) -> int:
@@ -247,6 +365,27 @@ def sync_once(*, venue: str, account: str, initial: bool = True) -> int:
             raise ValueError(f"unsupported cashflow venue: {venue}")
         for event in events:
             upsert_cashflow_event(event)
+        if venue == "kraken":
+            try:
+                trades = _fetch_kraken_closed_trades(
+                    coverage_start=start,
+                    coverage_end=now,
+                )
+                for trade in trades:
+                    upsert_closed_trade(trade)
+                log.info(
+                    "kraken closed-trade sync complete account=%s trades=%s",
+                    account,
+                    len(trades),
+                )
+            except Exception as exc:
+                # Trade-history availability must not invalidate an otherwise
+                # authoritative cashflow sync or leave Net Flows pending.
+                log.warning(
+                    "kraken closed-trade sync failed account=%s error=%s",
+                    account,
+                    type(exc).__name__,
+                )
         upsert_cashflow_sync_state(
             venue=venue,
             account=account,

@@ -644,6 +644,67 @@ class MultiInstanceTradesTests(unittest.TestCase):
         self.assertEqual(len(out), 2)
         self.assertEqual(set(out["trade_id"]), {"a", "b"})
 
+    def test_kraken_synced_trade_reaches_performance_after_shared_cutoff(self) -> None:
+        from quant.execution.fleet_api import build_fleet_performance
+
+        bot = {
+            "id": "kraken-legacy",
+            "display_name": "Kraken Legacy",
+            "strategy_instance": "kraken_bot",
+            "trade_instances": ["kraken_bot", "live_executor_2"],
+            "venue": "kraken",
+            "symbol": "SOL-USD",
+            "color": "#b07050",
+        }
+        trades = pd.DataFrame(
+            [
+                {
+                    "trade_id": "kraken-position:1",
+                    "venue": "kraken",
+                    "symbol": "SOL-USD",
+                    "entry_ts": pd.Timestamp("2026-07-22T12:00:00Z"),
+                    "exit_ts": pd.Timestamp("2026-07-23T12:00:00Z"),
+                    "side": "long",
+                    "qty": 2.0,
+                    "entry_price": 100.0,
+                    "exit_price": 103.0,
+                    "pnl_pct": 3.0,
+                    "exit_event": "kraken_position_reverse",
+                    "strategy": "kraken_tv_executor",
+                    "strategy_instance": "kraken_bot",
+                }
+            ]
+        )
+        seen_since: list[pd.Timestamp] = []
+
+        def _load(bot_arg, *, since=None, limit=5000):
+            seen_since.append(since)
+            return trades
+
+        with patch.dict(
+            "os.environ",
+            {"FLEET_HISTORY_START": "2026-07-22"},
+            clear=False,
+        ), patch(
+            "quant.execution.fleet_api.fleet_bot_registry",
+            return_value=[bot],
+        ), patch(
+            "quant.execution.fleet_api.list_fleet_bots",
+            return_value={"ok": True, "bots": []},
+        ), patch(
+            "quant.execution.fleet_api._load_display_trades_for_bot",
+            side_effect=_load,
+        ), patch(
+            "quant.execution.fleet_api._load_account_points_for_bot",
+            return_value=[],
+        ):
+            out = build_fleet_performance(hours=0)
+
+        self.assertEqual(seen_since, [pd.Timestamp("2026-07-22T00:00:00Z")])
+        self.assertEqual(out["since"], "2026-07-22T00:00:00+00:00")
+        self.assertEqual(out["series"][0]["stats"]["trade_count"], 1)
+        self.assertTrue(out["series"][0]["trade_curve"])
+
 
 class ExecutionActivityTradeTests(unittest.TestCase):
     @staticmethod
