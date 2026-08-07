@@ -1238,11 +1238,11 @@ def _load_cashflow_data(
     return flows, state
 
 
-def _cashflow_corrected_return(
+def _cashflow_corrected_curve(
     points: List[Dict[str, Any]],
     cashflows: List[Dict[str, Any]],
-) -> Optional[float]:
-    """Chain equity changes after subtracting confirmed timestamped cashflows."""
+) -> List[Dict[str, Any]]:
+    """Time series of cashflow-corrected equity growth (0% at first point)."""
     clean = [
         {"t": int(point["t"]), "equity": float(point["equity"])}
         for point in points
@@ -1252,7 +1252,7 @@ def _cashflow_corrected_return(
     ]
     clean.sort(key=lambda point: point["t"])
     if len(clean) < 2:
-        return None
+        return []
     flows = sorted(
         [
             flow
@@ -1265,6 +1265,7 @@ def _cashflow_corrected_return(
     growth = 1.0
     flow_index = 0
     last_value = clean[0]["equity"]
+    out: List[Dict[str, Any]] = [{"t": clean[0]["t"], "equity_pct": 0.0}]
     for point in clean[1:]:
         interval_flows: List[Dict[str, Any]] = []
         while flow_index < len(flows) and int(flows[flow_index]["t"]) <= point["t"]:
@@ -1280,15 +1281,29 @@ def _cashflow_corrected_return(
                 continue
             before = float(equity_after) - amount
             if before <= 0 or last_value <= 0:
-                return None
+                return []
             growth *= before / last_value
             last_value = float(equity_after)
         adjusted_end = float(point["equity"]) - unresolved
         if adjusted_end <= 0 or last_value <= 0:
-            return None
+            return []
         growth *= adjusted_end / last_value
         last_value = float(point["equity"])
-    return round((growth - 1.0) * 100.0, 6)
+        out.append(
+            {"t": int(point["t"]), "equity_pct": round((growth - 1.0) * 100.0, 6)}
+        )
+    return out
+
+
+def _cashflow_corrected_return(
+    points: List[Dict[str, Any]],
+    cashflows: List[Dict[str, Any]],
+) -> Optional[float]:
+    """Chain equity changes after subtracting confirmed timestamped cashflows."""
+    curve = _cashflow_corrected_curve(points, cashflows)
+    if not curve:
+        return None
+    return float(curve[-1]["equity_pct"])
 
 
 def _build_cashflow_return(

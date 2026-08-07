@@ -187,6 +187,34 @@ class CashflowCorrectedReturnTests(unittest.TestCase):
             places=5,
         )
 
+    def test_corrected_curve_matches_scalar_end_return(self) -> None:
+        from quant.execution.fleet_api import (
+            _cashflow_corrected_curve,
+            _cashflow_corrected_return,
+        )
+
+        points = [
+            {"t": 100, "equity": 100.0},
+            {"t": 200, "equity": 160.0},
+            {"t": 300, "equity": 176.0},
+        ]
+        flows = [{"t": 150, "reporting_amount": 50.0, "equity_after": None}]
+        curve = _cashflow_corrected_curve(points, flows)
+        self.assertEqual(curve[0], {"t": 100, "equity_pct": 0.0})
+        scalar = _cashflow_corrected_return(points, flows)
+        self.assertIsNotNone(scalar)
+        self.assertAlmostEqual(curve[-1]["equity_pct"], float(scalar), places=5)
+        self.assertAlmostEqual(curve[1]["equity_pct"], 10.0, places=5)
+        self.assertAlmostEqual(curve[2]["equity_pct"], 21.0, places=5)
+
+    def test_corrected_curve_empty_when_insufficient_points(self) -> None:
+        from quant.execution.fleet_api import _cashflow_corrected_curve
+
+        self.assertEqual(
+            _cashflow_corrected_curve([{"t": 1, "equity": 100.0}], []),
+            [],
+        )
+
     def test_portfolio_is_value_weighted_and_excludes_unavailable_bot(self) -> None:
         from quant.execution.fleet_api import _build_cashflow_return
 
