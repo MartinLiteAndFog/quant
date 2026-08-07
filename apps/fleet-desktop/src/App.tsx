@@ -43,6 +43,7 @@ const RANGES: RangeKey[] = ["24h", "7d", "30d", "all"];
 const CHART_MODES: Array<{ id: ChartMode; label: string }> = [
   { id: "account_abs", label: "Equity $" },
   { id: "account", label: "Equity %" },
+  { id: "corrected", label: "Corrected Return" },
   { id: "trade", label: "Trade %" },
 ];
 
@@ -76,6 +77,15 @@ function legendValue(s: BotSeries, mode: ChartMode): string {
     const last = curve.length ? curve[curve.length - 1].equity_pct : 0;
     return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%`;
   }
+  if (mode === "corrected") {
+    const curve = s.corrected_curve || [];
+    if (!curve.length) return "—";
+    const last = curve[curve.length - 1].equity_pct;
+    const method = s.corrected_meta?.method;
+    const suffix =
+      method === "ledger" || method === "jump_twr" ? ` · ${method}` : "";
+    return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%${suffix}`;
+  }
   const pct = s.stats?.return_pct ?? 0;
   return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
 }
@@ -91,6 +101,12 @@ function portfolioLegendValue(p: PortfolioSeries | null, mode: ChartMode): strin
   if (mode === "account") {
     const curve = p.account_curve || [];
     const last = curve.length ? curve[curve.length - 1].equity_pct : 0;
+    return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%`;
+  }
+  if (mode === "corrected") {
+    const curve = p.corrected_curve || [];
+    if (!curve.length) return "—";
+    const last = curve[curve.length - 1].equity_pct;
     return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%`;
   }
   return "n/a";
@@ -306,6 +322,15 @@ export default function App() {
           mode: "trade",
         });
       }
+      for (const p of s.corrected_curve || []) {
+        rows.push({
+          bot: s.display_name,
+          instance: s.strategy_instance,
+          t: p.t,
+          equity_pct: p.equity_pct,
+          mode: "corrected",
+        });
+      }
     }
     if (portfolio) {
       for (const p of portfolio.account_curve_abs || []) {
@@ -317,17 +342,32 @@ export default function App() {
           mode: "account_abs",
         });
       }
+      for (const p of portfolio.corrected_curve || []) {
+        rows.push({
+          bot: "Portfolio",
+          instance: "portfolio",
+          t: p.t,
+          equity_pct: p.equity_pct,
+          mode: "corrected",
+        });
+      }
     }
     downloadCsv("fleet-equity-curves.csv", rows);
   };
 
   const legend = series.filter((s) => enabledIds.has(s.id));
   const portfolioOn =
-    showPortfolio && !isolatedId && (chartMode === "account_abs" || chartMode === "account");
+    showPortfolio &&
+    !isolatedId &&
+    (chartMode === "account_abs" || chartMode === "account" || chartMode === "corrected");
 
   // Telemetry readouts (stylebook §06): the numbers the operator steers by.
   const liveBotCount = bots.filter((b) => b.status === "live").length;
   const portfolioPct = (() => {
+    if (chartMode === "corrected") {
+      const curve = portfolio?.corrected_curve || [];
+      return curve.length ? curve[curve.length - 1].equity_pct : null;
+    }
     const curve = portfolio?.account_curve || [];
     return curve.length ? curve[curve.length - 1].equity_pct : null;
   })();
