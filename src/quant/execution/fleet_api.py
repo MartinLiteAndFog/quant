@@ -921,7 +921,7 @@ def _shared_curve_window(
     else:
         firsts: List[int] = []
         for s in series:
-            for key in ("account_curve_abs", "account_curve", "trade_curve"):
+            for key in ("account_curve_abs", "account_curve", "trade_curve", "corrected_curve"):
                 curve = s.get(key) or []
                 if curve:
                     firsts.append(int(curve[0]["t"]))
@@ -976,6 +976,17 @@ def _align_series_to_shared_clock(
                 t1=min(t1, int(trade_curve[-1]["t"])),
                 interval_sec=interval,
             )
+        corr = s.get("corrected_curve") or []
+        if corr:
+            row["corrected_curve"] = _forward_fill_on_grid(
+                corr,
+                value_key="equity_pct",
+                t0=t0,
+                t1=min(t1, int(corr[-1]["t"])),
+                interval_sec=interval,
+            )
+        else:
+            row["corrected_curve"] = []
         aligned.append(row)
     meta = {
         "t0": t0,
@@ -1238,11 +1249,11 @@ def _load_cashflow_data(
     return flows, state
 
 
-def _cashflow_corrected_return(
+def _cashflow_corrected_curve(
     points: List[Dict[str, Any]],
     cashflows: List[Dict[str, Any]],
-) -> Optional[float]:
-    """Chain equity changes after subtracting confirmed timestamped cashflows."""
+) -> List[Dict[str, Any]]:
+    """Time series of cashflow-corrected equity growth (0% at first point)."""
     clean = [
         {"t": int(point["t"]), "equity": float(point["equity"])}
         for point in points
@@ -1252,7 +1263,7 @@ def _cashflow_corrected_return(
     ]
     clean.sort(key=lambda point: point["t"])
     if len(clean) < 2:
-        return None
+        return []
     flows = sorted(
         [
             flow
@@ -1265,6 +1276,7 @@ def _cashflow_corrected_return(
     growth = 1.0
     flow_index = 0
     last_value = clean[0]["equity"]
+    out: List[Dict[str, Any]] = [{"t": clean[0]["t"], "equity_pct": 0.0}]
     for point in clean[1:]:
         interval_flows: List[Dict[str, Any]] = []
         while flow_index < len(flows) and int(flows[flow_index]["t"]) <= point["t"]:
@@ -1280,15 +1292,169 @@ def _cashflow_corrected_return(
                 continue
             before = float(equity_after) - amount
             if before <= 0 or last_value <= 0:
-                return None
+                return []
             growth *= before / last_value
             last_value = float(equity_after)
         adjusted_end = float(point["equity"]) - unresolved
         if adjusted_end <= 0 or last_value <= 0:
-            return None
+            return []
         growth *= adjusted_end / last_value
         last_value = float(point["equity"])
-    return round((growth - 1.0) * 100.0, 6)
+        out.append(
+            {"t": int(point["t"]), "equity_pct": round((growth - 1.0) * 100.0, 6)}
+        )
+    return out
+
+
+def _cashflow_corrected_return(
+    points: List[Dict[str, Any]],
+    cashflows: List[Dict[str, Any]],
+) -> Optional[float]:
+    """Chain equity changes after subtracting confirmed timestamped cashflows."""
+    curve = _cashflow_corrected_curve(points, cashflows)
+    if not curve:
+        return None
+    return float(curve[-1]["equity_pct"])
+
+
+def _bot_corrected_payload(
+    *,
+    abs_points: List[Dict[str, Any]],
+    venue: str,
+    account: str,
+    since: Optional[pd.Timestamp],
+    until_ts: int,
+    bot_status: Optional[str],
+    bot_disabled: bool,
+) -> Dict[str, Any]:
+    """Always loads cashflows. Returns corrected_curve, corrected_meta, cashflows."""
+    since_ts = (
+        since
+        if since is not None
+        else pd.Timestamp(0, unit="s", tz="UTC")
+    )
+    until = pd.Timestamp(int(until_ts), unit="s", tz="UTC")
+    flows, state = _load_cashflow_data(
+        venue=venue,
+        account=account,
+        since=since_ts,
+        until=until,
+    )
+    api_flows = [
+        {
+            "t": int(flow["t"]),
+            "direction": flow.get("direction"),
+            "reporting_amount": flow.get("reporting_amount"),
+            "currency": flow.get("currency"),
+            "flow_type": flow.get("flow_type"),
+        }
+        for flow in flows
+    ]
+    reportable = [
+        flow
+        for flow in flows
+        if flow.get("reporting_amount") is not None
+        and _is_finite(flow.get("reporting_amount"))
+    ]
+    net_cashflow = (
+        round(sum(float(flow["reporting_amount"]) for flow in reportable), 6)
+        if reportable
+        else 0.0
+    )
+    flow_count = len(reportable)
+    base_meta: Dict[str, Any] = {
+        "method": "unavailable",
+        "available": False,
+        "reason": None,
+        "flow_count": flow_count,
+        "net_cashflow": net_cashflow,
+        "source": "db",
+    }
+
+    def _result(
+        curve: List[Dict[str, Any]],
+        *,
+        method: str,
+        available: bool,
+        reason: Optional[str],
+    ) -> Dict[str, Any]:
+        return {
+            "corrected_curve": curve,
+            "corrected_meta": {
+                **base_meta,
+                "method": method,
+                "available": available,
+                "reason": reason,
+            },
+            "cashflows": api_flows,
+        }
+
+    if bot_disabled:
+        return _result([], method="unavailable", available=False, reason="disabled")
+    if str(bot_status or "").strip().lower() == "down":
+        return _result([], method="unavailable", available=False, reason="inactive")
+
+    clean_abs = [
+        {"t": int(point["t"]), "equity": float(point["equity"])}
+        for point in abs_points
+        if point.get("equity") is not None
+        and _is_finite(point.get("equity"))
+        and float(point["equity"]) > 0
+    ]
+    clean_abs.sort(key=lambda point: point["t"])
+    if len(clean_abs) < 2:
+        return _result(
+            [],
+            method="unavailable",
+            available=False,
+            reason="insufficient_equity",
+        )
+
+    requested_start = (
+        int(since.timestamp()) if since is not None else int(clean_abs[0]["t"])
+    )
+    coverage_ok = bool(
+        state
+        and state.get("last_success_at")
+        and state.get("coverage_end")
+        and state.get("coverage_start") is not None
+        and int(pd.Timestamp(state["coverage_start"]).timestamp()) <= requested_start
+    )
+
+    if coverage_ok:
+        ledger_curve = _cashflow_corrected_curve(clean_abs, flows)
+        if ledger_curve:
+            return _result(
+                _downsample_points(
+                    ledger_curve,
+                    max_points=180,
+                    value_key="equity_pct",
+                    min_interval_sec=900,
+                ),
+                method="ledger",
+                available=True,
+                reason=None,
+            )
+
+    twr = _twr_account_curve(clean_abs)
+    if not twr:
+        return _result(
+            [],
+            method="unavailable",
+            available=False,
+            reason="insufficient_equity",
+        )
+    return _result(
+        _downsample_points(
+            twr,
+            max_points=180,
+            value_key="equity_pct",
+            min_interval_sec=900,
+        ),
+        method="jump_twr",
+        available=True,
+        reason=None if coverage_ok else "ledger_sync_unavailable",
+    )
 
 
 def _build_cashflow_return(
@@ -1512,6 +1678,38 @@ def _normalize_account_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any
         ]
     return _downsample_points(raw, max_points=180, value_key="equity_pct", min_interval_sec=900)
 
+def _equal_weight_pct_mean(
+    curves: List[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """Equal-weight forward-filled mean of equity_pct curves on union timestamps."""
+    clean: List[List[Dict[str, Any]]] = []
+    for curve in curves:
+        pts = [
+            {"t": int(p["t"]), "equity_pct": float(p["equity_pct"])}
+            for p in curve
+            if p.get("equity_pct") is not None and _is_finite(p.get("equity_pct"))
+        ]
+        if pts:
+            clean.append(pts)
+    if not clean:
+        return []
+    times = sorted({int(p["t"]) for c in clean for p in c})
+    idxs = [0] * len(clean)
+    lasts: List[Optional[float]] = [None] * len(clean)
+    out: List[Dict[str, Any]] = []
+    for t in times:
+        vals: List[float] = []
+        for i, curve in enumerate(clean):
+            while idxs[i] < len(curve) and int(curve[idxs[i]]["t"]) <= t:
+                lasts[i] = float(curve[idxs[i]]["equity_pct"])
+                idxs[i] += 1
+            if lasts[i] is not None:
+                vals.append(lasts[i])
+        if vals:
+            out.append({"t": t, "equity_pct": round(sum(vals) / len(vals), 6)})
+    return out
+
+
 def _build_portfolio_curve(
     series: List[Dict[str, Any]],
     *,
@@ -1711,6 +1909,16 @@ def build_fleet_performance(
         # Equity % remains a raw own-base view. Corrected Return is separate.
         account_curve = _normalize_account_curve(acct_pts)
 
+        corrected = _bot_corrected_payload(
+            abs_points=acct_pts,
+            venue=venue,
+            account=str(b.get("equity_account") or instance),
+            since=bot_since,
+            until_ts=now_ts,
+            bot_status=(live_row.get("status") if live_row else None),
+            bot_disabled=bool(b.get("disabled")),
+        )
+
         series.append(
             {
                 "id": b.get("id"),
@@ -1728,6 +1936,9 @@ def build_fleet_performance(
                 "trade_curve": trade_curve,
                 "account_curve": account_curve,
                 "account_curve_abs": account_curve_abs,
+                "corrected_curve": corrected["corrected_curve"],
+                "corrected_meta": corrected["corrected_meta"],
+                "cashflows": corrected["cashflows"],
                 "stats": stats,
                 "needs_backfill": bool(trades.empty) or not snapshots_fresh,
                 "last_snapshot_ts": last_snapshot_ts,
@@ -1755,6 +1966,13 @@ def build_fleet_performance(
         series, hours=hours, now_ts=now_ts
     )
     portfolio = _build_portfolio_curve(series, thin=False)
+    portfolio["corrected_curve"] = _equal_weight_pct_mean(
+        [
+            list(row.get("corrected_curve") or [])
+            for row in series
+            if row.get("corrected_curve")
+        ]
+    )
     portfolio["cashflow_return"] = _build_cashflow_return(
         series,
         registry,

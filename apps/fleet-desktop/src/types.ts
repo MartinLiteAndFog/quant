@@ -27,7 +27,24 @@ export interface AbsCurvePoint {
   equity: number;
 }
 
-export type ChartMode = "trade" | "account" | "account_abs";
+export type ChartMode = "trade" | "account" | "account_abs" | "corrected";
+
+export interface CorrectedMeta {
+  method: "ledger" | "jump_twr" | "unavailable" | string;
+  available: boolean;
+  reason?: string | null;
+  flow_count?: number;
+  net_cashflow?: number | null;
+  source?: string;
+}
+
+export interface CashflowPoint {
+  t: number;
+  direction?: string;
+  reporting_amount?: number | null;
+  currency?: string | null;
+  flow_type?: string | null;
+}
 
 export interface BotStats {
   return_pct: number;
@@ -51,6 +68,9 @@ export interface BotSeries {
   trade_curve: CurvePoint[];
   account_curve: CurvePoint[];
   account_curve_abs?: AbsCurvePoint[];
+  corrected_curve?: CurvePoint[];
+  corrected_meta?: CorrectedMeta;
+  cashflows?: CashflowPoint[];
   stats: BotStats;
   needs_backfill?: boolean;
   /** Unix seconds of the newest persisted equity snapshot (null = none). */
@@ -67,6 +87,7 @@ export interface PortfolioSeries {
   live_equity?: number | null;
   account_curve: CurvePoint[];
   account_curve_abs?: AbsCurvePoint[];
+  corrected_curve?: CurvePoint[];
   bot_count?: number;
   note?: string;
 }
