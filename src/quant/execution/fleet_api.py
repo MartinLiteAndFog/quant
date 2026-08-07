@@ -1306,6 +1306,146 @@ def _cashflow_corrected_return(
     return float(curve[-1]["equity_pct"])
 
 
+def _bot_corrected_payload(
+    *,
+    abs_points: List[Dict[str, Any]],
+    venue: str,
+    account: str,
+    since: Optional[pd.Timestamp],
+    until_ts: int,
+    bot_status: Optional[str],
+    bot_disabled: bool,
+) -> Dict[str, Any]:
+    """Always loads cashflows. Returns corrected_curve, corrected_meta, cashflows."""
+    since_ts = (
+        since
+        if since is not None
+        else pd.Timestamp(0, unit="s", tz="UTC")
+    )
+    until = pd.Timestamp(int(until_ts), unit="s", tz="UTC")
+    flows, state = _load_cashflow_data(
+        venue=venue,
+        account=account,
+        since=since_ts,
+        until=until,
+    )
+    api_flows = [
+        {
+            "t": int(flow["t"]),
+            "direction": flow.get("direction"),
+            "reporting_amount": flow.get("reporting_amount"),
+            "currency": flow.get("currency"),
+            "flow_type": flow.get("flow_type"),
+        }
+        for flow in flows
+    ]
+    reportable = [
+        flow
+        for flow in flows
+        if flow.get("reporting_amount") is not None
+        and _is_finite(flow.get("reporting_amount"))
+    ]
+    net_cashflow = (
+        round(sum(float(flow["reporting_amount"]) for flow in reportable), 6)
+        if reportable
+        else 0.0
+    )
+    flow_count = len(reportable)
+    base_meta: Dict[str, Any] = {
+        "method": "unavailable",
+        "available": False,
+        "reason": None,
+        "flow_count": flow_count,
+        "net_cashflow": net_cashflow,
+        "source": "db",
+    }
+
+    def _result(
+        curve: List[Dict[str, Any]],
+        *,
+        method: str,
+        available: bool,
+        reason: Optional[str],
+    ) -> Dict[str, Any]:
+        return {
+            "corrected_curve": curve,
+            "corrected_meta": {
+                **base_meta,
+                "method": method,
+                "available": available,
+                "reason": reason,
+            },
+            "cashflows": api_flows,
+        }
+
+    if bot_disabled:
+        return _result([], method="unavailable", available=False, reason="disabled")
+    if str(bot_status or "").strip().lower() == "down":
+        return _result([], method="unavailable", available=False, reason="inactive")
+
+    clean_abs = [
+        {"t": int(point["t"]), "equity": float(point["equity"])}
+        for point in abs_points
+        if point.get("equity") is not None
+        and _is_finite(point.get("equity"))
+        and float(point["equity"]) > 0
+    ]
+    clean_abs.sort(key=lambda point: point["t"])
+    if len(clean_abs) < 2:
+        return _result(
+            [],
+            method="unavailable",
+            available=False,
+            reason="insufficient_equity",
+        )
+
+    requested_start = (
+        int(since.timestamp()) if since is not None else int(clean_abs[0]["t"])
+    )
+    coverage_ok = bool(
+        state
+        and state.get("last_success_at")
+        and state.get("coverage_end")
+        and state.get("coverage_start") is not None
+        and int(pd.Timestamp(state["coverage_start"]).timestamp()) <= requested_start
+    )
+
+    if coverage_ok:
+        ledger_curve = _cashflow_corrected_curve(clean_abs, flows)
+        if ledger_curve:
+            return _result(
+                _downsample_points(
+                    ledger_curve,
+                    max_points=180,
+                    value_key="equity_pct",
+                    min_interval_sec=900,
+                ),
+                method="ledger",
+                available=True,
+                reason=None,
+            )
+
+    twr = _twr_account_curve(clean_abs)
+    if not twr:
+        return _result(
+            [],
+            method="unavailable",
+            available=False,
+            reason="insufficient_equity",
+        )
+    return _result(
+        _downsample_points(
+            twr,
+            max_points=180,
+            value_key="equity_pct",
+            min_interval_sec=900,
+        ),
+        method="jump_twr",
+        available=True,
+        reason=None if coverage_ok else "ledger_sync_unavailable",
+    )
+
+
 def _build_cashflow_return(
     series: List[Dict[str, Any]],
     registry: List[Dict[str, Any]],
