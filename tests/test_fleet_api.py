@@ -506,6 +506,67 @@ class BotCorrectedPayloadTests(unittest.TestCase):
         self.assertEqual(out["corrected_meta"]["net_cashflow"], 50.0)
 
 
+class BuildFleetCorrectedCurveTests(unittest.TestCase):
+    def test_performance_series_includes_corrected_fields(self) -> None:
+        registry = [
+            {
+                "id": "a",
+                "display_name": "A",
+                "strategy_instance": "a",
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "color": "#fff",
+            }
+        ]
+        acct = [
+            {"t": 100, "equity": 100.0, "currency": "USDT"},
+            {"t": 200, "equity": 110.0, "currency": "USDT"},
+        ]
+        corrected = {
+            "corrected_curve": [
+                {"t": 100, "equity_pct": 0.0},
+                {"t": 200, "equity_pct": 10.0},
+            ],
+            "corrected_meta": {
+                "method": "jump_twr",
+                "available": True,
+                "reason": None,
+                "flow_count": 0,
+                "net_cashflow": 0.0,
+                "source": "db",
+            },
+            "cashflows": [],
+        }
+        with patch(
+            "quant.execution.fleet_api.fleet_bot_registry", return_value=registry
+        ), patch(
+            "quant.execution.fleet_api.list_fleet_bots",
+            return_value={
+                "bots": [{"id": "a", "status": "live", "equity": 110.0}]
+            },
+        ), patch(
+            "quant.execution.fleet_api._load_display_trades_for_bot",
+            return_value=pd.DataFrame(),
+        ), patch(
+            "quant.execution.fleet_api._load_account_points_for_bot",
+            return_value=acct,
+        ), patch(
+            "quant.execution.fleet_api._bot_corrected_payload",
+            return_value=corrected,
+        ), patch(
+            "quant.execution.fleet_api._build_cashflow_return",
+            return_value={"available": False},
+        ):
+            out = build_fleet_performance(hours=0)
+        row = out["series"][0]
+        self.assertIn("corrected_curve", row)
+        self.assertIn("corrected_meta", row)
+        self.assertIn("cashflows", row)
+        self.assertEqual(row["corrected_meta"]["method"], "jump_twr")
+        self.assertIn("corrected_curve", out["portfolio"])
+        self.assertTrue(len(out["portfolio"]["corrected_curve"]) >= 1)
+
+
 class FleetRegistryTests(unittest.TestCase):
     def test_default_registry_includes_pilots_and_kraken(self) -> None:
         with patch.dict(os.environ, {"FLEET_BOTS_JSON": ""}, clear=False):

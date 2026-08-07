@@ -921,7 +921,7 @@ def _shared_curve_window(
     else:
         firsts: List[int] = []
         for s in series:
-            for key in ("account_curve_abs", "account_curve", "trade_curve"):
+            for key in ("account_curve_abs", "account_curve", "trade_curve", "corrected_curve"):
                 curve = s.get(key) or []
                 if curve:
                     firsts.append(int(curve[0]["t"]))
@@ -976,6 +976,17 @@ def _align_series_to_shared_clock(
                 t1=min(t1, int(trade_curve[-1]["t"])),
                 interval_sec=interval,
             )
+        corr = s.get("corrected_curve") or []
+        if corr:
+            row["corrected_curve"] = _forward_fill_on_grid(
+                corr,
+                value_key="equity_pct",
+                t0=t0,
+                t1=min(t1, int(corr[-1]["t"])),
+                interval_sec=interval,
+            )
+        else:
+            row["corrected_curve"] = []
         aligned.append(row)
     meta = {
         "t0": t0,
@@ -1667,6 +1678,38 @@ def _normalize_account_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any
         ]
     return _downsample_points(raw, max_points=180, value_key="equity_pct", min_interval_sec=900)
 
+def _equal_weight_pct_mean(
+    curves: List[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """Equal-weight forward-filled mean of equity_pct curves on union timestamps."""
+    clean: List[List[Dict[str, Any]]] = []
+    for curve in curves:
+        pts = [
+            {"t": int(p["t"]), "equity_pct": float(p["equity_pct"])}
+            for p in curve
+            if p.get("equity_pct") is not None and _is_finite(p.get("equity_pct"))
+        ]
+        if pts:
+            clean.append(pts)
+    if not clean:
+        return []
+    times = sorted({int(p["t"]) for c in clean for p in c})
+    idxs = [0] * len(clean)
+    lasts: List[Optional[float]] = [None] * len(clean)
+    out: List[Dict[str, Any]] = []
+    for t in times:
+        vals: List[float] = []
+        for i, curve in enumerate(clean):
+            while idxs[i] < len(curve) and int(curve[idxs[i]]["t"]) <= t:
+                lasts[i] = float(curve[idxs[i]]["equity_pct"])
+                idxs[i] += 1
+            if lasts[i] is not None:
+                vals.append(lasts[i])
+        if vals:
+            out.append({"t": t, "equity_pct": round(sum(vals) / len(vals), 6)})
+    return out
+
+
 def _build_portfolio_curve(
     series: List[Dict[str, Any]],
     *,
@@ -1866,6 +1909,16 @@ def build_fleet_performance(
         # Equity % remains a raw own-base view. Corrected Return is separate.
         account_curve = _normalize_account_curve(acct_pts)
 
+        corrected = _bot_corrected_payload(
+            abs_points=acct_pts,
+            venue=venue,
+            account=str(b.get("equity_account") or instance),
+            since=bot_since,
+            until_ts=now_ts,
+            bot_status=(live_row.get("status") if live_row else None),
+            bot_disabled=bool(b.get("disabled")),
+        )
+
         series.append(
             {
                 "id": b.get("id"),
@@ -1883,6 +1936,9 @@ def build_fleet_performance(
                 "trade_curve": trade_curve,
                 "account_curve": account_curve,
                 "account_curve_abs": account_curve_abs,
+                "corrected_curve": corrected["corrected_curve"],
+                "corrected_meta": corrected["corrected_meta"],
+                "cashflows": corrected["cashflows"],
                 "stats": stats,
                 "needs_backfill": bool(trades.empty) or not snapshots_fresh,
                 "last_snapshot_ts": last_snapshot_ts,
@@ -1910,6 +1966,13 @@ def build_fleet_performance(
         series, hours=hours, now_ts=now_ts
     )
     portfolio = _build_portfolio_curve(series, thin=False)
+    portfolio["corrected_curve"] = _equal_weight_pct_mean(
+        [
+            list(row.get("corrected_curve") or [])
+            for row in series
+            if row.get("corrected_curve")
+        ]
+    )
     portfolio["cashflow_return"] = _build_cashflow_return(
         series,
         registry,
