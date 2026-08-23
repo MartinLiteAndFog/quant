@@ -1,8 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ActivityItem, ActivityKind, FleetBot } from "../../types";
 import { downloadCsv } from "../../lib/csv";
 
 type KindFilter = "all" | ActivityKind;
+const PAGE_SIZE = 100;
 
 interface Props {
   items: ActivityItem[];
@@ -24,6 +25,11 @@ function fmtQty(q?: number | null): string {
   return q.toPrecision(3);
 }
 
+function fmtNumber(value?: number | null, digits = 4): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return value.toFixed(digits);
+}
+
 function statusOrPnl(item: ActivityItem): { text: string; tone?: "up" | "down" } {
   if (item.kind === "fill" && item.pnl_pct != null && Number.isFinite(item.pnl_pct)) {
     const pct = item.pnl_pct;
@@ -35,6 +41,34 @@ function statusOrPnl(item: ActivityItem): { text: string; tone?: "up" | "down" }
   return { text: item.status || "—" };
 }
 
+function fmtSigned(value?: number | null, digits = 4): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return `${value >= 0 ? "+" : ""}${value.toFixed(digits)}`;
+}
+
+function activityTooltip(item: ActivityItem): string {
+  const position = item.position_before != null || item.position_after != null
+    ? `${fmtQty(item.position_before)} → ${fmtQty(item.position_after)}`
+    : "—";
+  const entry = item.entry_price != null
+    ? `${item.side || "position"} @ ${fmtNumber(item.entry_price)}`
+    : "not reported";
+  const exit = item.exit_price != null
+    ? `${item.side || "position"} @ ${fmtNumber(item.exit_price)}`
+    : "open / not reported";
+  return [
+    `Time (UTC): ${fmtTs(item.ts, 24)}`,
+    `Action: ${item.action}`,
+    `Entry: ${entry}`,
+    `Exit: ${exit}`,
+    `Realized P/L: ${fmtSigned(item.realized_pnl)}`,
+    `Fee: ${item.fee != null ? `${fmtSigned(item.fee)}${item.fee_currency ? ` ${item.fee_currency}` : ""}` : "not reported"}`,
+    `Funding: ${fmtSigned(item.realized_funding)}`,
+    `Position: ${position}`,
+    item.execution_uid ? `Execution: ${item.execution_uid}` : "",
+  ].filter(Boolean).join("\n");
+}
+
 export function ActivityDrawer({
   items,
   bots,
@@ -43,6 +77,7 @@ export function ActivityDrawer({
   loading,
 }: Props) {
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
+  const [page, setPage] = useState(0);
 
   const botScoped = useMemo(() => {
     if (!botFilter || botFilter === "__all__") return items;
@@ -66,6 +101,11 @@ export function ActivityDrawer({
     !botFilter || botFilter === "__all__"
       ? "All bots"
       : bots.find((b) => b.id === botFilter)?.display_name || botFilter;
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount - 1);
+  const pageItems = filtered.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+
+  useEffect(() => setPage(0), [botFilter, kindFilter]);
 
   if (loading && !items.length) {
     return <p className="text-[12px] text-[var(--muted)]">Loading activity…</p>;
@@ -139,15 +179,23 @@ export function ActivityDrawer({
       </div>
 
       <p className="text-[11px] text-[var(--muted)]">
-        One feed · fills = closed trades with PnL · events = entries / exits / TP / SL /
-        flips · {botLabel} · range chip applies
+        Exchange timeline · entries, reductions, closes, TP/SL, fees and funding ·
+        exchange values are reported, never inferred · {botLabel} · range chip applies
         {loading ? " · refreshing…" : ""}
       </p>
 
       {!filtered.length ? (
         <p className="text-[12px] text-[var(--muted)]">No activity in this window.</p>
       ) : (
-        <div className="overflow-x-auto">
+        <div className="flex min-h-0 flex-col gap-2">
+          <div className="flex items-center justify-between text-[10px] text-[var(--muted)]">
+            <span>{filtered.length} records · page {currentPage + 1} / {pageCount}</span>
+            <span className="flex gap-1">
+              <button type="button" className="chip" disabled={currentPage === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>Previous</button>
+              <button type="button" className="chip" disabled={currentPage + 1 >= pageCount} onClick={() => setPage((value) => Math.min(pageCount - 1, value + 1))}>Next</button>
+            </span>
+          </div>
+          <div className="overflow-x-auto">
           <table className="w-full min-w-[460px] border-collapse text-left text-[11px]">
             <thead className="text-[var(--muted)]">
               <tr className="border-b border-[var(--line)]">
@@ -157,15 +205,17 @@ export function ActivityDrawer({
                 )}
                 <th className="py-2 pr-2 font-medium">Action</th>
                 <th className="py-2 pr-2 font-medium">Side</th>
-                <th className="py-2 pr-2 font-medium">Qty</th>
+                <th className="py-2 pr-2 font-medium">Qty @ price</th>
+                <th className="py-2 pr-2 font-medium">Position</th>
+                <th className="py-2 pr-2 font-medium">Fee / funding</th>
                 <th className="py-2 font-medium">Status / PnL</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.slice(0, 300).map((e) => {
+              {pageItems.map((e) => {
                 const result = statusOrPnl(e);
                 return (
-                  <tr key={e.id} className="border-b border-[var(--line)]/50">
+                  <tr key={e.id} className="border-b border-[var(--line)]/50" title={activityTooltip(e)}>
                     <td className="py-1.5 pr-2 whitespace-nowrap text-[var(--text)]">
                       {fmtTs(e.ts)}
                     </td>
@@ -191,7 +241,19 @@ export function ActivityDrawer({
                       className="py-1.5 pr-2 font-mono"
                       title={e.price != null ? `@ ${e.price}` : undefined}
                     >
-                      {fmtQty(e.qty)}
+                      {fmtQty(e.qty)} {e.price != null ? `@ ${fmtNumber(e.price)}` : ""}
+                    </td>
+                    <td className="py-1.5 pr-2 font-mono">
+                      {e.position_before != null || e.position_after != null
+                        ? `${fmtQty(e.position_before)} → ${fmtQty(e.position_after)}`
+                        : "—"}
+                    </td>
+                    <td className="py-1.5 pr-2 font-mono" title={e.source || undefined}>
+                      {e.fee != null
+                        ? `fee ${fmtNumber(e.fee)}${e.fee_currency ? ` ${e.fee_currency}` : ""}`
+                        : e.realized_funding != null
+                          ? `fund ${fmtNumber(e.realized_funding)}`
+                          : "—"}
                     </td>
                     <td
                       className="py-1.5 font-mono"
@@ -210,6 +272,7 @@ export function ActivityDrawer({
               })}
             </tbody>
           </table>
+        </div>
         </div>
       )}
     </div>

@@ -282,6 +282,114 @@ class KrakenFuturesClient:
             "portfolio_usd": portfolio,
         }
 
+    def get_position_events(
+        self,
+        *,
+        symbol: Optional[str] = None,
+        since_ms: Optional[int] = None,
+        before_ms: Optional[int] = None,
+        limit: int = 500,
+        include_funding: bool = False,
+    ) -> List[Dict[str, Any]]:
+        """Read authenticated position events from Kraken Futures.
+
+        The history API uses the Futures ``APIKey``/``Authent`` scheme and
+        signs the URL-encoded GET query as ``postData``. This method is
+        deliberately read-only and never calls an order route.
+
+        ``include_funding`` is deliberately opt-in so legacy callers retain a
+        trades-only result.  The Fleet activity read model opts in to expose
+        exchange-reported funding and settlement events beside real fills.
+        """
+        if not self.key or not self.secret:
+            raise RuntimeError("Kraken Futures credentials are not configured")
+
+        endpoint_path = "/api/history/v3/positions"
+        # ``count`` is still capped at 100 per exchange request; this bound is
+        # the number of rows accumulated across continuation pages.
+        wanted = max(1, min(int(limit), 10_000))
+        continuation: Optional[str] = None
+        out: List[Dict[str, Any]] = []
+
+        while len(out) < wanted:
+            params: Dict[str, Any] = {
+                "sort": "desc",
+                "count": min(100, wanted - len(out)),
+                "trades": "true",
+                "tradeable": self._norm_symbol(symbol),
+            }
+            if include_funding:
+                params["funding_realization"] = "true"
+                params["settlement"] = "true"
+            if since_ms is not None:
+                params["since"] = int(since_ms)
+            if before_ms is not None:
+                params["before"] = int(before_ms)
+            if continuation:
+                params["continuation_token"] = continuation
+
+            query = urllib.parse.urlencode(params)
+            nonce = str(int(time.time() * 1000))
+            headers = {
+                "Accept": "application/json",
+                **self._signed_headers(endpoint_path, query.encode("utf-8"), nonce),
+            }
+            req = urllib.request.Request(
+                f"{self.base}{endpoint_path}?{query}",
+                method="GET",
+                headers=headers,
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout_s) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            except Exception as exc:
+                err_body = None
+                try:
+                    err_body = exc.read().decode("utf-8", errors="replace")
+                except Exception:
+                    err_body = None
+                raise RuntimeError(
+                    f"kraken position history failed err={exc} body={err_body}"
+                ) from exc
+
+            if not isinstance(payload, dict):
+                raise RuntimeError("kraken position history returned invalid payload")
+            if payload.get("error") or payload.get("errors"):
+                raise RuntimeError(f"kraken position history error data={payload}")
+
+            rows = payload.get("elements")
+            if not isinstance(rows, list):
+                rows = []
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                # Current Futures history wraps every PositionUpdate in an
+                # envelope: {timestamp, uid, event: {PositionUpdate: {...}}}.
+                # Normalise that transport shape at the client boundary so
+                # every read-only Fleet consumer sees the documented position
+                # fields, while retaining compatibility with the older flat
+                # response used by existing callers and tests.
+                event = row.get("event")
+                position_update = (
+                    event.get("PositionUpdate")
+                    if isinstance(event, dict)
+                    else None
+                )
+                if isinstance(position_update, dict):
+                    normalised = dict(position_update)
+                    normalised.setdefault("timestamp", row.get("timestamp"))
+                    normalised.setdefault("historyUid", row.get("uid"))
+                    out.append(normalised)
+                else:
+                    out.append(row)
+
+            next_token = payload.get("continuationToken")
+            if not next_token or not rows:
+                break
+            continuation = str(next_token)
+
+        return out[:wanted]
+
     # ------------------------------------------------------------------
     # Orders
     # ------------------------------------------------------------------

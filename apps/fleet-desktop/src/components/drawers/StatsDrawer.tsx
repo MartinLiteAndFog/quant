@@ -59,8 +59,11 @@ export function StatsDrawer({ series }: Props) {
               rows.map((r) => ({
                 bot: r.display_name,
                 instance: r.strategy_instance,
-                return_pct: r.stats.return_pct,
-                max_dd_pct: r.stats.max_drawdown_pct,
+                price_move_bps: r.price_move_meta?.return_bps ?? r.stats.return_pct * 100,
+                price_move_max_dd_bps: r.stats.max_drawdown_pct * 100,
+                strategy_return_pct: r.strategy_meta?.available
+                  ? r.strategy_meta.return_pct
+                  : null,
                 trades: r.stats.trade_count,
                 win_rate: r.stats.win_rate,
                 profit_factor: r.stats.profit_factor,
@@ -75,8 +78,8 @@ export function StatsDrawer({ series }: Props) {
         <thead className="text-[var(--muted)]">
           <tr className="border-b border-[var(--line)]">
             {header("display_name", "Bot")}
-            {header("return_pct", "Return %")}
-            {header("max_drawdown_pct", "Max DD %")}
+            {header("return_pct", "Price Move · BPS")}
+            {header("max_drawdown_pct", "Max DD · BPS")}
             {header("trade_count", "Trades")}
             {header("win_rate", "Win")}
             {header("profit_factor", "PF")}
@@ -87,9 +90,9 @@ export function StatsDrawer({ series }: Props) {
             <tr key={r.id} className="border-b border-[var(--line)]/60">
               <td className="py-2 pr-2 text-[var(--text)]">{r.display_name}</td>
               <td className="py-2 pr-2" style={{ color: r.stats.return_pct >= 0 ? "var(--live)" : "var(--down)" }}>
-                {r.stats.return_pct.toFixed(2)}
+                {(r.price_move_meta?.return_bps ?? r.stats.return_pct * 100).toFixed(0)}
               </td>
-              <td className="py-2 pr-2">{r.stats.max_drawdown_pct.toFixed(2)}</td>
+              <td className="py-2 pr-2">{(r.stats.max_drawdown_pct * 100).toFixed(0)}</td>
               <td className="py-2 pr-2">{r.stats.trade_count}</td>
               <td className="py-2 pr-2">
                 {r.stats.win_rate == null ? "—" : `${(r.stats.win_rate * 100).toFixed(0)}%`}

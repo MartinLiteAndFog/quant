@@ -113,7 +113,9 @@ export function rawCommonScopeReturnPct(series: BotSeries[]): number | null {
  * - Corrected Return mirrors the deposit/withdrawal-adjusted portfolio curve.
  * - Equity $ prefers the confirmed-ledger return and falls back to the
  *   cashflow-neutralized compatibility curve while ledger sync is pending.
- * - Trade % retains the completed-trade metric supplied by the caller.
+ * - Price Move is supplied by the caller in its display unit (BPS in the UI).
+ * - Strategy return stays unavailable here unless a complete per-bot curve is
+ *   rendered directly; it is never inferred from account equity.
  */
 export function returnPctForView(
   mode: ChartMode,
@@ -122,6 +124,7 @@ export function returnPctForView(
   rawAccountReturnPct: number | null = null,
 ): number | null {
   if (mode === "trade") return tradeReturnPct;
+  if (mode === "strategy") return null;
   if (!portfolio) return null;
   if (mode === "account") return lastFinitePercent(portfolio.account_curve || []);
   const correctedReturn = (): number | null => {

@@ -27,7 +27,7 @@ export interface AbsCurvePoint {
   equity: number;
 }
 
-export type ChartMode = "trade" | "account" | "account_abs" | "corrected";
+export type ChartMode = "trade" | "strategy" | "account" | "account_abs" | "corrected";
 
 export interface CorrectedMeta {
   method: "ledger" | "jump_twr" | "unavailable" | string;
@@ -36,6 +36,42 @@ export interface CorrectedMeta {
   flow_count: number;
   net_cashflow: number;
   source?: string | null;
+}
+
+export interface PriceMoveMeta {
+  available: boolean;
+  unit: "bps" | string;
+  method: string;
+  fees_included: boolean;
+  funding_included: boolean;
+  position_size_included: boolean;
+  leverage_included: boolean;
+  return_bps: number;
+  realized_event_ts?: number | null;
+}
+
+export interface StrategyReturnMeta {
+  available: boolean;
+  method: string;
+  reason: string | null;
+  costs_included: boolean;
+  funding_included: boolean;
+  trade_count: number;
+  return_pct?: number | null;
+}
+
+export interface AllocationMetric {
+  available: boolean;
+  method: string;
+  reason: string | null;
+  included_bot_ids: string[];
+  excluded_bot_ids: string[];
+  benchmark_curve: CurvePoint[];
+  contribution_curve: CurvePoint[];
+  contribution_pct: number | null;
+  common_start: number | null;
+  common_end: number | null;
+  target_interval_volatility?: number;
 }
 
 export interface CashflowPoint {
@@ -66,6 +102,12 @@ export interface BotSeries {
   currency?: string | null;
   live_equity?: number | null;
   trade_curve: CurvePoint[];
+  /** Explicit unlevered price-move curve; values are basis points. */
+  price_move_curve_bps?: CurvePoint[];
+  price_move_meta?: PriceMoveMeta;
+  /** Net leverage/notional-aware return, emitted only with complete inputs. */
+  strategy_curve?: CurvePoint[];
+  strategy_meta?: StrategyReturnMeta;
   account_curve: CurvePoint[];
   account_curve_abs?: AbsCurvePoint[];
   corrected_curve?: CurvePoint[];
@@ -111,9 +153,11 @@ export interface PortfolioSeries {
   account_curve: CurvePoint[];
   account_curve_abs?: AbsCurvePoint[];
   corrected_curve?: CurvePoint[];
+  corrected_meta?: CorrectedMeta;
   bot_count?: number;
   note?: string;
   cashflow_return?: CashflowReturnMetric;
+  allocation?: AllocationMetric;
 }
 
 export interface FleetClock {
@@ -152,8 +196,24 @@ export interface ActivityItem {
   side?: string;
   qty?: number | null;
   price?: number | null;
+  /** Position entry/exit prices when the exchange supplied them. */
+  entry_price?: number | null;
+  exit_price?: number | null;
   status?: string | null;
   pnl_pct?: number | null;
+  /** Exchange-reported realized PnL, never inferred from a price move. */
+  realized_pnl?: number | null;
+  /** Exchange-reported fee and currency for this position event. */
+  fee?: number | null;
+  fee_currency?: string | null;
+  /** Exchange-reported funding realization (may be positive or negative). */
+  realized_funding?: number | null;
+  /** Exchange position quantities before and after the action. */
+  position_before?: number | null;
+  position_after?: number | null;
+  position_ref?: string | null;
+  execution_uid?: string | null;
+  source?: string | null;
   color?: string;
   /** Present on fills (closed trades). */
   trade_id?: string;

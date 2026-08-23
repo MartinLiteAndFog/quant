@@ -16,6 +16,8 @@ from quant.execution.fleet_api import (
     _load_display_trades_for_bot,
     _load_equity_snapshots,
     _normalize_account_curve,
+    _risk_normalized_allocation_payload,
+    _strategy_return_payload,
     build_fleet_performance,
     fleet_bot_registry,
 )
@@ -159,14 +161,207 @@ class KrakenDirectTradeTests(unittest.TestCase):
             since=pd.Timestamp(0, unit="s", tz="UTC"),
         )
 
-        self.assertEqual(frame["trade_id"].tolist(), [
-            "kraken-position:close-long",
-            "kraken-position:open-short",
-        ])
+        self.assertEqual(frame["trade_id"].tolist(), ["kraken-batch:close-long"])
         self.assertAlmostEqual(float(frame.iloc[0]["pnl_pct"]), 10.0)
         self.assertEqual(frame.iloc[0]["side"], "long")
-        self.assertTrue(pd.isna(frame.iloc[1]["pnl_pct"]))
-        self.assertEqual(frame.iloc[1]["side"], "short")
+
+    def test_position_events_weight_split_fills_once_and_reach_latest_realization(self) -> None:
+        frame = _kraken_position_events_frame(
+            [
+                {
+                    "executionUid": "july-close",
+                    "updateReason": "trade",
+                    "positionChange": "close",
+                    "oldPosition": "1",
+                    "newPosition": "0",
+                    "oldAverageEntryPrice": "100",
+                    "executionPrice": "101",
+                    "executionSize": "1",
+                    "fee": "0.05",
+                    "realizedPnL": "1",
+                    "fillTime": 1_800_000,
+                },
+                {
+                    "executionUid": "aug-part-1",
+                    "updateReason": "trade",
+                    "positionChange": "decrease",
+                    "oldPosition": "1",
+                    "newPosition": "0.6",
+                    "oldAverageEntryPrice": "100",
+                    "executionPrice": "110",
+                    "executionSize": "0.4",
+                    "fee": "0.04",
+                    "realizedPnL": "4",
+                    "fillTime": 2_800_000,
+                },
+                {
+                    "executionUid": "aug-part-2",
+                    "updateReason": "trade",
+                    "positionChange": "close",
+                    "oldPosition": "0.6",
+                    "newPosition": "0",
+                    "oldAverageEntryPrice": "100",
+                    "executionPrice": "112",
+                    "executionSize": "0.6",
+                    "fee": "0.06",
+                    "realizedPnL": "7.2",
+                    "fillTime": 2_800_000,
+                },
+            ],
+            bot=self.bot,
+            since=pd.Timestamp(0, unit="s", tz="UTC"),
+        )
+
+        self.assertEqual(len(frame), 2)
+        latest = frame.iloc[-1]
+        self.assertEqual(latest["fill_count"], 2)
+        self.assertAlmostEqual(float(latest["qty"]), 1.0)
+        self.assertAlmostEqual(float(latest["exit_price"]), 111.2)
+        self.assertAlmostEqual(float(latest["pnl_pct"]), 11.2)
+        self.assertAlmostEqual(float(latest["fee"]), 0.1)
+        self.assertEqual(int(latest["exit_ts"].timestamp()), 2_800)
+
+    def test_position_events_activity_preserves_reductions_fees_and_funding(self) -> None:
+        from quant.execution.fleet_api import _kraken_position_event_activity_items
+
+        items = _kraken_position_event_activity_items(
+            [
+                {
+                    "executionUid": "reduce-long",
+                    "updateReason": "trade",
+                    "positionChange": "decrease",
+                    "oldPosition": "1.0",
+                    "newPosition": "0.4",
+                    "oldAverageEntryPrice": "100",
+                    "executionPrice": "110",
+                    "executionSize": "0.6",
+                    "fee": "0.12",
+                    "feeCurrency": "USD",
+                    "realizedPnL": "6.0",
+                    "fillTime": 1_900_000,
+                    "accountUid": "acct-1",
+                    "tradeable": "PF_SOLUSD",
+                },
+                {
+                    "updateReason": "fundingRealisation",
+                    "positionChange": "noChange",
+                    "oldPosition": "0.4",
+                    "newPosition": "0.4",
+                    "realizedFunding": "-0.03",
+                    "fundingRealizationTime": 2_000_000,
+                    "timestamp": 2_000_000,
+                    "accountUid": "acct-1",
+                    "tradeable": "PF_SOLUSD",
+                },
+            ],
+            bot=self.bot,
+            since=pd.Timestamp(0, unit="s", tz="UTC"),
+        )
+        self.assertEqual([item["action"] for item in items], ["reduce", "funding"])
+        self.assertEqual(items[0]["side"], "sell")
+        self.assertEqual(items[0]["position_before"], 1.0)
+        self.assertEqual(items[0]["position_after"], 0.4)
+        self.assertEqual(items[0]["fee"], 0.12)
+        self.assertEqual(items[0]["fee_currency"], "USD")
+        self.assertEqual(items[1]["realized_funding"], -0.03)
+        self.assertEqual(items[1]["t"], 2_000)
+        self.assertEqual(items[0]["source"], "kraken_position_history")
+        self.assertEqual(items[0]["entry_price"], 100.0)
+        self.assertEqual(items[0]["exit_price"], 110.0)
+
+    @patch("quant.execution.fleet_api.urlopen")
+    def test_remote_position_event_proxy_uses_dedicated_read_token(self, urlopen) -> None:
+        from quant.execution.fleet_api import (
+            _KRAKEN_POSITION_EVENT_CACHE,
+            _load_kraken_position_events_for_bot,
+        )
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args: Any) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"events": [{"executionUid": "remote-1"}]}).encode()
+
+        _KRAKEN_POSITION_EVENT_CACHE.clear()
+        urlopen.return_value = Response()
+        with patch.dict(
+            os.environ,
+            {
+                "FLEET_KRAKEN_DIRECT_EVENTS_URL": "https://kraken.example/events",
+                "FLEET_KRAKEN_READ_TOKEN": "read-only-token",
+            },
+            clear=True,
+        ):
+            rows = _load_kraken_position_events_for_bot(
+                self.bot, since=None, limit=10_000
+            )
+
+        self.assertEqual(rows, [{"executionUid": "remote-1"}])
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer read-only-token")
+        self.assertIn("limit=10000", request.full_url)
+
+    @patch("quant.execution.kraken_futures.KrakenFuturesClient.get_position_events")
+    def test_position_event_proxy_whitelists_and_reports_full_page(self, get_events) -> None:
+        from quant.execution.fleet_api import build_kraken_position_events
+
+        get_events.return_value = [
+            {
+                "executionUid": "first",
+                "fillTime": 1_000,
+                "executionPrice": "100",
+                "accountUid": "must-not-leak",
+            },
+            {
+                "executionUid": "last",
+                "fundingRealizationTime": 3_000,
+                "realizedFunding": "-0.1",
+            },
+        ]
+        out = build_kraken_position_events(limit=10_000)
+
+        self.assertEqual(out["count"], 2)
+        self.assertEqual(out["oldest_ms"], 1_000)
+        self.assertEqual(out["newest_ms"], 3_000)
+        self.assertNotIn("accountUid", out["events"][0])
+        self.assertEqual(get_events.call_args.kwargs["limit"], 10_000)
+        self.assertTrue(get_events.call_args.kwargs["include_funding"])
+
+    @patch("quant.execution.kraken_futures.KrakenFuturesClient.get_position_events")
+    def test_position_event_proxy_can_skip_funding_for_fast_performance_reads(self, get_events) -> None:
+        from quant.execution.fleet_api import build_kraken_position_events
+
+        get_events.return_value = []
+        out = build_kraken_position_events(limit=10_000, include_funding=False)
+
+        self.assertFalse(out["include_funding"])
+        self.assertFalse(get_events.call_args.kwargs["include_funding"])
+
+    def test_activity_limit_retains_complete_bounded_kraken_ledger(self) -> None:
+        from quant.execution.fleet_api import _limit_activity_items
+
+        kraken = [
+            {
+                "id": f"kraken-{index}",
+                "t": index,
+                "source": "kraken_position_history",
+            }
+            for index in range(1, 6)
+        ]
+        other = [
+            {"id": f"other-{index}", "t": 100 + index, "source": "database"}
+            for index in range(1, 6)
+        ]
+        out = _limit_activity_items(kraken + other, cap=5)
+
+        self.assertEqual(
+            [row["id"] for row in out],
+            ["kraken-5", "kraken-4", "kraken-3", "kraken-2", "kraken-1"],
+        )
 
     @patch("quant.execution.fleet_api._load_kraken_exchange_trades_for_bot")
     @patch("quant.execution.fleet_api._load_execution_activity_trades_for_bot")
@@ -196,6 +391,96 @@ class KrakenDirectTradeTests(unittest.TestCase):
 
         self.assertEqual(out["trade_id"].tolist(), ["same", "new"])
         self.assertEqual(float(out.iloc[0]["pnl_pct"]), 2.0)
+
+    @patch("quant.execution.fleet_api._load_kraken_exchange_trades_for_bot")
+    @patch("quant.execution.fleet_api._load_kraken_position_events_for_bot")
+    @patch("quant.execution.fleet_api._load_execution_activity_trades_for_bot")
+    @patch("quant.execution.fleet_api._load_closed_trades_for_bot")
+    def test_display_loader_prefers_complete_event_ledger_through_august(
+        self,
+        load_closed,
+        load_inferred,
+        load_events,
+        load_legacy,
+    ) -> None:
+        load_closed.return_value = pd.DataFrame([_trade("2026-07-27T14:25:13Z", 1.0, "old")])
+        load_inferred.return_value = pd.DataFrame()
+        load_events.return_value = [
+            {
+                "executionUid": "latest",
+                "updateReason": "trade",
+                "positionChange": "close",
+                "oldPosition": "1",
+                "newPosition": "0",
+                "oldAverageEntryPrice": "100",
+                "executionPrice": "102",
+                "executionSize": "1",
+                "fillTime": int(pd.Timestamp("2026-08-23T08:40:08Z").timestamp() * 1000),
+            }
+        ]
+
+        out = _load_display_trades_for_bot(self.bot, limit=20)
+
+        self.assertEqual(out["trade_id"].tolist(), ["kraken-batch:latest"])
+        self.assertEqual(out.iloc[-1]["exit_ts"], pd.Timestamp("2026-08-23T08:40:08Z"))
+        load_legacy.assert_not_called()
+
+
+class StrategyAndAllocationMetricTests(unittest.TestCase):
+    def test_strategy_return_refuses_incomplete_historical_leverage(self) -> None:
+        result = _strategy_return_payload(pd.DataFrame([_trade("2026-08-01T00:00:00Z", 2.0)]))
+        self.assertFalse(result["strategy_meta"]["available"])
+        self.assertEqual(
+            result["strategy_meta"]["reason"],
+            "historical_notional_leverage_or_cost_basis_incomplete",
+        )
+
+    def test_strategy_return_accepts_only_explicit_complete_net_rows(self) -> None:
+        frame = pd.DataFrame(
+            [
+                {**_trade("2026-08-01T00:00:00Z", 2.0, "a"), "strategy_return_pct": 4.0, "strategy_return_complete": True},
+                {**_trade("2026-08-02T00:00:00Z", 2.0, "b"), "strategy_return_pct": -1.0, "strategy_return_complete": True},
+            ]
+        )
+        result = _strategy_return_payload(frame)
+        self.assertTrue(result["strategy_meta"]["available"])
+        self.assertAlmostEqual(result["strategy_curve"][-1]["equity_pct"], 2.96, places=5)
+
+    def test_allocation_benchmark_uses_common_window_and_equal_risk(self) -> None:
+        series = [
+            {
+                "id": "steady",
+                "strategy_meta": {"available": True},
+                "strategy_curve": [
+                    {"t": 1, "equity_pct": 0.0},
+                    {"t": 2, "equity_pct": 1.0},
+                    {"t": 3, "equity_pct": 0.0},
+                    {"t": 4, "equity_pct": 1.0},
+                ],
+            },
+            {
+                "id": "volatile",
+                "strategy_meta": {"available": True},
+                "strategy_curve": [
+                    {"t": 1, "equity_pct": 0.0},
+                    {"t": 2, "equity_pct": 4.0},
+                    {"t": 3, "equity_pct": 0.0},
+                    {"t": 4, "equity_pct": 4.0},
+                ],
+            },
+        ]
+        portfolio = [
+            {"t": 1, "equity_pct": 0.0},
+            {"t": 2, "equity_pct": 2.0},
+            {"t": 3, "equity_pct": 1.0},
+            {"t": 4, "equity_pct": 3.0},
+        ]
+        result = _risk_normalized_allocation_payload(series, portfolio)
+        self.assertTrue(result["available"])
+        self.assertEqual(result["common_start"], 1)
+        self.assertEqual(result["common_end"], 4)
+        self.assertEqual(result["included_bot_ids"], ["steady", "volatile"])
+        self.assertIsNotNone(result["contribution_pct"])
 
 
 class CompoundedTradeCurveTests(unittest.TestCase):
@@ -432,7 +717,7 @@ class BuildFleetPerformanceFilterTests(unittest.TestCase):
             "quant.execution.fleet_api.list_fleet_bots",
             return_value={"ok": True, "bots": []},
         ):
-            out = build_fleet_performance(hours=24.0, instance_ids=["imba-runner"])
+            out = build_fleet_performance(hours=0, instance_ids=["imba-runner"])
         self.assertTrue(out["ok"])
         self.assertEqual(len(out["series"]), 1)
         self.assertEqual(out["series"][0]["id"], "imba-runner")
@@ -441,6 +726,32 @@ class BuildFleetPerformanceFilterTests(unittest.TestCase):
         self.assertEqual(out["series"][0]["account_curve_abs"], [])
         self.assertIn("portfolio", out)
         self.assertEqual(out["portfolio"]["id"], "portfolio")
+
+    def test_performance_emits_exact_bps_and_does_not_infer_strategy_return(self) -> None:
+        trades = pd.DataFrame(
+            [
+                _trade("2026-08-22T10:00:00Z", 1.0, "one-percent"),
+            ]
+        )
+        with patch(
+            "quant.execution.fleet_api._load_display_trades_for_bot",
+            return_value=trades,
+        ), patch(
+            "quant.execution.fleet_api._load_account_points_for_bot",
+            return_value=[],
+        ), patch(
+            "quant.execution.fleet_api.list_fleet_bots",
+            return_value={"ok": True, "bots": []},
+        ):
+            out = build_fleet_performance(hours=0, instance_ids=["imba-runner"])
+
+        row = out["series"][0]
+        self.assertEqual(row["price_move_meta"]["return_bps"], 100.0)
+        self.assertEqual(row["price_move_curve_bps"][-1]["equity_pct"], 100.0)
+        self.assertFalse(row["strategy_meta"]["available"])
+        self.assertEqual(row["strategy_curve"], [])
+        self.assertEqual(out["portfolio"]["corrected_meta"]["method"], "jump_twr")
+        self.assertFalse(out["portfolio"]["allocation"]["available"])
 
 
 class PortfolioAggregateTests(unittest.TestCase):
@@ -1139,7 +1450,7 @@ class FleetActivityUnifiedTests(unittest.TestCase):
         with patch("quant.execution.fleet_api.fleet_bot_registry", return_value=[bot]), patch(
             "quant.execution.fleet_api.get_conn", return_value=_Conn()
         ), patch(
-            "quant.execution.fleet_api._load_closed_trades_for_bot", return_value=fills
+            "quant.execution.fleet_api._load_display_trades_for_bot", return_value=fills
         ):
             out = build_fleet_activity(hours=24, limit=50)
 

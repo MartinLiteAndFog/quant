@@ -78,7 +78,24 @@ function curveForBot(
       value: p.equity_pct,
     }));
   }
-  const curve = mode === "trade" ? bot.trade_curve : bot.account_curve;
+  if (mode === "trade") {
+    const explicit = bot.price_move_curve_bps;
+    if (explicit?.length) {
+      return explicit.map((p) => ({ t: p.t, value: p.equity_pct }));
+    }
+    // Backward compatibility with pre-BPS APIs.
+    return (bot.trade_curve || []).map((p) => ({
+      t: p.t,
+      value: p.equity_pct * 100,
+    }));
+  }
+  if (mode === "strategy") {
+    return (bot.strategy_curve || []).map((p) => ({
+      t: p.t,
+      value: p.equity_pct,
+    }));
+  }
+  const curve = bot.account_curve;
   return (curve || []).map((p) => ({ t: p.t, value: p.equity_pct }));
 }
 
@@ -659,6 +676,14 @@ export function HeroChart({
         plotted += 1;
         totalPts += data.length;
         wanted.add(id);
+        const priceFormat = mode === "trade"
+          ? {
+              type: "custom" as const,
+              precision: 1,
+              minMove: 0.1,
+              formatter: (price: number) => `${price.toFixed(1)} bps`,
+            }
+          : { type: "price" as const, precision: 2, minMove: 0.01 };
         const options = {
           color,
           lineWidth: (opts?.width ?? 2) as 1 | 2 | 3 | 4,
@@ -669,7 +694,7 @@ export function HeroChart({
           title,
           crosshairMarkerVisible: true,
           crosshairMarkerRadius: 4,
-          priceFormat: { type: "price" as const, precision: 2, minMove: 0.01 },
+          priceFormat,
         };
         let line = seriesRef.current.get(id) as ISeriesApi<"Line"> | undefined;
         if (line) {
@@ -723,7 +748,7 @@ export function HeroChart({
                 position: "belowBar",
                 color: "#b86a58",
                 shape: "arrowUp",
-                text: `DD ${bot.stats.max_drawdown_pct.toFixed(1)}%`,
+                text: `DD ${(bot.stats.max_drawdown_pct * 100).toFixed(0)} bps`,
               },
             ]);
           }

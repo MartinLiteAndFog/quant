@@ -45,7 +45,8 @@ const CHART_MODES: Array<{ id: ChartMode; label: string }> = [
   { id: "account_abs", label: "Equity $" },
   { id: "account", label: "Equity %" },
   { id: "corrected", label: "Bereinigt %" },
-  { id: "trade", label: "Trade %" },
+  { id: "strategy", label: "Strategie %" },
+  { id: "trade", label: "PRICE MOVE · BPS" },
 ];
 
 const DRAWER_TITLES: Record<Exclude<DrawerId, null>, string> = {
@@ -87,14 +88,21 @@ function legendValue(s: BotSeries, mode: ChartMode): string {
     const method = s.corrected_meta?.method;
     const suffix =
       method === "ledger"
-        ? " · Ledger"
+        ? " · Ledger geprüft"
         : method === "jump_twr" || !s.corrected_curve?.length
-          ? " · TWR"
+          ? " · Fallback"
           : "";
     return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%${suffix}`;
   }
-  const pct = s.stats?.return_pct ?? 0;
-  return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+  if (mode === "strategy") {
+    if (!s.strategy_meta?.available) return "nicht verfügbar";
+    const curve = s.strategy_curve || [];
+    const value = curve.length ? curve[curve.length - 1].equity_pct : s.strategy_meta.return_pct;
+    if (value == null || !Number.isFinite(value)) return "nicht verfügbar";
+    return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+  }
+  const bps = s.price_move_meta?.return_bps ?? (s.stats?.return_pct ?? 0) * 100;
+  return `${bps >= 0 ? "+" : ""}${bps.toFixed(0)} bps`;
 }
 
 /** Hex → rgba for translucent legend swatches (stack mode). */
@@ -138,7 +146,8 @@ function portfolioLegendValue(p: PortfolioSeries | null, mode: ChartMode): strin
     );
     if (!curve.length) return "—";
     const last = curve[curve.length - 1].equity_pct;
-    return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%`;
+    const suffix = p.corrected_meta?.method === "ledger" ? " · Ledger geprüft" : " · Fallback";
+    return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%${suffix}`;
   }
   return "n/a";
 }
@@ -353,15 +362,19 @@ export default function App() {
       ? portfolio.live_equity
       : null;
   }, [portfolio]);
-  const tradeReturnPct = useMemo(() => {
+  const tradeReturnBps = useMemo(() => {
     const active = series.filter(
       (item) =>
         (isolatedId ? item.id === isolatedId : visibleIds.has(item.id)) &&
-        Number.isFinite(item.stats?.return_pct),
+        Number.isFinite(item.price_move_meta?.return_bps ?? item.stats?.return_pct),
     );
     if (!active.length) return null;
     return (
-      active.reduce((total, item) => total + item.stats.return_pct, 0) /
+      active.reduce(
+        (total, item) =>
+          total + (item.price_move_meta?.return_bps ?? item.stats.return_pct * 100),
+        0,
+      ) /
       active.length
     );
   }, [series, isolatedId, visibleIds]);
@@ -370,10 +383,11 @@ export default function App() {
     [series],
   );
   const displayedReturnPct = useMemo(
-    () => returnPctForView(chartMode, portfolio, tradeReturnPct, rawAccountReturnPct),
-    [chartMode, portfolio, tradeReturnPct, rawAccountReturnPct],
+    () => returnPctForView(chartMode, portfolio, null, rawAccountReturnPct),
+    [chartMode, portfolio, rawAccountReturnPct],
   );
   const cashflowReturn = portfolio?.cashflow_return;
+  const allocation = portfolio?.allocation;
   const returnLabel =
     chartMode === "account_abs"
       ? cashflowReturn?.available
@@ -382,14 +396,20 @@ export default function App() {
       : chartMode === "account"
         ? "Equity %"
         : chartMode === "corrected"
-          ? "Bereinigte Rendite"
-        : "Trade return";
+          ? portfolio?.corrected_meta?.method === "ledger"
+            ? "Bereinigt · Ledger"
+            : "Bereinigt · Fallback"
+          : chartMode === "strategy"
+            ? "Strategie-Rendite"
+            : "Price Move · BPS";
   const excludedScopeNote = cashflowReturn?.excluded_bot_ids.includes("counter-sl-reverse")
     ? " Counter SL Reverse is excluded because its ledger is unavailable."
     : "";
   const returnTitle =
     chartMode === "trade"
-      ? "Equal-weight average of the visible bots' completed-trade returns"
+      ? "Reine unlevered Entry/Exit-Kursbewegung; 1 % = 100 bps. Keine Equity, Positionsgröße, Leverage, Gebühren oder Funding."
+      : chartMode === "strategy"
+        ? "Netto-Strategierendite mit tatsächlicher Notional-/Leverage- und Kostenbasis. Wird nur bei vollständigen historischen Eingaben angezeigt."
       : chartMode === "account"
         ? `Raw ${range.toUpperCase()} Equity % chart value; deposits and withdrawals remain visible`
         : chartMode === "corrected"
@@ -456,9 +476,13 @@ export default function App() {
                     : "down"
               }
             >
-              {displayedReturnPct == null
-                ? "—"
-                : `${displayedReturnPct >= 0 ? "+" : ""}${displayedReturnPct.toFixed(2)}%`}
+              {chartMode === "trade"
+                ? tradeReturnBps == null
+                  ? "—"
+                  : `${tradeReturnBps >= 0 ? "+" : ""}${tradeReturnBps.toFixed(0)} bps`
+                : displayedReturnPct == null
+                  ? chartMode === "strategy" ? "nicht verfügbar" : "—"
+                  : `${displayedReturnPct >= 0 ? "+" : ""}${displayedReturnPct.toFixed(2)}%`}
             </span>
           </div>
           <div
@@ -470,6 +494,24 @@ export default function App() {
               {cashflowReturn?.available
                 ? formatMoney(cashflowReturn.net_cashflow, true)
                 : "Ledger pending"}
+            </span>
+          </div>
+          <div
+            className="readout"
+            title={allocation?.available
+              ? "Reales bereinigtes Portfolio relativ zu einem gleichgewichteten Strategiebasket auf gemeinsamem Zeitfenster und gleicher realisierter Risikohöhe."
+              : "Noch nicht vergleichbar: vollständige historische Strategie-Notional-, Leverage- und Kostendaten fehlen."}
+          >
+            <span className="k">Allokationsbeitrag</span>
+            <span
+              className="v"
+              data-tone={allocation?.contribution_pct == null
+                ? undefined
+                : allocation.contribution_pct >= 0 ? "up" : "down"}
+            >
+              {allocation?.available && allocation.contribution_pct != null
+                ? `${allocation.contribution_pct >= 0 ? "+" : ""}${allocation.contribution_pct.toFixed(2)}%`
+                : "nicht verfügbar"}
             </span>
           </div>
         </div>
@@ -571,7 +613,10 @@ export default function App() {
               style={
                 {
                   "--i": 0,
-                  display: chartMode === "trade" ? "none" : undefined,
+                  display:
+                    chartMode === "trade" || chartMode === "strategy"
+                      ? "none"
+                      : undefined,
                 } as CSSProperties
               }
             >
@@ -636,7 +681,7 @@ export default function App() {
             })}
             <label
               className="ml-auto flex items-center gap-2 text-[10px] font-medium tracking-wide text-[var(--muted)]"
-              style={{ display: chartMode === "trade" ? undefined : "none" }}
+                  style={{ display: chartMode === "trade" ? undefined : "none" }}
             >
               <input
                 type="checkbox"

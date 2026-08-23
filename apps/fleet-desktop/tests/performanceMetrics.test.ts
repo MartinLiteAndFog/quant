@@ -101,8 +101,12 @@ test("Equity $ uses the confirmed-ledger cashflow-corrected return", () => {
   assert.equal(returnPctForView("account_abs", portfolio, 88), 8.5);
 });
 
-test("Trade % preserves the completed-trade return", () => {
+test("Price Move preserves the BPS value supplied by the caller", () => {
   assert.equal(returnPctForView("trade", portfolio, 7.25), 7.25);
+});
+
+test("Strategy return is never inferred from portfolio equity", () => {
+  assert.equal(returnPctForView("strategy", portfolio, null), null);
 });
 
 test("Equity $ falls back to cashflow-neutralized return while ledger sync is unavailable", () => {
