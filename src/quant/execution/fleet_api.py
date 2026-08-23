@@ -2181,6 +2181,24 @@ def _activity_item_from_fill(
     }
 
 
+def _limit_activity_items(items: List[Dict[str, Any]], *, cap: int) -> List[Dict[str, Any]]:
+    """Keep the complete bounded Kraken ledger before generic activity rows.
+
+    Kraken history is independently paginated to ``cap`` exchange records.
+    A global post-merge limit must not silently discard its older real fills
+    merely because unrelated bots also produced recent dashboard activity.
+    """
+    ordered = sorted(items, key=lambda x: (x.get("t") is None, -(x.get("t") or 0)))
+    kraken_history = [
+        item for item in ordered if item.get("source") == "kraken_position_history"
+    ]
+    others = [
+        item for item in ordered if item.get("source") != "kraken_position_history"
+    ]
+    kept = kraken_history + others[: max(0, int(cap) - len(kraken_history))]
+    return sorted(kept, key=lambda x: (x.get("t") is None, -(x.get("t") or 0)))
+
+
 def build_fleet_activity(
     *,
     hours: Optional[float] = 168.0,
@@ -2273,11 +2291,10 @@ def build_fleet_activity(
                 e,
             )
             continue
-        if df.empty:
-            continue
-        work = df.sort_values("exit_ts", ascending=False).head(per_bot_limit)
-        for _, row in work.iterrows():
-            items.append(_activity_item_from_fill(row=row, bot=bot))
+        if not df.empty:
+            work = df.sort_values("exit_ts", ascending=False).head(per_bot_limit)
+            for _, row in work.iterrows():
+                items.append(_activity_item_from_fill(row=row, bot=bot))
 
         if str(bot.get("venue") or "").lower() == "kraken":
             # Kraken's exchange ledger is primary evidence, not an old local
@@ -2291,12 +2308,11 @@ def build_fleet_activity(
             )
             items.extend(
                 _kraken_position_event_activity_items(
-                    raw_events, bot=bot, since=since
+                    raw_events, bot=bot, since=kraken_since
                 )
             )
 
-    items.sort(key=lambda x: (x.get("t") is None, -(x.get("t") or 0)))
-    items = items[:cap]
+    items = _limit_activity_items(items, cap=cap)
 
     # Legacy `events` = execution rows only (older clients).
     events = [i for i in items if i.get("kind") == "event"]

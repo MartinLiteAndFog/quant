@@ -277,6 +277,28 @@ class KrakenDirectTradeTests(unittest.TestCase):
         self.assertEqual(get_events.call_args.kwargs["limit"], 2000)
         self.assertTrue(get_events.call_args.kwargs["include_funding"])
 
+    def test_activity_limit_retains_complete_bounded_kraken_ledger(self) -> None:
+        from quant.execution.fleet_api import _limit_activity_items
+
+        kraken = [
+            {
+                "id": f"kraken-{index}",
+                "t": index,
+                "source": "kraken_position_history",
+            }
+            for index in range(1, 6)
+        ]
+        other = [
+            {"id": f"other-{index}", "t": 100 + index, "source": "database"}
+            for index in range(1, 6)
+        ]
+        out = _limit_activity_items(kraken + other, cap=5)
+
+        self.assertEqual(
+            [row["id"] for row in out],
+            ["kraken-5", "kraken-4", "kraken-3", "kraken-2", "kraken-1"],
+        )
+
     @patch("quant.execution.fleet_api._load_kraken_exchange_trades_for_bot")
     @patch("quant.execution.fleet_api._load_execution_activity_trades_for_bot")
     @patch("quant.execution.fleet_api._load_closed_trades_for_bot")
