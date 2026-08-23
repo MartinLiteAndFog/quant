@@ -817,10 +817,13 @@ export function HeroChart({
       )}
       {empty && (
         <div className="pointer-events-none absolute inset-0 flex flex-col items-center justify-center gap-2 px-8 text-center">
-          <p className="text-[13px] font-medium text-[var(--text)]">No equity series in this window</p>
+          <p className="text-[13px] font-medium text-[var(--text)]">
+            {mode === "strategy" ? "Strategie-Rendite nicht verfügbar" : "No equity series in this window"}
+          </p>
           <p className="max-w-sm text-[12px] leading-relaxed text-[var(--muted)]">
-            Switch to Equity $ and ALL, then Refresh. Pilots without account history stay flat until
-            they trade or report live equity.
+            {mode === "strategy"
+              ? "Historische Notional-, Leverage-, Gebühren- und Funding-Daten sind nicht vollständig. Fleet schätzt diesen Wert nicht aus der Konto-Equity."
+              : "Switch to Equity $ and ALL, then Refresh. Pilots without account history stay flat until they trade or report live equity."}
           </p>
         </div>
       )}
