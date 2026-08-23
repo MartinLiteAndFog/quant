@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "protocol_id": "brain-forward-sol-5m-v1-20260719",
+  "candidate_id": "trade/SOL_5m_utility_v1",
+  "symbol": "SOL-USDT",
+  "source": "binance_spot_klines",
+  "artifact_sha256": "569d1000f5a040497b28df87d885780dbc67e33de89cbebd7b65a4dcee09e334",
+  "candidate_spec_sha256": "35f2ddb41f08ef6e518c95b80ab7041dc16db95afa719ff16b8f9b67b7275185",
+  "observer_code_sha256": {
+    "runtime.py": "d2dcbacc08a13d5fdbd2ef3e5a39704f1366ad3d2ffceec14f78fb0e2a32d533",
+    "service.py": "a36f01b1234f24324a71c2f870098433a25b36e95c32f2020d70768c508105c1",
+    "store.py": "0debcb906267c74390a26efbab7cff2ee56d792c4692646451ce3d3b4c47b541"
+  },
+  "warmup_start": "2026-07-19T00:00:00Z",
+  "evidence_start": "2026-08-02T00:00:00Z",
+  "evidence_end": "2026-10-31T00:00:00Z",
+  "checkpoint_at": "2026-10-31T00:10:00Z",
+  "outcome_maturity_minutes": 5,
+  "base_cost_bps": 14.0,
+  "stress_cost_bps": 22.0,
+  "minimum_formal_trades": 6,
+  "minimum_bar_coverage": 0.995,
+  "maximum_drawdown_bps": 1000.0,
+  "minimum_mean_net_bps": 0.0,
+  "minimum_lcb95_net_bps": 0.0,
+  "minimum_stress_mean_net_bps": 0.0,
+  "promotion_scope": "shadow_champion_review_only",
+  "live_orders_permitted": false,
+  "notes": [
+    "The first fourteen UTC days are operational warmup and never count as formal evidence.",
+    "The formal epoch is fixed at ninety UTC days and cannot be extended after its sample is opened.",
+    "Passing this checkpoint can establish a shadow champion only; micro-live and deployment require separate actual-fill and risk gates."
+  ]
+}

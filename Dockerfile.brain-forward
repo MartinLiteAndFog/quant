@@ -1,0 +1,12 @@
+FROM python:3.12-slim
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+
+COPY pyproject.toml .
+COPY src ./src
+RUN pip install --no-cache-dir .
+
+# Dedicated, paper-only v2 worker. It runs once so Railway Cron can stop it.
+# v1 remains immutable and is never repurposed as independent evidence.
+CMD ["brain-forward-v2", "--once"]

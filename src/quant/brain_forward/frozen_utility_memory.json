@@ -1,0 +1,7924 @@
+{
+  "contract": {
+    "bar_seconds": 60,
+    "barrier_multiplier": 1.0,
+    "cost_bps_roundtrip": 14.0,
+    "min_state_support": 15,
+    "primary_trade_minutes": 5,
+    "prior_strength": 40.0
+  },
+  "feature_bounds": {
+    "flow_imbalance": [
+      -0.3,
+      -0.1
+    ],
+    "volatility_ratio": [
+      2.0,
+      null
+    ]
+  },
+  "memories": {
+    "micro_flow": [
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.350974516834235,
+        "state": 0,
+        "support": 5181
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.601251408258209,
+        "state": 1,
+        "support": 3755
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.59007293898911,
+        "state": 2,
+        "support": 3273
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.04106324686728,
+        "state": 3,
+        "support": 1771
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.809215757535922,
+        "state": 4,
+        "support": 564
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.012275816566696,
+        "state": 5,
+        "support": 193
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.226670956285297,
+        "state": 6,
+        "support": 57
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.43362790439239,
+        "state": 7,
+        "support": 2434
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.904146703323399,
+        "state": 8,
+        "support": 1997
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.742662541193445,
+        "state": 9,
+        "support": 1690
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.818062185667827,
+        "state": 10,
+        "support": 838
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.05918093922354,
+        "state": 11,
+        "support": 263
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.574681012024,
+        "state": 12,
+        "support": 75
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.199065773350332,
+        "state": 13,
+        "support": 15
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.223751989759783,
+        "state": 14,
+        "support": 1132
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.559151811046709,
+        "state": 15,
+        "support": 1064
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.507876781171243,
+        "state": 16,
+        "support": 922
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.21359461117479,
+        "state": 17,
+        "support": 411
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.023814750322375,
+        "state": 18,
+        "support": 92
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -13.920795837427644,
+        "state": 19,
+        "support": 26
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.07885221358244,
+        "state": 20,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.656055479829801,
+        "state": 21,
+        "support": 934
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.491625901784209,
+        "state": 22,
+        "support": 980
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.47838395802203,
+        "state": 23,
+        "support": 876
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.701505745196094,
+        "state": 24,
+        "support": 413
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.685520973094594,
+        "state": 25,
+        "support": 110
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.722024500772548,
+        "state": 26,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.138050610812924,
+        "state": 27,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -13.288645376074031,
+        "state": 28,
+        "support": 328
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.45606966051665,
+        "state": 29,
+        "support": 396
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.174773769652521,
+        "state": 30,
+        "support": 351
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.524243235352145,
+        "state": 31,
+        "support": 168
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.699290638447028,
+        "state": 32,
+        "support": 31
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -18.22677737760981,
+        "state": 33,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.522042448245422,
+        "state": 34,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.08495921974838,
+        "state": 35,
+        "support": 297
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.714227491297713,
+        "state": 36,
+        "support": 459
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -11.578560314146305,
+        "state": 37,
+        "support": 475
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -20.285591655427606,
+        "state": 38,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -25.253125873421112,
+        "state": 39,
+        "support": 41
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -20.838045391669752,
+        "state": 40,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.113306265067678,
+        "state": 41,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.062353964986581,
+        "state": 0,
+        "support": 5181
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.766814219837299,
+        "state": 1,
+        "support": 3755
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.343745328576935,
+        "state": 2,
+        "support": 3273
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.162207934311567,
+        "state": 3,
+        "support": 1771
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.086751645428585,
+        "state": 4,
+        "support": 564
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.009466071404216,
+        "state": 5,
+        "support": 193
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.011507855704988,
+        "state": 6,
+        "support": 57
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.442160353405663,
+        "state": 7,
+        "support": 2434
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.664105218056516,
+        "state": 8,
+        "support": 1997
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.090850684002648,
+        "state": 9,
+        "support": 1690
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.312299229051646,
+        "state": 10,
+        "support": 838
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.825348624587532,
+        "state": 11,
+        "support": 263
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.478693397491938,
+        "state": 12,
+        "support": 75
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -17.152310026571477,
+        "state": 13,
+        "support": 15
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.262015625910559,
+        "state": 14,
+        "support": 1132
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.984496650022198,
+        "state": 15,
+        "support": 1064
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.253781792836607,
+        "state": 16,
+        "support": 922
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.924371347147996,
+        "state": 17,
+        "support": 411
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -18.19266546665061,
+        "state": 18,
+        "support": 92
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.922176991530238,
+        "state": 19,
+        "support": 26
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -17.580631065703372,
+        "state": 20,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.680284662775609,
+        "state": 21,
+        "support": 934
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.073182748249215,
+        "state": 22,
+        "support": 980
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.773948837875865,
+        "state": 23,
+        "support": 876
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -8.837544849362155,
+        "state": 24,
+        "support": 413
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.040169380385736,
+        "state": 25,
+        "support": 110
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -20.90662741307173,
+        "state": 26,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -9.273659852123307,
+        "state": 27,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -8.714072801338306,
+        "state": 28,
+        "support": 328
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.16020971352895,
+        "state": 29,
+        "support": 396
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.962750191948198,
+        "state": 30,
+        "support": 351
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.323902263404815,
+        "state": 31,
+        "support": 168
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.202748052993327,
+        "state": 32,
+        "support": 31
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -17.356243446437702,
+        "state": 33,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.425464214023009,
+        "state": 34,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -8.31948945301423,
+        "state": 35,
+        "support": 297
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -10.134639119536264,
+        "state": 36,
+        "support": 459
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -0.7780571420193124,
+        "state": 37,
+        "support": 475
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -23.099567617696483,
+        "state": 38,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -30.001373115708162,
+        "state": 39,
+        "support": 41
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.89736311803669,
+        "state": 40,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.175034523579265,
+        "state": 41,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.335156452685844,
+        "state": 0,
+        "support": 5181
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.132334705657662,
+        "state": 1,
+        "support": 3755
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.690206665517817,
+        "state": 2,
+        "support": 3273
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.732218443549682,
+        "state": 3,
+        "support": 1771
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.09206483961554,
+        "state": 4,
+        "support": 564
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -17.07488856540314,
+        "state": 5,
+        "support": 193
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.84203589204601,
+        "state": 6,
+        "support": 57
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.32687937920347,
+        "state": 7,
+        "support": 2434
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.479313779325663,
+        "state": 8,
+        "support": 1997
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.563672259823711,
+        "state": 9,
+        "support": 1690
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.082359158334704,
+        "state": 10,
+        "support": 838
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.726679361651167,
+        "state": 11,
+        "support": 263
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.851218563525787,
+        "state": 12,
+        "support": 75
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -18.348210373001166,
+        "state": 13,
+        "support": 15
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.723702709109192,
+        "state": 14,
+        "support": 1132
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.700045882391684,
+        "state": 15,
+        "support": 1064
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.805190315343637,
+        "state": 16,
+        "support": 922
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.581487362134872,
+        "state": 17,
+        "support": 411
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -19.179643154194583,
+        "state": 18,
+        "support": 92
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.315536451137811,
+        "state": 19,
+        "support": 26
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -17.38689117738763,
+        "state": 20,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.82264191357942,
+        "state": 21,
+        "support": 934
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.732719797304254,
+        "state": 22,
+        "support": 980
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.765714444260963,
+        "state": 23,
+        "support": 876
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -7.495147810986272,
+        "state": 24,
+        "support": 413
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.750809460458987,
+        "state": 25,
+        "support": 110
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -22.305826424716216,
+        "state": 26,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.856413057942069,
+        "state": 27,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -6.054253329425668,
+        "state": 28,
+        "support": 328
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.340772557925284,
+        "state": 29,
+        "support": 396
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.326165718505566,
+        "state": 30,
+        "support": 351
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.120014849750733,
+        "state": 31,
+        "support": 168
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.5745648801052,
+        "state": 32,
+        "support": 31
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -18.836766652338323,
+        "state": 33,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.224033515895627,
+        "state": 34,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -6.480382793307402,
+        "state": 35,
+        "support": 297
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -9.909393429571118,
+        "state": 36,
+        "support": 459
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": 11.303214179095757,
+        "state": 37,
+        "support": 475
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -24.79656477615474,
+        "state": 38,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -20.92685370803993,
+        "state": 39,
+        "support": 41
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.784938822929197,
+        "state": 40,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.648076406936065,
+        "state": 41,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.301934460326274,
+        "state": 0,
+        "support": 5181
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.790157489877725,
+        "state": 1,
+        "support": 3755
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.986057327105058,
+        "state": 2,
+        "support": 3273
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.480805571675855,
+        "state": 3,
+        "support": 1771
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -18.885649365833178,
+        "state": 4,
+        "support": 564
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -18.588896065180872,
+        "state": 5,
+        "support": 193
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.889108269679399,
+        "state": 6,
+        "support": 57
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.4627143057789,
+        "state": 7,
+        "support": 2434
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.690512609121647,
+        "state": 8,
+        "support": 1997
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.152912703066782,
+        "state": 9,
+        "support": 1690
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.906428669445958,
+        "state": 10,
+        "support": 838
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.715356746515964,
+        "state": 11,
+        "support": 263
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -17.097525337198405,
+        "state": 12,
+        "support": 75
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.788709243864512,
+        "state": 13,
+        "support": 15
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.985250914005857,
+        "state": 14,
+        "support": 1132
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.04176652433681,
+        "state": 15,
+        "support": 1064
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.429601768727263,
+        "state": 16,
+        "support": 922
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -18.138587390096024,
+        "state": 17,
+        "support": 411
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -21.06252744750305,
+        "state": 18,
+        "support": 92
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.762380925755327,
+        "state": 19,
+        "support": 26
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -18.19385388168718,
+        "state": 20,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.321054339302693,
+        "state": 21,
+        "support": 934
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.764978671557436,
+        "state": 22,
+        "support": 980
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.310081665234085,
+        "state": 23,
+        "support": 876
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -7.4064542729982445,
+        "state": 24,
+        "support": 413
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.421863738584834,
+        "state": 25,
+        "support": 110
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -21.93308279079093,
+        "state": 26,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -10.081587091350947,
+        "state": 27,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -5.052601356552867,
+        "state": 28,
+        "support": 328
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.160330661734072,
+        "state": 29,
+        "support": 396
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.1574600145826,
+        "state": 30,
+        "support": 351
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.377322334384585,
+        "state": 31,
+        "support": 168
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -7.157304972257362,
+        "state": 32,
+        "support": 31
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -18.92467078820494,
+        "state": 33,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.162688924084785,
+        "state": 34,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -5.463148007770186,
+        "state": 35,
+        "support": 297
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -6.835294368279764,
+        "state": 36,
+        "support": 459
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": 11.026042774741272,
+        "state": 37,
+        "support": 475
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -22.826860524692975,
+        "state": 38,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -23.162728041789993,
+        "state": 39,
+        "support": 41
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -6.556632509573657,
+        "state": 40,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.261638286787713,
+        "state": 41,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.489356360542915,
+        "state": 0,
+        "support": 5181
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.081418068446055,
+        "state": 1,
+        "support": 3755
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.86433710011064,
+        "state": 2,
+        "support": 3273
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.212064327627104,
+        "state": 3,
+        "support": 1771
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -18.226483037436097,
+        "state": 4,
+        "support": 564
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -18.235808986706797,
+        "state": 5,
+        "support": 193
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.19285009046135,
+        "state": 6,
+        "support": 57
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.692637963752798,
+        "state": 7,
+        "support": 2434
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.809961124306522,
+        "state": 8,
+        "support": 1997
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.962876709243698,
+        "state": 9,
+        "support": 1690
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -10.819034507140248,
+        "state": 10,
+        "support": 838
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.772466505927808,
+        "state": 11,
+        "support": 263
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -19.57011197626325,
+        "state": 12,
+        "support": 75
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -19.082911001693773,
+        "state": 13,
+        "support": 15
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.379868342891392,
+        "state": 14,
+        "support": 1132
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.937044313094306,
+        "state": 15,
+        "support": 1064
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.090519147289069,
+        "state": 16,
+        "support": 922
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.223581752804265,
+        "state": 17,
+        "support": 411
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -22.303989678720555,
+        "state": 18,
+        "support": 92
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -9.999034654096198,
+        "state": 19,
+        "support": 26
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -18.020787722016866,
+        "state": 20,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.796394097637547,
+        "state": 21,
+        "support": 934
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.47324949414553,
+        "state": 22,
+        "support": 980
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.298551438271213,
+        "state": 23,
+        "support": 876
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -7.035897787656013,
+        "state": 24,
+        "support": 413
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.647237862010249,
+        "state": 25,
+        "support": 110
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -21.48202508966029,
+        "state": 26,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.441942123211843,
+        "state": 27,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -8.168710237339353,
+        "state": 28,
+        "support": 328
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.99763789168884,
+        "state": 29,
+        "support": 396
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -10.036523124610401,
+        "state": 30,
+        "support": 351
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -9.207927565690973,
+        "state": 31,
+        "support": 168
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -4.7677193020864514,
+        "state": 32,
+        "support": 31
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -19.191184246202287,
+        "state": 33,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.859992885797976,
+        "state": 34,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -1.7443050620724445,
+        "state": 35,
+        "support": 297
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -2.313210570143029,
+        "state": 36,
+        "support": 459
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": 14.09758276479403,
+        "state": 37,
+        "support": 475
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -27.194482722401606,
+        "state": 38,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.905639241735033,
+        "state": 39,
+        "support": 41
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -10.108204685720942,
+        "state": 40,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.310052246523973,
+        "state": 41,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.572695285794104,
+        "state": 0,
+        "support": 5181
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.334343330273564,
+        "state": 1,
+        "support": 3755
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.981350618763328,
+        "state": 2,
+        "support": 3273
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.531189948366649,
+        "state": 3,
+        "support": 1771
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -17.575932808205522,
+        "state": 4,
+        "support": 564
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -18.09126003842998,
+        "state": 5,
+        "support": 193
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.335474552534281,
+        "state": 6,
+        "support": 57
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.097492588578945,
+        "state": 7,
+        "support": 2434
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.399205955209519,
+        "state": 8,
+        "support": 1997
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.23419618615758,
+        "state": 9,
+        "support": 1690
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.798667443932707,
+        "state": 10,
+        "support": 838
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.572160702671676,
+        "state": 11,
+        "support": 263
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.851661158453815,
+        "state": 12,
+        "support": 75
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -21.32961083905848,
+        "state": 13,
+        "support": 15
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.997551276536896,
+        "state": 14,
+        "support": 1132
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.916074009411751,
+        "state": 15,
+        "support": 1064
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.962888585423864,
+        "state": 16,
+        "support": 922
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.565928056205896,
+        "state": 17,
+        "support": 411
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -21.71675241029477,
+        "state": 18,
+        "support": 92
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.907019108827768,
+        "state": 19,
+        "support": 26
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.02620644933116,
+        "state": 20,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.704598423201137,
+        "state": 21,
+        "support": 934
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.42116551189075,
+        "state": 22,
+        "support": 980
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -10.721587477422942,
+        "state": 23,
+        "support": 876
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -6.646959412255261,
+        "state": 24,
+        "support": 413
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.303291829337123,
+        "state": 25,
+        "support": 110
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -18.035114765683332,
+        "state": 26,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.053045732943714,
+        "state": 27,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -7.923938670794713,
+        "state": 28,
+        "support": 328
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.26914741526543,
+        "state": 29,
+        "support": 396
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.046406201656522,
+        "state": 30,
+        "support": 351
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -8.907298601468689,
+        "state": 31,
+        "support": 168
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -2.691385698373709,
+        "state": 32,
+        "support": 31
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -18.819196394641466,
+        "state": 33,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.442640662095593,
+        "state": 34,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -2.7938572236545665,
+        "state": 35,
+        "support": 297
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": 2.615264432376213,
+        "state": 36,
+        "support": 459
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": 17.652069814301953,
+        "state": 37,
+        "support": 475
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -23.012863597775453,
+        "state": 38,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -10.619585332538733,
+        "state": 39,
+        "support": 41
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.758991600582215,
+        "state": 40,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.828663237114453,
+        "state": 41,
+        "support": 1
+      }
+    ],
+    "path": [
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.258405167873914,
+        "state": 0,
+        "support": 4142
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.773182344410877,
+        "state": 1,
+        "support": 2058
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.548750594440229,
+        "state": 2,
+        "support": 1015
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.70907292165667,
+        "state": 3,
+        "support": 798
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.911363830100735,
+        "state": 4,
+        "support": 642
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.862125478448888,
+        "state": 5,
+        "support": 865
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.68411510729521,
+        "state": 6,
+        "support": 777
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.92515556289007,
+        "state": 7,
+        "support": 540
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.10460864768906,
+        "state": 8,
+        "support": 506
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.062668537952566,
+        "state": 9,
+        "support": 428
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.280342702988115,
+        "state": 10,
+        "support": 280
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.986650035183533,
+        "state": 11,
+        "support": 206
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.50119336202275,
+        "state": 12,
+        "support": 201
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.176064991638963,
+        "state": 13,
+        "support": 231
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.145520993349688,
+        "state": 14,
+        "support": 289
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.560468780761758,
+        "state": 15,
+        "support": 176
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.465850932766541,
+        "state": 16,
+        "support": 131
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.49845079807998,
+        "state": 17,
+        "support": 116
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.474031654668257,
+        "state": 18,
+        "support": 200
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.068884099649345,
+        "state": 19,
+        "support": 322
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.750542958286271,
+        "state": 20,
+        "support": 117
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.45660092087857,
+        "state": 21,
+        "support": 71
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.236272271954256,
+        "state": 22,
+        "support": 53
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.091220727829224,
+        "state": 23,
+        "support": 155
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.451768549209277,
+        "state": 24,
+        "support": 475
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.620270608713263,
+        "state": 25,
+        "support": 2571
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.332044113141174,
+        "state": 26,
+        "support": 1066
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.704621440960448,
+        "state": 27,
+        "support": 474
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.881162688934301,
+        "state": 28,
+        "support": 383
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.444769878981353,
+        "state": 29,
+        "support": 368
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.85971512549216,
+        "state": 30,
+        "support": 328
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.113591676150257,
+        "state": 31,
+        "support": 252
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.779111447523901,
+        "state": 32,
+        "support": 162
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.51549818569433,
+        "state": 33,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.979975881848898,
+        "state": 34,
+        "support": 205
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.33839424785667,
+        "state": 35,
+        "support": 113
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.438018657348602,
+        "state": 36,
+        "support": 74
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.598694418511041,
+        "state": 37,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -13.376455836578625,
+        "state": 38,
+        "support": 75
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.981280556608478,
+        "state": 39,
+        "support": 140
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.10619033743464,
+        "state": 40,
+        "support": 95
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.009873819004712,
+        "state": 41,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.918722755997651,
+        "state": 42,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -11.62747421422067,
+        "state": 43,
+        "support": 83
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.423084412831312,
+        "state": 44,
+        "support": 156
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.11910555346907,
+        "state": 45,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -18.009078349684476,
+        "state": 46,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.83727986222567,
+        "state": 47,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.04460145972098,
+        "state": 48,
+        "support": 64
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.113340492001953,
+        "state": 49,
+        "support": 259
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.750768119087054,
+        "state": 50,
+        "support": 1610
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.347673473812394,
+        "state": 51,
+        "support": 471
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.906568177513376,
+        "state": 52,
+        "support": 222
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.563055209724002,
+        "state": 53,
+        "support": 180
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.85802972014843,
+        "state": 54,
+        "support": 197
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.552805575323188,
+        "state": 55,
+        "support": 127
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -18.074429406616023,
+        "state": 56,
+        "support": 78
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.371575385301696,
+        "state": 57,
+        "support": 55
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -13.62961430061315,
+        "state": 58,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.598003420616745,
+        "state": 59,
+        "support": 89
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -13.836698747934658,
+        "state": 60,
+        "support": 58
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.312145647563197,
+        "state": 61,
+        "support": 19
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.940460550821742,
+        "state": 62,
+        "support": 19
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.767703348779678,
+        "state": 63,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.44892802546463,
+        "state": 64,
+        "support": 60
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.88906060110197,
+        "state": 65,
+        "support": 37
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.882935943751173,
+        "state": 66,
+        "support": 20
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.966532958888777,
+        "state": 67,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.620113219169848,
+        "state": 68,
+        "support": 33
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.02205829785781,
+        "state": 69,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -12.721900291845436,
+        "state": 70,
+        "support": 25
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.869100612050339,
+        "state": 71,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.742747561150853,
+        "state": 72,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.198679901977467,
+        "state": 73,
+        "support": 18
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.01493587318833,
+        "state": 74,
+        "support": 159
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.14561331169761,
+        "state": 75,
+        "support": 1742
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.32608225368,
+        "state": 76,
+        "support": 386
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.218560735074787,
+        "state": 77,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.383295768243096,
+        "state": 78,
+        "support": 139
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.44333068308449,
+        "state": 79,
+        "support": 200
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.829836642779117,
+        "state": 80,
+        "support": 72
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.488231309391661,
+        "state": 81,
+        "support": 36
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.835638772919111,
+        "state": 82,
+        "support": 29
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.91348455649716,
+        "state": 83,
+        "support": 39
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.988108489443045,
+        "state": 84,
+        "support": 63
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -18.77255484348637,
+        "state": 85,
+        "support": 40
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -18.03767692732112,
+        "state": 86,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.952729752971344,
+        "state": 87,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.395794650509123,
+        "state": 88,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.531608843897807,
+        "state": 89,
+        "support": 44
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.794627011598475,
+        "state": 90,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.84174267410677,
+        "state": 91,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -13.678202195207072,
+        "state": 92,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -13.5933327263848,
+        "state": 93,
+        "support": 16
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.386091179465257,
+        "state": 94,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.849157180263916,
+        "state": 95,
+        "support": 33
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -12.053073086467672,
+        "state": 96,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -11.425396449164204,
+        "state": 97,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.946727670803773,
+        "state": 98,
+        "support": 23
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.451864103706292,
+        "state": 99,
+        "support": 152
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.725195264501803,
+        "state": 100,
+        "support": 789
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -12.67096575486876,
+        "state": 101,
+        "support": 96
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.210015933462445,
+        "state": 102,
+        "support": 42
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -10.375079780107871,
+        "state": 103,
+        "support": 54
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -12.324306011762198,
+        "state": 104,
+        "support": 80
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.24195649421916,
+        "state": 105,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.316516093484495,
+        "state": 106,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.412244240014807,
+        "state": 107,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.474548718700714,
+        "state": 108,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.066848367513767,
+        "state": 109,
+        "support": 25
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -18.14562362076295,
+        "state": 110,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.742114760528757,
+        "state": 111,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.767904945099747,
+        "state": 112,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.253706024960719,
+        "state": 113,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.93346496330698,
+        "state": 114,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.372012125247041,
+        "state": 115,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.429677525760557,
+        "state": 116,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.854122029395683,
+        "state": 118,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -13.423826731067672,
+        "state": 119,
+        "support": 15
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -18.953284086453465,
+        "state": 120,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.1065727139284,
+        "state": 121,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.456371200237061,
+        "state": 122,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -18.772041618835075,
+        "state": 123,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.46155592925805,
+        "state": 124,
+        "support": 58
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -13.794550333111378,
+        "state": 125,
+        "support": 1113
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -19.463764746169705,
+        "state": 126,
+        "support": 71
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -19.315511302427726,
+        "state": 127,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.341342395818295,
+        "state": 128,
+        "support": 35
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.655523269068597,
+        "state": 129,
+        "support": 68
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.2830059981624,
+        "state": 130,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -19.117512746985224,
+        "state": 131,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.152289733177737,
+        "state": 132,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.005565901012698,
+        "state": 133,
+        "support": 5
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.912407482184165,
+        "state": 134,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.5614932505076,
+        "state": 135,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.813290924482352,
+        "state": 136,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.102522334047194,
+        "state": 137,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -13.577583832846916,
+        "state": 139,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.45306371835267,
+        "state": 141,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.120117914417662,
+        "state": 142,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.81205040778684,
+        "state": 143,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -21.06148780273861,
+        "state": 144,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.833775137623423,
+        "state": 145,
+        "support": 12
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.254633205788918,
+        "state": 146,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.090178023181455,
+        "state": 147,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.29970066182902,
+        "state": 148,
+        "support": 5
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -20.527256246044534,
+        "state": 149,
+        "support": 56
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.611643804167493,
+        "state": 0,
+        "support": 4142
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.220488095912028,
+        "state": 1,
+        "support": 2058
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.297000956811125,
+        "state": 2,
+        "support": 1015
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.848617886224226,
+        "state": 3,
+        "support": 798
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.26619367299295,
+        "state": 4,
+        "support": 642
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.043588065726286,
+        "state": 5,
+        "support": 865
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.06156155105309,
+        "state": 6,
+        "support": 777
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.197457535676623,
+        "state": 7,
+        "support": 540
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.082834999324811,
+        "state": 8,
+        "support": 506
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.418053330167535,
+        "state": 9,
+        "support": 428
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.932163398822757,
+        "state": 10,
+        "support": 280
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.31434612152648,
+        "state": 11,
+        "support": 206
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -17.32569020444947,
+        "state": 12,
+        "support": 201
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.253197650555519,
+        "state": 13,
+        "support": 231
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.823780439051196,
+        "state": 14,
+        "support": 289
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.763194142766,
+        "state": 15,
+        "support": 176
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -10.225285238734063,
+        "state": 16,
+        "support": 131
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.946777544483947,
+        "state": 17,
+        "support": 116
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.00341784860168,
+        "state": 18,
+        "support": 200
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.285192377402254,
+        "state": 19,
+        "support": 322
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.727580518822126,
+        "state": 20,
+        "support": 117
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.500555713171808,
+        "state": 21,
+        "support": 71
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.432944187853815,
+        "state": 22,
+        "support": 53
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.404432133099636,
+        "state": 23,
+        "support": 155
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.967155845097212,
+        "state": 24,
+        "support": 475
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.01259276797656,
+        "state": 25,
+        "support": 2571
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.390680302511209,
+        "state": 26,
+        "support": 1066
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.596029453448335,
+        "state": 27,
+        "support": 474
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.454478369049625,
+        "state": 28,
+        "support": 383
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.271746683092932,
+        "state": 29,
+        "support": 368
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.472855750168975,
+        "state": 30,
+        "support": 328
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.868193112650781,
+        "state": 31,
+        "support": 252
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.39649928274963,
+        "state": 32,
+        "support": 162
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.469244117992572,
+        "state": 33,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.113874767173492,
+        "state": 34,
+        "support": 205
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.371012292259945,
+        "state": 35,
+        "support": 113
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -17.937442997214543,
+        "state": 36,
+        "support": 74
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.196447102892893,
+        "state": 37,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -8.704766969486764,
+        "state": 38,
+        "support": 75
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.184578420662117,
+        "state": 39,
+        "support": 140
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.649092372913703,
+        "state": 40,
+        "support": 95
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.517677651619113,
+        "state": 41,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.171894242902406,
+        "state": 42,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -7.336129735537574,
+        "state": 43,
+        "support": 83
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.625627796913172,
+        "state": 44,
+        "support": 156
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -8.043218065799461,
+        "state": 45,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -21.53475450339532,
+        "state": 46,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.983116403973773,
+        "state": 47,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.67018300369627,
+        "state": 48,
+        "support": 64
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.88584739612253,
+        "state": 49,
+        "support": 259
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.002768705372414,
+        "state": 50,
+        "support": 1610
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.676121273170917,
+        "state": 51,
+        "support": 471
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.709439785412174,
+        "state": 52,
+        "support": 222
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.43701225324028,
+        "state": 53,
+        "support": 180
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.134831517375403,
+        "state": 54,
+        "support": 197
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.46398046540786,
+        "state": 55,
+        "support": 127
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -17.641049099991367,
+        "state": 56,
+        "support": 78
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -17.28196789532793,
+        "state": 57,
+        "support": 55
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.884503715207662,
+        "state": 58,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.442990851928743,
+        "state": 59,
+        "support": 89
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -7.874342513437446,
+        "state": 60,
+        "support": 58
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.679570389776664,
+        "state": 61,
+        "support": 19
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.275421334631332,
+        "state": 62,
+        "support": 19
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.283056453337622,
+        "state": 63,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.575923958404577,
+        "state": 64,
+        "support": 60
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.979503523120433,
+        "state": 65,
+        "support": 37
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.180341005548119,
+        "state": 66,
+        "support": 20
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -18.333940771307738,
+        "state": 67,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -9.94025097902141,
+        "state": 68,
+        "support": 33
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.074586237319723,
+        "state": 69,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -10.57775241668881,
+        "state": 70,
+        "support": 25
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.271788255983347,
+        "state": 71,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.573139621347387,
+        "state": 72,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.054041003733396,
+        "state": 73,
+        "support": 18
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -18.291644695856505,
+        "state": 74,
+        "support": 159
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.480088684853738,
+        "state": 75,
+        "support": 1742
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.17152942820533,
+        "state": 76,
+        "support": 386
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.050327800220183,
+        "state": 77,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.386749703711066,
+        "state": 78,
+        "support": 139
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -10.197615401722835,
+        "state": 79,
+        "support": 200
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -10.054237707958665,
+        "state": 80,
+        "support": 72
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -10.071494153152921,
+        "state": 81,
+        "support": 36
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.694280924500195,
+        "state": 82,
+        "support": 29
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.9356885810111,
+        "state": 83,
+        "support": 39
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -6.144433886969961,
+        "state": 84,
+        "support": 63
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.286714558589571,
+        "state": 85,
+        "support": 40
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.238317259759768,
+        "state": 86,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.450098469938174,
+        "state": 87,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.716988769199352,
+        "state": 88,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.683237600914637,
+        "state": 89,
+        "support": 44
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.72839854071538,
+        "state": 90,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.740600551826168,
+        "state": 91,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.29731964111536,
+        "state": 92,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.075860815652748,
+        "state": 93,
+        "support": 16
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.368881523854487,
+        "state": 94,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.998629306041513,
+        "state": 95,
+        "support": 33
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -7.033170068829992,
+        "state": 96,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -8.538897211173001,
+        "state": 97,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -19.042848170504023,
+        "state": 98,
+        "support": 23
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -8.46977286434517,
+        "state": 99,
+        "support": 152
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.268155759168787,
+        "state": 100,
+        "support": 789
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.988017166687573,
+        "state": 101,
+        "support": 96
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -10.425377685399733,
+        "state": 102,
+        "support": 42
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -10.723068648528,
+        "state": 103,
+        "support": 54
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -6.912049091636785,
+        "state": 104,
+        "support": 80
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -8.597416516781033,
+        "state": 105,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.822683893251419,
+        "state": 106,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.233661621780872,
+        "state": 107,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.707151828202981,
+        "state": 108,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.327034203991177,
+        "state": 109,
+        "support": 25
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.875947679138426,
+        "state": 110,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.243256315179924,
+        "state": 111,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.929655227397157,
+        "state": 112,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -8.561740577783825,
+        "state": 113,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.514938701116678,
+        "state": 114,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -10.967767337496108,
+        "state": 115,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.093250064153116,
+        "state": 116,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.80498457825346,
+        "state": 118,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.690811129024027,
+        "state": 119,
+        "support": 15
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.110079733543662,
+        "state": 120,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.333333540678408,
+        "state": 121,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -10.742424913252501,
+        "state": 122,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -17.282208094869528,
+        "state": 123,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.89347414710632,
+        "state": 124,
+        "support": 58
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -5.899916139417229,
+        "state": 125,
+        "support": 1113
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -20.50968627472965,
+        "state": 126,
+        "support": 71
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -25.877255655626342,
+        "state": 127,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.478772974013328,
+        "state": 128,
+        "support": 35
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.955648939782792,
+        "state": 129,
+        "support": 68
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -9.126482217282103,
+        "state": 130,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -17.485883584938257,
+        "state": 131,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.674065413213828,
+        "state": 132,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.509249949261006,
+        "state": 133,
+        "support": 5
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -21.65601305754839,
+        "state": 134,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.554849555798295,
+        "state": 135,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.575140728598049,
+        "state": 136,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.027953131453124,
+        "state": 137,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.235605958491725,
+        "state": 139,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.858088330733889,
+        "state": 141,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.652332660953107,
+        "state": 142,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.64904345197087,
+        "state": 143,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -19.124854709828604,
+        "state": 144,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": 2.3348510389539547,
+        "state": 145,
+        "support": 12
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.674501928160781,
+        "state": 146,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.04170101427777,
+        "state": 147,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.641060878119063,
+        "state": 148,
+        "support": 5
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -20.242365067576365,
+        "state": 149,
+        "support": 56
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.52224301538331,
+        "state": 0,
+        "support": 4142
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.381540044310718,
+        "state": 1,
+        "support": 2058
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.523050958496592,
+        "state": 2,
+        "support": 1015
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.273340068700811,
+        "state": 3,
+        "support": 798
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.584837061470013,
+        "state": 4,
+        "support": 642
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.04568510219901,
+        "state": 5,
+        "support": 865
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.00938190399635,
+        "state": 6,
+        "support": 777
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.78953498376895,
+        "state": 7,
+        "support": 540
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.593568707327304,
+        "state": 8,
+        "support": 506
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.344073376289499,
+        "state": 9,
+        "support": 428
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.943666846746149,
+        "state": 10,
+        "support": 280
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.936810798136577,
+        "state": 11,
+        "support": 206
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.967084959646458,
+        "state": 12,
+        "support": 201
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.353240502253746,
+        "state": 13,
+        "support": 231
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.645052426378516,
+        "state": 14,
+        "support": 289
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.247603665670438,
+        "state": 15,
+        "support": 176
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.169084698644388,
+        "state": 16,
+        "support": 131
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.279066212505413,
+        "state": 17,
+        "support": 116
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.46758131391838,
+        "state": 18,
+        "support": 200
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.074055678610804,
+        "state": 19,
+        "support": 322
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.994215264404218,
+        "state": 20,
+        "support": 117
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.373151485142122,
+        "state": 21,
+        "support": 71
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.936974163381294,
+        "state": 22,
+        "support": 53
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.365212176562546,
+        "state": 23,
+        "support": 155
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.514380317335393,
+        "state": 24,
+        "support": 475
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.4988828619762,
+        "state": 25,
+        "support": 2571
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.636791929935626,
+        "state": 26,
+        "support": 1066
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.748365480555934,
+        "state": 27,
+        "support": 474
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.504995958313861,
+        "state": 28,
+        "support": 383
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.615023265948725,
+        "state": 29,
+        "support": 368
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.547423119869876,
+        "state": 30,
+        "support": 328
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.6608903908674,
+        "state": 31,
+        "support": 252
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -9.961074557969713,
+        "state": 32,
+        "support": 162
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.19132698760385,
+        "state": 33,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.705338458903437,
+        "state": 34,
+        "support": 205
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.28658596445348,
+        "state": 35,
+        "support": 113
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.850986388730075,
+        "state": 36,
+        "support": 74
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -17.15933581213882,
+        "state": 37,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.0467734276798,
+        "state": 38,
+        "support": 75
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.027346844215991,
+        "state": 39,
+        "support": 140
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.703134536763262,
+        "state": 40,
+        "support": 95
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.203985268497155,
+        "state": 41,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.446626647938634,
+        "state": 42,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -5.658692426471573,
+        "state": 43,
+        "support": 83
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.211941741569655,
+        "state": 44,
+        "support": 156
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -7.212788760992858,
+        "state": 45,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -25.941623957880235,
+        "state": 46,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.932156921865207,
+        "state": 47,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -17.25855597411539,
+        "state": 48,
+        "support": 64
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.548923167152399,
+        "state": 49,
+        "support": 259
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.67648117454993,
+        "state": 50,
+        "support": 1610
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.869122844536975,
+        "state": 51,
+        "support": 471
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.773818644919201,
+        "state": 52,
+        "support": 222
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.25744986158899,
+        "state": 53,
+        "support": 180
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.830882540628668,
+        "state": 54,
+        "support": 197
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.552501291548474,
+        "state": 55,
+        "support": 127
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -20.108545926932983,
+        "state": 56,
+        "support": 78
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.739047218111203,
+        "state": 57,
+        "support": 55
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.829351433647552,
+        "state": 58,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.499167794350614,
+        "state": 59,
+        "support": 89
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -8.790001476289238,
+        "state": 60,
+        "support": 58
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -19.157332219399137,
+        "state": 61,
+        "support": 19
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.520842386931335,
+        "state": 62,
+        "support": 19
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -17.23311957154127,
+        "state": 63,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.812561521144184,
+        "state": 64,
+        "support": 60
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -18.78012514003792,
+        "state": 65,
+        "support": 37
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.356638855540506,
+        "state": 66,
+        "support": 20
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.34949720563952,
+        "state": 67,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.804198571375302,
+        "state": 68,
+        "support": 33
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.973997361959247,
+        "state": 69,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -9.054195886903514,
+        "state": 70,
+        "support": 25
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -9.683706824113003,
+        "state": 71,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.304498641344885,
+        "state": 72,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -17.45108374643706,
+        "state": 73,
+        "support": 18
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -18.157250816624593,
+        "state": 74,
+        "support": 159
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.28142795700604,
+        "state": 75,
+        "support": 1742
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -18.190916093165484,
+        "state": 76,
+        "support": 386
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.986093695467668,
+        "state": 77,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.069658605736384,
+        "state": 78,
+        "support": 139
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.603083518718309,
+        "state": 79,
+        "support": 200
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.156643040019008,
+        "state": 80,
+        "support": 72
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -8.350364915422503,
+        "state": 81,
+        "support": 36
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.459870145382704,
+        "state": 82,
+        "support": 29
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.438100710216442,
+        "state": 83,
+        "support": 39
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -4.13670916093484,
+        "state": 84,
+        "support": 63
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -17.96367665750433,
+        "state": 85,
+        "support": 40
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.058535696798783,
+        "state": 86,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.580527168331159,
+        "state": 87,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.891012332544305,
+        "state": 88,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.518035719348822,
+        "state": 89,
+        "support": 44
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.121901423362726,
+        "state": 90,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.809892358873189,
+        "state": 91,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.054552386372185,
+        "state": 92,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.23129432026818,
+        "state": 93,
+        "support": 16
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.12682800691566,
+        "state": 94,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.425305553369867,
+        "state": 95,
+        "support": 33
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -5.89177763567073,
+        "state": 96,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.356582654124542,
+        "state": 97,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -19.82893892116671,
+        "state": 98,
+        "support": 23
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -9.716592557262851,
+        "state": 99,
+        "support": 152
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.140044581165231,
+        "state": 100,
+        "support": 789
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.447858647394606,
+        "state": 101,
+        "support": 96
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -5.340393244625751,
+        "state": 102,
+        "support": 42
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.764678807964717,
+        "state": 103,
+        "support": 54
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.32891830722989,
+        "state": 104,
+        "support": 80
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.33162222431874,
+        "state": 105,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.895038662590851,
+        "state": 106,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.594197498527517,
+        "state": 107,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.596527542703939,
+        "state": 108,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -18.41225664620567,
+        "state": 109,
+        "support": 25
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.971698801738725,
+        "state": 110,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -9.759951022789895,
+        "state": 111,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.061227647447964,
+        "state": 112,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.087015439319512,
+        "state": 113,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -9.755431766961642,
+        "state": 114,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -9.703778993260556,
+        "state": 115,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.72968063860537,
+        "state": 116,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -17.018972695730675,
+        "state": 118,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -20.92315279710999,
+        "state": 119,
+        "support": 15
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.104497154456844,
+        "state": 120,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.483192840286444,
+        "state": 121,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -9.429725465873169,
+        "state": 122,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -17.579912502632794,
+        "state": 123,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -18.197020869147657,
+        "state": 124,
+        "support": 58
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -1.6062683925902854,
+        "state": 125,
+        "support": 1113
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -19.64985146170204,
+        "state": 126,
+        "support": 71
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": 0.25346382180712124,
+        "state": 127,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.731912826999912,
+        "state": 128,
+        "support": 35
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -3.3402508307023626,
+        "state": 129,
+        "support": 68
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.061592413236747,
+        "state": 130,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -18.676715344904693,
+        "state": 131,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.472634715086445,
+        "state": 132,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.094731262635074,
+        "state": 133,
+        "support": 5
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -22.312694625466264,
+        "state": 134,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.246364469099714,
+        "state": 135,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.748443969180816,
+        "state": 136,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.331720672601044,
+        "state": 137,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.831699452658343,
+        "state": 139,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.160094395327658,
+        "state": 141,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.114375844236008,
+        "state": 142,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.992417788162227,
+        "state": 143,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -19.98833131929979,
+        "state": 144,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": 4.980224465040497,
+        "state": 145,
+        "support": 12
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -17.58931786650721,
+        "state": 146,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.371454206596974,
+        "state": 147,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.38431705269967,
+        "state": 148,
+        "support": 5
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -20.463329618626386,
+        "state": 149,
+        "support": 56
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.286817130714574,
+        "state": 0,
+        "support": 4142
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.974804265882778,
+        "state": 1,
+        "support": 2058
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.864334569232472,
+        "state": 2,
+        "support": 1015
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.152031103011439,
+        "state": 3,
+        "support": 798
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.753996073649416,
+        "state": 4,
+        "support": 642
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.68876986897121,
+        "state": 5,
+        "support": 865
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.703263303727255,
+        "state": 6,
+        "support": 777
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.736589922482741,
+        "state": 7,
+        "support": 540
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.58418304886559,
+        "state": 8,
+        "support": 506
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.830398451237885,
+        "state": 9,
+        "support": 428
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.10448626463213,
+        "state": 10,
+        "support": 280
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -18.08456988448482,
+        "state": 11,
+        "support": 206
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.945999334475896,
+        "state": 12,
+        "support": 201
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.202455213273348,
+        "state": 13,
+        "support": 231
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.259255684018965,
+        "state": 14,
+        "support": 289
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.412460715030331,
+        "state": 15,
+        "support": 176
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -10.602109312651034,
+        "state": 16,
+        "support": 131
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.765356075303707,
+        "state": 17,
+        "support": 116
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.42802390259432,
+        "state": 18,
+        "support": 200
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.415289781849783,
+        "state": 19,
+        "support": 322
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -18.177221451058696,
+        "state": 20,
+        "support": 117
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -9.437399292691357,
+        "state": 21,
+        "support": 71
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -5.047221533209816,
+        "state": 22,
+        "support": 53
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.353234150038915,
+        "state": 23,
+        "support": 155
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.313216344790495,
+        "state": 24,
+        "support": 475
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.458165065440976,
+        "state": 25,
+        "support": 2571
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -17.216167565419134,
+        "state": 26,
+        "support": 1066
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.913627194061275,
+        "state": 27,
+        "support": 474
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.240248444042582,
+        "state": 28,
+        "support": 383
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.214523460961715,
+        "state": 29,
+        "support": 368
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.73145877562345,
+        "state": 30,
+        "support": 328
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.286820409184156,
+        "state": 31,
+        "support": 252
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -8.80672311640291,
+        "state": 32,
+        "support": 162
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.099719734508438,
+        "state": 33,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.10147349153896,
+        "state": 34,
+        "support": 205
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.390469240423359,
+        "state": 35,
+        "support": 113
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.327430441139258,
+        "state": 36,
+        "support": 74
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.535217796991358,
+        "state": 37,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -10.75495699656024,
+        "state": 38,
+        "support": 75
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.983875915791016,
+        "state": 39,
+        "support": 140
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -9.389600062680708,
+        "state": 40,
+        "support": 95
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.120298090159523,
+        "state": 41,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.268460878403719,
+        "state": 42,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -5.4618217182477125,
+        "state": 43,
+        "support": 83
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.073032669228958,
+        "state": 44,
+        "support": 156
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -4.830987995602688,
+        "state": 45,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -23.12851327225745,
+        "state": 46,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.573088957813779,
+        "state": 47,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -19.976720621969356,
+        "state": 48,
+        "support": 64
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.484096079189465,
+        "state": 49,
+        "support": 259
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.742494823170912,
+        "state": 50,
+        "support": 1610
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.710573830399236,
+        "state": 51,
+        "support": 471
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.259581033972616,
+        "state": 52,
+        "support": 222
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.795309879877955,
+        "state": 53,
+        "support": 180
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.977327664667087,
+        "state": 54,
+        "support": 197
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -8.79569305458936,
+        "state": 55,
+        "support": 127
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -22.58738031506183,
+        "state": 56,
+        "support": 78
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -19.61805533757346,
+        "state": 57,
+        "support": 55
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.32654826307214,
+        "state": 58,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.26403860791782,
+        "state": 59,
+        "support": 89
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -7.271807354599028,
+        "state": 60,
+        "support": 58
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -19.978655267875777,
+        "state": 61,
+        "support": 19
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.096962767536892,
+        "state": 62,
+        "support": 19
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -17.223023976705196,
+        "state": 63,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.585359572880455,
+        "state": 64,
+        "support": 60
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -20.057400920952137,
+        "state": 65,
+        "support": 37
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.201988675939718,
+        "state": 66,
+        "support": 20
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.675627456968208,
+        "state": 67,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.034370697862096,
+        "state": 68,
+        "support": 33
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -10.07712124752639,
+        "state": 69,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -5.238287646530634,
+        "state": 70,
+        "support": 25
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -5.129464978634993,
+        "state": 71,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.034433680894821,
+        "state": 72,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -17.528460260235033,
+        "state": 73,
+        "support": 18
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.792502344722708,
+        "state": 74,
+        "support": 159
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.763578684908396,
+        "state": 75,
+        "support": 1742
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -17.541856517944137,
+        "state": 76,
+        "support": 386
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.836405172460012,
+        "state": 77,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.791844328428652,
+        "state": 78,
+        "support": 139
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -5.952346484241745,
+        "state": 79,
+        "support": 200
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -8.713036530821011,
+        "state": 80,
+        "support": 72
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.461857310801992,
+        "state": 81,
+        "support": 36
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.309910174755885,
+        "state": 82,
+        "support": 29
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -9.602190532601279,
+        "state": 83,
+        "support": 39
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -4.829574778263195,
+        "state": 84,
+        "support": 63
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -24.890428711567157,
+        "state": 85,
+        "support": 40
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.381331550927715,
+        "state": 86,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.141953978243185,
+        "state": 87,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.819209139812124,
+        "state": 88,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.271674914468008,
+        "state": 89,
+        "support": 44
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -9.939042187625745,
+        "state": 90,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.512147532261235,
+        "state": 91,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.096169788060942,
+        "state": 92,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.31090738611221,
+        "state": 93,
+        "support": 16
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.848998310054153,
+        "state": 94,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -4.397913996977525,
+        "state": 95,
+        "support": 33
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -8.095964659205945,
+        "state": 96,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -18.42454470643102,
+        "state": 97,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -21.21379372739206,
+        "state": 98,
+        "support": 23
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -10.63850026426949,
+        "state": 99,
+        "support": 152
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -9.845286102474525,
+        "state": 100,
+        "support": 789
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.551427169337918,
+        "state": 101,
+        "support": 96
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -4.2283728836998264,
+        "state": 102,
+        "support": 42
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.900031531632228,
+        "state": 103,
+        "support": 54
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -9.771153355061044,
+        "state": 104,
+        "support": 80
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -17.02319482445811,
+        "state": 105,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.104448390979293,
+        "state": 106,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.389404776338804,
+        "state": 107,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -10.737156401708987,
+        "state": 108,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -19.89294259535206,
+        "state": 109,
+        "support": 25
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.579498718099888,
+        "state": 110,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -8.423433759013683,
+        "state": 111,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.002736292465535,
+        "state": 112,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -19.764423802856193,
+        "state": 113,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -8.204660746395614,
+        "state": 114,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -8.000257848527943,
+        "state": 115,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.669796632313835,
+        "state": 116,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.96048134074824,
+        "state": 118,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -22.299789122423835,
+        "state": 119,
+        "support": 15
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.965805220960757,
+        "state": 120,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.42330883399491,
+        "state": 121,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -8.255970668830894,
+        "state": 122,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -18.930991744983668,
+        "state": 123,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.125829033989348,
+        "state": 124,
+        "support": 58
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": 1.5795317054342786,
+        "state": 125,
+        "support": 1113
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -18.827910962156153,
+        "state": 126,
+        "support": 71
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -9.95137096638278,
+        "state": 127,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.65042589635843,
+        "state": 128,
+        "support": 35
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -7.835480170192789,
+        "state": 129,
+        "support": 68
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.57092249902139,
+        "state": 130,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -19.93993271640357,
+        "state": 131,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.411290123275604,
+        "state": 132,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -9.862848172376218,
+        "state": 133,
+        "support": 5
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -23.8791694586053,
+        "state": 134,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -17.082782258754953,
+        "state": 135,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.062409946786186,
+        "state": 136,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.773285053032268,
+        "state": 137,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -10.871489936940204,
+        "state": 139,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.098749803516817,
+        "state": 141,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.714997004209305,
+        "state": 142,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.764705911011777,
+        "state": 143,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -17.9797664289414,
+        "state": 144,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": 0.7724141053718807,
+        "state": 145,
+        "support": 12
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.98130142933209,
+        "state": 146,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.443034638571811,
+        "state": 147,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.86975346805926,
+        "state": 148,
+        "support": 5
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -24.555377027548584,
+        "state": 149,
+        "support": 56
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.065000968092468,
+        "state": 0,
+        "support": 4142
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.532554237368686,
+        "state": 1,
+        "support": 2058
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.911264152594246,
+        "state": 2,
+        "support": 1015
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.286463233758997,
+        "state": 3,
+        "support": 798
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.353599964068318,
+        "state": 4,
+        "support": 642
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.332594028571574,
+        "state": 5,
+        "support": 865
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.22749613479071,
+        "state": 6,
+        "support": 777
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.576529926710357,
+        "state": 7,
+        "support": 540
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.176062659429016,
+        "state": 8,
+        "support": 506
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.790479383456043,
+        "state": 9,
+        "support": 428
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -8.94781013819035,
+        "state": 10,
+        "support": 280
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -19.481779142318555,
+        "state": 11,
+        "support": 206
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.908493313922353,
+        "state": 12,
+        "support": 201
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.051868498170522,
+        "state": 13,
+        "support": 231
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.975698941838692,
+        "state": 14,
+        "support": 289
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.236109417233045,
+        "state": 15,
+        "support": 176
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.001967491336815,
+        "state": 16,
+        "support": 131
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.878256222258216,
+        "state": 17,
+        "support": 116
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.927985061742197,
+        "state": 18,
+        "support": 200
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.026099598258842,
+        "state": 19,
+        "support": 322
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -20.945968430963376,
+        "state": 20,
+        "support": 117
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -9.62896391262653,
+        "state": 21,
+        "support": 71
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -5.238584306460001,
+        "state": 22,
+        "support": 53
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.445605142216348,
+        "state": 23,
+        "support": 155
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.278554477903256,
+        "state": 24,
+        "support": 475
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.004495587712174,
+        "state": 25,
+        "support": 2571
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.84220741704423,
+        "state": 26,
+        "support": 1066
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.721155659628783,
+        "state": 27,
+        "support": 474
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.52073658278042,
+        "state": 28,
+        "support": 383
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.325784870072003,
+        "state": 29,
+        "support": 368
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.062062892796405,
+        "state": 30,
+        "support": 328
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.348848992018915,
+        "state": 31,
+        "support": 252
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -7.727167120399511,
+        "state": 32,
+        "support": 162
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.104153823429144,
+        "state": 33,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -5.726345426028396,
+        "state": 34,
+        "support": 205
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.357478082838519,
+        "state": 35,
+        "support": 113
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.373802185994494,
+        "state": 36,
+        "support": 74
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.899966871688674,
+        "state": 37,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.865554369272871,
+        "state": 38,
+        "support": 75
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -19.072607991766347,
+        "state": 39,
+        "support": 140
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -9.061890867123415,
+        "state": 40,
+        "support": 95
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.930618549876089,
+        "state": 41,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.596888041829182,
+        "state": 42,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -6.1750283982527066,
+        "state": 43,
+        "support": 83
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -10.337222933887785,
+        "state": 44,
+        "support": 156
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": 0.3379982312686271,
+        "state": 45,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.75924872732412,
+        "state": 46,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -10.73344647579078,
+        "state": 47,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -22.977451583564786,
+        "state": 48,
+        "support": 64
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.563798148852472,
+        "state": 49,
+        "support": 259
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.746276935636466,
+        "state": 50,
+        "support": 1610
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.27800360683286,
+        "state": 51,
+        "support": 471
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.822043893237495,
+        "state": 52,
+        "support": 222
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.034583999107443,
+        "state": 53,
+        "support": 180
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.622691918495963,
+        "state": 54,
+        "support": 197
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.326837732299827,
+        "state": 55,
+        "support": 127
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -22.186246096780994,
+        "state": 56,
+        "support": 78
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -20.017604164768137,
+        "state": 57,
+        "support": 55
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -10.621941761793385,
+        "state": 58,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.88222727669708,
+        "state": 59,
+        "support": 89
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -5.852040454705245,
+        "state": 60,
+        "support": 58
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.836105886463752,
+        "state": 61,
+        "support": 19
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.004059177521757,
+        "state": 62,
+        "support": 19
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -18.368655461685357,
+        "state": 63,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.406293499015817,
+        "state": 64,
+        "support": 60
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.63407885357195,
+        "state": 65,
+        "support": 37
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.701967132872198,
+        "state": 66,
+        "support": 20
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.69473700760447,
+        "state": 67,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.051138515738305,
+        "state": 68,
+        "support": 33
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -8.635564956919664,
+        "state": 69,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -3.4567305031601268,
+        "state": 70,
+        "support": 25
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -0.6642768790654736,
+        "state": 71,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.33353211914249,
+        "state": 72,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.905243814235902,
+        "state": 73,
+        "support": 18
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.174531786057061,
+        "state": 74,
+        "support": 159
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.549262997868917,
+        "state": 75,
+        "support": 1742
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.00741060113469,
+        "state": 76,
+        "support": 386
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.874318162009509,
+        "state": 77,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.368669736687009,
+        "state": 78,
+        "support": 139
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -2.426294284253829,
+        "state": 79,
+        "support": 200
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -6.692171503930114,
+        "state": 80,
+        "support": 72
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -8.497004325033732,
+        "state": 81,
+        "support": 36
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.633834699618559,
+        "state": 82,
+        "support": 29
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -9.091238481162184,
+        "state": 83,
+        "support": 39
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -7.379068408442776,
+        "state": 84,
+        "support": 63
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -30.05608612710781,
+        "state": 85,
+        "support": 40
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.11686768359352,
+        "state": 86,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -8.074157679449993,
+        "state": 87,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -18.637049440716776,
+        "state": 88,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.54538616997692,
+        "state": 89,
+        "support": 44
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.667951524774114,
+        "state": 90,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.662603540084051,
+        "state": 91,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -8.921262821777674,
+        "state": 92,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.955397565375206,
+        "state": 93,
+        "support": 16
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.64242989771765,
+        "state": 94,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -3.0273072512050105,
+        "state": 95,
+        "support": 33
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -7.511887091758478,
+        "state": 96,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -18.95831378782413,
+        "state": 97,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -18.814915024608347,
+        "state": 98,
+        "support": 23
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -7.846141848045792,
+        "state": 99,
+        "support": 152
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -10.292037378039149,
+        "state": 100,
+        "support": 789
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.089556695548136,
+        "state": 101,
+        "support": 96
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -8.043808764991873,
+        "state": 102,
+        "support": 42
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -10.339658410381071,
+        "state": 103,
+        "support": 54
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.865956034684121,
+        "state": 104,
+        "support": 80
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.522035920995531,
+        "state": 105,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.348462337503861,
+        "state": 106,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.118141907302608,
+        "state": 107,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -10.811896996656609,
+        "state": 108,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.62012693440557,
+        "state": 109,
+        "support": 25
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.884276492692177,
+        "state": 110,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -8.820981439749344,
+        "state": 111,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.714119139680438,
+        "state": 112,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -19.566143830717433,
+        "state": 113,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -4.836428896378062,
+        "state": 114,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -5.599766086135901,
+        "state": 115,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.374307642557664,
+        "state": 116,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.67186418796315,
+        "state": 118,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.410771403885262,
+        "state": 119,
+        "support": 15
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -10.6312665426426,
+        "state": 120,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.127819844238738,
+        "state": 121,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -5.752744696208373,
+        "state": 122,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -19.577343230225942,
+        "state": 123,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.54095348995898,
+        "state": 124,
+        "support": 58
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": 4.844732304474718,
+        "state": 125,
+        "support": 1113
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.477683635055877,
+        "state": 126,
+        "support": 71
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.21057400070846,
+        "state": 127,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.486990051839255,
+        "state": 128,
+        "support": 35
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -7.286924786101874,
+        "state": 129,
+        "support": 68
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -8.6007543426376,
+        "state": 130,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.77772581147701,
+        "state": 131,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.108594084988795,
+        "state": 132,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -9.587058448603791,
+        "state": 133,
+        "support": 5
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -23.879200998604887,
+        "state": 134,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -18.092469095643267,
+        "state": 135,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.512072057054272,
+        "state": 136,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.404025268543299,
+        "state": 137,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.26205328332033,
+        "state": 139,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.796053765230008,
+        "state": 141,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.746040858693824,
+        "state": 142,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.451293124127806,
+        "state": 143,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -22.28962092766838,
+        "state": 144,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -1.4794156507204614,
+        "state": 145,
+        "support": 12
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.21448021649276,
+        "state": 146,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.147545648815642,
+        "state": 147,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.45948735759772,
+        "state": 148,
+        "support": 5
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.651963257298476,
+        "state": 149,
+        "support": 56
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.69728211523504,
+        "state": 0,
+        "support": 4142
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.49352055056037,
+        "state": 1,
+        "support": 2058
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.79022480218346,
+        "state": 2,
+        "support": 1015
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.199312543271436,
+        "state": 3,
+        "support": 798
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.1339754104274,
+        "state": 4,
+        "support": 642
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.363752936308998,
+        "state": 5,
+        "support": 865
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.728564085338085,
+        "state": 6,
+        "support": 777
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.730374119620592,
+        "state": 7,
+        "support": 540
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.287732125470544,
+        "state": 8,
+        "support": 506
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -10.824202316010126,
+        "state": 9,
+        "support": 428
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -8.393589358777257,
+        "state": 10,
+        "support": 280
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -18.97448634944205,
+        "state": 11,
+        "support": 206
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.246218420821535,
+        "state": 12,
+        "support": 201
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -17.032619303658596,
+        "state": 13,
+        "support": 231
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.372555238963576,
+        "state": 14,
+        "support": 289
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.547400492346798,
+        "state": 15,
+        "support": 176
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.848431926876177,
+        "state": 16,
+        "support": 131
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.156819755107493,
+        "state": 17,
+        "support": 116
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.896357035436223,
+        "state": 18,
+        "support": 200
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.573051097370845,
+        "state": 19,
+        "support": 322
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -22.455521555011003,
+        "state": 20,
+        "support": 117
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.749382518187922,
+        "state": 21,
+        "support": 71
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -3.719914321551099,
+        "state": 22,
+        "support": 53
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.342677783494853,
+        "state": 23,
+        "support": 155
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.334733243065282,
+        "state": 24,
+        "support": 475
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.045697261527623,
+        "state": 25,
+        "support": 2571
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.98379025260311,
+        "state": 26,
+        "support": 1066
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.570544381148547,
+        "state": 27,
+        "support": 474
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.352351827699321,
+        "state": 28,
+        "support": 383
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -10.52076341864177,
+        "state": 29,
+        "support": 368
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.226506078331896,
+        "state": 30,
+        "support": 328
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -17.26284708481215,
+        "state": 31,
+        "support": 252
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -6.395330525387421,
+        "state": 32,
+        "support": 162
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.104670893768109,
+        "state": 33,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -3.994059257478866,
+        "state": 34,
+        "support": 205
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.812094418251398,
+        "state": 35,
+        "support": 113
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.728286704296233,
+        "state": 36,
+        "support": 74
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.276071364178886,
+        "state": 37,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.15888974683193,
+        "state": 38,
+        "support": 75
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -18.314963109343,
+        "state": 39,
+        "support": 140
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.400239953228386,
+        "state": 40,
+        "support": 95
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.683453611633324,
+        "state": 41,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.155277488913166,
+        "state": 42,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -7.6118293007932,
+        "state": 43,
+        "support": 83
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.912519046039383,
+        "state": 44,
+        "support": 156
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -2.739443151455903,
+        "state": 45,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.347283569575666,
+        "state": 46,
+        "support": 32
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.638349681070512,
+        "state": 47,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -21.5186857519141,
+        "state": 48,
+        "support": 64
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.730243704865345,
+        "state": 49,
+        "support": 259
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.30428244648317,
+        "state": 50,
+        "support": 1610
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.108801034506786,
+        "state": 51,
+        "support": 471
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.255235615393984,
+        "state": 52,
+        "support": 222
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.73200083366472,
+        "state": 53,
+        "support": 180
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.629497464176119,
+        "state": 54,
+        "support": 197
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.030926316450113,
+        "state": 55,
+        "support": 127
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -21.643062859751755,
+        "state": 56,
+        "support": 78
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -19.072144205840512,
+        "state": 57,
+        "support": 55
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.018255585888483,
+        "state": 58,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.960577100501332,
+        "state": 59,
+        "support": 89
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -4.8265133416440404,
+        "state": 60,
+        "support": 58
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -17.05998374395501,
+        "state": 61,
+        "support": 19
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.26117638436556,
+        "state": 62,
+        "support": 19
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -18.18609971124824,
+        "state": 63,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -10.578753405921994,
+        "state": 64,
+        "support": 60
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -18.840020033502846,
+        "state": 65,
+        "support": 37
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.817570286306164,
+        "state": 66,
+        "support": 20
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.498319790299565,
+        "state": 67,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -10.94940933649131,
+        "state": 68,
+        "support": 33
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -8.347879784270585,
+        "state": 69,
+        "support": 67
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": 0.7285835285319693,
+        "state": 70,
+        "support": 25
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -4.221568501678965,
+        "state": 71,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.977043761396706,
+        "state": 72,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -18.276512370910382,
+        "state": 73,
+        "support": 18
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.083682426556935,
+        "state": 74,
+        "support": 159
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.42650420884669,
+        "state": 75,
+        "support": 1742
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.822004850140395,
+        "state": 76,
+        "support": 386
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.349453222381634,
+        "state": 77,
+        "support": 167
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.506481423245543,
+        "state": 78,
+        "support": 139
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -0.5899311786428231,
+        "state": 79,
+        "support": 200
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -5.634902738885296,
+        "state": 80,
+        "support": 72
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -7.0370005408821985,
+        "state": 81,
+        "support": 36
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.756239996015324,
+        "state": 82,
+        "support": 29
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -8.437622834544657,
+        "state": 83,
+        "support": 39
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -7.826384709999119,
+        "state": 84,
+        "support": 63
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -24.860740536736255,
+        "state": 85,
+        "support": 40
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -17.417176893800907,
+        "state": 86,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -8.203566384275817,
+        "state": 87,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -20.0377821852964,
+        "state": 88,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.610371633360366,
+        "state": 89,
+        "support": 44
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.445997147465956,
+        "state": 90,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.350847205803733,
+        "state": 91,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -7.749024356336667,
+        "state": 92,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.649836115878818,
+        "state": 93,
+        "support": 16
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.773134291337412,
+        "state": 94,
+        "support": 52
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -2.2586106249183153,
+        "state": 95,
+        "support": 33
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -6.6196157342673665,
+        "state": 96,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -20.064341496789126,
+        "state": 97,
+        "support": 14
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -17.487142121398787,
+        "state": 98,
+        "support": 23
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -8.950705581818196,
+        "state": 99,
+        "support": 152
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -10.279750528294919,
+        "state": 100,
+        "support": 789
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.43349075270143,
+        "state": 101,
+        "support": 96
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -7.182748269675894,
+        "state": 102,
+        "support": 42
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.998062424484873,
+        "state": 103,
+        "support": 54
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.644721889278772,
+        "state": 104,
+        "support": 80
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.749174614353475,
+        "state": 105,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.05310429135416,
+        "state": 106,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.022168042798498,
+        "state": 107,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -10.43990914509579,
+        "state": 108,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.962979144943194,
+        "state": 109,
+        "support": 25
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.391436790566097,
+        "state": 110,
+        "support": 11
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -8.403629216046962,
+        "state": 111,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.31617864731305,
+        "state": 112,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -19.216930745578704,
+        "state": 113,
+        "support": 9
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -0.9718980827461269,
+        "state": 114,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -5.276908705535945,
+        "state": 115,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.96689237656248,
+        "state": 116,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.273923695595762,
+        "state": 118,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.667391361570361,
+        "state": 119,
+        "support": 15
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.794713524406784,
+        "state": 120,
+        "support": 13
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.720404578243555,
+        "state": 121,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -3.1610859201782766,
+        "state": 122,
+        "support": 3
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -18.767911386095914,
+        "state": 123,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.879205406680777,
+        "state": 124,
+        "support": 58
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": 8.312494649047165,
+        "state": 125,
+        "support": 1113
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.462400708998995,
+        "state": 126,
+        "support": 71
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.469255669412942,
+        "state": 127,
+        "support": 27
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.948074177802773,
+        "state": 128,
+        "support": 35
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -6.906750905752507,
+        "state": 129,
+        "support": 68
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -8.211857952369472,
+        "state": 130,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -17.40573795991619,
+        "state": 131,
+        "support": 6
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.691241861286413,
+        "state": 132,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.206804200341622,
+        "state": 133,
+        "support": 5
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -23.522712640859055,
+        "state": 134,
+        "support": 8
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -18.267914158387324,
+        "state": 135,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.730310073717561,
+        "state": 136,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -10.996610002548115,
+        "state": 137,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -10.706672995607926,
+        "state": 139,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.378701541527626,
+        "state": 141,
+        "support": 1
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -17.148244637802318,
+        "state": 142,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.043877858132625,
+        "state": 143,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -21.947392104232428,
+        "state": 144,
+        "support": 10
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": 17.759839585672722,
+        "state": 145,
+        "support": 12
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -18.350990269765624,
+        "state": 146,
+        "support": 4
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.740130382820459,
+        "state": 147,
+        "support": 2
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.079233109335549,
+        "state": 148,
+        "support": 5
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -19.906903152294188,
+        "state": 149,
+        "support": 56
+      }
+    ],
+    "regime": [
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.224167626658328,
+        "state": 0,
+        "support": 1263
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.324661369121324,
+        "state": 1,
+        "support": 3742
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.513508666546011,
+        "state": 2,
+        "support": 6579
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.285157276550784,
+        "state": 3,
+        "support": 2223
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.310455304064146,
+        "state": 4,
+        "support": 987
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.986341279938761,
+        "state": 5,
+        "support": 482
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.198713755470191,
+        "state": 6,
+        "support": 1640
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.316073984448337,
+        "state": 7,
+        "support": 3219
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.948732754180638,
+        "state": 8,
+        "support": 1316
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.190279181142262,
+        "state": 9,
+        "support": 655
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -13.763389155296101,
+        "state": 10,
+        "support": 253
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.438911137175415,
+        "state": 11,
+        "support": 732
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.675650212339214,
+        "state": 12,
+        "support": 1580
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.166149333575058,
+        "state": 13,
+        "support": 693
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -15.137852428976437,
+        "state": 14,
+        "support": 397
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.21080301265545,
+        "state": 15,
+        "support": 207
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.152193372513395,
+        "state": 16,
+        "support": 573
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.750102011487666,
+        "state": 17,
+        "support": 1418
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.016509551658253,
+        "state": 18,
+        "support": 719
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.236712357067926,
+        "state": 19,
+        "support": 432
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.177673120206645,
+        "state": 20,
+        "support": 66
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -14.210867301751021,
+        "state": 21,
+        "support": 198
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -13.392730526205987,
+        "state": 22,
+        "support": 508
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -16.168338028200957,
+        "state": 23,
+        "support": 291
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -17.177985861900318,
+        "state": 24,
+        "support": 218
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -11.332264252634555,
+        "state": 25,
+        "support": 64
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -11.461256687804685,
+        "state": 26,
+        "support": 218
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -12.861028117601471,
+        "state": 27,
+        "support": 495
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -18.273141562368295,
+        "state": 28,
+        "support": 307
+      },
+      {
+        "barrier_multiplier": 0.25,
+        "posterior_net_bps": -20.19326940239686,
+        "state": 29,
+        "support": 365
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.207113955103422,
+        "state": 0,
+        "support": 1263
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.564338626244519,
+        "state": 1,
+        "support": 3742
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.240065929759687,
+        "state": 2,
+        "support": 6579
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.100269006092649,
+        "state": 3,
+        "support": 2223
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.93180812601349,
+        "state": 4,
+        "support": 987
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -15.332308678418837,
+        "state": 5,
+        "support": 482
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.332659743987335,
+        "state": 6,
+        "support": 1640
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.058270242093904,
+        "state": 7,
+        "support": 3219
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.710418373821954,
+        "state": 8,
+        "support": 1316
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.375762440446906,
+        "state": 9,
+        "support": 655
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.338880626256394,
+        "state": 10,
+        "support": 253
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.550576417096465,
+        "state": 11,
+        "support": 732
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.886410855506993,
+        "state": 12,
+        "support": 1580
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.372189346697942,
+        "state": 13,
+        "support": 693
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.403153665407888,
+        "state": 14,
+        "support": 397
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -14.56422679587178,
+        "state": 15,
+        "support": 207
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.764223972468095,
+        "state": 16,
+        "support": 573
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.923069911858207,
+        "state": 17,
+        "support": 1418
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.827903356948644,
+        "state": 18,
+        "support": 719
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -8.52338536622408,
+        "state": 19,
+        "support": 432
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -16.121169298246087,
+        "state": 20,
+        "support": 66
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.248985991813434,
+        "state": 21,
+        "support": 198
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.038301704139608,
+        "state": 22,
+        "support": 508
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -13.35474827626256,
+        "state": 23,
+        "support": 291
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -5.962416645722691,
+        "state": 24,
+        "support": 218
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -6.32809938297458,
+        "state": 25,
+        "support": 64
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -10.22366940240847,
+        "state": 26,
+        "support": 218
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -11.720378873521025,
+        "state": 27,
+        "support": 495
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -12.078429453569585,
+        "state": 28,
+        "support": 307
+      },
+      {
+        "barrier_multiplier": 0.5,
+        "posterior_net_bps": -4.4003160919411375,
+        "state": 29,
+        "support": 365
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.94681576514059,
+        "state": 0,
+        "support": 1263
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.915910226239255,
+        "state": 1,
+        "support": 3742
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.148134237410645,
+        "state": 2,
+        "support": 6579
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.292017632365617,
+        "state": 3,
+        "support": 2223
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.961206472058059,
+        "state": 4,
+        "support": 987
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.747868829476543,
+        "state": 5,
+        "support": 482
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.978524485292699,
+        "state": 6,
+        "support": 1640
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.071185196684368,
+        "state": 7,
+        "support": 3219
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.838697390120146,
+        "state": 8,
+        "support": 1316
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -9.95085992185474,
+        "state": 9,
+        "support": 655
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.331445416934272,
+        "state": 10,
+        "support": 253
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.082191542953012,
+        "state": 11,
+        "support": 732
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.11053230582151,
+        "state": 12,
+        "support": 1580
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.320322772904426,
+        "state": 13,
+        "support": 693
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -14.199610428346116,
+        "state": 14,
+        "support": 397
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -15.75261684647565,
+        "state": 15,
+        "support": 207
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.76994193246331,
+        "state": 16,
+        "support": 573
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.546382837793795,
+        "state": 17,
+        "support": 1418
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -12.43995205578604,
+        "state": 18,
+        "support": 719
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.790036485138248,
+        "state": 19,
+        "support": 432
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -16.7285078985117,
+        "state": 20,
+        "support": 66
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.325981859815338,
+        "state": 21,
+        "support": 198
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -13.4298314327667,
+        "state": 22,
+        "support": 508
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.863428097571587,
+        "state": 23,
+        "support": 291
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -9.89933999379588,
+        "state": 24,
+        "support": 218
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -4.09937318914235,
+        "state": 25,
+        "support": 64
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -10.730965401183859,
+        "state": 26,
+        "support": 218
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -11.207811361538381,
+        "state": 27,
+        "support": 495
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": -5.657980480744556,
+        "state": 28,
+        "support": 307
+      },
+      {
+        "barrier_multiplier": 0.75,
+        "posterior_net_bps": 7.558600256821899,
+        "state": 29,
+        "support": 365
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.310984345138447,
+        "state": 0,
+        "support": 1263
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.25707997651446,
+        "state": 1,
+        "support": 3742
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.4942416784954,
+        "state": 2,
+        "support": 6579
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.115140103992601,
+        "state": 3,
+        "support": 2223
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.238799551136514,
+        "state": 4,
+        "support": 987
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -18.07891400556822,
+        "state": 5,
+        "support": 482
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.821501456542553,
+        "state": 6,
+        "support": 1640
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.90682193743409,
+        "state": 7,
+        "support": 3219
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.89216558748194,
+        "state": 8,
+        "support": 1316
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -8.829261268437522,
+        "state": 9,
+        "support": 655
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -15.595530908247728,
+        "state": 10,
+        "support": 253
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.79529635957902,
+        "state": 11,
+        "support": 732
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.793538728048556,
+        "state": 12,
+        "support": 1580
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -13.169479020008719,
+        "state": 13,
+        "support": 693
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.590299314988663,
+        "state": 14,
+        "support": 397
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -17.465244878049102,
+        "state": 15,
+        "support": 207
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -16.586959312943176,
+        "state": 16,
+        "support": 573
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.56072416067909,
+        "state": 17,
+        "support": 1418
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.811959214047281,
+        "state": 18,
+        "support": 719
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -7.810088625499297,
+        "state": 19,
+        "support": 432
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.677377148421666,
+        "state": 20,
+        "support": 66
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -12.599120529258915,
+        "state": 21,
+        "support": 198
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -14.775469751174535,
+        "state": 22,
+        "support": 508
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -10.326604324142485,
+        "state": 23,
+        "support": 291
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -5.085000558020019,
+        "state": 24,
+        "support": 218
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -1.577261609598104,
+        "state": 25,
+        "support": 64
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -11.686293278544692,
+        "state": 26,
+        "support": 218
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -9.530366652165174,
+        "state": 27,
+        "support": 495
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": -2.6500859637496657,
+        "state": 28,
+        "support": 307
+      },
+      {
+        "barrier_multiplier": 1.0,
+        "posterior_net_bps": 8.105925261793042,
+        "state": 29,
+        "support": 365
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.41901369818851,
+        "state": 0,
+        "support": 1263
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.693882470365573,
+        "state": 1,
+        "support": 3742
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.61813669846216,
+        "state": 2,
+        "support": 6579
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.349472422300975,
+        "state": 3,
+        "support": 2223
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.12944021282217,
+        "state": 4,
+        "support": 987
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -19.491111954183797,
+        "state": 5,
+        "support": 482
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.08427780677,
+        "state": 6,
+        "support": 1640
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.143342627073503,
+        "state": 7,
+        "support": 3219
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.91771791661625,
+        "state": 8,
+        "support": 1316
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -7.399341585638436,
+        "state": 9,
+        "support": 655
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.02678544912328,
+        "state": 10,
+        "support": 253
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.058629286607362,
+        "state": 11,
+        "support": 732
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -14.106177327032178,
+        "state": 12,
+        "support": 1580
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.319311575133405,
+        "state": 13,
+        "support": 693
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.09159667852246,
+        "state": 14,
+        "support": 397
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -15.12511952290456,
+        "state": 15,
+        "support": 207
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -17.468681765891024,
+        "state": 16,
+        "support": 573
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.198297321664677,
+        "state": 17,
+        "support": 1418
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -11.237719459551537,
+        "state": 18,
+        "support": 719
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -5.847761194318663,
+        "state": 19,
+        "support": 432
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -12.922830605272717,
+        "state": 20,
+        "support": 66
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -13.718926003065752,
+        "state": 21,
+        "support": 198
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -16.210593235640115,
+        "state": 22,
+        "support": 508
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -9.85350765537683,
+        "state": 23,
+        "support": 291
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -0.8016622528256814,
+        "state": 24,
+        "support": 218
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -2.272253871378491,
+        "state": 25,
+        "support": 64
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -9.729057331070168,
+        "state": 26,
+        "support": 218
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": -9.434005028432386,
+        "state": 27,
+        "support": 495
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": 1.948333864952062,
+        "state": 28,
+        "support": 307
+      },
+      {
+        "barrier_multiplier": 1.5,
+        "posterior_net_bps": 14.5666992571673,
+        "state": 29,
+        "support": 365
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.273610907564937,
+        "state": 0,
+        "support": 1263
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.52031633820246,
+        "state": 1,
+        "support": 3742
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.241350020698503,
+        "state": 2,
+        "support": 6579
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.552341029879464,
+        "state": 3,
+        "support": 2223
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.68616631289945,
+        "state": 4,
+        "support": 987
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -19.146406342438883,
+        "state": 5,
+        "support": 482
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -16.018692666258616,
+        "state": 6,
+        "support": 1640
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -11.590264909239114,
+        "state": 7,
+        "support": 3219
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.6973351597711,
+        "state": 8,
+        "support": 1316
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -6.055914266202907,
+        "state": 9,
+        "support": 655
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.611899355184008,
+        "state": 10,
+        "support": 253
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -15.439013657615948,
+        "state": 11,
+        "support": 732
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.977038118751262,
+        "state": 12,
+        "support": 1580
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.407185587446723,
+        "state": 13,
+        "support": 693
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.800942579246867,
+        "state": 14,
+        "support": 397
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -14.635741110120568,
+        "state": 15,
+        "support": 207
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -17.9366967373107,
+        "state": 16,
+        "support": 573
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -10.706491817999046,
+        "state": 17,
+        "support": 1418
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -12.077472905553908,
+        "state": 18,
+        "support": 719
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -3.5888250105391437,
+        "state": 19,
+        "support": 432
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -10.690844572023277,
+        "state": 20,
+        "support": 66
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -13.511659966645663,
+        "state": 21,
+        "support": 198
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -17.881910045038623,
+        "state": 22,
+        "support": 508
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.743108735832674,
+        "state": 23,
+        "support": 291
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": 2.361918152192482,
+        "state": 24,
+        "support": 218
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -2.3092312818581857,
+        "state": 25,
+        "support": 64
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -8.507648853419195,
+        "state": 26,
+        "support": 218
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": -9.163527953391107,
+        "state": 27,
+        "support": 495
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": 3.515699334404304,
+        "state": 28,
+        "support": 307
+      },
+      {
+        "barrier_multiplier": 2.0,
+        "posterior_net_bps": 24.716583263009117,
+        "state": 29,
+        "support": 365
+      }
+    ]
+  },
+  "model": "cost_aware_thousand_brains_five_minute_v1",
+  "priors": {
+    "0.25": -15.475697571517626,
+    "0.5": -13.82308056663901,
+    "0.75": -13.616614101058442,
+    "1.0": -13.55373589445233,
+    "1.5": -13.243472455208352,
+    "2.0": -12.81568642591341
+  },
+  "schema_version": 1,
+  "source_data_sha256": "e427c42c028b116c7883739dc576bb01bcb2687c9c070c587f6e0f0b47ee85aa",
+  "training_cutoff": "2026-01-01T00:00:00+00:00"
+}

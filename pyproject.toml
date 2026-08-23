@@ -22,3 +22,10 @@ quant-backtest = "quant.backtest.renko_runner:main"
 quant-webhook = "quant.execution.webhook_server:main"
 quant-manual-order = "quant.execution.manual_orders:main"
 databot = "databot.main:main"
+brain-forward = "quant.brain_forward.service:main"
+brain-forward-v2 = "quant.brain_forward.service_v2:main"
+brain-forward-checkpoint = "quant.brain_forward.evidence:main"
+brain-forward-export = "quant.brain_forward.export:main"
+
+[tool.setuptools.package-data]
+"quant.brain_forward" = ["*.json"]

@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "name": "cost_aware_thousand_brains_five_minute_v1",
+  "status": "paper_trading_only",
+  "experiment_program": {
+    "completed": 137,
+    "maximum": 200,
+    "stopped_reason": "The three pre-registered adaptive candidates failed their 2021-2023 discovery guards; further SOL-only exit or calibration selection would add bias. New complete data or paper execution is required."
+  },
+  "probability_brain": {
+    "frozen": true,
+    "horizons_minutes": [1, 2, 3, 5, 8, 13, 21, 34, 60],
+    "barrier_multipliers": [0.25, 0.5, 0.75, 1.0, 1.5, 2.0],
+    "state_memories": ["micro_flow", "path", "regime"],
+    "minimum_state_support": 15,
+    "prior_strength": 40.0
+  },
+  "utility_head": {
+    "target": "realised five-minute long net return after barrier exits and 14 bps round-trip cost",
+    "training_universe": {
+      "side": "down_shock_long_reversal",
+      "minimum_shock_z": 2.5,
+      "maximum_close_position": 0.3
+    },
+    "state_memories": ["micro_flow", "path", "regime"],
+    "minimum_state_support": 15,
+    "prior_strength": 40.0,
+    "training_history": "expanding",
+    "minimum_viable_history_years": 3,
+    "minimum_predicted_net_bps": 0.0,
+    "minimum_active_memories": 1
+  },
+  "execution": {
+    "side": "long",
+    "minimum_shock_z": 3.0,
+    "maximum_close_position": 0.2,
+    "volatility_ratio_minimum": 2.0,
+    "flow_imbalance_interval": [-0.3, -0.1],
+    "barrier_multiplier": 1.0,
+    "entry": "next_minute_open",
+    "target": "entry plus one event-candle range",
+    "stop": "entry minus one event-candle range",
+    "same_bar_target_and_stop": "stop",
+    "unresolved_exit": "fifth_close",
+    "maximum_holding_minutes": 5,
+    "round_trip_cost_bps": 14.0,
+    "position_policy": "single_position_skip_overlaps"
+  },
+  "primary_walk_forward_result": {
+    "source_iteration": 91,
+    "years": [2021, 2022, 2023, 2024, 2025],
+    "trades": 126,
+    "annual_trades": [15, 32, 30, 19, 30],
+    "mean_net_bps": 60.6180867132,
+    "lcb95_net_bps": 25.1086670382,
+    "annual_mean_net_bps": [120.8203897358, 44.3528972865, 32.4009606103, 124.669948663, 35.5174174585],
+    "pnl_concentration": 0.3101291664
+  },
+  "coverage_variant": {
+    "source_iteration": 103,
+    "difference": "volatility_ratio_minimum=1.5",
+    "trades": 187,
+    "mean_net_bps": 39.2343829289,
+    "lcb95_net_bps": 15.7485147683,
+    "pnl_concentration": 0.317329237
+  },
+  "frozen_decision_cost_stress": {
+    "18_bps": {"lcb95_net_bps": 21.1086670382, "pnl_concentration": 0.3213860297},
+    "22_bps": {"lcb95_net_bps": 17.1086670382, "pnl_concentration": 0.334354375},
+    "28_bps": {"lcb95_net_bps": 11.1086670382, "pnl_concentration": 0.3579796334}
+  },
+  "unused_2026_tail": {
+    "start": "2026-01-01T00:00:00Z",
+    "end": "2026-02-05T14:52:00Z",
+    "trades": 6,
+    "mean_net_bps_at_14_bps_cost": 29.8135505555,
+    "lcb95_net_bps": -24.2420339243,
+    "interpretation": "positive but too small for confidence"
+  },
+  "independent_post_february_2026_holdout": {
+    "source_end": "2026-07-11T09:29:00Z",
+    "holdout_start": "2026-02-05T14:53:00Z",
+    "overlap_with_original_input": "exact through 2026-02-05T14:52:00Z",
+    "expanding_control": {"trades": 7, "mean_net_bps": 91.889415024, "lcb95_net_bps": -4.276757426},
+    "rolling_three_years": {"trades": 5, "mean_net_bps": 91.453657891, "lcb95_net_bps": -14.80670482},
+    "candidate_minus_control_daily_lcb5_bps": -5.042622073,
+    "interpretation": "Neither frozen history has sufficient independent sample size; rolling three years does not improve on control."
+  },
+  "guards": {
+    "aggregate_positive_lcb": true,
+    "positive_mean_in_all_five_years": true,
+    "pnl_concentration_at_most_0.35": true,
+    "at_least_250_trades_per_year": false,
+    "paper_execution_complete": false
+  },
+  "required_next_evidence": [
+    "complete multi-asset one-minute histories with taker-flow fields",
+    "or forward paper execution without changing the frozen candidate for long enough to generate a pre-specified minimum sample"
+  ]
+}
