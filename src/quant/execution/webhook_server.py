@@ -3705,7 +3705,7 @@ def api_fleet_activity(
 
     hrs: Optional[float] = None if float(hours) <= 0 else float(hours)
     try:
-        return build_fleet_activity(hours=hrs, limit=int(max(1, min(limit, 2000))))
+        return build_fleet_activity(hours=hrs, limit=int(max(1, min(limit, 10_000))))
     except Exception as e:
         return {"ok": False, "events": [], "error": str(e), "ts": _now_utc_iso()}
 
@@ -3744,7 +3744,7 @@ def api_fleet_trades(
 def api_fleet_kraken_position_events(
     since_ms: Optional[int] = None,
     before_ms: Optional[int] = None,
-    limit: int = 2000,
+    limit: int = 10_000,
     x_webhook_token: Optional[str] = Header(default=None),
     authorization: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
@@ -3761,7 +3761,7 @@ def api_fleet_kraken_position_events(
         return build_kraken_position_events(
             since_ms=since_ms,
             before_ms=before_ms,
-            limit=int(max(1, min(limit, 2000))),
+            limit=int(max(1, min(limit, 10_000))),
         )
     except Exception as exc:
         return {

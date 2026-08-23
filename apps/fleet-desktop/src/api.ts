@@ -223,7 +223,7 @@ export async function fetchActivityFeed(
       withFresh(
         {
           hours: RANGE_HOURS[range],
-          limit: 2000,
+          limit: 10000,
         },
         opts,
       ),

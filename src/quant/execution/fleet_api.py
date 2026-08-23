@@ -844,7 +844,7 @@ def _load_kraken_position_events_for_bot(
     since_ms = int(since.timestamp() * 1000) if since is not None else None
     cache_key = f"{bot.get('id')}:{since_ms}:{int(limit)}"
     cached = _KRAKEN_POSITION_EVENT_CACHE.get(cache_key)
-    if cached and (time.monotonic() - cached[0]) <= 30.0:
+    if cached and (time.monotonic() - cached[0]) <= 300.0:
         return [dict(row) for row in cached[1]]
     rows: List[Dict[str, Any]] = []
     if (os.getenv("KRAKEN_FUTURES_KEY") or "").strip() and (
@@ -856,7 +856,7 @@ def _load_kraken_position_events_for_bot(
             rows = KrakenFuturesClient().get_position_events(
                 symbol=os.getenv("KRAKEN_FUTURES_SYMBOL", "PF_SOLUSD"),
                 since_ms=since_ms,
-                limit=int(max(1, min(limit, 2000))),
+                limit=int(max(1, min(limit, 10_000))),
                 include_funding=True,
             )
         except Exception as exc:
@@ -871,7 +871,7 @@ def _load_kraken_position_events_for_bot(
         # request or accidentally reuse quant's unrelated webhook token.
         token = (os.getenv("FLEET_KRAKEN_READ_TOKEN") or "").strip()
         if remote_url and token:
-            query: Dict[str, Any] = {"limit": int(max(1, min(limit, 2000)))}
+            query: Dict[str, Any] = {"limit": int(max(1, min(limit, 10_000)))}
             if since_ms is not None:
                 query["since_ms"] = since_ms
             req = Request(
@@ -883,7 +883,10 @@ def _load_kraken_position_events_for_bot(
                 },
             )
             try:
-                with urlopen(req, timeout=12.0) as response:
+                # A complete historical page can span many Kraken continuation
+                # requests. Keep this bounded but do not truncate it at the
+                # old short proxy timeout.
+                with urlopen(req, timeout=90.0) as response:
                     payload = json.loads(response.read().decode("utf-8"))
                 remote_events = payload.get("events") if isinstance(payload, dict) else None
                 if isinstance(remote_events, list):
@@ -2213,7 +2216,7 @@ def build_fleet_activity(
     registry = _bot_registry_by_instance()
     bots = fleet_bot_registry()
     instances = list(registry.keys())
-    cap = int(max(1, min(limit, 2000)))
+    cap = int(max(1, min(limit, 10_000)))
     if not instances and not bots:
         return {
             "ok": True,
@@ -2277,7 +2280,7 @@ def build_fleet_activity(
             }
 
     # --- closed trades and direct Kraken position history ---
-    per_bot_limit = max(cap, 50)
+    per_bot_limit = min(max(cap, 50), 2000)
     for bot in bots:
         try:
             # Use the display read model, not only ``closed_trades``: Kraken
@@ -2304,7 +2307,7 @@ def build_fleet_activity(
             raw_events = _load_kraken_position_events_for_bot(
                 bot,
                 since=kraken_since,
-                limit=2000 if kraken_since is None else per_bot_limit,
+                limit=10_000 if kraken_since is None else per_bot_limit,
             )
             items.extend(
                 _kraken_position_event_activity_items(
@@ -2476,17 +2479,17 @@ def build_kraken_position_events(
     *,
     since_ms: Optional[int] = None,
     before_ms: Optional[int] = None,
-    limit: int = 2000,
+    limit: int = 10_000,
 ) -> Dict[str, Any]:
     """Expose bounded, authenticated, read-only Kraken position history.
 
     The client follows Kraken's continuation token internally. Callers receive
-    up to 2,000 real position mutations, not merely the exchange's first page.
+    up to 10,000 real position mutations, not merely the exchange's first page.
     Account identifiers and API metadata are stripped before the service hop.
     """
     from quant.execution.kraken_futures import KrakenFuturesClient
 
-    cap = int(max(1, min(limit, 2000)))
+    cap = int(max(1, min(limit, 10_000)))
     events = KrakenFuturesClient().get_position_events(
         symbol=os.getenv("KRAKEN_FUTURES_SYMBOL", "PF_SOLUSD"),
         since_ms=since_ms,

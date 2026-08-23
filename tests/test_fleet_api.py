@@ -243,13 +243,13 @@ class KrakenDirectTradeTests(unittest.TestCase):
             clear=True,
         ):
             rows = _load_kraken_position_events_for_bot(
-                self.bot, since=None, limit=2000
+                self.bot, since=None, limit=10_000
             )
 
         self.assertEqual(rows, [{"executionUid": "remote-1"}])
         request = urlopen.call_args.args[0]
         self.assertEqual(request.get_header("Authorization"), "Bearer read-only-token")
-        self.assertIn("limit=2000", request.full_url)
+        self.assertIn("limit=10000", request.full_url)
 
     @patch("quant.execution.kraken_futures.KrakenFuturesClient.get_position_events")
     def test_position_event_proxy_whitelists_and_reports_full_page(self, get_events) -> None:
@@ -268,13 +268,13 @@ class KrakenDirectTradeTests(unittest.TestCase):
                 "realizedFunding": "-0.1",
             },
         ]
-        out = build_kraken_position_events(limit=2000)
+        out = build_kraken_position_events(limit=10_000)
 
         self.assertEqual(out["count"], 2)
         self.assertEqual(out["oldest_ms"], 1_000)
         self.assertEqual(out["newest_ms"], 3_000)
         self.assertNotIn("accountUid", out["events"][0])
-        self.assertEqual(get_events.call_args.kwargs["limit"], 2000)
+        self.assertEqual(get_events.call_args.kwargs["limit"], 10_000)
         self.assertTrue(get_events.call_args.kwargs["include_funding"])
 
     def test_activity_limit_retains_complete_bounded_kraken_ledger(self) -> None:

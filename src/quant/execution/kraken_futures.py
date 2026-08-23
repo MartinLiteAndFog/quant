@@ -305,7 +305,9 @@ class KrakenFuturesClient:
             raise RuntimeError("Kraken Futures credentials are not configured")
 
         endpoint_path = "/api/history/v3/positions"
-        wanted = max(1, min(int(limit), 2000))
+        # ``count`` is still capped at 100 per exchange request; this bound is
+        # the number of rows accumulated across continuation pages.
+        wanted = max(1, min(int(limit), 10_000))
         continuation: Optional[str] = None
         out: List[Dict[str, Any]] = []
 
