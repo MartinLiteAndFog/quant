@@ -358,7 +358,28 @@ class KrakenFuturesClient:
             rows = payload.get("elements")
             if not isinstance(rows, list):
                 rows = []
-            out.extend(row for row in rows if isinstance(row, dict))
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                # Current Futures history wraps every PositionUpdate in an
+                # envelope: {timestamp, uid, event: {PositionUpdate: {...}}}.
+                # Normalise that transport shape at the client boundary so
+                # every read-only Fleet consumer sees the documented position
+                # fields, while retaining compatibility with the older flat
+                # response used by existing callers and tests.
+                event = row.get("event")
+                position_update = (
+                    event.get("PositionUpdate")
+                    if isinstance(event, dict)
+                    else None
+                )
+                if isinstance(position_update, dict):
+                    normalised = dict(position_update)
+                    normalised.setdefault("timestamp", row.get("timestamp"))
+                    normalised.setdefault("historyUid", row.get("uid"))
+                    out.append(normalised)
+                else:
+                    out.append(row)
 
             next_token = payload.get("continuationToken")
             if not next_token or not rows:

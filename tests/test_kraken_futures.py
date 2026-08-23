@@ -126,6 +126,39 @@ class KrakenFuturesPositionHistoryTests(unittest.TestCase):
         self.assertIn("funding_realization=true", request.full_url)
         self.assertIn("settlement=true", request.full_url)
 
+    @patch("quant.execution.kraken_futures.urllib.request.urlopen")
+    def test_position_history_unwraps_current_event_envelope(self, urlopen) -> None:
+        urlopen.return_value = _FakeResponse(
+            {
+                "elements": [
+                    {
+                        "timestamp": 123_000,
+                        "uid": "history-row-1",
+                        "event": {
+                            "PositionUpdate": {
+                                "executionUid": "execution-1",
+                                "updateReason": "trade",
+                                "positionChange": "open",
+                                "executionPrice": "75.5",
+                            }
+                        },
+                    }
+                ]
+            }
+        )
+        with patch.dict(
+            "os.environ",
+            {
+                "KRAKEN_FUTURES_KEY": "read-key",
+                "KRAKEN_FUTURES_SECRET": "c2VjcmV0",
+            },
+        ):
+            rows = KrakenFuturesClient().get_position_events(limit=1)
+
+        self.assertEqual(rows[0]["executionUid"], "execution-1")
+        self.assertEqual(rows[0]["timestamp"], 123_000)
+        self.assertEqual(rows[0]["historyUid"], "history-row-1")
+
 
 if __name__ == "__main__":
     unittest.main()
