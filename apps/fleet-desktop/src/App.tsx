@@ -45,7 +45,7 @@ const CHART_MODES: Array<{ id: ChartMode; label: string }> = [
   { id: "account_abs", label: "Equity $" },
   { id: "account", label: "Equity %" },
   { id: "corrected", label: "Bereinigt %" },
-  { id: "trade", label: "Trade %" },
+  { id: "trade", label: "Price-move %" },
 ];
 
 const DRAWER_TITLES: Record<Exclude<DrawerId, null>, string> = {
@@ -383,13 +383,13 @@ export default function App() {
         ? "Equity %"
         : chartMode === "corrected"
           ? "Bereinigte Rendite"
-        : "Trade return";
+        : "Price-move return";
   const excludedScopeNote = cashflowReturn?.excluded_bot_ids.includes("counter-sl-reverse")
     ? " Counter SL Reverse is excluded because its ledger is unavailable."
     : "";
   const returnTitle =
     chartMode === "trade"
-      ? "Equal-weight average of the visible bots' completed-trade returns"
+      ? "Compounded underlying price moves of completed trades. This is not account P&L, does not apply position sizing or leverage, and may exclude exchange fees/funding."
       : chartMode === "account"
         ? `Raw ${range.toUpperCase()} Equity % chart value; deposits and withdrawals remain visible`
         : chartMode === "corrected"

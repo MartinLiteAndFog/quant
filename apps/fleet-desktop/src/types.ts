@@ -154,6 +154,19 @@ export interface ActivityItem {
   price?: number | null;
   status?: string | null;
   pnl_pct?: number | null;
+  /** Exchange-reported realized PnL, never inferred from a price move. */
+  realized_pnl?: number | null;
+  /** Exchange-reported fee and currency for this position event. */
+  fee?: number | null;
+  fee_currency?: string | null;
+  /** Exchange-reported funding realization (may be positive or negative). */
+  realized_funding?: number | null;
+  /** Exchange position quantities before and after the action. */
+  position_before?: number | null;
+  position_after?: number | null;
+  position_ref?: string | null;
+  execution_uid?: string | null;
+  source?: string | null;
   color?: string;
   /** Present on fills (closed trades). */
   trade_id?: string;

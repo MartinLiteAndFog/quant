@@ -22,6 +22,7 @@ from quant.utils.log import get_logger
 log = get_logger("quant.fleet_api")
 
 _KRAKEN_DIRECT_TRADE_CACHE: Dict[str, Tuple[float, pd.DataFrame]] = {}
+_KRAKEN_POSITION_EVENT_CACHE: Dict[str, Tuple[float, List[Dict[str, Any]]]] = {}
 
 # Default registry — overridden by FLEET_BOTS_JSON env (array of bot dicts).
 _DEFAULT_BOTS: List[Dict[str, Any]] = [
@@ -720,6 +721,139 @@ def _kraken_position_events_frame(
     if not rows:
         return pd.DataFrame()
     return pd.DataFrame(rows).sort_values("exit_ts")
+
+
+def _kraken_position_event_activity_items(
+    events: Sequence[Dict[str, Any]],
+    *,
+    bot: Dict[str, Any],
+    since: Optional[pd.Timestamp],
+) -> List[Dict[str, Any]]:
+    """Map immutable Kraken position-history rows into Fleet activity items.
+
+    Kraken emits one authoritative row for each position mutation, including
+    entries, reductions, closes, reversals, fees and funding realisations.
+    These are not synthesized round trips: each item keeps the exchange UID
+    and position before/after values so the UI can distinguish a partial
+    reduction from a completed trade.
+    """
+
+    def number(value: Any) -> Optional[float]:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if _is_finite(parsed) else None
+
+    items: List[Dict[str, Any]] = []
+    for event in events:
+        reason = str(event.get("updateReason") or "unknown").strip().lower()
+        ts_raw = event.get("fillTime") or event.get("fundingRealizationTime") or event.get("timestamp")
+        try:
+            ts = pd.to_datetime(int(ts_raw), unit="ms", utc=True)
+        except (TypeError, ValueError):
+            continue
+        if since is not None and ts < since:
+            continue
+
+        change = str(event.get("positionChange") or "noChange").strip().lower()
+        old_position = number(event.get("oldPosition")) or 0.0
+        new_position = number(event.get("newPosition")) or 0.0
+        execution_size = number(event.get("executionSize"))
+        execution_price = number(event.get("executionPrice"))
+        delta = new_position - old_position
+        side = "buy" if delta > 0 else ("sell" if delta < 0 else None)
+        if side is None and execution_size is not None:
+            side = "buy" if new_position >= old_position else "sell"
+        action = {
+            "open": "entry",
+            "increase": "scale_in",
+            "decrease": "reduce",
+            "close": "close",
+            "reverse": "reverse",
+            "nochange": "execution",
+        }.get(change, "execution")
+        if reason == "fundingrealisation":
+            action = "funding"
+        elif reason == "settlement":
+            action = "settlement"
+
+        execution_uid = str(event.get("executionUid") or "").strip()
+        stable_id = execution_uid or f"{reason}:{event.get('timestamp')}:{change}:{old_position}:{new_position}"
+        fee = number(event.get("fee"))
+        realized_pnl = number(event.get("realizedPnL"))
+        realized_funding = number(event.get("realizedFunding"))
+        position_ref = str(event.get("accountUid") or "")
+        if position_ref:
+            position_ref = f"{position_ref}:{event.get('tradeable') or bot.get('symbol') or ''}"
+        else:
+            position_ref = str(event.get("tradeable") or bot.get("symbol") or "")
+        items.append(
+            {
+                "id": f"kraken-position-event:{stable_id}",
+                "kind": "event",
+                "t": int(ts.timestamp()),
+                "ts": ts.isoformat(),
+                "venue": "kraken",
+                "symbol": str(event.get("tradeable") or bot.get("symbol") or "SOL-USD"),
+                "strategy_instance": str(bot.get("strategy_instance") or "kraken_bot"),
+                "bot_id": bot.get("id"),
+                "display_name": bot.get("display_name") or "Kraken Legacy",
+                "action": action,
+                "side": side,
+                "qty": abs(execution_size) if execution_size is not None else None,
+                "price": execution_price,
+                "status": "reported",
+                "pnl_pct": None,
+                "realized_pnl": realized_pnl,
+                "fee": fee,
+                "fee_currency": event.get("feeCurrency"),
+                "realized_funding": realized_funding,
+                "position_before": old_position,
+                "position_after": new_position,
+                "position_ref": position_ref,
+                "execution_uid": execution_uid or None,
+                "source": "kraken_position_history",
+                "color": bot.get("color"),
+            }
+        )
+    return items
+
+
+def _load_kraken_position_events_for_bot(
+    bot: Dict[str, Any],
+    *,
+    since: Optional[pd.Timestamp],
+    limit: int,
+) -> List[Dict[str, Any]]:
+    """Read the authoritative Kraken event ledger, including funding.
+
+    This is a bounded, cached read-through synchronisation. It never submits
+    an order and intentionally falls back to the durable Fleet event store
+    when the credentials or the upstream history API are unavailable.
+    """
+    since_ms = int(since.timestamp() * 1000) if since is not None else None
+    cache_key = f"{bot.get('id')}:{since_ms}:{int(limit)}"
+    cached = _KRAKEN_POSITION_EVENT_CACHE.get(cache_key)
+    if cached and (time.monotonic() - cached[0]) <= 30.0:
+        return [dict(row) for row in cached[1]]
+    rows: List[Dict[str, Any]] = []
+    if (os.getenv("KRAKEN_FUTURES_KEY") or "").strip() and (
+        os.getenv("KRAKEN_FUTURES_SECRET") or ""
+    ).strip():
+        try:
+            from quant.execution.kraken_futures import KrakenFuturesClient
+
+            rows = KrakenFuturesClient().get_position_events(
+                symbol=os.getenv("KRAKEN_FUTURES_SYMBOL", "PF_SOLUSD"),
+                since_ms=since_ms,
+                limit=int(max(1, min(limit, 2000))),
+                include_funding=True,
+            )
+        except Exception as exc:
+            log.warning("Kraken position-event history failed: %s", type(exc).__name__)
+    _KRAKEN_POSITION_EVENT_CACHE[cache_key] = (time.monotonic(), [dict(row) for row in rows])
+    return rows
 
 
 def _load_kraken_exchange_trades_for_bot(
@@ -2084,11 +2218,14 @@ def build_fleet_activity(
                 "ts": pd.Timestamp.now("UTC").isoformat(),
             }
 
-    # --- closed_trades as fill rows (PnL-bearing) ---
+    # --- closed trades and direct Kraken position history ---
     per_bot_limit = max(cap, 50)
     for bot in bots:
         try:
-            df = _load_closed_trades_for_bot(bot, since=since, limit=per_bot_limit)
+            # Use the display read model, not only ``closed_trades``: Kraken
+            # history is exchange-authoritative and older deployments did not
+            # persist every fill locally.
+            df = _load_display_trades_for_bot(bot, since=since, limit=per_bot_limit)
         except Exception as e:
             log.warning(
                 "fleet activity fills load failed for %s: %s",
@@ -2101,6 +2238,16 @@ def build_fleet_activity(
         work = df.sort_values("exit_ts", ascending=False).head(per_bot_limit)
         for _, row in work.iterrows():
             items.append(_activity_item_from_fill(row=row, bot=bot))
+
+        if str(bot.get("venue") or "").lower() == "kraken":
+            raw_events = _load_kraken_position_events_for_bot(
+                bot, since=since, limit=per_bot_limit
+            )
+            items.extend(
+                _kraken_position_event_activity_items(
+                    raw_events, bot=bot, since=since
+                )
+            )
 
     items.sort(key=lambda x: (x.get("t") is None, -(x.get("t") or 0)))
     items = items[:cap]

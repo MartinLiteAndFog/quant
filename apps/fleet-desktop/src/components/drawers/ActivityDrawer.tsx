@@ -24,6 +24,11 @@ function fmtQty(q?: number | null): string {
   return q.toPrecision(3);
 }
 
+function fmtNumber(value?: number | null, digits = 4): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  return value.toFixed(digits);
+}
+
 function statusOrPnl(item: ActivityItem): { text: string; tone?: "up" | "down" } {
   if (item.kind === "fill" && item.pnl_pct != null && Number.isFinite(item.pnl_pct)) {
     const pct = item.pnl_pct;
@@ -139,8 +144,8 @@ export function ActivityDrawer({
       </div>
 
       <p className="text-[11px] text-[var(--muted)]">
-        One feed · fills = closed trades with PnL · events = entries / exits / TP / SL /
-        flips · {botLabel} · range chip applies
+        Exchange timeline · entries, reductions, closes, TP/SL, fees and funding ·
+        exchange values are reported, never inferred · {botLabel} · range chip applies
         {loading ? " · refreshing…" : ""}
       </p>
 
@@ -157,7 +162,9 @@ export function ActivityDrawer({
                 )}
                 <th className="py-2 pr-2 font-medium">Action</th>
                 <th className="py-2 pr-2 font-medium">Side</th>
-                <th className="py-2 pr-2 font-medium">Qty</th>
+                <th className="py-2 pr-2 font-medium">Qty @ price</th>
+                <th className="py-2 pr-2 font-medium">Position</th>
+                <th className="py-2 pr-2 font-medium">Fee / funding</th>
                 <th className="py-2 font-medium">Status / PnL</th>
               </tr>
             </thead>
@@ -191,7 +198,19 @@ export function ActivityDrawer({
                       className="py-1.5 pr-2 font-mono"
                       title={e.price != null ? `@ ${e.price}` : undefined}
                     >
-                      {fmtQty(e.qty)}
+                      {fmtQty(e.qty)} {e.price != null ? `@ ${fmtNumber(e.price)}` : ""}
+                    </td>
+                    <td className="py-1.5 pr-2 font-mono">
+                      {e.position_before != null || e.position_after != null
+                        ? `${fmtQty(e.position_before)} → ${fmtQty(e.position_after)}`
+                        : "—"}
+                    </td>
+                    <td className="py-1.5 pr-2 font-mono" title={e.source || undefined}>
+                      {e.fee != null
+                        ? `fee ${fmtNumber(e.fee)}${e.fee_currency ? ` ${e.fee_currency}` : ""}`
+                        : e.realized_funding != null
+                          ? `fund ${fmtNumber(e.realized_funding)}`
+                          : "—"}
                     </td>
                     <td
                       className="py-1.5 font-mono"

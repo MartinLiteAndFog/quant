@@ -168,6 +168,50 @@ class KrakenDirectTradeTests(unittest.TestCase):
         self.assertTrue(pd.isna(frame.iloc[1]["pnl_pct"]))
         self.assertEqual(frame.iloc[1]["side"], "short")
 
+    def test_position_events_activity_preserves_reductions_fees_and_funding(self) -> None:
+        from quant.execution.fleet_api import _kraken_position_event_activity_items
+
+        items = _kraken_position_event_activity_items(
+            [
+                {
+                    "executionUid": "reduce-long",
+                    "updateReason": "trade",
+                    "positionChange": "decrease",
+                    "oldPosition": "1.0",
+                    "newPosition": "0.4",
+                    "executionPrice": "110",
+                    "executionSize": "0.6",
+                    "fee": "0.12",
+                    "feeCurrency": "USD",
+                    "realizedPnL": "6.0",
+                    "fillTime": 1_900_000,
+                    "accountUid": "acct-1",
+                    "tradeable": "PF_SOLUSD",
+                },
+                {
+                    "updateReason": "fundingRealisation",
+                    "positionChange": "noChange",
+                    "oldPosition": "0.4",
+                    "newPosition": "0.4",
+                    "realizedFunding": "-0.03",
+                    "fundingRealizationTime": 2_000_000,
+                    "timestamp": 2_000_000,
+                    "accountUid": "acct-1",
+                    "tradeable": "PF_SOLUSD",
+                },
+            ],
+            bot=self.bot,
+            since=pd.Timestamp(0, unit="s", tz="UTC"),
+        )
+        self.assertEqual([item["action"] for item in items], ["reduce", "funding"])
+        self.assertEqual(items[0]["side"], "sell")
+        self.assertEqual(items[0]["position_before"], 1.0)
+        self.assertEqual(items[0]["position_after"], 0.4)
+        self.assertEqual(items[0]["fee"], 0.12)
+        self.assertEqual(items[0]["fee_currency"], "USD")
+        self.assertEqual(items[1]["realized_funding"], -0.03)
+        self.assertEqual(items[0]["source"], "kraken_position_history")
+
     @patch("quant.execution.fleet_api._load_kraken_exchange_trades_for_bot")
     @patch("quant.execution.fleet_api._load_execution_activity_trades_for_bot")
     @patch("quant.execution.fleet_api._load_closed_trades_for_bot")
@@ -1139,7 +1183,7 @@ class FleetActivityUnifiedTests(unittest.TestCase):
         with patch("quant.execution.fleet_api.fleet_bot_registry", return_value=[bot]), patch(
             "quant.execution.fleet_api.get_conn", return_value=_Conn()
         ), patch(
-            "quant.execution.fleet_api._load_closed_trades_for_bot", return_value=fills
+            "quant.execution.fleet_api._load_display_trades_for_bot", return_value=fills
         ):
             out = build_fleet_activity(hours=24, limit=50)
 
