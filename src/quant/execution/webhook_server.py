@@ -3740,6 +3740,40 @@ def api_fleet_trades(
         }
 
 
+@app.get("/api/fleet/kraken-position-events")
+def api_fleet_kraken_position_events(
+    since_ms: Optional[int] = None,
+    before_ms: Optional[int] = None,
+    limit: int = 2000,
+    x_webhook_token: Optional[str] = Header(default=None),
+    authorization: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    """Authenticated read-only Kraken event ledger for the Fleet service.
+
+    Unlike public Fleet display reads, this account-specific route always
+    requires the existing Kraken-service ``WEBHOOK_TOKEN``. It never reaches
+    an order endpoint and returns a whitelisted display schema only.
+    """
+    _check_token(_fleet_auth_token(x_webhook_token, authorization))
+    from quant.execution.fleet_api import build_kraken_position_events
+
+    try:
+        return build_kraken_position_events(
+            since_ms=since_ms,
+            before_ms=before_ms,
+            limit=int(max(1, min(limit, 2000))),
+        )
+    except Exception as exc:
+        return {
+            "ok": False,
+            "source": "kraken_futures_position_history",
+            "events": [],
+            "count": 0,
+            "error": str(exc),
+            "ts": _now_utc_iso(),
+        }
+
+
 @app.get("/api/fleet/capitalization")
 def api_fleet_capitalization(
     token: Optional[str] = None,

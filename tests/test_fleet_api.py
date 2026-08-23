@@ -179,6 +179,7 @@ class KrakenDirectTradeTests(unittest.TestCase):
                     "positionChange": "decrease",
                     "oldPosition": "1.0",
                     "newPosition": "0.4",
+                    "oldAverageEntryPrice": "100",
                     "executionPrice": "110",
                     "executionSize": "0.6",
                     "fee": "0.12",
@@ -211,6 +212,70 @@ class KrakenDirectTradeTests(unittest.TestCase):
         self.assertEqual(items[0]["fee_currency"], "USD")
         self.assertEqual(items[1]["realized_funding"], -0.03)
         self.assertEqual(items[0]["source"], "kraken_position_history")
+        self.assertEqual(items[0]["entry_price"], 100.0)
+        self.assertEqual(items[0]["exit_price"], 110.0)
+
+    @patch("quant.execution.fleet_api.urlopen")
+    def test_remote_position_event_proxy_uses_dedicated_read_token(self, urlopen) -> None:
+        from quant.execution.fleet_api import (
+            _KRAKEN_POSITION_EVENT_CACHE,
+            _load_kraken_position_events_for_bot,
+        )
+
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args: Any) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return json.dumps({"events": [{"executionUid": "remote-1"}]}).encode()
+
+        _KRAKEN_POSITION_EVENT_CACHE.clear()
+        urlopen.return_value = Response()
+        with patch.dict(
+            os.environ,
+            {
+                "FLEET_KRAKEN_DIRECT_EVENTS_URL": "https://kraken.example/events",
+                "FLEET_KRAKEN_READ_TOKEN": "read-only-token",
+            },
+            clear=True,
+        ):
+            rows = _load_kraken_position_events_for_bot(
+                self.bot, since=None, limit=2000
+            )
+
+        self.assertEqual(rows, [{"executionUid": "remote-1"}])
+        request = urlopen.call_args.args[0]
+        self.assertEqual(request.get_header("Authorization"), "Bearer read-only-token")
+        self.assertIn("limit=2000", request.full_url)
+
+    @patch("quant.execution.kraken_futures.KrakenFuturesClient.get_position_events")
+    def test_position_event_proxy_whitelists_and_reports_full_page(self, get_events) -> None:
+        from quant.execution.fleet_api import build_kraken_position_events
+
+        get_events.return_value = [
+            {
+                "executionUid": "first",
+                "fillTime": 1_000,
+                "executionPrice": "100",
+                "accountUid": "must-not-leak",
+            },
+            {
+                "executionUid": "last",
+                "fundingRealizationTime": 3_000,
+                "realizedFunding": "-0.1",
+            },
+        ]
+        out = build_kraken_position_events(limit=2000)
+
+        self.assertEqual(out["count"], 2)
+        self.assertEqual(out["oldest_ms"], 1_000)
+        self.assertEqual(out["newest_ms"], 3_000)
+        self.assertNotIn("accountUid", out["events"][0])
+        self.assertEqual(get_events.call_args.kwargs["limit"], 2000)
+        self.assertTrue(get_events.call_args.kwargs["include_funding"])
 
     @patch("quant.execution.fleet_api._load_kraken_exchange_trades_for_bot")
     @patch("quant.execution.fleet_api._load_execution_activity_trades_for_bot")

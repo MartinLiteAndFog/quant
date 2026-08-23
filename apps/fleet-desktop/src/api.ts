@@ -165,6 +165,8 @@ function normalizeActivityItem(raw: Record<string, unknown>): ActivityItem {
     side: raw.side as string | undefined,
     qty: (raw.qty as number | null | undefined) ?? null,
     price: (raw.price as number | null | undefined) ?? null,
+    entry_price: (raw.entry_price as number | null | undefined) ?? null,
+    exit_price: (raw.exit_price as number | null | undefined) ?? null,
     status: (raw.status as string | null | undefined) ?? null,
     pnl_pct: (raw.pnl_pct as number | null | undefined) ?? null,
     realized_pnl: (raw.realized_pnl as number | null | undefined) ?? null,
@@ -221,7 +223,7 @@ export async function fetchActivityFeed(
       withFresh(
         {
           hours: RANGE_HOURS[range],
-          limit: 500,
+          limit: 2000,
         },
         opts,
       ),

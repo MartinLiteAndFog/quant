@@ -152,6 +152,9 @@ export interface ActivityItem {
   side?: string;
   qty?: number | null;
   price?: number | null;
+  /** Position entry/exit prices when the exchange supplied them. */
+  entry_price?: number | null;
+  exit_price?: number | null;
   status?: string | null;
   pnl_pct?: number | null;
   /** Exchange-reported realized PnL, never inferred from a price move. */

@@ -783,6 +783,13 @@ def _kraken_position_event_activity_items(
         fee = number(event.get("fee"))
         realized_pnl = number(event.get("realizedPnL"))
         realized_funding = number(event.get("realizedFunding"))
+        closes_position = change in {"decrease", "close", "reverse"}
+        entry_price = (
+            number(event.get("oldAverageEntryPrice"))
+            if closes_position
+            else execution_price
+        )
+        exit_price = execution_price if closes_position else None
         position_ref = str(event.get("accountUid") or "")
         if position_ref:
             position_ref = f"{position_ref}:{event.get('tradeable') or bot.get('symbol') or ''}"
@@ -803,6 +810,8 @@ def _kraken_position_event_activity_items(
                 "side": side,
                 "qty": abs(execution_size) if execution_size is not None else None,
                 "price": execution_price,
+                "entry_price": entry_price,
+                "exit_price": exit_price,
                 "status": "reported",
                 "pnl_pct": None,
                 "realized_pnl": realized_pnl,
@@ -852,6 +861,37 @@ def _load_kraken_position_events_for_bot(
             )
         except Exception as exc:
             log.warning("Kraken position-event history failed: %s", type(exc).__name__)
+    else:
+        remote_url = str(
+            bot.get("direct_events_url")
+            or os.getenv("FLEET_KRAKEN_DIRECT_EVENTS_URL")
+            or ""
+        ).strip()
+        # The raw ledger is account-specific. Never send an unauthenticated
+        # request or accidentally reuse quant's unrelated webhook token.
+        token = (os.getenv("FLEET_KRAKEN_READ_TOKEN") or "").strip()
+        if remote_url and token:
+            query: Dict[str, Any] = {"limit": int(max(1, min(limit, 2000)))}
+            if since_ms is not None:
+                query["since_ms"] = since_ms
+            req = Request(
+                f"{remote_url.rstrip('/')}?{urlencode(query)}",
+                method="GET",
+                headers={
+                    "Accept": "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+            )
+            try:
+                with urlopen(req, timeout=12.0) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                remote_events = payload.get("events") if isinstance(payload, dict) else None
+                if isinstance(remote_events, list):
+                    rows = [dict(row) for row in remote_events if isinstance(row, dict)]
+            except Exception as exc:
+                log.warning("Kraken position-event proxy failed: %s", type(exc).__name__)
+        elif remote_url:
+            log.warning("Kraken position-event proxy is configured without read token")
     _KRAKEN_POSITION_EVENT_CACHE[cache_key] = (time.monotonic(), [dict(row) for row in rows])
     return rows
 
@@ -2240,8 +2280,14 @@ def build_fleet_activity(
             items.append(_activity_item_from_fill(row=row, bot=bot))
 
         if str(bot.get("venue") or "").lower() == "kraken":
+            # Kraken's exchange ledger is primary evidence, not an old local
+            # research table: the All-range view must not inherit the Fleet
+            # Postgres start-date floor. The client paginates up to this cap.
+            kraken_since = _hours_cutoff_ts(hours)
             raw_events = _load_kraken_position_events_for_bot(
-                bot, since=since, limit=per_bot_limit
+                bot,
+                since=kraken_since,
+                limit=2000 if kraken_since is None else per_bot_limit,
             )
             items.extend(
                 _kraken_position_event_activity_items(
@@ -2395,6 +2441,62 @@ def build_kraken_exchange_trades(
         "trades": trades,
         "count": len(trades),
         "ts": pd.Timestamp.now("UTC").isoformat(),
+    }
+
+
+def _public_kraken_position_event(event: Dict[str, Any]) -> Dict[str, Any]:
+    """Return only display-safe exchange fields for the Fleet read proxy."""
+    keys = (
+        "updateReason", "positionChange", "fillTime", "fundingRealizationTime",
+        "timestamp", "executionUid", "executionPrice", "executionSize",
+        "oldPosition", "newPosition", "oldAverageEntryPrice",
+        "newAverageEntryPrice", "fee", "feeCurrency", "realizedPnL",
+        "realizedFunding", "tradeable",
+    )
+    return {key: event[key] for key in keys if key in event}
+
+
+def build_kraken_position_events(
+    *,
+    since_ms: Optional[int] = None,
+    before_ms: Optional[int] = None,
+    limit: int = 2000,
+) -> Dict[str, Any]:
+    """Expose bounded, authenticated, read-only Kraken position history.
+
+    The client follows Kraken's continuation token internally. Callers receive
+    up to 2,000 real position mutations, not merely the exchange's first page.
+    Account identifiers and API metadata are stripped before the service hop.
+    """
+    from quant.execution.kraken_futures import KrakenFuturesClient
+
+    cap = int(max(1, min(limit, 2000)))
+    events = KrakenFuturesClient().get_position_events(
+        symbol=os.getenv("KRAKEN_FUTURES_SYMBOL", "PF_SOLUSD"),
+        since_ms=since_ms,
+        before_ms=before_ms,
+        limit=cap,
+        include_funding=True,
+    )
+    safe_events = [_public_kraken_position_event(row) for row in events]
+
+    def event_time(row: Dict[str, Any]) -> Optional[int]:
+        for key in ("fillTime", "fundingRealizationTime", "timestamp"):
+            try:
+                return int(row[key])
+            except (KeyError, TypeError, ValueError):
+                continue
+        return None
+
+    times = [value for value in (event_time(row) for row in safe_events) if value is not None]
+    return {
+        "ok": True,
+        "source": "kraken_futures_position_history",
+        "events": safe_events,
+        "count": len(safe_events),
+        "oldest_ms": min(times) if times else None,
+        "newest_ms": max(times) if times else None,
+        "limit": cap,
     }
 
 
