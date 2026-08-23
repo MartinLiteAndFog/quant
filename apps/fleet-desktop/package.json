@@ -10,6 +10,9 @@
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build",
+    "ios:init": "tauri ios init",
+    "ios:dev": "tauri ios dev",
+    "ios:build": "tauri ios build",
     "install:desktop": "tauri build && rm -rf \"$HOME/Desktop/Fleet Cockpit.app\" && cp -R 'src-tauri/target/release/bundle/macos/Fleet Cockpit.app' \"$HOME/Desktop/Fleet Cockpit.app\" && echo \"Installed: $HOME/Desktop/Fleet Cockpit.app\""
   },
   "dependencies": {

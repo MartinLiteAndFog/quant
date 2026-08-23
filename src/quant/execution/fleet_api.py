@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 import pandas as pd
@@ -18,6 +20,8 @@ from quant.execution.event_store import get_conn
 from quant.utils.log import get_logger
 
 log = get_logger("quant.fleet_api")
+
+_KRAKEN_DIRECT_TRADE_CACHE: Dict[str, Tuple[float, pd.DataFrame]] = {}
 
 # Default registry — overridden by FLEET_BOTS_JSON env (array of bot dicts).
 _DEFAULT_BOTS: List[Dict[str, Any]] = [
@@ -454,6 +458,399 @@ def _load_closed_trades_for_bot(
     return out.sort_values("exit_ts") if "exit_ts" in out.columns else out
 
 
+def _execution_payload(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _activity_execution_is_partial(row: Dict[str, Any]) -> bool:
+    """True when a reducing activity is a partial TP, not a completed trade."""
+    payload = _execution_payload(row.get("payload_json"))
+    reason = str(payload.get("reason_code") or "").strip().lower()
+    client_oid = str(row.get("client_oid") or "").strip().lower()
+    if reason in {"tv_tp1", "tp1", "tp1_partial"} or ":tp1:" in client_oid:
+        return True
+    before = payload.get("position_before")
+    after = payload.get("position_after")
+    try:
+        return float(before) != 0.0 and float(after) == float(before)
+    except (TypeError, ValueError):
+        return False
+
+
+def _trades_from_execution_activity(
+    rows: Sequence[Sequence[Any]],
+    *,
+    bot: Dict[str, Any],
+    since: Optional[pd.Timestamp] = None,
+) -> pd.DataFrame:
+    """Infer completed round trips from the Fleet execution activity stream.
+
+    This is a read-model fallback for historic pilot activity that predates
+    durable ``closed_trades`` writes. Opening market activity is paired with a
+    later full reducing activity for the same instance and symbol. Partial TP1
+    reductions deliberately leave the leg open and do not become standalone
+    trades.
+    """
+    columns = [
+        "event_id",
+        "ts",
+        "venue",
+        "symbol",
+        "strategy_instance",
+        "side",
+        "qty",
+        "price",
+        "reduce_only",
+        "status",
+        "client_oid",
+        "payload_json",
+    ]
+    records = [dict(zip(columns, row)) for row in rows]
+    records.sort(key=lambda row: pd.Timestamp(row.get("ts") or 0))
+    open_by_key: Dict[Tuple[str, str], Dict[str, Any]] = {}
+    trades: List[Dict[str, Any]] = []
+    accepted_statuses = {"sent", "filled", "done", "success", "completed", "closed", "ok"}
+
+    for row in records:
+        status = str(row.get("status") or "").strip().lower()
+        if status and status not in accepted_statuses:
+            continue
+        side = str(row.get("side") or "").strip().lower()
+        if side not in {"buy", "sell"}:
+            continue
+        inst = str(row.get("strategy_instance") or "").strip()
+        symbol = str(row.get("symbol") or bot.get("symbol") or "")
+        key = (inst, _normalize_symbol_token(symbol))
+        is_reducing = bool(row.get("reduce_only"))
+        if not is_reducing:
+            opened = open_by_key.get(key)
+            opened_side = str((opened or {}).get("side") or "").strip().lower()
+            if opened is not None and opened_side != side:
+                # Historic pilot reversals were persisted as a new opening fill
+                # (reduce_only=false, position_before=0) even though the
+                # opposite-side transaction completed the prior displayed leg.
+                # Close the read-model leg at this activity, then keep the same
+                # activity as the opening of the new direction.
+                open_by_key.pop(key, None)
+            else:
+                open_by_key[key] = row
+                continue
+        else:
+            opened = open_by_key.pop(key, None)
+        if is_reducing and _activity_execution_is_partial(row):
+            if opened is not None:
+                open_by_key[key] = opened
+            continue
+        if opened is None:
+            continue
+
+        entry_ts = pd.Timestamp(opened.get("ts"))
+        exit_ts = pd.Timestamp(row.get("ts"))
+        if since is not None and exit_ts < since:
+            continue
+        entry_side = str(opened.get("side") or "").strip().lower()
+        trade_side = "long" if entry_side == "buy" else "short"
+        entry_price = float(opened["price"]) if _is_finite(opened.get("price")) else None
+        exit_price = float(row["price"]) if _is_finite(row.get("price")) else None
+        pnl_pct = None
+        if entry_price is not None and entry_price > 0 and exit_price is not None:
+            direction = 1.0 if trade_side == "long" else -1.0
+            pnl_pct = (exit_price / entry_price - 1.0) * 100.0 * direction
+        payload = _execution_payload(row.get("payload_json"))
+        exit_event = (
+            str(payload.get("reason_code") or "activity_close")
+            if is_reducing
+            else "activity_reversal"
+        )
+        trades.append(
+            {
+                "trade_id": f"activity:{row.get('event_id')}",
+                "venue": row.get("venue") or bot.get("venue"),
+                "symbol": symbol,
+                "entry_ts": entry_ts,
+                "exit_ts": exit_ts,
+                "side": trade_side,
+                "qty": row.get("qty"),
+                "entry_price": entry_price,
+                "exit_price": exit_price,
+                "pnl_pct": pnl_pct,
+                "exit_event": exit_event,
+                "strategy": "execution_activity",
+                "strategy_instance": inst or bot.get("strategy_instance"),
+                "display_source": "execution_activity",
+            }
+        )
+        if not is_reducing:
+            open_by_key[key] = row
+    return pd.DataFrame(trades)
+
+
+def _load_execution_activity_trades_for_bot(
+    bot: Dict[str, Any],
+    *,
+    since: Optional[pd.Timestamp] = None,
+    limit: int = 5000,
+) -> pd.DataFrame:
+    instances = _trade_instances_for_bot(bot)
+    if not instances:
+        return pd.DataFrame()
+    venue = str(bot.get("venue") or "kucoin")
+    symbol = str(bot.get("symbol") or "SOL-USDT")
+    # Read from the global display-history floor rather than the selected range
+    # so a close inside the range can still pair with its earlier opening leg.
+    query_since = _history_start_ts()
+    where = [
+        "strategy_instance = any(%(instances)s::text[])",
+        "venue = %(venue)s",
+        "execution_stage = 'market_fill'",
+        "lower(coalesce(side, '')) in ('buy', 'sell')",
+    ]
+    params: Dict[str, Any] = {
+        "instances": instances,
+        "venue": venue,
+        "limit": int(max(2, limit * 4)),
+    }
+    if venue != "kraken":
+        where.append(
+            "replace(replace(replace(replace(upper(symbol), '-', ''), '_', ''), '/', ''), '.', '') = %(symbol_norm)s"
+        )
+        params["symbol_norm"] = _normalize_symbol_token(symbol)
+    if query_since is not None:
+        where.append("ts >= %(query_since)s")
+        params["query_since"] = query_since.to_pydatetime()
+    sql = f"""
+        select event_id, ts, venue, symbol, strategy_instance, side, qty, price,
+               reduce_only, status, client_oid, payload_json
+        from execution_events
+        where {' and '.join(where)}
+        order by ts asc
+        limit %(limit)s
+    """
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall() or []
+    except Exception as e:
+        log.warning("fleet execution activity load failed for %s: %s", bot.get("id"), e)
+        return pd.DataFrame()
+    return _trades_from_execution_activity(rows, bot=bot, since=since)
+
+
+def _kraken_position_events_frame(
+    events: Sequence[Dict[str, Any]],
+    *,
+    bot: Dict[str, Any],
+    since: Optional[pd.Timestamp],
+) -> pd.DataFrame:
+    """Convert Kraken account position events into Fleet trade/fill rows."""
+
+    def number(value: Any) -> Optional[float]:
+        try:
+            parsed = float(value)
+        except Exception:
+            return None
+        return parsed if _is_finite(parsed) else None
+
+    rows: List[Dict[str, Any]] = []
+    for event in events:
+        if str(event.get("updateReason") or "").lower() != "trade":
+            continue
+        execution_uid = str(event.get("executionUid") or "").strip()
+        execution_price = number(event.get("executionPrice"))
+        execution_size = number(event.get("executionSize"))
+        ts_raw = event.get("fillTime") or event.get("timestamp")
+        try:
+            ts = pd.to_datetime(int(ts_raw), unit="ms", utc=True)
+        except Exception:
+            continue
+        if since is not None and ts < since:
+            continue
+        if not execution_uid or execution_price is None or execution_size is None:
+            continue
+
+        old_position = number(event.get("oldPosition")) or 0.0
+        new_position = number(event.get("newPosition")) or 0.0
+        change = str(event.get("positionChange") or "unknown").strip().lower()
+        closes_position = change in {"close", "decrease", "reverse"}
+        closed_qty = 0.0
+        if closes_position:
+            if change == "reverse" or new_position == 0 or old_position * new_position < 0:
+                closed_qty = abs(old_position)
+            else:
+                closed_qty = max(0.0, abs(old_position) - abs(new_position))
+
+        entry_price = number(event.get("oldAverageEntryPrice"))
+        if not closes_position:
+            entry_price = number(event.get("newAverageEntryPrice")) or execution_price
+        pnl_pct: Optional[float] = None
+        if closes_position and entry_price is not None and entry_price > 0:
+            direction = 1.0 if old_position > 0 else -1.0
+            pnl_pct = ((execution_price - entry_price) / entry_price) * 100.0 * direction
+
+        position_side = (
+            "long"
+            if (old_position > 0 if closes_position else new_position > 0)
+            else "short"
+        )
+        rows.append(
+            {
+                "trade_id": f"kraken-position:{execution_uid}",
+                "venue": "kraken",
+                "symbol": str(bot.get("symbol") or event.get("tradeable") or "SOL-USD"),
+                "entry_ts": ts,
+                "exit_ts": ts,
+                "side": position_side,
+                "qty": closed_qty if closed_qty > 0 else abs(execution_size),
+                "entry_price": entry_price,
+                "exit_price": execution_price,
+                "pnl_pct": pnl_pct,
+                "exit_event": f"kraken_position_{change.replace('nochange', 'no_change')}",
+                "strategy": "kraken_exchange_history",
+                "strategy_instance": str(bot.get("strategy_instance") or "kraken_bot"),
+            }
+        )
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(rows).sort_values("exit_ts")
+
+
+def _load_kraken_exchange_trades_for_bot(
+    bot: Dict[str, Any],
+    *,
+    since: Optional[pd.Timestamp],
+    limit: int,
+    allow_remote: bool,
+) -> pd.DataFrame:
+    """Read Kraken account history locally or through the Kraken bot service."""
+    since_ms = int(since.timestamp() * 1000) if since is not None else None
+    cache_key = f"{bot.get('id')}:{since_ms}:{int(limit)}:{int(allow_remote)}"
+    cached = _KRAKEN_DIRECT_TRADE_CACHE.get(cache_key)
+    if cached and (time.monotonic() - cached[0]) <= 30.0:
+        return cached[1].copy()
+
+    frame = pd.DataFrame()
+    if (os.getenv("KRAKEN_FUTURES_KEY") or "").strip() and (
+        os.getenv("KRAKEN_FUTURES_SECRET") or ""
+    ).strip():
+        try:
+            from quant.execution.kraken_futures import KrakenFuturesClient
+
+            events = KrakenFuturesClient().get_position_events(
+                symbol=os.getenv("KRAKEN_FUTURES_SYMBOL", "PF_SOLUSD"),
+                since_ms=since_ms,
+                limit=limit,
+            )
+            frame = _kraken_position_events_frame(events, bot=bot, since=since)
+        except Exception as exc:
+            log.warning("direct Kraken position history failed: %s", type(exc).__name__)
+    elif allow_remote:
+        remote_url = str(
+            bot.get("direct_trades_url")
+            or os.getenv("FLEET_KRAKEN_DIRECT_TRADES_URL")
+            or ""
+        ).strip()
+        if remote_url:
+            query: Dict[str, Any] = {"limit": int(limit)}
+            if since_ms is not None:
+                query["since_ms"] = since_ms
+            token = (
+                os.getenv("FLEET_KRAKEN_READ_TOKEN")
+                or os.getenv("WEBHOOK_TOKEN")
+                or ""
+            ).strip()
+            headers = {"Accept": "application/json"}
+            if token:
+                headers["Authorization"] = f"Bearer {token}"
+            req = Request(
+                f"{remote_url.rstrip('/')}?{urlencode(query)}",
+                method="GET",
+                headers=headers,
+            )
+            try:
+                with urlopen(req, timeout=12.0) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+                trades = payload.get("trades") if isinstance(payload, dict) else None
+                if isinstance(trades, list) and trades:
+                    frame = pd.DataFrame(trades)
+                    frame["entry_ts"] = pd.to_datetime(
+                        frame["entry_ts"], utc=True, errors="coerce"
+                    )
+                    frame["exit_ts"] = pd.to_datetime(
+                        frame["exit_ts"], utc=True, errors="coerce"
+                    )
+            except Exception as exc:
+                log.warning("Kraken trade proxy failed: %s", type(exc).__name__)
+
+    _KRAKEN_DIRECT_TRADE_CACHE[cache_key] = (time.monotonic(), frame.copy())
+    return frame
+
+
+def _load_display_trades_for_bot(
+    bot: Dict[str, Any],
+    *,
+    since: Optional[pd.Timestamp] = None,
+    limit: int = 5000,
+) -> pd.DataFrame:
+    """Closed-trade SoT plus inferred and read-only exchange history."""
+    closed = _load_closed_trades_for_bot(bot, since=since, limit=limit)
+    inferred = _load_execution_activity_trades_for_bot(bot, since=since, limit=limit)
+    if inferred.empty:
+        out = closed
+    elif closed.empty:
+        out = inferred
+    else:
+        # Durable closed_trades remain authoritative. Suppress an inferred copy
+        # when its close activity lands within five seconds of an existing close.
+        closed_exit: List[Tuple[pd.Timestamp, str]] = []
+        for _, row in closed.iterrows():
+            ts = pd.to_datetime(row.get("exit_ts"), utc=True, errors="coerce")
+            if pd.isna(ts):
+                continue
+            closed_exit.append(
+                (ts, _normalize_symbol_token(str(row.get("symbol") or "")))
+            )
+        keep: List[bool] = []
+        for _, row in inferred.iterrows():
+            ts = pd.to_datetime(row.get("exit_ts"), utc=True, errors="coerce")
+            symbol = _normalize_symbol_token(str(row.get("symbol") or ""))
+            duplicate = any(
+                other_symbol == symbol
+                and abs((ts - other_ts).total_seconds()) <= 5.0
+                for other_ts, other_symbol in closed_exit
+            )
+            keep.append(not duplicate)
+        supplemental = inferred.loc[keep]
+        out = (
+            closed
+            if supplemental.empty
+            else pd.concat([closed, supplemental], ignore_index=True)
+        )
+
+    if str(bot.get("venue") or "").lower() == "kraken":
+        direct = _load_kraken_exchange_trades_for_bot(
+            bot,
+            since=since,
+            limit=limit,
+            allow_remote=True,
+        )
+        if not direct.empty:
+            out = direct if out.empty else pd.concat([out, direct], ignore_index=True)
+
+    if out.empty:
+        return out
+    if "trade_id" in out.columns:
+        out = out.drop_duplicates(subset=["trade_id"], keep="first")
+    return out.sort_values("exit_ts").tail(int(max(1, limit)))
+
+
 def _is_finite(v: Any) -> bool:
     try:
         x = float(v)
@@ -653,7 +1050,12 @@ def _shared_curve_window(
     else:
         firsts: List[int] = []
         for s in series:
-            for key in ("account_curve_abs", "account_curve", "trade_curve"):
+            for key in (
+                "account_curve_abs",
+                "account_curve",
+                "trade_curve",
+                "corrected_curve",
+            ):
                 curve = s.get(key) or []
                 if curve:
                     firsts.append(int(curve[0]["t"]))
@@ -710,6 +1112,17 @@ def _align_series_to_shared_clock(
                 t1=min(t1, int(trade_curve[-1]["t"])),
                 interval_sec=interval,
             )
+        corrected_curve = s.get("corrected_curve") or []
+        if corrected_curve:
+            row["corrected_curve"] = _forward_fill_on_grid(
+                corrected_curve,
+                value_key="equity_pct",
+                t0=t0,
+                t1=min(t1, int(corrected_curve[-1]["t"])),
+                interval_sec=interval,
+            )
+        else:
+            row["corrected_curve"] = []
         aligned.append(row)
     meta = {
         "t0": t0,
@@ -854,23 +1267,40 @@ def _load_equity_snapshots(
     venue: str,
     account: Optional[str] = None,
     since: Optional[pd.Timestamp] = None,
-    limit: int = 5000,
+    limit: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     where = ["venue = %(venue)s"]
-    params: Dict[str, Any] = {"venue": str(venue), "limit": int(max(1, limit))}
+    params: Dict[str, Any] = {"venue": str(venue)}
     if account:
         where.append("account = %(account)s")
         params["account"] = str(account)
     if since is not None:
         where.append("ts >= %(since)s")
         params["since"] = since.to_pydatetime()
-    sql = f"""
-        select ts, equity, currency, account, source
-        from equity_snapshots
-        where {' and '.join(where)}
-        order by ts asc
-        limit %(limit)s
-    """
+    if limit is None:
+        # Performance curves need the complete requested time span. The result
+        # is downsampled only after loading, so no historical boundary vanishes.
+        sql = f"""
+            select ts, equity, currency, account, source
+            from equity_snapshots
+            where {' and '.join(where)}
+            order by ts asc
+        """
+    else:
+        params["limit"] = int(max(1, limit))
+        # Explicit bounded reads (for example Capitalization's latest point)
+        # select newest rows first, then restore chronological curve order.
+        sql = f"""
+            select ts, equity, currency, account, source
+            from (
+                select ts, equity, currency, account, source
+                from equity_snapshots
+                where {' and '.join(where)}
+                order by ts desc
+                limit %(limit)s
+            ) latest
+            order by ts asc
+        """
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(sql, params)
@@ -896,6 +1326,280 @@ def _load_equity_snapshots(
     except Exception as e:
         log.warning("fleet equity_snapshots load failed: %s", e)
         return []
+
+
+def _load_cashflow_data(
+    *,
+    venue: str,
+    account: str,
+    since: pd.Timestamp,
+    until: pd.Timestamp,
+) -> Tuple[List[Dict[str, Any]], Optional[Dict[str, Any]]]:
+    """Load confirmed account cashflows and their authoritative coverage."""
+    state_sql = """
+        select coverage_start, coverage_end, last_success_at, last_error, source
+        from cashflow_sync_state
+        where venue = %(venue)s and account = %(account)s
+        limit 1
+    """
+    flow_sql = """
+        select ts, amount, reporting_amount, currency, direction, flow_type,
+               status, equity_after, source_ref
+        from cashflow_events
+        where venue = %(venue)s
+          and account = %(account)s
+          and ts >= %(since)s
+          and ts <= %(until)s
+          and lower(status) in ('completed', 'success')
+        order by ts asc, event_id asc
+    """
+    params = {
+        "venue": str(venue),
+        "account": str(account),
+        "since": since.to_pydatetime(),
+        "until": until.to_pydatetime(),
+    }
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(state_sql, params)
+            state_row = cur.fetchone()
+            cur.execute(flow_sql, params)
+            rows = cur.fetchall() or []
+    except Exception as exc:
+        log.warning(
+            "fleet cashflow load failed venue=%s account=%s error=%s",
+            venue,
+            account,
+            type(exc).__name__,
+        )
+        return [], None
+
+    state = None
+    if state_row:
+        state = {
+            "coverage_start": state_row[0],
+            "coverage_end": state_row[1],
+            "last_success_at": state_row[2],
+            "last_error": state_row[3],
+            "source": state_row[4],
+        }
+    flows = [
+        {
+            "t": int(pd.Timestamp(row[0]).timestamp()),
+            "amount": float(row[1]),
+            "reporting_amount": (
+                float(row[2]) if row[2] is not None else None
+            ),
+            "currency": row[3],
+            "direction": row[4],
+            "flow_type": row[5],
+            "status": row[6],
+            "equity_after": float(row[7]) if row[7] is not None else None,
+            "source_ref": row[8],
+            "venue": venue,
+            "account": account,
+        }
+        for row in rows
+    ]
+    return flows, state
+
+
+def _cashflow_corrected_curve(
+    points: List[Dict[str, Any]],
+    cashflows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Compound equity growth after removing confirmed deposits/withdrawals."""
+    clean = [
+        {"t": int(point["t"]), "equity": float(point["equity"])}
+        for point in points
+        if point.get("equity") is not None
+        and _is_finite(point.get("equity"))
+        and float(point["equity"]) > 0
+    ]
+    clean.sort(key=lambda point: point["t"])
+    if len(clean) < 2:
+        return []
+    flows = sorted(
+        [
+            flow
+            for flow in cashflows
+            if flow.get("reporting_amount") is not None
+            and _is_finite(flow.get("reporting_amount"))
+        ],
+        key=lambda flow: int(flow["t"]),
+    )
+    growth = 1.0
+    flow_index = 0
+    last_value = clean[0]["equity"]
+    out: List[Dict[str, Any]] = [{"t": clean[0]["t"], "equity_pct": 0.0}]
+    for point in clean[1:]:
+        interval_flows: List[Dict[str, Any]] = []
+        while flow_index < len(flows) and int(flows[flow_index]["t"]) <= point["t"]:
+            if int(flows[flow_index]["t"]) > clean[0]["t"]:
+                interval_flows.append(flows[flow_index])
+            flow_index += 1
+        unresolved = 0.0
+        for flow in interval_flows:
+            amount = float(flow["reporting_amount"])
+            equity_after = flow.get("equity_after")
+            if (
+                equity_after is None
+                or not _is_finite(equity_after)
+                or float(equity_after) <= 0
+            ):
+                unresolved += amount
+                continue
+            before = float(equity_after) - amount
+            if before <= 0 or last_value <= 0:
+                return []
+            growth *= before / last_value
+            last_value = float(equity_after)
+        adjusted_end = float(point["equity"]) - unresolved
+        if adjusted_end <= 0 or last_value <= 0:
+            return []
+        growth *= adjusted_end / last_value
+        last_value = float(point["equity"])
+        out.append(
+            {"t": int(point["t"]), "equity_pct": round((growth - 1.0) * 100.0, 6)}
+        )
+    return out
+
+
+def _bot_corrected_payload(
+    *,
+    abs_points: List[Dict[str, Any]],
+    venue: str,
+    account: str,
+    since: Optional[pd.Timestamp],
+    until_ts: int,
+    bot_status: Optional[str],
+    bot_disabled: bool,
+) -> Dict[str, Any]:
+    """Return a verified-ledger curve, or a conservative jump-TWR fallback."""
+    clean_abs = [
+        {"t": int(point["t"]), "equity": float(point["equity"])}
+        for point in abs_points
+        if point.get("equity") is not None
+        and _is_finite(point.get("equity"))
+        and float(point["equity"]) > 0
+    ]
+    clean_abs.sort(key=lambda point: point["t"])
+    load_start = (
+        since
+        if since is not None
+        else pd.Timestamp(
+            clean_abs[0]["t"] if clean_abs else 0,
+            unit="s",
+            tz="UTC",
+        )
+    )
+    flows, state = _load_cashflow_data(
+        venue=venue,
+        account=account,
+        since=load_start,
+        until=pd.Timestamp(int(until_ts), unit="s", tz="UTC"),
+    )
+    api_flows = [
+        {
+            "t": int(flow["t"]),
+            "direction": flow.get("direction"),
+            "reporting_amount": flow.get("reporting_amount"),
+            "currency": flow.get("currency"),
+            "flow_type": flow.get("flow_type"),
+        }
+        for flow in flows
+    ]
+    reportable = [
+        flow
+        for flow in flows
+        if flow.get("reporting_amount") is not None
+        and _is_finite(flow.get("reporting_amount"))
+    ]
+    base_meta: Dict[str, Any] = {
+        "method": "unavailable",
+        "available": False,
+        "reason": None,
+        "flow_count": len(reportable),
+        "net_cashflow": round(
+            sum(float(flow["reporting_amount"]) for flow in reportable), 6
+        ),
+        "source": state.get("source") if state else None,
+    }
+
+    def result(
+        curve: List[Dict[str, Any]],
+        *,
+        method: str,
+        available: bool,
+        reason: Optional[str],
+    ) -> Dict[str, Any]:
+        return {
+            "corrected_curve": curve,
+            "corrected_meta": {
+                **base_meta,
+                "method": method,
+                "available": available,
+                "reason": reason,
+            },
+            "cashflows": api_flows,
+        }
+
+    if bot_disabled:
+        return result([], method="unavailable", available=False, reason="disabled")
+    if str(bot_status or "").strip().lower() == "down":
+        return result([], method="unavailable", available=False, reason="inactive")
+    if len(clean_abs) < 2:
+        return result(
+            [],
+            method="unavailable",
+            available=False,
+            reason="insufficient_equity",
+        )
+
+    curve_start = int(clean_abs[0]["t"])
+    curve_end = int(clean_abs[-1]["t"])
+    coverage_ok = bool(
+        state
+        and state.get("last_success_at")
+        and state.get("coverage_start") is not None
+        and state.get("coverage_end") is not None
+        and int(pd.Timestamp(state["coverage_start"]).timestamp()) <= curve_start
+        and int(pd.Timestamp(state["coverage_end"]).timestamp()) >= curve_end
+    )
+    if coverage_ok:
+        ledger_curve = _cashflow_corrected_curve(clean_abs, flows)
+        if ledger_curve:
+            return result(
+                _downsample_points(
+                    ledger_curve,
+                    max_points=180,
+                    value_key="equity_pct",
+                    min_interval_sec=900,
+                ),
+                method="ledger",
+                available=True,
+                reason=None,
+            )
+
+    fallback = _twr_account_curve(clean_abs)
+    if not fallback:
+        return result(
+            [],
+            method="unavailable",
+            available=False,
+            reason="insufficient_equity",
+        )
+    return result(
+        _downsample_points(
+            fallback,
+            max_points=180,
+            value_key="equity_pct",
+            min_interval_sec=900,
+        ),
+        method="jump_twr",
+        available=True,
+        reason=None if coverage_ok else "ledger_coverage_incomplete",
+    )
 
 
 def _twr_account_curve(
@@ -951,23 +1655,61 @@ def _normalize_account_curve(points: List[Dict[str, Any]]) -> List[Dict[str, Any
         ]
     return _downsample_points(raw, max_points=180, value_key="equity_pct", min_interval_sec=900)
 
+
+def _equal_weight_pct_mean(
+    curves: List[List[Dict[str, Any]]],
+) -> List[Dict[str, Any]]:
+    """Equal-weight, forward-filled mean on the union of curve timestamps."""
+    clean: List[List[Dict[str, Any]]] = []
+    for curve in curves:
+        points = [
+            {"t": int(point["t"]), "equity_pct": float(point["equity_pct"])}
+            for point in curve
+            if point.get("equity_pct") is not None
+            and _is_finite(point.get("equity_pct"))
+        ]
+        if points:
+            clean.append(points)
+    if not clean:
+        return []
+    times = sorted({int(point["t"]) for curve in clean for point in curve})
+    indices = [0] * len(clean)
+    last_values: List[Optional[float]] = [None] * len(clean)
+    out: List[Dict[str, Any]] = []
+    for timestamp in times:
+        values: List[float] = []
+        for index, curve in enumerate(clean):
+            while (
+                indices[index] < len(curve)
+                and int(curve[indices[index]]["t"]) <= timestamp
+            ):
+                last_values[index] = float(curve[indices[index]]["equity_pct"])
+                indices[index] += 1
+            if last_values[index] is not None:
+                values.append(float(last_values[index]))
+        if values:
+            out.append(
+                {
+                    "t": timestamp,
+                    "equity_pct": round(sum(values) / len(values), 6),
+                }
+            )
+    return out
+
 def _build_portfolio_curve(
     series: List[Dict[str, Any]],
     *,
     thin: bool = True,
 ) -> Dict[str, Any]:
-    """Build portfolio abs sum + equal-weight % of bot returns.
+    """Build portfolio cash equity plus organic, deposit-adjusted growth.
 
     Absolute (Equity $): sum forward-filled equities (nominal USD/USDT 1:1).
 
-    Percent (Equity %): equal-weight mean of each bot's own-base equity_pct,
-    forward-filled on the union of timestamps. Do NOT normalize the summed
-    absolute curve from its first point — when a large account (e.g. Kraken
-    ~$360) joins after tiny pilots (~$15), that false rebase spikes to
-    thousands of percent while every bot is still near ± a few percent.
+    Percent (Return): time-weighted growth of the summed portfolio equity.
+    Large capital steps are treated as transfers by the same jump filter used
+    for individual accounts, while organic gains compound by portfolio size.
     """
     curves: List[List[Dict[str, Any]]] = []
-    twr_pcts: List[Optional[List[Dict[str, Any]]]] = []
     live_sum = 0.0
     live_n = 0
     for s in series:
@@ -980,14 +1722,6 @@ def _build_portfolio_curve(
                     if p.get("equity") is not None and _is_finite(p.get("equity"))
                 ]
             )
-            # Prefer the bot's deposit-adjusted (TWR) % curve when present so
-            # portfolio % inherits it; recomputing from abs re-added deposits.
-            pc = [
-                {"t": int(p["t"]), "equity_pct": float(p["equity_pct"])}
-                for p in (s.get("account_curve") or [])
-                if p.get("equity_pct") is not None and _is_finite(p.get("equity_pct"))
-            ]
-            twr_pcts.append(pc or None)
         le = s.get("live_equity")
         if le is not None and _is_finite(le):
             live_sum += float(le)
@@ -1003,39 +1737,13 @@ def _build_portfolio_curve(
             "account_curve_abs": [],
             "account_curve": [],
             "bot_count": 0,
-            "note": "equal_weight_pct_mean_abs_sum",
+            "note": "portfolio_twr_from_abs_sum",
         }
-
-    # Per-bot %: use the bot's own (TWR) curve when available; else fall back
-    # to first-equity base from the abs curve.
-    pct_curves: List[List[Dict[str, Any]]] = []
-    for curve, twr in zip(curves, twr_pcts):
-        if twr:
-            pct_curves.append(twr)
-            continue
-        base = float(curve[0]["equity"])
-        if base <= 0:
-            pct_curves.append(
-                [{"t": int(p["t"]), "equity_pct": 0.0} for p in curve]
-            )
-        else:
-            pct_curves.append(
-                [
-                    {
-                        "t": int(p["t"]),
-                        "equity_pct": round((float(p["equity"]) / base - 1.0) * 100.0, 6),
-                    }
-                    for p in curve
-                ]
-            )
 
     times = sorted({int(p["t"]) for c in curves for p in c})
     abs_idxs = [0] * len(curves)
     abs_lasts: List[Optional[float]] = [None] * len(curves)
-    pct_idxs = [0] * len(pct_curves)
-    pct_lasts: List[Optional[float]] = [None] * len(pct_curves)
     portfolio_abs: List[Dict[str, Any]] = []
-    portfolio_pct: List[Dict[str, Any]] = []
     for t in times:
         total = 0.0
         contributing = 0
@@ -1049,17 +1757,7 @@ def _build_portfolio_curve(
         if contributing:
             portfolio_abs.append({"t": t, "equity": round(total, 6)})
 
-        pct_vals: List[float] = []
-        for i, curve in enumerate(pct_curves):
-            while pct_idxs[i] < len(curve) and int(curve[pct_idxs[i]]["t"]) <= t:
-                pct_lasts[i] = float(curve[pct_idxs[i]]["equity_pct"])
-                pct_idxs[i] += 1
-            if pct_lasts[i] is not None:
-                pct_vals.append(pct_lasts[i])
-        if pct_vals:
-            portfolio_pct.append(
-                {"t": t, "equity_pct": round(sum(pct_vals) / len(pct_vals), 6)}
-            )
+    portfolio_pct = _twr_account_curve(portfolio_abs)
 
     # Only thin dense boards when caller has not already put curves on a
     # uniform shared clock (thin=False preserves true-time regularity).
@@ -1082,7 +1780,7 @@ def _build_portfolio_curve(
         "account_curve_abs": portfolio_abs,
         "account_curve": portfolio_pct,
         "bot_count": len(curves),
-        "note": "equal_weight_pct_mean_abs_sum",
+        "note": "portfolio_twr_from_abs_sum",
     }
 
 
@@ -1128,7 +1826,7 @@ def build_fleet_performance(
         symbol = str(b.get("symbol") or "SOL-USDT")
         bot_id = str(b.get("id") or instance)
 
-        trades = _load_closed_trades_for_bot(b, since=since)
+        trades = _load_display_trades_for_bot(b, since=since)
         trade_curve, stats = _compounded_trade_curve(trades)
 
         acct_pts = _load_account_points_for_bot(b, since=since)
@@ -1149,6 +1847,15 @@ def build_fleet_performance(
         account_curve_abs = _absolute_account_curve(acct_pts)
         # % curve is deposit-adjusted (TWR): transfers don't count as returns.
         account_curve = _twr_account_curve(acct_pts)
+        corrected = _bot_corrected_payload(
+            abs_points=acct_pts,
+            venue=venue,
+            account=str(b.get("equity_account") or instance),
+            since=since,
+            until_ts=now_ts,
+            bot_status=live_row.get("status") if live_row else None,
+            bot_disabled=bool(b.get("disabled")),
+        )
 
         series.append(
             {
@@ -1167,6 +1874,9 @@ def build_fleet_performance(
                 "trade_curve": trade_curve,
                 "account_curve": account_curve,
                 "account_curve_abs": account_curve_abs,
+                "corrected_curve": corrected["corrected_curve"],
+                "corrected_meta": corrected["corrected_meta"],
+                "cashflows": corrected["cashflows"],
                 "stats": stats,
                 "needs_backfill": bool(trades.empty) or not snapshots_fresh,
                 "last_snapshot_ts": last_snapshot_ts,
@@ -1180,6 +1890,13 @@ def build_fleet_performance(
         series, hours=hours, now_ts=now_ts
     )
     portfolio = _build_portfolio_curve(series, thin=False)
+    portfolio["corrected_curve"] = _equal_weight_pct_mean(
+        [
+            list(row.get("corrected_curve") or [])
+            for row in series
+            if row.get("corrected_curve")
+        ]
+    )
     return {
         "ok": True,
         "hours": hours,
@@ -1191,65 +1908,214 @@ def build_fleet_performance(
     }
 
 
+def _bot_registry_by_instance() -> Dict[str, Dict[str, Any]]:
+    """Map every known strategy_instance alias → bot (primary + trade_instances)."""
+    out: Dict[str, Dict[str, Any]] = {}
+    for b in fleet_bot_registry():
+        for inst in _trade_instances_for_bot(b):
+            out.setdefault(inst, b)
+        primary = str(b.get("strategy_instance") or "").strip()
+        if primary:
+            out.setdefault(primary, b)
+    return out
+
+
+def _activity_item_from_event(
+    *,
+    ts: Any,
+    venue: Any,
+    symbol: Any,
+    strategy_instance: str,
+    side: Any,
+    qty: Any,
+    price: Any,
+    stage: Any,
+    status: Any,
+    event_id: Any,
+    bot: Dict[str, Any],
+) -> Dict[str, Any]:
+    t_unix = int(pd.Timestamp(ts).timestamp()) if ts is not None else None
+    ts_iso = ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+    action = str(stage or "event")
+    return {
+        "id": str(event_id or f"event:{strategy_instance}:{ts_iso}:{action}"),
+        "kind": "event",
+        "t": t_unix,
+        "ts": ts_iso,
+        "venue": venue,
+        "symbol": symbol,
+        "strategy_instance": strategy_instance,
+        "bot_id": bot.get("id"),
+        "display_name": bot.get("display_name") or strategy_instance,
+        "action": action,
+        "side": side,
+        "qty": float(qty) if qty is not None else None,
+        "price": float(price) if price is not None else None,
+        "status": status,
+        "pnl_pct": None,
+        "color": bot.get("color"),
+        # Backward-compat aliases consumed by older clients.
+        "stage": action,
+        "event_id": event_id,
+    }
+
+
+def _activity_item_from_fill(
+    *,
+    row: pd.Series,
+    bot: Dict[str, Any],
+) -> Dict[str, Any]:
+    exit_ts = row.get("exit_ts")
+    t_unix = (
+        int(pd.Timestamp(exit_ts).timestamp())
+        if exit_ts is not None and pd.notna(exit_ts)
+        else None
+    )
+    ts_iso = (
+        exit_ts.isoformat()
+        if hasattr(exit_ts, "isoformat")
+        else (str(exit_ts) if exit_ts is not None else "")
+    )
+    action = str(row.get("exit_event") or "fill")
+    trade_id = str(row.get("trade_id") or f"fill:{bot.get('id')}:{ts_iso}")
+    inst = str(row.get("strategy_instance") or bot.get("strategy_instance") or "")
+    return {
+        "id": f"fill:{trade_id}",
+        "kind": "fill",
+        "t": t_unix,
+        "ts": ts_iso,
+        "venue": row.get("venue"),
+        "symbol": row.get("symbol"),
+        "strategy_instance": inst,
+        "bot_id": bot.get("id"),
+        "display_name": bot.get("display_name") or inst,
+        "action": action,
+        "side": row.get("side"),
+        "qty": float(row["qty"]) if pd.notna(row.get("qty")) else None,
+        "price": float(row["exit_price"]) if pd.notna(row.get("exit_price")) else None,
+        "status": "closed",
+        "pnl_pct": float(row["pnl_pct"]) if pd.notna(row.get("pnl_pct")) else None,
+        "color": bot.get("color"),
+        "trade_id": trade_id,
+        "exit_event": action,
+        "entry_ts": (
+            row["entry_ts"].isoformat()
+            if hasattr(row.get("entry_ts"), "isoformat")
+            else str(row.get("entry_ts") or "")
+        ),
+        "exit_ts": ts_iso,
+    }
+
+
 def build_fleet_activity(
     *,
     hours: Optional[float] = 168.0,
     limit: int = 500,
 ) -> Dict[str, Any]:
-    since = _effective_since(hours)
-    registry = {str(b["strategy_instance"]): b for b in fleet_bot_registry()}
-    instances = list(registry.keys())
-    if not instances:
-        return {"ok": True, "events": [], "ts": pd.Timestamp.now("UTC").isoformat()}
+    """Unified activity feed: execution events + closed-trade fills.
 
-    where = ["strategy_instance = any(%(instances)s::text[])"]
-    params: Dict[str, Any] = {
-        "instances": instances,
-        "limit": int(max(1, limit)),
-    }
-    if since is not None:
-        where.append("ts >= %(since)s")
-        params["since"] = since.to_pydatetime()
-
-    sql = f"""
-        select ts, venue, symbol, strategy_instance, side, qty, price,
-               execution_stage, status, event_id
-        from execution_events
-        where {' and '.join(where)}
-        order by ts desc
-        limit %(limit)s
+    Single source of truth for the Fleet Cockpit Activity panel. Fills carry
+    PnL; events carry execution stage/status (entries, exits, TPs, SLs, flips).
     """
-    events: List[Dict[str, Any]] = []
-    try:
-        with get_conn() as conn, conn.cursor() as cur:
-            cur.execute(sql, params)
-            rows = cur.fetchall() or []
-        for r in rows:
-            inst = str(r[3] or "")
-            bot = registry.get(inst) or {}
-            events.append(
-                {
-                    "t": int(pd.Timestamp(r[0]).timestamp()) if r[0] is not None else None,
-                    "ts": r[0].isoformat() if hasattr(r[0], "isoformat") else str(r[0]),
-                    "venue": r[1],
-                    "symbol": r[2],
-                    "strategy_instance": inst,
-                    "bot_id": bot.get("id"),
-                    "display_name": bot.get("display_name") or inst,
-                    "side": r[4],
-                    "qty": float(r[5]) if r[5] is not None else None,
-                    "price": float(r[6]) if r[6] is not None else None,
-                    "stage": r[7],
-                    "status": r[8],
-                    "event_id": r[9],
-                    "color": bot.get("color"),
-                }
-            )
-    except Exception as e:
-        log.warning("fleet activity query failed: %s", e)
-        return {"ok": False, "events": [], "error": str(e), "ts": pd.Timestamp.now("UTC").isoformat()}
+    since = _effective_since(hours)
+    registry = _bot_registry_by_instance()
+    bots = fleet_bot_registry()
+    instances = list(registry.keys())
+    cap = int(max(1, min(limit, 2000)))
+    if not instances and not bots:
+        return {
+            "ok": True,
+            "items": [],
+            "events": [],
+            "count": 0,
+            "ts": pd.Timestamp.now("UTC").isoformat(),
+        }
 
-    return {"ok": True, "events": events, "count": len(events), "ts": pd.Timestamp.now("UTC").isoformat()}
+    items: List[Dict[str, Any]] = []
+
+    # --- execution_events (all trade_instance aliases) ---
+    if instances:
+        where = ["strategy_instance = any(%(instances)s::text[])"]
+        params: Dict[str, Any] = {
+            "instances": instances,
+            "limit": cap,
+        }
+        if since is not None:
+            where.append("ts >= %(since)s")
+            params["since"] = since.to_pydatetime()
+
+        sql = f"""
+            select ts, venue, symbol, strategy_instance, side, qty, price,
+                   execution_stage, status, event_id
+            from execution_events
+            where {' and '.join(where)}
+            order by ts desc
+            limit %(limit)s
+        """
+        try:
+            with get_conn() as conn, conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall() or []
+            for r in rows:
+                inst = str(r[3] or "")
+                bot = registry.get(inst) or {}
+                items.append(
+                    _activity_item_from_event(
+                        ts=r[0],
+                        venue=r[1],
+                        symbol=r[2],
+                        strategy_instance=inst,
+                        side=r[4],
+                        qty=r[5],
+                        price=r[6],
+                        stage=r[7],
+                        status=r[8],
+                        event_id=r[9],
+                        bot=bot,
+                    )
+                )
+        except Exception as e:
+            log.warning("fleet activity events query failed: %s", e)
+            return {
+                "ok": False,
+                "items": [],
+                "events": [],
+                "error": str(e),
+                "ts": pd.Timestamp.now("UTC").isoformat(),
+            }
+
+    # --- closed_trades as fill rows (PnL-bearing) ---
+    per_bot_limit = max(cap, 50)
+    for bot in bots:
+        try:
+            df = _load_closed_trades_for_bot(bot, since=since, limit=per_bot_limit)
+        except Exception as e:
+            log.warning(
+                "fleet activity fills load failed for %s: %s",
+                bot.get("id"),
+                e,
+            )
+            continue
+        if df.empty:
+            continue
+        work = df.sort_values("exit_ts", ascending=False).head(per_bot_limit)
+        for _, row in work.iterrows():
+            items.append(_activity_item_from_fill(row=row, bot=bot))
+
+    items.sort(key=lambda x: (x.get("t") is None, -(x.get("t") or 0)))
+    items = items[:cap]
+
+    # Legacy `events` = execution rows only (older clients).
+    events = [i for i in items if i.get("kind") == "event"]
+    return {
+        "ok": True,
+        "items": items,
+        "events": events,
+        "count": len(items),
+        "fill_count": sum(1 for i in items if i.get("kind") == "fill"),
+        "event_count": len(events),
+        "ts": pd.Timestamp.now("UTC").isoformat(),
+    }
 
 
 def build_fleet_trades(
@@ -1271,7 +2137,7 @@ def build_fleet_trades(
     venue = str((bot or {}).get("venue") or "kucoin")
     since = _effective_since(hours)
     if bot:
-        df = _load_closed_trades_for_bot(bot, since=since, limit=max(limit * 3, limit))
+        df = _load_display_trades_for_bot(bot, since=since, limit=max(limit * 3, limit))
     else:
         df = _load_closed_trades_for_instance(
             strategy_instance=instance,
@@ -1306,6 +2172,79 @@ def build_fleet_trades(
         "ok": True,
         "strategy_instance": instance,
         "display_name": (bot or {}).get("display_name") or instance,
+        "trades": trades,
+        "count": len(trades),
+        "ts": pd.Timestamp.now("UTC").isoformat(),
+    }
+
+
+def build_kraken_exchange_trades(
+    *,
+    since_ms: Optional[int] = None,
+    limit: int = 500,
+) -> Dict[str, Any]:
+    """Return account-specific Kraken position fills from the exchange API."""
+    bot = next(
+        (
+            row
+            for row in fleet_bot_registry()
+            if str(row.get("venue") or "").lower() == "kraken"
+        ),
+        {
+            "id": "kraken-legacy",
+            "display_name": "Kraken Legacy",
+            "strategy_instance": "kraken_bot",
+            "venue": "kraken",
+            "symbol": "SOL-USD",
+        },
+    )
+    since = (
+        pd.Timestamp(int(since_ms), unit="ms", tz="UTC")
+        if since_ms is not None
+        else _history_start_ts()
+    )
+    frame = _load_kraken_exchange_trades_for_bot(
+        bot,
+        since=since,
+        limit=int(max(1, min(limit, 2000))),
+        allow_remote=False,
+    )
+    trades: List[Dict[str, Any]] = []
+    if not frame.empty:
+        for _, row in frame.sort_values("exit_ts", ascending=False).iterrows():
+            trades.append(
+                {
+                    "trade_id": row.get("trade_id"),
+                    "side": row.get("side"),
+                    "qty": float(row["qty"]) if pd.notna(row.get("qty")) else None,
+                    "entry_price": (
+                        float(row["entry_price"])
+                        if pd.notna(row.get("entry_price"))
+                        else None
+                    ),
+                    "exit_price": (
+                        float(row["exit_price"])
+                        if pd.notna(row.get("exit_price"))
+                        else None
+                    ),
+                    "pnl_pct": (
+                        float(row["pnl_pct"])
+                        if pd.notna(row.get("pnl_pct"))
+                        else None
+                    ),
+                    "entry_ts": row["entry_ts"].isoformat(),
+                    "exit_ts": row["exit_ts"].isoformat(),
+                    "exit_event": row.get("exit_event"),
+                    "strategy_instance": row.get("strategy_instance"),
+                    "venue": "kraken",
+                    "symbol": row.get("symbol"),
+                    "bot_id": bot.get("id"),
+                    "display_name": bot.get("display_name"),
+                }
+            )
+    return {
+        "ok": True,
+        "source": "kraken_futures_position_history",
         "trades": trades,
         "count": len(trades),
         "ts": pd.Timestamp.now("UTC").isoformat(),

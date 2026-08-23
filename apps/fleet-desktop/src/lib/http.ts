@@ -6,6 +6,9 @@ export async function fleetFetch(
 ): Promise<Response> {
   const headers = new Headers(init.headers || {});
   if (!headers.has("Accept")) headers.set("Accept", "application/json");
+  // Fleet cockpit must never show a cached board after Refresh / poll.
+  if (!headers.has("Cache-Control")) headers.set("Cache-Control", "no-cache");
+  if (!headers.has("Pragma")) headers.set("Pragma", "no-cache");
 
   const isTauri =
     typeof window !== "undefined" &&
@@ -24,5 +27,5 @@ export async function fleetFetch(
     }
   }
 
-  return fetch(url, { ...init, headers });
+  return fetch(url, { ...init, headers, cache: "no-store" });
 }

@@ -12,10 +12,93 @@ import pandas as pd
 
 from quant.execution.fleet_api import (
     _compounded_trade_curve,
+    _kraken_position_events_frame,
+    _load_display_trades_for_bot,
+    _load_equity_snapshots,
     _normalize_account_curve,
     build_fleet_performance,
     fleet_bot_registry,
 )
+
+
+class EquitySnapshotLoadTests(unittest.TestCase):
+    def test_default_load_keeps_complete_history_without_sql_limit(self) -> None:
+        executed: Dict[str, Any] = {}
+
+        class _Cur:
+            def execute(self, sql: str, params: Dict[str, Any]) -> None:
+                executed["sql"] = " ".join(sql.split()).lower()
+                executed["params"] = params
+
+            def fetchall(self) -> List[Any]:
+                return []
+
+            def __enter__(self) -> "_Cur":
+                return self
+
+            def __exit__(self, *_a: Any) -> None:
+                return None
+
+        class _Conn:
+            def cursor(self) -> _Cur:
+                return _Cur()
+
+            def __enter__(self) -> "_Conn":
+                return self
+
+            def __exit__(self, *_a: Any) -> None:
+                return None
+
+        with patch("quant.execution.fleet_api.get_conn", return_value=_Conn()):
+            rows = _load_equity_snapshots(venue="kucoin", account="pilot")
+
+        self.assertEqual(rows, [])
+        self.assertNotIn(" limit ", f" {executed['sql']} ")
+        self.assertTrue(str(executed["sql"]).endswith("order by ts asc"))
+        self.assertNotIn("limit", executed["params"])
+
+    def test_limit_selects_latest_rows_then_returns_them_chronologically(self) -> None:
+        older = pd.Timestamp("2026-08-22T10:00:00Z")
+        newer = pd.Timestamp("2026-08-23T10:00:00Z")
+        executed: Dict[str, Any] = {}
+
+        class _Cur:
+            def execute(self, sql: str, params: Dict[str, Any]) -> None:
+                executed["sql"] = " ".join(sql.split()).lower()
+                executed["params"] = params
+
+            def fetchall(self) -> List[Any]:
+                return [
+                    (older, 10.0, "USDT", "pilot", "writer"),
+                    (newer, 11.0, "USDT", "pilot", "writer"),
+                ]
+
+            def __enter__(self) -> "_Cur":
+                return self
+
+            def __exit__(self, *_a: Any) -> None:
+                return None
+
+        class _Conn:
+            def cursor(self) -> _Cur:
+                return _Cur()
+
+            def __enter__(self) -> "_Conn":
+                return self
+
+            def __exit__(self, *_a: Any) -> None:
+                return None
+
+        with patch("quant.execution.fleet_api.get_conn", return_value=_Conn()):
+            rows = _load_equity_snapshots(
+                venue="kucoin", account="pilot", limit=5000
+            )
+
+        sql = str(executed["sql"])
+        self.assertIn("order by ts desc limit %(limit)s", sql)
+        self.assertTrue(sql.endswith("order by ts asc"))
+        self.assertEqual(executed["params"]["limit"], 5000)
+        self.assertEqual([row["equity"] for row in rows], [10.0, 11.0])
 
 
 def _trade(exit_ts: str, pnl_pct: float, trade_id: str = "t") -> Dict[str, Any]:
@@ -34,6 +117,85 @@ def _trade(exit_ts: str, pnl_pct: float, trade_id: str = "t") -> Dict[str, Any]:
         "strategy": "test",
         "strategy_instance": "sol-pilot-canonical",
     }
+
+
+class KrakenDirectTradeTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.bot = {
+            "id": "kraken-legacy",
+            "display_name": "Kraken Legacy",
+            "strategy_instance": "kraken_bot",
+            "venue": "kraken",
+            "symbol": "SOL-USD",
+        }
+
+    def test_position_events_map_closes_and_openings(self) -> None:
+        frame = _kraken_position_events_frame(
+            [
+                {
+                    "executionUid": "close-long",
+                    "updateReason": "trade",
+                    "positionChange": "close",
+                    "oldPosition": "0.5",
+                    "newPosition": "0",
+                    "oldAverageEntryPrice": "100",
+                    "executionPrice": "110",
+                    "executionSize": "0.5",
+                    "fillTime": 1_800_000,
+                },
+                {
+                    "executionUid": "open-short",
+                    "updateReason": "trade",
+                    "positionChange": "open",
+                    "oldPosition": "0",
+                    "newPosition": "-0.25",
+                    "newAverageEntryPrice": "108",
+                    "executionPrice": "108",
+                    "executionSize": "0.25",
+                    "fillTime": 1_900_000,
+                },
+            ],
+            bot=self.bot,
+            since=pd.Timestamp(0, unit="s", tz="UTC"),
+        )
+
+        self.assertEqual(frame["trade_id"].tolist(), [
+            "kraken-position:close-long",
+            "kraken-position:open-short",
+        ])
+        self.assertAlmostEqual(float(frame.iloc[0]["pnl_pct"]), 10.0)
+        self.assertEqual(frame.iloc[0]["side"], "long")
+        self.assertTrue(pd.isna(frame.iloc[1]["pnl_pct"]))
+        self.assertEqual(frame.iloc[1]["side"], "short")
+
+    @patch("quant.execution.fleet_api._load_kraken_exchange_trades_for_bot")
+    @patch("quant.execution.fleet_api._load_execution_activity_trades_for_bot")
+    @patch("quant.execution.fleet_api._load_closed_trades_for_bot")
+    def test_display_loader_merges_and_deduplicates_exchange_truth(
+        self,
+        load_closed,
+        load_inferred,
+        load_direct,
+    ) -> None:
+        db = pd.DataFrame([_trade("2026-07-27T14:25:13Z", 2.0, "same")])
+        db["venue"] = "kraken"
+        db["strategy_instance"] = "kraken_bot"
+        direct = pd.DataFrame(
+            [
+                {**db.iloc[0].to_dict(), "pnl_pct": 9.0},
+                _trade("2026-08-12T12:00:00Z", -1.0, "new"),
+            ]
+        )
+        direct["venue"] = "kraken"
+        direct["strategy_instance"] = "kraken_bot"
+        load_closed.return_value = db
+        load_inferred.return_value = pd.DataFrame()
+        load_direct.return_value = direct
+
+        out = _load_display_trades_for_bot(self.bot, limit=20)
+
+        self.assertEqual(out["trade_id"].tolist(), ["same", "new"])
+        self.assertEqual(float(out.iloc[0]["pnl_pct"]), 2.0)
 
 
 class CompoundedTradeCurveTests(unittest.TestCase):
@@ -118,6 +280,122 @@ class TwrAccountCurveTests(unittest.TestCase):
         self.assertAlmostEqual(out[2]["equity_pct"], -1.0, places=5)
 
 
+class CorrectedReturnCurveTests(unittest.TestCase):
+    def test_confirmed_small_deposit_is_not_mistaken_for_performance(self) -> None:
+        from quant.execution.fleet_api import (
+            _cashflow_corrected_curve,
+            _twr_account_curve,
+        )
+
+        points = [
+            {"t": 100, "equity": 100.0},
+            {"t": 200, "equity": 107.0},
+        ]
+        flows = [
+            {"t": 150, "reporting_amount": 5.0, "equity_after": None},
+        ]
+
+        ledger_curve = _cashflow_corrected_curve(points, flows)
+        heuristic_curve = _twr_account_curve(points, jump_threshold_pct=10.0)
+
+        self.assertAlmostEqual(ledger_curve[-1]["equity_pct"], 2.0, places=5)
+        self.assertAlmostEqual(heuristic_curve[-1]["equity_pct"], 7.0, places=5)
+
+    def test_confirmed_deposit_and_withdrawal_are_removed(self) -> None:
+        from quant.execution.fleet_api import _cashflow_corrected_curve
+
+        points = [
+            {"t": 100, "equity": 100.0},
+            {"t": 200, "equity": 160.0},
+            {"t": 300, "equity": 132.0},
+        ]
+        flows = [
+            {"t": 150, "reporting_amount": 50.0, "equity_after": None},
+            {"t": 250, "reporting_amount": -20.0, "equity_after": None},
+        ]
+        curve = _cashflow_corrected_curve(points, flows)
+        self.assertEqual(curve[0], {"t": 100, "equity_pct": 0.0})
+        self.assertAlmostEqual(curve[1]["equity_pct"], 10.0, places=5)
+        self.assertAlmostEqual(curve[2]["equity_pct"], 4.5, places=5)
+
+    def test_stale_ledger_coverage_uses_twr_fallback(self) -> None:
+        from quant.execution.fleet_api import _bot_corrected_payload
+
+        state = {
+            "coverage_start": pd.Timestamp(90, unit="s", tz="UTC"),
+            "coverage_end": pd.Timestamp(200, unit="s", tz="UTC"),
+            "last_success_at": pd.Timestamp(200, unit="s", tz="UTC"),
+            "last_error": None,
+            "source": "test",
+        }
+        with patch(
+            "quant.execution.fleet_api._load_cashflow_data",
+            return_value=([], state),
+        ):
+            result = _bot_corrected_payload(
+                abs_points=[
+                    {"t": 100, "equity": 100.0},
+                    {"t": 300, "equity": 150.0},
+                ],
+                venue="kucoin",
+                account="test",
+                since=pd.Timestamp(100, unit="s", tz="UTC"),
+                until_ts=300,
+                bot_status="live",
+                bot_disabled=False,
+            )
+        self.assertEqual(result["corrected_meta"]["method"], "jump_twr")
+        self.assertEqual(
+            result["corrected_meta"]["reason"],
+            "ledger_coverage_incomplete",
+        )
+        self.assertAlmostEqual(
+            result["corrected_curve"][-1]["equity_pct"], 0.0, places=5
+        )
+
+    def test_complete_ledger_coverage_uses_confirmed_flows(self) -> None:
+        from quant.execution.fleet_api import _bot_corrected_payload
+
+        state = {
+            "coverage_start": pd.Timestamp(90, unit="s", tz="UTC"),
+            "coverage_end": pd.Timestamp(300, unit="s", tz="UTC"),
+            "last_success_at": pd.Timestamp(300, unit="s", tz="UTC"),
+            "last_error": None,
+            "source": "test",
+        }
+        flows = [
+            {
+                "t": 150,
+                "reporting_amount": 50.0,
+                "direction": "in",
+                "currency": "USDT",
+                "flow_type": "TransferIn",
+                "equity_after": None,
+            }
+        ]
+        with patch(
+            "quant.execution.fleet_api._load_cashflow_data",
+            return_value=(flows, state),
+        ):
+            result = _bot_corrected_payload(
+                abs_points=[
+                    {"t": 100, "equity": 100.0},
+                    {"t": 300, "equity": 160.0},
+                ],
+                venue="kucoin",
+                account="test",
+                since=pd.Timestamp(100, unit="s", tz="UTC"),
+                until_ts=300,
+                bot_status="live",
+                bot_disabled=False,
+            )
+        self.assertEqual(result["corrected_meta"]["method"], "ledger")
+        self.assertEqual(result["corrected_meta"]["flow_count"], 1)
+        self.assertAlmostEqual(
+            result["corrected_curve"][-1]["equity_pct"], 10.0, places=5
+        )
+
+
 class FleetRegistryTests(unittest.TestCase):
     def test_default_registry_includes_pilots_and_kraken(self) -> None:
         with patch.dict(os.environ, {"FLEET_BOTS_JSON": ""}, clear=False):
@@ -198,13 +476,14 @@ class PortfolioAggregateTests(unittest.TestCase):
         self.assertAlmostEqual(by_t[200], 32.0, places=5)  # 12 + 20
         self.assertAlmostEqual(by_t[250], 34.0, places=5)  # 12 + 22
         self.assertAlmostEqual(port["live_equity"], 30.0, places=5)
-        # Equal-weight % of each bot's own-base return (not sum-then-rebase).
+        # Portfolio TWR compounds the summed equity and ignores the capital
+        # step from the late-arriving second account.
         pct_by_t = {p["t"]: p["equity_pct"] for p in port["account_curve"]}
         self.assertAlmostEqual(pct_by_t[100], 0.0, places=5)
-        self.assertAlmostEqual(pct_by_t[150], 0.0, places=5)  # A 0% + B 0%
-        self.assertAlmostEqual(pct_by_t[200], 10.0, places=5)  # A +20% + B 0%
-        self.assertAlmostEqual(pct_by_t[250], 15.0, places=5)  # A +20% + B +10%
-        self.assertEqual(port["note"], "equal_weight_pct_mean_abs_sum")
+        self.assertAlmostEqual(pct_by_t[150], 0.0, places=5)  # capital step excluded
+        self.assertAlmostEqual(pct_by_t[200], 6.6666667, places=5)  # 30 -> 32
+        self.assertAlmostEqual(pct_by_t[250], 13.3333333, places=5)  # 32 -> 34
+        self.assertEqual(port["note"], "portfolio_twr_from_abs_sum")
 
     def test_portfolio_pct_ignores_late_large_account_join_spike(self) -> None:
         """Regression: pilots ~$15 then Kraken ~$360 must not rebase to +2000%+."""
@@ -231,10 +510,12 @@ class PortfolioAggregateTests(unittest.TestCase):
         ]
         port = _build_portfolio_curve(series)
         pct_by_t = {p["t"]: p["equity_pct"] for p in port["account_curve"]}
-        # Old bug: (14.7+366.3)/15 - 1 ≈ +2440%. Equal-weight stays near bot %.
+        # The large late capital step is excluded; only portfolio growth remains.
         self.assertAlmostEqual(pct_by_t[200], -2.0, places=5)
-        self.assertAlmostEqual(pct_by_t[250], -1.0, places=5)  # (-2 + 0) / 2
-        self.assertAlmostEqual(pct_by_t[300], (-2.0 + 1.75) / 2.0, places=5)
+        self.assertAlmostEqual(pct_by_t[250], -2.0, places=5)  # deposit excluded
+        # Exact capital-weighted portfolio result: -2%, followed by
+        # 381 / 374.7 - 1 = +1.681345%, compounds to -0.352282%.
+        self.assertAlmostEqual(pct_by_t[300], -0.352282, places=5)
         self.assertLess(abs(pct_by_t[300]), 5.0)
         # Abs sum still honest about total capital step-up when Kraken joins.
         abs_by_t = {p["t"]: p["equity"] for p in port["account_curve_abs"]}
@@ -458,6 +739,246 @@ class MultiInstanceTradesTests(unittest.TestCase):
         self.assertEqual(set(out["trade_id"]), {"a", "b"})
 
 
+class ExecutionActivityTradeTests(unittest.TestCase):
+    @staticmethod
+    def _row(
+        *,
+        event_id: str,
+        ts: str,
+        side: str,
+        reduce_only: bool,
+        reason: str,
+        before: int,
+        after: int,
+        price: float,
+        instance: str = "sol-pilot-canonical",
+    ) -> tuple[Any, ...]:
+        return (
+            event_id,
+            pd.Timestamp(ts),
+            "kucoin",
+            "SOLUSDT",
+            instance,
+            side,
+            1.0,
+            price,
+            reduce_only,
+            "sent",
+            f"quant:tv:{reason}:1",
+            {
+                "reason_code": f"tv_{reason}",
+                "position_before": before,
+                "position_after": after,
+            },
+        )
+
+    def test_completed_activity_round_trip_becomes_display_trade(self) -> None:
+        from quant.execution.fleet_api import _trades_from_execution_activity
+
+        rows = [
+            self._row(
+                event_id="open",
+                ts="2026-07-22T01:00:00Z",
+                side="buy",
+                reduce_only=False,
+                reason="entry",
+                before=0,
+                after=1,
+                price=100.0,
+            ),
+            self._row(
+                event_id="close",
+                ts="2026-07-22T02:00:00Z",
+                side="sell",
+                reduce_only=True,
+                reason="exit",
+                before=1,
+                after=0,
+                price=102.0,
+            ),
+        ]
+        bot = {
+            "id": "imba-runner",
+            "strategy_instance": "sol-pilot-canonical",
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+        }
+        out = _trades_from_execution_activity(rows, bot=bot)
+        self.assertEqual(len(out), 1)
+        trade = out.iloc[0]
+        self.assertEqual(trade["trade_id"], "activity:close")
+        self.assertEqual(trade["side"], "long")
+        self.assertAlmostEqual(float(trade["pnl_pct"]), 2.0)
+        self.assertEqual(trade["display_source"], "execution_activity")
+
+    def test_partial_take_profit_does_not_complete_trade(self) -> None:
+        from quant.execution.fleet_api import _trades_from_execution_activity
+
+        rows = [
+            self._row(
+                event_id="open",
+                ts="2026-07-22T01:00:00Z",
+                side="sell",
+                reduce_only=False,
+                reason="entry",
+                before=0,
+                after=-1,
+                price=100.0,
+            ),
+            self._row(
+                event_id="partial",
+                ts="2026-07-22T01:30:00Z",
+                side="buy",
+                reduce_only=True,
+                reason="tp1",
+                before=-1,
+                after=-1,
+                price=98.0,
+            ),
+            self._row(
+                event_id="close",
+                ts="2026-07-22T02:00:00Z",
+                side="buy",
+                reduce_only=True,
+                reason="tp2",
+                before=-1,
+                after=0,
+                price=96.0,
+            ),
+        ]
+        bot = {
+            "id": "imba-runner",
+            "strategy_instance": "sol-pilot-canonical",
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+        }
+        out = _trades_from_execution_activity(rows, bot=bot)
+        self.assertEqual(list(out["trade_id"]), ["activity:close"])
+        self.assertAlmostEqual(float(out.iloc[0]["pnl_pct"]), 4.0)
+
+    def test_opposite_open_activity_closes_prior_display_leg(self) -> None:
+        from quant.execution.fleet_api import _trades_from_execution_activity
+
+        rows = [
+            self._row(
+                event_id="open-long",
+                ts="2026-07-22T01:00:00Z",
+                side="buy",
+                reduce_only=False,
+                reason="flip_entry",
+                before=0,
+                after=1,
+                price=100.0,
+            ),
+            self._row(
+                event_id="reverse-short",
+                ts="2026-07-22T02:00:00Z",
+                side="sell",
+                reduce_only=False,
+                reason="flip_entry",
+                before=0,
+                after=-1,
+                price=102.0,
+            ),
+            self._row(
+                event_id="reverse-long",
+                ts="2026-07-22T03:00:00Z",
+                side="buy",
+                reduce_only=False,
+                reason="flip_entry",
+                before=0,
+                after=1,
+                price=99.0,
+            ),
+        ]
+        bot = {
+            "id": "pure-imbatp",
+            "strategy_instance": "sol-pilot-pc3axis",
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+        }
+        out = _trades_from_execution_activity(rows, bot=bot)
+        self.assertEqual(
+            list(out["trade_id"]),
+            ["activity:reverse-short", "activity:reverse-long"],
+        )
+        self.assertEqual(list(out["side"]), ["long", "short"])
+        self.assertEqual(set(out["exit_event"]), {"activity_reversal"})
+        self.assertAlmostEqual(float(out.iloc[0]["pnl_pct"]), 2.0)
+        self.assertAlmostEqual(float(out.iloc[1]["pnl_pct"]), 100.0 * (1.0 - 99.0 / 102.0))
+
+    def test_closed_trade_wins_over_matching_activity_inference(self) -> None:
+        from quant.execution.fleet_api import _load_display_trades_for_bot
+
+        exit_ts = pd.Timestamp("2026-07-22T02:00:00Z")
+        closed = pd.DataFrame(
+            [
+                {
+                    **_trade(exit_ts.isoformat(), 1.5, "durable"),
+                    "symbol": "SOLUSDT",
+                }
+            ]
+        )
+        inferred = pd.DataFrame(
+            [
+                {
+                    **_trade((exit_ts + pd.Timedelta(seconds=2)).isoformat(), 1.4, "activity:close"),
+                    "symbol": "SOL-USDT",
+                    "display_source": "execution_activity",
+                }
+            ]
+        )
+        bot = {
+            "id": "imba-runner",
+            "strategy_instance": "sol-pilot-canonical",
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+        }
+        with patch(
+            "quant.execution.fleet_api._load_closed_trades_for_bot",
+            return_value=closed,
+        ), patch(
+            "quant.execution.fleet_api._load_execution_activity_trades_for_bot",
+            return_value=inferred,
+        ):
+            out = _load_display_trades_for_bot(bot)
+        self.assertEqual(list(out["trade_id"]), ["durable"])
+
+    def test_fleet_trade_view_uses_activity_fallback(self) -> None:
+        from quant.execution.fleet_api import build_fleet_trades
+
+        bot = {
+            "id": "imba-runner",
+            "display_name": "imba5",
+            "strategy_instance": "sol-pilot-canonical",
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+        }
+        inferred = pd.DataFrame(
+            [
+                {
+                    **_trade("2026-07-22T02:00:00Z", 2.0, "activity:close"),
+                    "strategy_instance": "sol-pilot-canonical",
+                }
+            ]
+        )
+        with patch(
+            "quant.execution.fleet_api.fleet_bot_registry",
+            return_value=[bot],
+        ), patch(
+            "quant.execution.fleet_api._load_display_trades_for_bot",
+            return_value=inferred,
+        ):
+            out = build_fleet_trades(
+                strategy_instance="sol-pilot-canonical",
+                hours=0,
+            )
+        self.assertEqual(out["count"], 1)
+        self.assertEqual(out["trades"][0]["trade_id"], "activity:close")
+        self.assertEqual(out["trades"][0]["bot_id"], "imba-runner")
+        self.assertEqual(out["trades"][0]["display_name"], "imba5")
+
+
 class CapitalizationLiveEquityTests(unittest.TestCase):
     def test_prefers_health_equity_over_snapshots(self) -> None:
         from quant.execution.fleet_api import build_fleet_capitalization
@@ -492,6 +1013,147 @@ class CapitalizationLiveEquityTests(unittest.TestCase):
         self.assertEqual(out["accounts"][0]["equity"], 250.5)
         self.assertEqual(out["accounts"][0]["available"], 180.0)
         self.assertEqual(out["accounts"][0]["equity_source"], "kucoin_live")
+
+
+class FleetActivityUnifiedTests(unittest.TestCase):
+    def test_item_helpers_unified_shape(self) -> None:
+        from quant.execution.fleet_api import (
+            _activity_item_from_event,
+            _activity_item_from_fill,
+        )
+
+        bot = {
+            "id": "quant-main",
+            "display_name": "Quant",
+            "strategy_instance": "quant",
+            "color": "#9a8f6a",
+        }
+        ts = pd.Timestamp("2026-07-24T12:00:00Z")
+        event = _activity_item_from_event(
+            ts=ts,
+            venue="kucoin",
+            symbol="SOLUSDT",
+            strategy_instance="quant",
+            side="buy",
+            qty=10.0,
+            price=75.0,
+            stage="market_fill",
+            status="sent",
+            event_id="e1",
+            bot=bot,
+        )
+        self.assertEqual(event["kind"], "event")
+        self.assertEqual(event["action"], "market_fill")
+        self.assertEqual(event["status"], "sent")
+        self.assertIsNone(event["pnl_pct"])
+
+        fill_row = pd.Series(
+            {
+                "trade_id": "t1",
+                "side": "long",
+                "qty": 10.0,
+                "exit_price": 76.0,
+                "pnl_pct": 1.25,
+                "entry_ts": ts,
+                "exit_ts": ts,
+                "exit_event": "tp_exit",
+                "strategy_instance": "quant",
+                "venue": "kucoin",
+                "symbol": "SOLUSDT",
+            }
+        )
+        fill = _activity_item_from_fill(row=fill_row, bot=bot)
+        self.assertEqual(fill["kind"], "fill")
+        self.assertEqual(fill["action"], "tp_exit")
+        self.assertEqual(fill["status"], "closed")
+        self.assertAlmostEqual(fill["pnl_pct"], 1.25)
+
+    def test_build_fleet_activity_merges_events_and_fills(self) -> None:
+        from quant.execution.fleet_api import build_fleet_activity
+
+        bot = {
+            "id": "quant-main",
+            "display_name": "Quant",
+            "strategy_instance": "quant",
+            "trade_instances": ["quant", "live_executor"],
+            "venue": "kucoin",
+            "symbol": "SOL-USDT",
+            "color": "#9a8f6a",
+        }
+        ts = pd.Timestamp("2026-07-24T12:00:00Z")
+
+        class _Cur:
+            def execute(self, *_a: Any, **_k: Any) -> None:
+                return None
+
+            def fetchall(self) -> List[Any]:
+                return [
+                    (
+                        ts,
+                        "kucoin",
+                        "SOLUSDT",
+                        "live_executor",
+                        "sell",
+                        5.0,
+                        74.0,
+                        "market_fill",
+                        "sent",
+                        "ev1",
+                    )
+                ]
+
+            def __enter__(self) -> "_Cur":
+                return self
+
+            def __exit__(self, *_a: Any) -> None:
+                return None
+
+        class _Conn:
+            def cursor(self) -> _Cur:
+                return _Cur()
+
+            def __enter__(self) -> "_Conn":
+                return self
+
+            def __exit__(self, *_a: Any) -> None:
+                return None
+
+        fills = pd.DataFrame(
+            [
+                {
+                    "trade_id": "t1",
+                    "side": "long",
+                    "qty": 5.0,
+                    "exit_price": 74.0,
+                    "pnl_pct": -0.5,
+                    "entry_ts": ts,
+                    "exit_ts": ts + pd.Timedelta(minutes=1),
+                    "exit_event": "sl_exit",
+                    "strategy_instance": "quant",
+                    "venue": "kucoin",
+                    "symbol": "SOLUSDT",
+                }
+            ]
+        )
+
+        with patch("quant.execution.fleet_api.fleet_bot_registry", return_value=[bot]), patch(
+            "quant.execution.fleet_api.get_conn", return_value=_Conn()
+        ), patch(
+            "quant.execution.fleet_api._load_closed_trades_for_bot", return_value=fills
+        ):
+            out = build_fleet_activity(hours=24, limit=50)
+
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["count"], 2)
+        kinds = {i["kind"] for i in out["items"]}
+        self.assertEqual(kinds, {"event", "fill"})
+        # Alias live_executor mapped to Quant bot.
+        event = next(i for i in out["items"] if i["kind"] == "event")
+        self.assertEqual(event["bot_id"], "quant-main")
+        self.assertEqual(event["display_name"], "Quant")
+        # Legacy events list excludes fills.
+        self.assertEqual(len(out["events"]), 1)
+        self.assertEqual(out["events"][0]["kind"], "event")
 
 
 if __name__ == "__main__":

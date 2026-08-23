@@ -44,7 +44,7 @@ export function StatusRail({
           <button
             key={bot.id}
             type="button"
-            title={`${bot.display_name} · ${status} — click trades, dbl-click isolate, right-click toggle`}
+            title={`${bot.display_name} · ${status} — click activity, dbl-click isolate, right-click toggle`}
             onClick={() => onOpenBot(bot.id)}
             onDoubleClick={() => onIsolate(isolated ? null : bot.id)}
             onContextMenu={(e) => {

@@ -61,6 +61,12 @@ Defaults match live Railway pilots + Kraken:
 
 Override server-side with `FLEET_BOTS_JSON`, or edit Settings locally (stored in `localStorage`).
 
+Kraken fills are read server-side; exchange credentials are never stored in the
+desktop app. The Kraken service exposes the authenticated, read-only
+`/api/fleet/kraken-position-trades` route. The Fleet API service can merge that
+history by setting `FLEET_KRAKEN_DIRECT_TRADES_URL` to the route URL and
+`FLEET_KRAKEN_READ_TOKEN` to the Kraken service's read token.
+
 ## API
 
 Mounted on the webhook server:
@@ -69,6 +75,7 @@ Mounted on the webhook server:
 - `GET /api/fleet/performance?hours=&instances=`
 - `GET /api/fleet/activity?hours=`
 - `GET /api/fleet/trades?instance=&limit=`
+- `GET /api/fleet/kraken-position-trades?since_ms=&limit=` (Kraken service; read-only)
 - `GET /api/fleet/capitalization`
 
 Auth: `WEBHOOK_TOKEN` via `Authorization: Bearer …`, `X-Webhook-Token`, or `?token=`.

@@ -6,12 +6,10 @@ import {
   type CSSProperties,
 } from "react";
 import {
-  fetchActivity,
+  fetchActivityFeed,
   fetchBots,
   fetchCapitalization,
   fetchPerformance,
-  fetchTrades,
-  fetchTradesForBots,
   probeConnection,
   type ConnectionProbe,
 } from "./api";
@@ -22,14 +20,17 @@ import { ActivityDrawer } from "./components/drawers/ActivityDrawer";
 import { CapitalizationDrawer } from "./components/drawers/CapitalizationDrawer";
 import { SettingsDrawer } from "./components/drawers/SettingsDrawer";
 import { StatsDrawer } from "./components/drawers/StatsDrawer";
-import { TradesDrawer } from "./components/drawers/TradesDrawer";
-import { downloadCsv } from "./lib/csv";
+import fleetRobotLogo from "./assets/fleet-robot-logo-transparent-v2.png";
 import {
-  type ActivityEvent,
+  correctedCurveOrJumpTwr,
+  rawCommonScopeReturnPct,
+  returnPctForView,
+} from "./lib/performanceMetrics";
+import {
+  type ActivityItem,
   type BotSeries,
   type CapitalAccount,
   type ChartMode,
-  type ClosedTrade,
   type FleetBot,
   type FleetClock,
   type FleetConfig,
@@ -43,23 +44,21 @@ const RANGES: RangeKey[] = ["24h", "7d", "30d", "all"];
 const CHART_MODES: Array<{ id: ChartMode; label: string }> = [
   { id: "account_abs", label: "Equity $" },
   { id: "account", label: "Equity %" },
+  { id: "corrected", label: "Bereinigt %" },
   { id: "trade", label: "Trade %" },
 ];
 
 const DRAWER_TITLES: Record<Exclude<DrawerId, null>, string> = {
-  activity: "Activity map",
-  trades: "Trades",
+  activity: "Activity",
   stats: "Stats compare",
   capital: "Capitalization & health",
   settings: "Settings",
 };
 
 /** Secondary surfaces only — never a second performance chart. */
-const PANEL_DRAWERS = [
-  ["activity", "Activity"],
-  ["trades", "Trades"],
-  ["stats", "Stats"],
+const RIGHT_DRAWERS = [
   ["capital", "Capital"],
+  ["stats", "Stats"],
   ["settings", "Settings"],
 ] as const;
 
@@ -68,16 +67,52 @@ function legendValue(s: BotSeries, mode: ChartMode): string {
     const abs = s.account_curve_abs || [];
     const last = abs.length ? abs[abs.length - 1].equity : s.live_equity;
     if (last == null || !Number.isFinite(last)) return "—";
-    const ccy = s.currency || (s.venue === "kraken" ? "USD" : "USDT");
-    return `${last.toFixed(2)} ${ccy}`;
+    return `$${last.toFixed(2)}`;
   }
   if (mode === "account") {
     const curve = s.account_curve || [];
     const last = curve.length ? curve[curve.length - 1].equity_pct : 0;
     return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%`;
   }
+  if (mode === "corrected") {
+    const curve = correctedCurveOrJumpTwr(
+      s.corrected_curve,
+      s.account_curve_abs,
+      10,
+      true,
+      s.account_curve,
+    );
+    if (!curve.length) return "—";
+    const last = curve[curve.length - 1].equity_pct;
+    const method = s.corrected_meta?.method;
+    const suffix =
+      method === "ledger"
+        ? " · Ledger"
+        : method === "jump_twr" || !s.corrected_curve?.length
+          ? " · TWR"
+          : "";
+    return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%${suffix}`;
+  }
   const pct = s.stats?.return_pct ?? 0;
   return `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`;
+}
+
+/** Hex → rgba for translucent legend swatches (stack mode). */
+function solidLegendFill(color: string, alpha = 0.55): string {
+  const hex = (color || "#f0b429").replace("#", "").trim();
+  const full =
+    hex.length === 3
+      ? hex
+          .split("")
+          .map((ch) => ch + ch)
+          .join("")
+      : hex;
+  if (full.length !== 6) return color;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  if (![r, g, b].every((n) => Number.isFinite(n))) return color;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 function portfolioLegendValue(p: PortfolioSeries | null, mode: ChartMode): string {
@@ -86,11 +121,23 @@ function portfolioLegendValue(p: PortfolioSeries | null, mode: ChartMode): strin
     const abs = p.account_curve_abs || [];
     const last = abs.length ? abs[abs.length - 1].equity : p.live_equity;
     if (last == null || !Number.isFinite(last)) return "—";
-    return `${last.toFixed(2)}`;
+    return `$${last.toFixed(2)}`;
   }
   if (mode === "account") {
     const curve = p.account_curve || [];
     const last = curve.length ? curve[curve.length - 1].equity_pct : 0;
+    return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%`;
+  }
+  if (mode === "corrected") {
+    const curve = correctedCurveOrJumpTwr(
+      p.corrected_curve,
+      p.account_curve_abs,
+      10,
+      true,
+      p.account_curve,
+    );
+    if (!curve.length) return "—";
+    const last = curve[curve.length - 1].equity_pct;
     return `${last >= 0 ? "+" : ""}${last.toFixed(2)}%`;
   }
   return "n/a";
@@ -114,16 +161,31 @@ export default function App() {
   const [showMaxDd, setShowMaxDd] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
-  const [activity, setActivity] = useState<ActivityEvent[]>([]);
-  const [trades, setTrades] = useState<ClosedTrade[]>([]);
+  const [activity, setActivity] = useState<ActivityItem[]>([]);
   const [tradeBotId, setTradeBotId] = useState<string | null>("__all__");
   const [accounts, setAccounts] = useState<CapitalAccount[]>([]);
   const [drawerLoading, setDrawerLoading] = useState(false);
   const [connection, setConnection] = useState<ConnectionProbe | null>(null);
   const [booting, setBooting] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  /** Bumped by Refresh so open drawers re-fetch without rewriting their SoT. */
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   const enabledIds = useMemo(
     () => new Set(config.bots.filter((b) => b.enabled).map((b) => b.id)),
+    [config.bots],
+  );
+
+  /** Stable bot list for activity SoT — must NOT track live `bots` (health poll). */
+  const activityBots = useMemo(
+    () =>
+      config.bots
+        .filter((b) => b.enabled)
+        .map((b) => ({
+          id: b.id,
+          strategy_instance: b.strategy_instance,
+          display_name: b.display_name,
+        })),
     [config.bots],
   );
 
@@ -132,13 +194,13 @@ export default function App() {
     saveConfig(next);
   }, []);
 
-  const refreshHealth = useCallback(async () => {
+  const refreshHealth = useCallback(async (fresh = false) => {
     try {
       // probe=false: the client probes health URLs itself (probeConnection);
       // asking the server to fan out to the same 6 URLs every poll doubled
       // every health check and could take longer than the poll interval.
       const [remote, probe] = await Promise.all([
-        fetchBots(config, false),
+        fetchBots(config, false, { fresh }),
         probeConnection(config),
       ]);
       setConnection(probe);
@@ -173,11 +235,18 @@ export default function App() {
     }
   }, [config]);
 
-  const refreshCurves = useCallback(async () => {
+  const refreshCurves = useCallback(async (fresh = false) => {
     try {
       const ids = [...enabledIds];
-      const perf = await fetchPerformance(config, range, ids);
-      setSeries(perf.series || []);
+      const perf = await fetchPerformance(config, range, ids, { fresh });
+      const colorById = new Map(config.bots.map((b) => [b.id, b.color]));
+      const named = (perf.series || []).map((s) => ({
+        ...s,
+        color: colorById.get(s.id) || s.color,
+        display_name:
+          config.bots.find((b) => b.id === s.id)?.display_name || s.display_name,
+      }));
+      setSeries(named);
       setPortfolio(perf.portfolio || null);
       setClock(perf.clock || null);
       setUpdatedAt(perf.ts || new Date().toISOString());
@@ -188,6 +257,19 @@ export default function App() {
       setBooting(false);
     }
   }, [config, range, enabledIds]);
+
+  const handleRefresh = useCallback(async () => {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.all([refreshHealth(true), refreshCurves(true)]);
+      // Force visible board clock — server perf.ts often unchanged on re-fetch.
+      setUpdatedAt(new Date().toISOString());
+      setRefreshNonce((n) => n + 1);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refreshing, refreshHealth, refreshCurves]);
 
   useEffect(() => {
     void refreshHealth();
@@ -208,58 +290,38 @@ export default function App() {
 
   useEffect(() => {
     if (drawer !== "activity") return;
+    let cancelled = false;
+    // Always mark loading for the soft "refreshing…" hint, but ActivityDrawer
+    // only shows the empty spinner when items are empty — never remounts on
+    // health-poll (bots intentionally omitted from deps).
     setDrawerLoading(true);
-    void fetchActivity(config, range)
-      .then(setActivity)
-      .catch((e) => setError(String(e)))
-      .finally(() => setDrawerLoading(false));
-  }, [drawer, config, range]);
+    const run = async () => {
+      try {
+        const fresh = refreshNonce > 0;
+        const feed = await fetchActivityFeed(config, range, activityBots, {
+          fresh,
+        });
+        if (!cancelled) setActivity(feed);
+      } catch (e) {
+        if (!cancelled) setError(String(e));
+      } finally {
+        if (!cancelled) setDrawerLoading(false);
+      }
+    };
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [drawer, activityBots, config, range, refreshNonce]);
 
   useEffect(() => {
     if (drawer !== "capital") return;
     setDrawerLoading(true);
-    void fetchCapitalization(config)
+    void fetchCapitalization(config, { fresh: refreshNonce > 0 })
       .then(setAccounts)
       .catch((e) => setError(String(e)))
       .finally(() => setDrawerLoading(false));
-  }, [drawer, config]);
-
-  useEffect(() => {
-    if (drawer !== "trades") return;
-    setDrawerLoading(true);
-    const run = async () => {
-      try {
-        if (!tradeBotId || tradeBotId === "__all__") {
-          const list = bots.length
-            ? bots
-            : config.bots.filter((b) => b.enabled).map((b) => ({
-                id: b.id,
-                strategy_instance: b.strategy_instance,
-                display_name: b.display_name,
-              }));
-          setTrades(await fetchTradesForBots(config, list, range));
-        } else {
-          const bot =
-            bots.find((b) => b.id === tradeBotId) ||
-            series.find((s) => s.id === tradeBotId);
-          const instance = bot?.strategy_instance || tradeBotId;
-          const rows = await fetchTrades(config, instance, range);
-          setTrades(
-            rows.map((t) => ({
-              ...t,
-              bot_id: t.bot_id || tradeBotId,
-              display_name: t.display_name || bot?.display_name,
-            })),
-          );
-        }
-      } catch (e) {
-        setError(String(e));
-      } finally {
-        setDrawerLoading(false);
-      }
-    };
-    void run();
-  }, [drawer, tradeBotId, bots, series, config, range]);
+  }, [drawer, config, refreshNonce]);
 
   const openDrawer = (id: DrawerId) => {
     setDrawer((cur) => (cur === id ? null : id));
@@ -275,98 +337,144 @@ export default function App() {
     setRange(r);
   };
 
-  const exportCurves = () => {
-    const rows: Array<Record<string, unknown>> = [];
-    for (const s of series) {
-      if (!visibleIds.has(s.id)) continue;
-      for (const p of s.account_curve_abs || []) {
-        rows.push({
-          bot: s.display_name,
-          instance: s.strategy_instance,
-          t: p.t,
-          equity: p.equity,
-          mode: "account_abs",
-        });
-      }
-      for (const p of s.account_curve) {
-        rows.push({
-          bot: s.display_name,
-          instance: s.strategy_instance,
-          t: p.t,
-          equity_pct: p.equity_pct,
-          mode: "account",
-        });
-      }
-      for (const p of s.trade_curve) {
-        rows.push({
-          bot: s.display_name,
-          instance: s.strategy_instance,
-          t: p.t,
-          equity_pct: p.equity_pct,
-          mode: "trade",
-        });
-      }
-    }
-    if (portfolio) {
-      for (const p of portfolio.account_curve_abs || []) {
-        rows.push({
-          bot: "Portfolio",
-          instance: "portfolio",
-          t: p.t,
-          equity: p.equity,
-          mode: "account_abs",
-        });
-      }
-    }
-    downloadCsv("fleet-equity-curves.csv", rows);
-  };
-
   const legend = series.filter((s) => enabledIds.has(s.id));
+  // Equity $ stack always shows total at the top edge; portfolio chip is readout-only.
   const portfolioOn =
-    showPortfolio && !isolatedId && (chartMode === "account_abs" || chartMode === "account");
+    chartMode === "account_abs"
+      ? !isolatedId
+      : showPortfolio &&
+        !isolatedId &&
+        (chartMode === "account" || chartMode === "corrected");
 
-  // Telemetry readouts (stylebook §06): the numbers the operator steers by.
-  const liveBotCount = bots.filter((b) => b.status === "live").length;
-  const portfolioPct = (() => {
-    const curve = portfolio?.account_curve || [];
-    return curve.length ? curve[curve.length - 1].equity_pct : null;
-  })();
-  const worstSnapshotAge = (() => {
-    let worst: number | null = null;
-    for (const s of legend) {
-      const age = s.snapshot_age_sec;
-      if (age == null) continue;
-      if (worst == null || age > worst) worst = age;
-    }
-    return worst;
-  })();
-  const formatAge = (sec: number | null): string => {
-    if (sec == null) return "—";
-    if (sec < 90) return "live";
-    if (sec < 3600) return `${Math.round(sec / 60)}m`;
-    if (sec < 48 * 3600) return `${Math.round(sec / 3600)}h`;
-    return `${Math.round(sec / 86400)}d`;
+  const currentPortfolioEquity = useMemo(() => {
+    const curve = portfolio?.account_curve_abs || [];
+    if (curve.length) return curve[curve.length - 1].equity;
+    return portfolio?.live_equity != null && Number.isFinite(portfolio.live_equity)
+      ? portfolio.live_equity
+      : null;
+  }, [portfolio]);
+  const tradeReturnPct = useMemo(() => {
+    const active = series.filter(
+      (item) =>
+        (isolatedId ? item.id === isolatedId : visibleIds.has(item.id)) &&
+        Number.isFinite(item.stats?.return_pct),
+    );
+    if (!active.length) return null;
+    return (
+      active.reduce((total, item) => total + item.stats.return_pct, 0) /
+      active.length
+    );
+  }, [series, isolatedId, visibleIds]);
+  const rawAccountReturnPct = useMemo(
+    () => rawCommonScopeReturnPct(series),
+    [series],
+  );
+  const displayedReturnPct = useMemo(
+    () => returnPctForView(chartMode, portfolio, tradeReturnPct, rawAccountReturnPct),
+    [chartMode, portfolio, tradeReturnPct, rawAccountReturnPct],
+  );
+  const cashflowReturn = portfolio?.cashflow_return;
+  const returnLabel =
+    chartMode === "account_abs"
+      ? cashflowReturn?.available
+        ? `Return · ${cashflowReturn.scope_label.replace(" futures accounts", " accts")}`
+        : "Return · corrected"
+      : chartMode === "account"
+        ? "Equity %"
+        : chartMode === "corrected"
+          ? "Bereinigte Rendite"
+        : "Trade return";
+  const excludedScopeNote = cashflowReturn?.excluded_bot_ids.includes("counter-sl-reverse")
+    ? " Counter SL Reverse is excluded because its ledger is unavailable."
+    : "";
+  const returnTitle =
+    chartMode === "trade"
+      ? "Equal-weight average of the visible bots' completed-trade returns"
+      : chartMode === "account"
+        ? `Raw ${range.toUpperCase()} Equity % chart value; deposits and withdrawals remain visible`
+        : chartMode === "corrected"
+          ? `${range.toUpperCase()} cashflow-corrected return. Ledger is used only when its coverage spans the complete displayed curve; otherwise the conservative jump-TWR fallback is shown.`
+        : cashflowReturn?.available
+          ? `${range.toUpperCase()} cashflow-corrected return across ${cashflowReturn.scope_label}. ${cashflowReturn.boundary_note}. Ledger as of ${cashflowReturn.as_of || "latest sync"}.${excludedScopeNote}`
+          : `${range.toUpperCase()} cashflow-neutralized return using the conservative jump-TWR compatibility curve until confirmed futures-account ledgers finish synchronizing`;
+  const netFlowTitle = cashflowReturn?.available
+    ? `${cashflowReturn.flow_count} confirmed successful ${cashflowReturn.flow_count === 1 ? "flow" : "flows"} across ${cashflowReturn.flow_scope_label || cashflowReturn.scope_label}. ${cashflowReturn.boundary_note}.`
+    : cashflowReturn?.reason === "reporting_currency_conversion_unavailable"
+      ? `Unavailable: event-time conversion is missing for ${(cashflowReturn.unsupported_currencies || []).join(", ")}`
+      : "Awaiting authoritative futures-account ledger synchronization; no cashflow is inferred from equity jumps";
+  const formatMoney = (value: number | null, signed = false): string => {
+    if (value == null) return "—";
+    const prefix = signed && value > 0 ? "+" : "";
+    return `${prefix}$${value.toFixed(2)}`;
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-end justify-between gap-4 border-b border-[var(--line)] px-4 pb-3 pt-3.5">
-        <div className="min-w-0">
-          <h1 className="text-[20px] font-semibold leading-none tracking-[-0.02em] text-[var(--text)]">
+    <div className="cockpit-shell relative flex h-full min-h-0 flex-col">
+      <header className="cockpit-toolbar">
+        <div className="cockpit-brand">
+          <img
+            className="cockpit-brand-logo"
+            src={fleetRobotLogo}
+            alt=""
+            aria-hidden="true"
+          />
+          <h1 className="text-[16px] font-semibold leading-none tracking-[-0.02em] text-[var(--text)]">
             Fleet Cockpit
           </h1>
           {connection && (
-            <p className="mt-1.5 text-[11px] text-[var(--muted)]">
+            <span
+              className="connection-pill"
+              data-mode={connection.mode}
+              title={updatedAt ? `Updated ${updatedAt.replace("T", " ").slice(0, 19)} UTC` : undefined}
+            >
               {connection.mode === "fleet_api"
-                ? "Live board"
+                ? "Live"
                 : connection.mode === "direct_health"
-                  ? "Health only — fleet API unreachable"
+                  ? "Health only"
                   : "Offline"}
-              {updatedAt ? ` · ${updatedAt.replace("T", " ").slice(0, 19)} UTC` : ""}
-            </p>
+            </span>
           )}
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+
+        <div className="toolbar-kpis" role="status" aria-label="Portfolio telemetry">
+          <div className="readout">
+            <span className="k">Portfolio</span>
+            <span className="v">{formatMoney(currentPortfolioEquity)}</span>
+          </div>
+          <div
+            className="readout"
+            title={returnTitle}
+          >
+            <span className="k">{returnLabel}</span>
+            <span
+              className="v"
+              data-tone={
+                displayedReturnPct == null
+                  ? undefined
+                  : displayedReturnPct >= 0
+                    ? "up"
+                    : "down"
+              }
+            >
+              {displayedReturnPct == null
+                ? "—"
+                : `${displayedReturnPct >= 0 ? "+" : ""}${displayedReturnPct.toFixed(2)}%`}
+            </span>
+          </div>
+          <div
+            className="readout"
+            title={netFlowTitle}
+          >
+            <span className="k">Net flows</span>
+            <span className={`v${cashflowReturn?.available ? "" : " v-unavailable"}`}>
+              {cashflowReturn?.available
+                ? formatMoney(cashflowReturn.net_cashflow, true)
+                : "Ledger pending"}
+            </span>
+          </div>
+        </div>
+
+        <nav className="toolbar-controls" aria-label="Fleet cockpit controls">
           <div className="chip-group" role="group" aria-label="Time range">
             {RANGES.map((r) => (
               <button
@@ -393,82 +501,37 @@ export default function App() {
               </button>
             ))}
           </div>
-          <div className="chip-group" role="group" aria-label="Panels">
-            {PANEL_DRAWERS.map(([id, label]) => (
+          <button
+            type="button"
+            className="toolbar-button"
+            data-active={drawer === "activity"}
+            onClick={() => {
+              if (!tradeBotId) setTradeBotId("__all__");
+              openDrawer("activity");
+            }}
+          >
+            Activity
+          </button>
+          <div className="toolbar-actions" role="group" aria-label="Panels">
+            {RIGHT_DRAWERS.map(([id, label]) => (
               <button
                 key={id}
                 type="button"
-                className="chip"
+                className="toolbar-button"
                 data-active={drawer === id}
-                onClick={() => {
-                  if (id === "trades" && !tradeBotId) setTradeBotId("__all__");
-                  openDrawer(id);
-                }}
+                onClick={() => openDrawer(id)}
               >
+                <span aria-hidden="true">
+                  {id === "capital" ? "◇" : id === "stats" ? "▥" : "⚙"}
+                </span>
                 {label}
               </button>
             ))}
           </div>
-          <button
-            type="button"
-            onClick={() => {
-              void refreshHealth();
-              void refreshCurves();
-            }}
-            className="border border-[var(--line)] px-2.5 py-1.5 text-[10px] font-semibold tracking-[0.08em] uppercase text-[var(--muted)] hover:text-[var(--text)]"
-          >
-            Refresh
-          </button>
-          <button
-            type="button"
-            onClick={exportCurves}
-            className="border border-[var(--line)] px-2.5 py-1.5 text-[10px] font-semibold tracking-[0.08em] uppercase text-[var(--muted)] hover:text-[var(--text)]"
-          >
-            CSV
-          </button>
-        </div>
+        </nav>
       </header>
 
-      <div className="readout-strip" role="status" aria-label="Fleet telemetry">
-        <div className="readout">
-          <span className="k">Portfolio</span>
-          <span className="v">
-            {portfolio?.live_equity != null ? portfolio.live_equity.toFixed(2) : "—"}
-          </span>
-        </div>
-        <div className="readout">
-          <span className="k">Return</span>
-          <span
-            className="v"
-            data-tone={
-              portfolioPct == null ? undefined : portfolioPct >= 0 ? "up" : "down"
-            }
-          >
-            {portfolioPct == null
-              ? "—"
-              : `${portfolioPct >= 0 ? "+" : ""}${portfolioPct.toFixed(2)}%`}
-          </span>
-        </div>
-        <div className="readout">
-          <span className="k">Bots live</span>
-          <span className="v" data-tone={liveBotCount ? "up" : "down"}>
-            {liveBotCount}/{bots.length || config.bots.filter((b) => b.enabled).length}
-          </span>
-        </div>
-        <div className="readout">
-          <span className="k">Data age</span>
-          <span
-            className="v"
-            data-tone={
-              worstSnapshotAge != null && worstSnapshotAge > 3600 ? "warn" : undefined
-            }
-          >
-            {formatAge(worstSnapshotAge)}
-          </span>
-        </div>
-      </div>
-
-      <div className="relative flex min-h-0 flex-1">
+      <div className="cockpit-stage relative flex min-h-0 flex-1">
         <StatusRail
           bots={bots}
           visibleIds={visibleIds}
@@ -484,18 +547,27 @@ export default function App() {
           onIsolate={setIsolatedId}
           onOpenBot={(id) => {
             setTradeBotId(id);
-            openDrawer("trades");
+            openDrawer("activity");
           }}
         />
 
-        <main className="relative flex min-w-0 flex-1 flex-col px-3 pb-3 pt-2">
+        <main className="cockpit-main relative flex min-w-0 flex-1 flex-col px-3 pb-3 pt-2">
           <div className="legend-row mb-2 flex min-h-[28px] flex-wrap items-center gap-x-3 gap-y-1.5">
             <button
               type="button"
-              onClick={() => setShowPortfolio((v) => !v)}
+              onClick={() => {
+                if (chartMode === "account_abs") return;
+                setShowPortfolio((v) => !v);
+              }}
               className="legend-item"
               data-off={!portfolioOn}
-              title="Combined portfolio: $ = sum of equities; % = equal-weight average of bot returns"
+              title={
+                  chartMode === "account_abs"
+                  ? "Portfolio total = top edge of stacked cash (sum of bot equities)"
+                  : chartMode === "corrected"
+                    ? "Portfolio mean of the available deposit/withdrawal-corrected bot curves"
+                    : "Selected Equity % series for the current range; not cashflow-adjusted"
+              }
               style={
                 {
                   "--i": 0,
@@ -503,14 +575,24 @@ export default function App() {
                 } as CSSProperties
               }
             >
-              <span className="legend-swatch portfolio" />
-              <span>Portfolio</span>
-              <span className="font-mono text-[var(--muted)]">
-                {portfolioLegendValue(portfolio, chartMode)}
+              <span
+                className="legend-swatch portfolio"
+                data-stack={chartMode === "account_abs" ? "true" : undefined}
+              />
+              <span>
+                Portfolio
+                <span className="legend-val">
+                  {" · "}
+                  {portfolioLegendValue(portfolio, chartMode)}
+                </span>
               </span>
             </button>
             {legend.map((s, i) => {
               const on = visibleIds.has(s.id) || isolatedId === s.id;
+              const swatch =
+                chartMode === "account_abs"
+                  ? solidLegendFill(s.color || "#f0b429", 0.55)
+                  : s.color || "var(--accent)";
               return (
                 <button
                   key={s.id}
@@ -530,11 +612,19 @@ export default function App() {
                 >
                   <span
                     className="legend-swatch"
-                    style={{ background: s.color || "var(--accent)" }}
+                    data-stack={chartMode === "account_abs" ? "true" : undefined}
+                    style={{ background: swatch }}
                   />
-                  <span>{s.display_name}</span>
-                  <span className="font-mono text-[var(--muted)]">
-                    {legendValue(s, chartMode)}
+                  <span>
+                    {s.display_name}
+                    {chartMode === "account_abs" ? (
+                      <span className="legend-val">{" ("}{legendValue(s, chartMode)}{ ")"}</span>
+                    ) : (
+                      <span className="legend-val">
+                        {" · "}
+                        {legendValue(s, chartMode)}
+                      </span>
+                    )}
                   </span>
                   {s.snapshot_age_sec != null && s.snapshot_age_sec > 3600 && (
                     <span className="stale-tag" title="Last equity snapshot older than 1h">
@@ -544,7 +634,10 @@ export default function App() {
                 </button>
               );
             })}
-            <label className="ml-auto flex items-center gap-2 text-[10px] font-medium tracking-wide text-[var(--muted)]">
+            <label
+              className="ml-auto flex items-center gap-2 text-[10px] font-medium tracking-wide text-[var(--muted)]"
+              style={{ display: chartMode === "trade" ? undefined : "none" }}
+            >
               <input
                 type="checkbox"
                 checked={showMaxDd}
@@ -555,7 +648,7 @@ export default function App() {
           </div>
 
           {/* Single full-bleed hero — drawers overlay this; they never replace it with a second chart */}
-          <div className="relative min-h-0 flex-1 overflow-hidden border border-[var(--line)] bg-[var(--bg-chart)]">
+          <div className="cockpit-chart relative min-h-0 flex-1 overflow-hidden border border-[var(--line)] bg-[var(--bg-chart)]">
             <HeroChart
               series={series}
               portfolio={portfolio}
@@ -589,34 +682,27 @@ export default function App() {
           open={drawer}
           onClose={() => openDrawer(null)}
           title={drawer ? DRAWER_TITLES[drawer] : ""}
-          widthClass={drawer === "stats" || drawer === "settings" ? "w-[480px]" : "w-[420px]"}
+          widthClass={
+            drawer === "stats" || drawer === "settings" || drawer === "activity"
+              ? "w-[480px]"
+              : "w-[420px]"
+          }
         >
-          {drawer === "activity" && <ActivityDrawer events={activity} loading={drawerLoading} />}
-          {drawer === "trades" && (
-            <div className="space-y-3">
-              <select
-                className="w-full border border-[var(--line)] bg-black/30 px-2 py-2 text-[12px]"
-                value={tradeBotId || "__all__"}
-                onChange={(e) => setTradeBotId(e.target.value)}
-              >
-                <option value="__all__">All bots</option>
-                {bots.map((b) => (
-                  <option key={b.id} value={b.id}>
-                    {b.display_name}
-                  </option>
-                ))}
-              </select>
-              <TradesDrawer
-                trades={trades}
-                botLabel={
-                  tradeBotId && tradeBotId !== "__all__"
-                    ? bots.find((b) => b.id === tradeBotId)?.display_name || "bot"
-                    : "All bots"
-                }
-                loading={drawerLoading}
-                showBotColumn={!tradeBotId || tradeBotId === "__all__"}
-              />
-            </div>
+          {drawer === "activity" && (
+            <ActivityDrawer
+              items={activity}
+              bots={
+                bots.length
+                  ? bots
+                  : config.bots.filter((b) => b.enabled).map((b) => ({
+                      id: b.id,
+                      display_name: b.display_name,
+                    }))
+              }
+              botFilter={tradeBotId}
+              onBotFilter={(id) => setTradeBotId(id || "__all__")}
+              loading={drawerLoading}
+            />
           )}
           {drawer === "stats" && <StatsDrawer series={series} />}
           {drawer === "capital" && (
@@ -632,6 +718,17 @@ export default function App() {
           )}
         </DrawerShell>
       </div>
+      <button
+        type="button"
+        className="refresh-fab"
+        onClick={() => void handleRefresh()}
+        disabled={refreshing}
+        aria-label={refreshing ? "Refreshing Fleet data" : "Refresh Fleet data"}
+        aria-busy={refreshing}
+        title={refreshing ? "Refreshing…" : "Refresh Fleet data"}
+      >
+        <span aria-hidden="true">{refreshing ? "…" : "↻"}</span>
+      </button>
     </div>
   );
 }

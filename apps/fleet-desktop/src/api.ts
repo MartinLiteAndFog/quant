@@ -1,5 +1,5 @@
 import type {
-  ActivityEvent,
+  ActivityItem,
   CapitalAccount,
   ClosedTrade,
   FleetBot,
@@ -14,12 +14,23 @@ import { fleetFetch } from "./lib/http";
 export { probeConnection } from "./lib/connection";
 export type { ConnectionProbe, ConnectionMode } from "./lib/connection";
 
+/** Manual Refresh / force-reload: bust intermediary caches without changing poll URLs. */
+export type FleetFetchOpts = { fresh?: boolean };
+
 function authHeaders(token: string): HeadersInit {
   if (!token) return {};
   return {
     Authorization: `Bearer ${token}`,
     "X-Webhook-Token": token,
   };
+}
+
+function withFresh(
+  query: Record<string, string | number | undefined>,
+  opts?: FleetFetchOpts,
+): Record<string, string | number | undefined> {
+  if (!opts?.fresh) return query;
+  return { ...query, _t: Date.now() };
 }
 
 function looksLikeSpaHtml(text: string): boolean {
@@ -77,11 +88,17 @@ async function getJson<T>(
   }
 }
 
-export async function fetchBots(cfg: FleetConfig, probe = true): Promise<FleetBot[]> {
+export async function fetchBots(
+  cfg: FleetConfig,
+  probe = true,
+  opts?: FleetFetchOpts,
+): Promise<FleetBot[]> {
   try {
-    const data = await getJson<{ ok: boolean; bots: FleetBot[] }>("/api/fleet/bots", cfg, {
-      probe: probe ? 1 : 0,
-    });
+    const data = await getJson<{ ok: boolean; bots: FleetBot[] }>(
+      "/api/fleet/bots",
+      cfg,
+      withFresh({ probe: probe ? 1 : 0 }, opts),
+    );
     if (!data.ok || !Array.isArray(data.bots)) {
       throw new Error("fleet bots payload invalid");
     }
@@ -96,12 +113,20 @@ export async function fetchPerformance(
   cfg: FleetConfig,
   range: RangeKey,
   instanceIds?: string[],
+  opts?: FleetFetchOpts,
 ): Promise<FleetPerformance> {
   try {
-    return await getJson<FleetPerformance>("/api/fleet/performance", cfg, {
-      hours: RANGE_HOURS[range],
-      instances: instanceIds?.join(","),
-    });
+    return await getJson<FleetPerformance>(
+      "/api/fleet/performance",
+      cfg,
+      withFresh(
+        {
+          hours: RANGE_HOURS[range],
+          instances: instanceIds?.join(","),
+        },
+        opts,
+      ),
+    );
   } catch (e) {
     return {
       ok: false,
@@ -114,32 +139,135 @@ export async function fetchPerformance(
   }
 }
 
+function normalizeActivityItem(raw: Record<string, unknown>): ActivityItem {
+  const kind: ActivityItem["kind"] =
+    raw.kind === "fill" || raw.trade_id ? "fill" : "event";
+  const action = String(
+    raw.action || raw.stage || raw.exit_event || (kind === "fill" ? "fill" : "event"),
+  );
+  const id = String(
+    raw.id ||
+      (kind === "fill"
+        ? `fill:${raw.trade_id || raw.ts}`
+        : raw.event_id || `event:${raw.strategy_instance}:${raw.ts}:${action}`),
+  );
+  return {
+    id,
+    kind,
+    t: (raw.t as number | null | undefined) ?? null,
+    ts: String(raw.ts || raw.exit_ts || ""),
+    venue: raw.venue as string | undefined,
+    symbol: raw.symbol as string | undefined,
+    strategy_instance: String(raw.strategy_instance || ""),
+    bot_id: raw.bot_id as string | undefined,
+    display_name: String(raw.display_name || raw.strategy_instance || "—"),
+    action,
+    side: raw.side as string | undefined,
+    qty: (raw.qty as number | null | undefined) ?? null,
+    price: (raw.price as number | null | undefined) ?? null,
+    status: (raw.status as string | null | undefined) ?? null,
+    pnl_pct: (raw.pnl_pct as number | null | undefined) ?? null,
+    color: raw.color as string | undefined,
+    trade_id: raw.trade_id as string | undefined,
+    stage: (raw.stage as string | undefined) || action,
+    event_id: raw.event_id as string | undefined,
+  };
+}
+
+function fillFromClosedTrade(t: ClosedTrade): ActivityItem {
+  return normalizeActivityItem({
+    kind: "fill",
+    id: `fill:${t.trade_id}`,
+    trade_id: t.trade_id,
+    ts: t.exit_ts,
+    t: t.exit_ts ? Math.floor(Date.parse(t.exit_ts) / 1000) : null,
+    venue: t.venue,
+    symbol: t.symbol,
+    strategy_instance: t.strategy_instance,
+    bot_id: t.bot_id,
+    display_name: t.display_name || t.strategy_instance,
+    action: t.exit_event || "fill",
+    side: t.side,
+    qty: t.qty,
+    price: t.exit_price,
+    status: "closed",
+    pnl_pct: t.pnl_pct,
+  });
+}
+
+/** Preferred SoT: `/api/fleet/activity` `items`. Falls back to events + per-bot trades. */
+export async function fetchActivityFeed(
+  cfg: FleetConfig,
+  range: RangeKey,
+  bots: Array<{ id: string; strategy_instance: string; display_name: string }>,
+  opts?: FleetFetchOpts,
+): Promise<ActivityItem[]> {
+  try {
+    const data = await getJson<{
+      items?: Array<Record<string, unknown>>;
+      events?: Array<Record<string, unknown>>;
+    }>(
+      "/api/fleet/activity",
+      cfg,
+      withFresh(
+        {
+          hours: RANGE_HOURS[range],
+          limit: 500,
+        },
+        opts,
+      ),
+    );
+    if ("items" in data && Array.isArray(data.items)) {
+      // New SoT: server already merged events + fills.
+      return data.items.map((row) => normalizeActivityItem(row));
+    }
+    // Older deploy: events only — merge closed trades client-side.
+    const events = (data.events || []).map((row) =>
+      normalizeActivityItem({ ...row, kind: "event" }),
+    );
+    const trades = await fetchTradesForBots(cfg, bots, range, opts);
+    const fills = trades.map(fillFromClosedTrade);
+    return [...events, ...fills].sort(
+      (a, b) => (b.t || 0) - (a.t || 0) || String(b.ts).localeCompare(String(a.ts)),
+    );
+  } catch {
+    try {
+      const trades = await fetchTradesForBots(cfg, bots, range, opts);
+      return trades.map(fillFromClosedTrade);
+    } catch {
+      return [];
+    }
+  }
+}
+
+/** @deprecated Use fetchActivityFeed. */
 export async function fetchActivity(
   cfg: FleetConfig,
   range: RangeKey,
-): Promise<ActivityEvent[]> {
-  try {
-    const data = await getJson<{ events: ActivityEvent[] }>("/api/fleet/activity", cfg, {
-      hours: RANGE_HOURS[range],
-      limit: 500,
-    });
-    return data.events || [];
-  } catch {
-    return [];
-  }
+  opts?: FleetFetchOpts,
+): Promise<ActivityItem[]> {
+  return fetchActivityFeed(cfg, range, [], opts);
 }
 
 export async function fetchTrades(
   cfg: FleetConfig,
   instance: string,
   range: RangeKey,
+  opts?: FleetFetchOpts,
 ): Promise<ClosedTrade[]> {
   try {
-    const data = await getJson<{ trades: ClosedTrade[] }>("/api/fleet/trades", cfg, {
-      instance,
-      hours: RANGE_HOURS[range],
-      limit: 300,
-    });
+    const data = await getJson<{ trades: ClosedTrade[] }>(
+      "/api/fleet/trades",
+      cfg,
+      withFresh(
+        {
+          instance,
+          hours: RANGE_HOURS[range],
+          limit: 300,
+        },
+        opts,
+      ),
+    );
     return data.trades || [];
   } catch {
     return [];
@@ -151,10 +279,11 @@ export async function fetchTradesForBots(
   cfg: FleetConfig,
   bots: Array<{ id: string; strategy_instance: string; display_name: string }>,
   range: RangeKey,
+  opts?: FleetFetchOpts,
 ): Promise<ClosedTrade[]> {
   const chunks = await Promise.all(
     bots.map(async (b) => {
-      const trades = await fetchTrades(cfg, b.strategy_instance || b.id, range);
+      const trades = await fetchTrades(cfg, b.strategy_instance || b.id, range, opts);
       return trades.map((t) => ({
         ...t,
         bot_id: t.bot_id || b.id,
@@ -167,11 +296,15 @@ export async function fetchTradesForBots(
     .sort((a, b) => String(b.exit_ts || "").localeCompare(String(a.exit_ts || "")));
 }
 
-export async function fetchCapitalization(cfg: FleetConfig): Promise<CapitalAccount[]> {
+export async function fetchCapitalization(
+  cfg: FleetConfig,
+  opts?: FleetFetchOpts,
+): Promise<CapitalAccount[]> {
   try {
     const data = await getJson<{ accounts: CapitalAccount[] }>(
       "/api/fleet/capitalization",
       cfg,
+      withFresh({}, opts),
     );
     return data.accounts || [];
   } catch {

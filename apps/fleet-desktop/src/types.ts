@@ -27,7 +27,24 @@ export interface AbsCurvePoint {
   equity: number;
 }
 
-export type ChartMode = "trade" | "account" | "account_abs";
+export type ChartMode = "trade" | "account" | "account_abs" | "corrected";
+
+export interface CorrectedMeta {
+  method: "ledger" | "jump_twr" | "unavailable" | string;
+  available: boolean;
+  reason: string | null;
+  flow_count: number;
+  net_cashflow: number;
+  source?: string | null;
+}
+
+export interface CashflowPoint {
+  t: number;
+  direction?: string | null;
+  reporting_amount?: number | null;
+  currency?: string | null;
+  flow_type?: string | null;
+}
 
 export interface BotStats {
   return_pct: number;
@@ -51,12 +68,38 @@ export interface BotSeries {
   trade_curve: CurvePoint[];
   account_curve: CurvePoint[];
   account_curve_abs?: AbsCurvePoint[];
+  corrected_curve?: CurvePoint[];
+  corrected_meta?: CorrectedMeta;
+  cashflows?: CashflowPoint[];
   stats: BotStats;
   needs_backfill?: boolean;
   /** Unix seconds of the newest persisted equity snapshot (null = none). */
   last_snapshot_ts?: number | null;
   /** Seconds since last snapshot at response time (null = no snapshots). */
   snapshot_age_sec?: number | null;
+  cashflow_scope?: CashflowScope;
+}
+
+export interface CashflowReturnMetric {
+  available: boolean;
+  return_pct: number | null;
+  net_cashflow: number | null;
+  flow_count: number;
+  scope_label: string;
+  flow_scope_label?: string;
+  boundary_note: string;
+  method: "ledger_segmented_equity" | string;
+  excluded_bot_ids: string[];
+  unavailable_bot_ids: string[];
+  reason: string | null;
+  as_of: string | null;
+  unsupported_currencies?: string[];
+}
+
+export interface CashflowScope {
+  available: boolean;
+  reason: string | null;
+  boundary: "futures" | string;
 }
 
 export interface PortfolioSeries {
@@ -67,8 +110,10 @@ export interface PortfolioSeries {
   live_equity?: number | null;
   account_curve: CurvePoint[];
   account_curve_abs?: AbsCurvePoint[];
+  corrected_curve?: CurvePoint[];
   bot_count?: number;
   note?: string;
+  cashflow_return?: CashflowReturnMetric;
 }
 
 export interface FleetClock {
@@ -89,22 +134,39 @@ export interface FleetPerformance {
   error?: string;
 }
 
-export interface ActivityEvent {
+/** Unified Activity feed row (events + closed-trade fills). */
+export type ActivityKind = "event" | "fill";
+
+export interface ActivityItem {
+  id: string;
+  kind: ActivityKind;
   t: number | null;
   ts: string;
-  venue: string;
-  symbol: string;
+  venue?: string;
+  symbol?: string;
   strategy_instance: string;
   bot_id?: string;
   display_name: string;
+  /** Stage / exit_event / fill label (entry, market_fill, sl_exit, tp_exit, flip, …). */
+  action: string;
   side?: string;
   qty?: number | null;
   price?: number | null;
-  stage?: string;
-  status?: string;
-  event_id?: string;
+  status?: string | null;
+  pnl_pct?: number | null;
   color?: string;
+  /** Present on fills (closed trades). */
+  trade_id?: string;
+  /** Legacy event aliases (older API / client merge). */
+  stage?: string;
+  event_id?: string;
 }
+
+/** @deprecated Prefer ActivityItem — kept for legacy event payloads. */
+export type ActivityEvent = ActivityItem & {
+  stage?: string;
+  event_id?: string;
+};
 
 export interface ClosedTrade {
   trade_id: string;
@@ -165,6 +227,16 @@ export const RANGE_HOURS: Record<RangeKey, number> = {
   all: 0,
 };
 
+/** Prior muddy defaults — upgraded once on load so translucent stack bands stay vivid. */
+const LEGACY_BOT_COLORS: Record<string, string[]> = {
+  "imba-runner": ["#c4a35a", "#c9a65a"],
+  "pure-imbatp": ["#6b9e7a"],
+  countervariante: ["#5b8fad"],
+  "counter-sl-reverse": ["#8a7a9a"],
+  "quant-main": ["#9a8f6a", "#fbbf24"],
+  "kraken-legacy": ["#b07050"],
+};
+
 export const DEFAULT_BOTS: FleetConfig["bots"] = [
   {
     id: "imba-runner",
@@ -173,7 +245,8 @@ export const DEFAULT_BOTS: FleetConfig["bots"] = [
     venue: "kucoin",
     symbol: "SOL-USDT",
     health_url: "https://sol-pilot-canonical-production.up.railway.app/health",
-    color: "#c4a35a",
+    // Amber — reads clean as glass fill on charcoal
+    color: "#f0b429",
     enabled: true,
   },
   {
@@ -183,7 +256,7 @@ export const DEFAULT_BOTS: FleetConfig["bots"] = [
     venue: "kucoin",
     symbol: "SOL-USDT",
     health_url: "https://sol-pilot-pc3axis-production.up.railway.app/health",
-    color: "#6b9e7a",
+    color: "#34d399",
     enabled: true,
   },
   {
@@ -193,7 +266,7 @@ export const DEFAULT_BOTS: FleetConfig["bots"] = [
     venue: "kucoin",
     symbol: "SOL-USDT",
     health_url: "https://sol-pilot-countertrend-production.up.railway.app/health",
-    color: "#5b8fad",
+    color: "#38bdf8",
     enabled: true,
   },
   {
@@ -204,7 +277,7 @@ export const DEFAULT_BOTS: FleetConfig["bots"] = [
     symbol: "SOL-USDT",
     health_url:
       "https://sol-pilot-countertrend-sl-reverse-production.up.railway.app/health",
-    color: "#8a7a9a",
+    color: "#a78bfa",
     enabled: true,
   },
   {
@@ -214,7 +287,8 @@ export const DEFAULT_BOTS: FleetConfig["bots"] = [
     venue: "kucoin",
     symbol: "SOL-USDT",
     health_url: "https://quant-production-5533.up.railway.app/health",
-    color: "#9a8f6a",
+    // Deep violet — deliberately distinct from Imba Runner's amber.
+    color: "#8b5cf6",
     enabled: true,
   },
   {
@@ -224,7 +298,7 @@ export const DEFAULT_BOTS: FleetConfig["bots"] = [
     venue: "kraken",
     symbol: "SOL-USD",
     health_url: "https://kraken-production-cb57.up.railway.app/health",
-    color: "#b07050",
+    color: "#fb7185",
     enabled: true,
   },
 ];
@@ -250,7 +324,14 @@ function mergeBots(
   const byId = new Map(saved.map((b) => [b.id, b]));
   const merged = DEFAULT_BOTS.map((def) => {
     const prev = byId.get(def.id);
-    return prev ? { ...def, ...prev, id: def.id } : { ...def };
+    if (!prev) return { ...def };
+    const next = { ...def, ...prev, id: def.id };
+    const legacy = LEGACY_BOT_COLORS[def.id] || [];
+    const prevColor = (prev.color || "").toLowerCase();
+    if (!prevColor || legacy.some((c) => c.toLowerCase() === prevColor)) {
+      next.color = def.color;
+    }
+    return next;
   });
   // Keep any user-added bots not in defaults.
   for (const b of saved) {
