@@ -95,6 +95,46 @@ _DEFAULT_BOTS: List[Dict[str, Any]] = [
     },
 ]
 
+# Read-only production configuration audit, 2026-08-23. Fleet snapshots these
+# values in source so a later Railway change cannot silently rewrite history.
+_CURRENT_STRATEGY_ASSUMPTIONS: Dict[str, Dict[str, Any]] = {
+    "imba-runner": {
+        "leverage": 25.0, "capital_fraction": 0.90,
+        "service": "sol-pilot-canonical",
+        "leverage_variable": "LIVE_EXECUTOR_LEVERAGE",
+        "capital_fraction_variable": "LIVE_EXECUTOR_POS_PCT",
+    },
+    "pure-imbatp": {
+        "leverage": 10.0, "capital_fraction": 0.90,
+        "service": "sol-pilot-IMBA5TTP",
+        "leverage_variable": "LIVE_EXECUTOR_LEVERAGE",
+        "capital_fraction_variable": "LIVE_EXECUTOR_POS_PCT",
+    },
+    "countervariante": {
+        "leverage": 10.0, "capital_fraction": 0.90,
+        "service": "sol-pilot-countertrend",
+        "leverage_variable": "LIVE_EXECUTOR_LEVERAGE",
+        "capital_fraction_variable": "LIVE_EXECUTOR_POS_PCT",
+    },
+    "counter-sl-reverse": {
+        "leverage": 10.0, "capital_fraction": 0.90,
+        "service": "counter-sl-reverse",
+        "leverage_variable": "LIVE_EXECUTOR_LEVERAGE",
+        "capital_fraction_variable": "LIVE_EXECUTOR_POS_PCT",
+    },
+    "quant-main": {
+        "leverage": 10.0, "capital_fraction": 0.90, "service": "quant",
+        "leverage_variable": "LIVE_EXECUTOR_LEVERAGE",
+        "capital_fraction_variable": "LIVE_EXECUTOR_POS_PCT",
+    },
+    "kraken-legacy": {
+        "leverage": 10.0, "capital_fraction": 0.90, "service": "Kraken",
+        "leverage_variable": "KRAKEN_TV_LEVERAGE",
+        "capital_fraction_variable": "KRAKEN_TV_POS_PCT",
+    },
+}
+_STRATEGY_ASSUMPTION_OBSERVED_AT = "2026-08-23"
+
 
 def fleet_bot_registry() -> List[Dict[str, Any]]:
     raw = (os.getenv("FLEET_BOTS_JSON") or "").strip()
@@ -1575,50 +1615,112 @@ def _compounded_trade_curve(df: pd.DataFrame) -> Tuple[List[Dict[str, Any]], Dic
     return points, stats
 
 
-def _strategy_return_payload(df: pd.DataFrame) -> Dict[str, Any]:
-    """Build a leverage/notional-aware strategy curve only from complete rows.
+def _strategy_assumption_for_bot(bot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    assumption = _CURRENT_STRATEGY_ASSUMPTIONS.get(str(bot.get("id") or ""))
+    return dict(assumption) if assumption else None
 
-    A price move is not a strategy return.  Fleet therefore refuses to infer
-    leverage from current account state or multiply by a configured default.
-    Producers may opt in by persisting a net ``strategy_return_pct`` for every
-    displayed economic trade together with ``strategy_return_complete=true``.
-    Until then the metric is explicitly unavailable.
-    """
+
+def _strategy_return_payload(
+    df: pd.DataFrame,
+    assumption: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    """Compound price moves using an explicit current-config gross assumption."""
+    leverage = float((assumption or {}).get("leverage") or 0.0)
+    capital_fraction = float((assumption or {}).get("capital_fraction") or 0.0)
+    metadata = {
+        "available": False,
+        "method": "current_config_gross_compounded_assumption",
+        "reason": "current_config_assumption_missing",
+        "costs_included": False,
+        "funding_included": False,
+        "trade_count": 0,
+        "return_pct": None,
+        "assumed_leverage": leverage or None,
+        "assumed_capital_fraction": capital_fraction or None,
+        "assumption_service": (assumption or {}).get("service"),
+        "leverage_variable": (assumption or {}).get("leverage_variable"),
+        "capital_fraction_variable": (assumption or {}).get("capital_fraction_variable"),
+        "assumption_observed_at": _STRATEGY_ASSUMPTION_OBSERVED_AT,
+        "historical_leverage_assumed_constant": True,
+        "formula": "compound(price_move_pct * current_leverage * current_capital_fraction)",
+        "cost_note": "Gross estimate; historic fees, funding and slippage are not completely attributable per trade.",
+    }
     unavailable = {
         "strategy_curve": [],
-        "strategy_meta": {
-            "available": False,
-            "method": "unavailable",
-            "reason": "historical_notional_leverage_or_cost_basis_incomplete",
-            "costs_included": False,
-            "funding_included": False,
-            "trade_count": 0,
-        },
+        "strategy_meta": metadata,
     }
     if df is None or df.empty:
-        return {**unavailable, "strategy_meta": {**unavailable["strategy_meta"], "reason": "no_completed_trades"}}
-    required = {"strategy_return_pct", "strategy_return_complete"}
-    if not required.issubset(df.columns):
-        return unavailable
-    complete = df["strategy_return_complete"].fillna(False).astype(bool)
-    returns = pd.to_numeric(df["strategy_return_pct"], errors="coerce")
-    if not bool(complete.all()) or bool(returns.isna().any()):
+        return {**unavailable, "strategy_meta": {**metadata, "reason": "no_completed_trades"}}
+    if leverage <= 0 or capital_fraction <= 0:
         return unavailable
     work = df.copy()
-    work["pnl_pct"] = returns
+    returns = pd.to_numeric(work.get("pnl_pct"), errors="coerce")
+    if bool(returns.isna().any()):
+        return {**unavailable, "strategy_meta": {**metadata, "reason": "price_move_incomplete"}}
+    assumed_returns = returns * leverage * capital_fraction
+    if bool((assumed_returns <= -100.0).any()):
+        return {**unavailable, "strategy_meta": {**metadata, "reason": "assumed_return_crosses_total_loss"}}
+    work["pnl_pct"] = assumed_returns
     curve, stats = _compounded_trade_curve(work)
     return {
         "strategy_curve": curve,
         "strategy_meta": {
+            **metadata,
             "available": bool(curve),
-            "method": "net_realized_on_strategy_risk_capital",
             "reason": None if curve else "no_completed_trades",
-            "costs_included": True,
-            "funding_included": True,
             "trade_count": int(stats["trade_count"]),
             "return_pct": stats["return_pct"],
         },
     }
+
+
+def _trade_detail_payload(
+    df: pd.DataFrame,
+    *,
+    bot: Dict[str, Any],
+    assumption: Optional[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if df is None or df.empty:
+        return []
+    leverage = float((assumption or {}).get("leverage") or 0.0)
+    fraction = float((assumption or {}).get("capital_fraction") or 0.0)
+    work = df.copy().tail(1000)
+    out: List[Dict[str, Any]] = []
+    for _, row in work.iterrows():
+        entry = pd.to_datetime(row.get("entry_ts"), utc=True, errors="coerce")
+        exit_ = pd.to_datetime(row.get("exit_ts"), utc=True, errors="coerce")
+        if pd.isna(exit_):
+            continue
+        pnl_pct = float(row.get("pnl_pct")) if _is_finite(row.get("pnl_pct")) else None
+
+        def finite_value(name: str) -> Optional[float]:
+            value = row.get(name)
+            return float(value) if _is_finite(value) else None
+
+        out.append({
+            "trade_id": str(row.get("trade_id") or f"{bot.get('id')}:{int(exit_.timestamp())}"),
+            "bot_id": str(bot.get("id") or ""),
+            "display_name": str(bot.get("display_name") or bot.get("id") or ""),
+            "strategy_instance": str(row.get("strategy_instance") or bot.get("strategy_instance") or ""),
+            "side": str(row.get("side") or "").lower() or None,
+            "entry_t": int(entry.timestamp()) if not pd.isna(entry) else None,
+            "exit_t": int(exit_.timestamp()),
+            "duration_sec": max(0, int((exit_ - entry).total_seconds())) if not pd.isna(entry) else None,
+            "entry_price": finite_value("entry_price"),
+            "exit_price": finite_value("exit_price"),
+            "qty": finite_value("qty"),
+            "price_move_bps": round(pnl_pct * 100.0, 6) if pnl_pct is not None else None,
+            "strategy_return_pct": round(pnl_pct * leverage * fraction, 6) if pnl_pct is not None and leverage > 0 and fraction > 0 else None,
+            "realized_pnl": finite_value("realized_pnl"),
+            "fee": finite_value("fee"),
+            "fee_currency": str(row.get("fee_currency")) if row.get("fee_currency") else None,
+            "realized_funding": finite_value("realized_funding"),
+            # Even Kraken's close events do not allocate every separate funding
+            # event to an economic round trip. Never label per-trade cost data
+            # complete merely because the close row itself has fee fields.
+            "cost_data_complete": False,
+        })
+    return out
 
 
 def _curve_value_at(points: List[Dict[str, Any]], timestamp: int) -> Optional[float]:
@@ -1634,6 +1736,7 @@ def _curve_value_at(points: List[Dict[str, Any]], timestamp: int) -> Optional[fl
 def _risk_normalized_allocation_payload(
     series: List[Dict[str, Any]],
     portfolio_corrected: List[Dict[str, Any]],
+    portfolio_corrected_meta: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Compare corrected portfolio growth with an equal-risk strategy basket.
 
@@ -1662,6 +1765,8 @@ def _risk_normalized_allocation_payload(
         "common_start": None,
         "common_end": None,
     }
+    if (portfolio_corrected_meta or {}).get("method") != "ledger":
+        return {**base, "reason": "portfolio_corrected_ledger_incomplete"}
     if len(eligible) < 2 or len(portfolio_corrected) < 2:
         return base
     start = max(int(row["strategy_curve"][0]["t"]) for row in eligible)
@@ -2330,7 +2435,8 @@ def build_fleet_performance(
             }
             for point in trade_curve
         ]
-        strategy = _strategy_return_payload(trades)
+        assumption = _strategy_assumption_for_bot(b)
+        strategy = _strategy_return_payload(trades, assumption=assumption)
 
         last_snapshot_ts = int(acct_pts[-1]["t"]) if acct_pts else None
         snapshot_age_sec = (
@@ -2392,6 +2498,9 @@ def build_fleet_performance(
                 },
                 "strategy_curve": strategy["strategy_curve"],
                 "strategy_meta": strategy["strategy_meta"],
+                "trade_details": _trade_detail_payload(
+                    trades, bot=b, assumption=assumption
+                ),
                 "account_curve": account_curve,
                 "account_curve_abs": account_curve_abs,
                 "corrected_curve": corrected["corrected_curve"],
@@ -2432,7 +2541,7 @@ def build_fleet_performance(
         "source": "summed_account_equity_jump_twr",
     }
     portfolio["allocation"] = _risk_normalized_allocation_payload(
-        series, portfolio["corrected_curve"]
+        series, portfolio["corrected_curve"], portfolio["corrected_meta"]
     )
     return {
         "ok": True,

@@ -17,6 +17,7 @@ from quant.execution.fleet_api import (
     _load_equity_snapshots,
     _normalize_account_curve,
     _risk_normalized_allocation_payload,
+    _strategy_assumption_for_bot,
     _strategy_return_payload,
     build_fleet_performance,
     fleet_bot_registry,
@@ -427,24 +428,32 @@ class KrakenDirectTradeTests(unittest.TestCase):
 
 
 class StrategyAndAllocationMetricTests(unittest.TestCase):
-    def test_strategy_return_refuses_incomplete_historical_leverage(self) -> None:
+    def test_current_productive_assumptions_keep_canonical_and_kraken_distinct(self) -> None:
+        self.assertEqual(_strategy_assumption_for_bot({"id": "imba-runner"})["leverage"], 25.0)
+        kraken = _strategy_assumption_for_bot({"id": "kraken-legacy"})
+        self.assertEqual(kraken["leverage"], 10.0)
+        self.assertEqual(kraken["leverage_variable"], "KRAKEN_TV_LEVERAGE")
+
+    def test_strategy_return_requires_explicit_current_config_assumption(self) -> None:
         result = _strategy_return_payload(pd.DataFrame([_trade("2026-08-01T00:00:00Z", 2.0)]))
         self.assertFalse(result["strategy_meta"]["available"])
-        self.assertEqual(
-            result["strategy_meta"]["reason"],
-            "historical_notional_leverage_or_cost_basis_incomplete",
-        )
+        self.assertEqual(result["strategy_meta"]["reason"], "current_config_assumption_missing")
 
-    def test_strategy_return_accepts_only_explicit_complete_net_rows(self) -> None:
+    def test_strategy_return_compounds_current_leverage_and_capital_fraction(self) -> None:
         frame = pd.DataFrame(
             [
-                {**_trade("2026-08-01T00:00:00Z", 2.0, "a"), "strategy_return_pct": 4.0, "strategy_return_complete": True},
-                {**_trade("2026-08-02T00:00:00Z", 2.0, "b"), "strategy_return_pct": -1.0, "strategy_return_complete": True},
+                _trade("2026-08-01T00:00:00Z", 2.0, "a"),
+                _trade("2026-08-02T00:00:00Z", -1.0, "b"),
             ]
         )
-        result = _strategy_return_payload(frame)
+        result = _strategy_return_payload(
+            frame,
+            assumption={"leverage": 10, "capital_fraction": 0.9, "service": "pilot"},
+        )
         self.assertTrue(result["strategy_meta"]["available"])
-        self.assertAlmostEqual(result["strategy_curve"][-1]["equity_pct"], 2.96, places=5)
+        self.assertAlmostEqual(result["strategy_curve"][-1]["equity_pct"], 7.38, places=5)
+        self.assertEqual(result["strategy_meta"]["assumed_leverage"], 10.0)
+        self.assertFalse(result["strategy_meta"]["costs_included"])
 
     def test_allocation_benchmark_uses_common_window_and_equal_risk(self) -> None:
         series = [
@@ -475,7 +484,9 @@ class StrategyAndAllocationMetricTests(unittest.TestCase):
             {"t": 3, "equity_pct": 1.0},
             {"t": 4, "equity_pct": 3.0},
         ]
-        result = _risk_normalized_allocation_payload(series, portfolio)
+        result = _risk_normalized_allocation_payload(
+            series, portfolio, {"method": "ledger", "available": True}
+        )
         self.assertTrue(result["available"])
         self.assertEqual(result["common_start"], 1)
         self.assertEqual(result["common_end"], 4)
@@ -727,7 +738,7 @@ class BuildFleetPerformanceFilterTests(unittest.TestCase):
         self.assertIn("portfolio", out)
         self.assertEqual(out["portfolio"]["id"], "portfolio")
 
-    def test_performance_emits_exact_bps_and_does_not_infer_strategy_return(self) -> None:
+    def test_performance_emits_bps_and_explicit_current_config_strategy_assumption(self) -> None:
         trades = pd.DataFrame(
             [
                 _trade("2026-08-22T10:00:00Z", 1.0, "one-percent"),
@@ -748,10 +759,18 @@ class BuildFleetPerformanceFilterTests(unittest.TestCase):
         row = out["series"][0]
         self.assertEqual(row["price_move_meta"]["return_bps"], 100.0)
         self.assertEqual(row["price_move_curve_bps"][-1]["equity_pct"], 100.0)
-        self.assertFalse(row["strategy_meta"]["available"])
-        self.assertEqual(row["strategy_curve"], [])
+        self.assertTrue(row["strategy_meta"]["available"])
+        self.assertEqual(row["strategy_meta"]["assumed_leverage"], 25.0)
+        self.assertEqual(row["strategy_meta"]["assumed_capital_fraction"], 0.9)
+        self.assertEqual(row["strategy_curve"][-1]["equity_pct"], 22.5)
+        self.assertEqual(row["trade_details"][0]["price_move_bps"], 100.0)
+        self.assertEqual(row["trade_details"][0]["strategy_return_pct"], 22.5)
         self.assertEqual(out["portfolio"]["corrected_meta"]["method"], "jump_twr")
         self.assertFalse(out["portfolio"]["allocation"]["available"])
+        self.assertEqual(
+            out["portfolio"]["allocation"]["reason"],
+            "portfolio_corrected_ledger_incomplete",
+        )
 
 
 class PortfolioAggregateTests(unittest.TestCase):

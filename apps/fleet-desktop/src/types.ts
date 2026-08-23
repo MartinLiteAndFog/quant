@@ -58,6 +58,36 @@ export interface StrategyReturnMeta {
   funding_included: boolean;
   trade_count: number;
   return_pct?: number | null;
+  assumed_leverage?: number | null;
+  assumed_capital_fraction?: number | null;
+  assumption_service?: string | null;
+  leverage_variable?: string | null;
+  capital_fraction_variable?: string | null;
+  assumption_observed_at?: string | null;
+  historical_leverage_assumed_constant?: boolean;
+  formula?: string;
+  cost_note?: string;
+}
+
+export interface TradeDetail {
+  trade_id: string;
+  bot_id: string;
+  display_name: string;
+  strategy_instance: string;
+  side?: string | null;
+  entry_t?: number | null;
+  exit_t: number;
+  duration_sec?: number | null;
+  entry_price?: number | null;
+  exit_price?: number | null;
+  qty?: number | null;
+  price_move_bps?: number | null;
+  strategy_return_pct?: number | null;
+  realized_pnl?: number | null;
+  fee?: number | null;
+  fee_currency?: string | null;
+  realized_funding?: number | null;
+  cost_data_complete?: boolean;
 }
 
 export interface AllocationMetric {
@@ -108,6 +138,7 @@ export interface BotSeries {
   /** Net leverage/notional-aware return, emitted only with complete inputs. */
   strategy_curve?: CurvePoint[];
   strategy_meta?: StrategyReturnMeta;
+  trade_details?: TradeDetail[];
   account_curve: CurvePoint[];
   account_curve_abs?: AbsCurvePoint[];
   corrected_curve?: CurvePoint[];

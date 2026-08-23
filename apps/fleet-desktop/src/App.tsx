@@ -42,11 +42,11 @@ import {
 
 const RANGES: RangeKey[] = ["24h", "7d", "30d", "all"];
 const CHART_MODES: Array<{ id: ChartMode; label: string }> = [
+  { id: "trade", label: "Performance" },
   { id: "account_abs", label: "Equity $" },
   { id: "account", label: "Equity %" },
   { id: "corrected", label: "Bereinigt %" },
   { id: "strategy", label: "Strategie %" },
-  { id: "trade", label: "PRICE MOVE · BPS" },
 ];
 
 const DRAWER_TITLES: Record<Exclude<DrawerId, null>, string> = {
@@ -99,7 +99,12 @@ function legendValue(s: BotSeries, mode: ChartMode): string {
     const curve = s.strategy_curve || [];
     const value = curve.length ? curve[curve.length - 1].equity_pct : s.strategy_meta.return_pct;
     if (value == null || !Number.isFinite(value)) return "nicht verfügbar";
-    return `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+    const leverage = s.strategy_meta.assumed_leverage;
+    const fraction = s.strategy_meta.assumed_capital_fraction;
+    const assumption = leverage && fraction
+      ? ` · ${leverage.toFixed(0)}× · ${(fraction * 100).toFixed(0)}% Kapital`
+      : "";
+    return `${value >= 0 ? "+" : ""}${value.toFixed(2)}% brutto${assumption}`;
   }
   const bps = s.price_move_meta?.return_bps ?? (s.stats?.return_pct ?? 0) * 100;
   return `${bps >= 0 ? "+" : ""}${bps.toFixed(0)} bps`;
@@ -166,7 +171,7 @@ export default function App() {
   const [isolatedId, setIsolatedId] = useState<string | null>(null);
   const [showPortfolio, setShowPortfolio] = useState(true);
   const [drawer, setDrawer] = useState<DrawerId>(null);
-  const [chartMode, setChartMode] = useState<ChartMode>("account_abs");
+  const [chartMode, setChartMode] = useState<ChartMode>("trade");
   const [showMaxDd, setShowMaxDd] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
@@ -401,15 +406,15 @@ export default function App() {
             : "Bereinigt · Fallback"
           : chartMode === "strategy"
             ? "Strategie-Rendite"
-            : "Price Move · BPS";
+            : "Performance";
   const excludedScopeNote = cashflowReturn?.excluded_bot_ids.includes("counter-sl-reverse")
     ? " Counter SL Reverse is excluded because its ledger is unavailable."
     : "";
   const returnTitle =
     chartMode === "trade"
-      ? "Reine unlevered Entry/Exit-Kursbewegung; 1 % = 100 bps. Keine Equity, Positionsgröße, Leverage, Gebühren oder Funding."
+      ? "Performance = reine unlevered Entry/Exit-Kursbewegung in Basispunkten; 1 % = 100 bps. Keine Equity, Positionsgröße, Leverage, Gebühren oder Funding."
       : chartMode === "strategy"
-        ? "Netto-Strategierendite mit tatsächlicher Notional-/Leverage- und Kostenbasis. Wird nur bei vollständigen historischen Eingaben angezeigt."
+        ? "Brutto-Strategierendite mit je Bot konstant angenommenem aktuellem Railway-Hebel und aktueller Kapitalquote. Historische Gebühren, Funding und Slippage sind nicht vollständig zuordenbar und deshalb ausdrücklich nicht enthalten."
       : chartMode === "account"
         ? `Raw ${range.toUpperCase()} Equity % chart value; deposits and withdrawals remain visible`
         : chartMode === "corrected"
@@ -691,6 +696,12 @@ export default function App() {
               Max DD markers
             </label>
           </div>
+
+          {chartMode === "strategy" && (
+            <p className="mb-2 border border-[var(--line)] bg-[rgba(10,11,15,0.7)] px-2 py-1 text-[9px] leading-relaxed text-[var(--muted)]">
+              Historische Brutto-Annahme mit dem am 23.08.2026 produktiv gesetzten Railway-Hebel und der aktuellen Kapitalquote je Bot. Gebühren, Funding und Slippage sind nicht vollständig pro Trade zuordenbar und nicht enthalten.
+            </p>
+          )}
 
           {/* Single full-bleed hero — drawers overlay this; they never replace it with a second chart */}
           <div className="cockpit-chart relative min-h-0 flex-1 overflow-hidden border border-[var(--line)] bg-[var(--bg-chart)]">

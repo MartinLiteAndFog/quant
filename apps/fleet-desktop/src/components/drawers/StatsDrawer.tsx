@@ -78,7 +78,7 @@ export function StatsDrawer({ series }: Props) {
         <thead className="text-[var(--muted)]">
           <tr className="border-b border-[var(--line)]">
             {header("display_name", "Bot")}
-            {header("return_pct", "Price Move · BPS")}
+            {header("return_pct", "Performance · BPS")}
             {header("max_drawdown_pct", "Max DD · BPS")}
             {header("trade_count", "Trades")}
             {header("win_rate", "Win")}

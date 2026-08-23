@@ -1,16 +1,22 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ColorType,
   createChart,
   type IChartApi,
   type ISeriesApi,
   type LineData,
+  type MouseEventParams,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
 import { rangeWindowUnix } from "../lib/chartTimeDomain";
 import type { BotSeries, ChartMode, PortfolioSeries, RangeKey } from "../types";
 import { correctedCurveOrJumpTwr } from "../lib/performanceMetrics";
+import {
+  latestTradeTime,
+  tradesAtHover,
+  visibleTradeDetails,
+} from "../lib/tradeHover";
 import { RANGE_HOURS } from "../types";
 
 interface Props {
@@ -34,6 +40,43 @@ function asUtc(t: number): UTCTimestamp {
   // Guard ms accidentally leaking through — LWC wants seconds.
   const sec = t > 1e12 ? Math.floor(t / 1000) : Math.floor(t);
   return sec as UTCTimestamp;
+}
+
+function compactPrice(value?: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "nicht erfasst";
+  return value.toLocaleString("de-DE", { maximumFractionDigits: 4 });
+}
+
+function compactDuration(seconds?: number | null): string {
+  if (seconds == null || !Number.isFinite(seconds)) return "Dauer nicht erfasst";
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours} h ${minutes % 60} min`;
+}
+
+function compactTime(value?: number | null): string {
+  if (value == null || !Number.isFinite(value)) return "nicht erfasst";
+  return new Date(value * 1000).toLocaleString("de-DE", {
+    day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+function modePerformance(
+  mode: ChartMode,
+  trade: ReturnType<typeof visibleTradeDetails>[number],
+): string {
+  if (mode === "trade") {
+    return trade.price_move_bps == null
+      ? "Performance nicht erfasst"
+      : `${trade.price_move_bps >= 0 ? "+" : ""}${trade.price_move_bps.toFixed(1)} bps`;
+  }
+  if (mode === "strategy") {
+    return trade.strategy_return_pct == null
+      ? "Strategie-Performance nicht verfügbar"
+      : `${trade.strategy_return_pct >= 0 ? "+" : ""}${trade.strategy_return_pct.toFixed(2)} % brutto`;
+  }
+  return "Nicht einem Einzeltrade zuordenbar";
 }
 
 function toLineData(points: Array<{ t: number; value: number }>): LineData[] {
@@ -370,6 +413,18 @@ export function HeroChart({
   const fittedKeyRef = useRef<string | null>(null);
   const [empty, setEmpty] = useState(false);
   const [pointCount, setPointCount] = useState(0);
+  const [hoverTime, setHoverTime] = useState<number | null>(null);
+  const allTrades = useMemo(
+    () => visibleTradeDetails(series, visibleIds, isolatedId),
+    [isolatedId, series, visibleIds],
+  );
+  const effectiveHoverTime = hoverTime ?? latestTradeTime(allTrades);
+  const hoverTrades = useMemo(
+    () => effectiveHoverTime == null
+      ? []
+      : tradesAtHover(allTrades, effectiveHoverTime, clock?.interval_sec ?? 60),
+    [allTrades, clock?.interval_sec, effectiveHoverTime],
+  );
 
   const fitView = useCallback((active: BotSeries[], useClock: boolean) => {
     const chart = chartRef.current;
@@ -504,6 +559,19 @@ export function HeroChart({
       seriesRef.current.clear();
       seriesKindRef.current = null;
     };
+  }, []);
+
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const onCrosshair = (param: MouseEventParams<Time>) => {
+      const value = typeof param.time === "number" ? param.time : Number(param.time);
+      // Keep the last valid instant when the pointer leaves the plot. This
+      // makes the fixed card stable instead of flashing empty on every edge.
+      if (Number.isFinite(value)) setHoverTime(value);
+    };
+    chart.subscribeCrosshairMove(onCrosshair);
+    return () => chart.unsubscribeCrosshairMove(onCrosshair);
   }, []);
 
   // Range / mode / isolate changes warrant a fresh fit — not live polls.
@@ -802,7 +870,48 @@ export function HeroChart({
   ]);
 
   return (
-    <div className="relative h-full w-full min-h-0">
+    <div className="flex h-full w-full min-h-0">
+      <aside className="flex w-[clamp(245px,24vw,325px)] shrink-0 flex-col overflow-hidden border-r border-[var(--line)] bg-[rgba(10,11,15,0.88)] p-3">
+        <div className="mb-2 border-b border-[var(--line)] pb-2">
+          <p className="text-[9px] font-semibold uppercase tracking-[0.16em] text-[var(--muted)]">Trades am Zeitpunkt</p>
+          <p className="mt-1 text-[11px] text-[var(--text)]">
+            {effectiveHoverTime == null
+              ? "Mit der Maus über den Chart fahren"
+              : new Date(effectiveHoverTime * 1000).toLocaleString("de-DE")}
+          </p>
+          <p className="mt-1 text-[9px] leading-relaxed text-[var(--muted)]">
+            {hoverTrades.length} gleichzeitig aktiv oder hier realisiert
+          </p>
+        </div>
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+          {hoverTrades.length === 0 ? (
+            <p className="py-4 text-[10px] leading-relaxed text-[var(--muted)]">
+              Zu diesem Zeitpunkt ist in der eingelesenen Historie kein Trade aktiv oder realisiert.
+            </p>
+          ) : hoverTrades.map((trade) => (
+            <article key={`${trade.bot_id}:${trade.trade_id}`} className="border border-[var(--line)] bg-[rgba(18,20,25,0.9)] p-2 text-[10px] leading-relaxed">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate font-semibold text-[var(--text)]">
+                  <span className="mr-1.5 inline-block h-2 w-2" style={{ background: trade.color }} />
+                  {trade.display_name}
+                </span>
+                <span className="shrink-0 uppercase text-[var(--muted)]">{trade.side || "Richtung fehlt"}</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-2 text-[var(--muted)]">
+                <span>Entry</span><span className="text-right text-[var(--text)]">{compactPrice(trade.entry_price)}</span>
+                <span>Exit</span><span className="text-right text-[var(--text)]">{compactPrice(trade.exit_price)}</span>
+                <span>Eintritt</span><span className="text-right text-[var(--text)]">{compactTime(trade.entry_t)}</span>
+                <span>Exit-Zeit</span><span className="text-right text-[var(--text)]">{compactTime(trade.exit_t)}</span>
+                <span>Dauer</span><span className="text-right text-[var(--text)]">{compactDuration(trade.duration_sec)}</span>
+                <span>Realisiert</span><span className="text-right text-[var(--text)]">{trade.realized_pnl == null ? "nicht erfasst" : compactPrice(trade.realized_pnl)}</span>
+              </div>
+              <div className="mt-1.5 border-t border-[var(--line)] pt-1.5 font-semibold text-[var(--text)]">{modePerformance(mode, trade)}</div>
+              {!trade.cost_data_complete && <p className="mt-1 text-[9px] text-[var(--muted)]">Kosten/Funding historisch unvollständig</p>}
+            </article>
+          ))}
+        </div>
+      </aside>
+      <div className="relative min-h-0 min-w-0 flex-1">
       <div ref={containerRef} className="h-full w-full min-h-0" />
       {!empty && (
         <button
@@ -822,7 +931,7 @@ export function HeroChart({
           </p>
           <p className="max-w-sm text-[12px] leading-relaxed text-[var(--muted)]">
             {mode === "strategy"
-              ? "Historische Notional-, Leverage-, Gebühren- und Funding-Daten sind nicht vollständig. Fleet schätzt diesen Wert nicht aus der Konto-Equity."
+              ? "Keine abgeschlossenen Trades oder keine explizite aktuelle Hebelannahme für diesen Bot. Fleet erfindet keine fehlenden Werte."
               : "Switch to Equity $ and ALL, then Refresh. Pilots without account history stay flat until they trade or report live equity."}
           </p>
         </div>
@@ -837,6 +946,7 @@ export function HeroChart({
           Stacked cash · top edge = fleet total
         </p>
       )}
+      </div>
     </div>
   );
 }
