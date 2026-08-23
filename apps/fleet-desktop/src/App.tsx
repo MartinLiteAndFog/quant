@@ -383,6 +383,19 @@ export default function App() {
       active.length
     );
   }, [series, isolatedId, visibleIds]);
+  const strategyKpi = useMemo(() => {
+    const active = series.filter((item) =>
+      isolatedId ? item.id === isolatedId : visibleIds.has(item.id),
+    );
+    const available = active.filter((item) => item.strategy_meta?.available);
+    if (isolatedId && available.length === 1) {
+      const value = available[0].strategy_meta?.return_pct;
+      return value == null || !Number.isFinite(value)
+        ? "nicht verfügbar"
+        : `${value >= 0 ? "+" : ""}${value.toFixed(2)}% brutto`;
+    }
+    return available.length ? `${available.length} Strategien` : "nicht verfügbar";
+  }, [isolatedId, series, visibleIds]);
   const rawAccountReturnPct = useMemo(
     () => rawCommonScopeReturnPct(series),
     [series],
@@ -485,8 +498,10 @@ export default function App() {
                 ? tradeReturnBps == null
                   ? "—"
                   : `${tradeReturnBps >= 0 ? "+" : ""}${tradeReturnBps.toFixed(0)} bps`
+                : chartMode === "strategy"
+                  ? strategyKpi
                 : displayedReturnPct == null
-                  ? chartMode === "strategy" ? "nicht verfügbar" : "—"
+                  ? "—"
                   : `${displayedReturnPct >= 0 ? "+" : ""}${displayedReturnPct.toFixed(2)}%`}
             </span>
           </div>
