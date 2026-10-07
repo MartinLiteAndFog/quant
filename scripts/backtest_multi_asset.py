@@ -321,6 +321,7 @@ def run_backtest(
     data_dir: str = "data",
     quiet: bool = False,
     start_date: str = "2024-01-01",
+    renko_source_timeframe: str = "5min",
     **kwargs,
 ) -> dict:
     t0 = time.time()
@@ -336,6 +337,20 @@ def run_backtest(
         ohlcv = load_csv_gz(pair, data_dir, start_date=start_date)
     if not quiet:
         print(f"[{pair}] Loaded {len(ohlcv)} bars, {ohlcv.ts.iloc[0]} -> {ohlcv.ts.iloc[-1]}")
+
+    # TradingView Renko parity: the source timeframe is part of the Renko definition.
+    # Our SOL TradingView charts use 5-minute source bars. Feeding 1-minute bars
+    # directly creates materially more bricks/signals and invalidates parity.
+    if renko_source_timeframe:
+        ohlcv = (
+            ohlcv.set_index("ts")
+            .resample(renko_source_timeframe, label="left", closed="left")
+            .agg({"open": "first", "high": "max", "low": "min", "close": "last"})
+            .dropna(subset=["close"])
+            .reset_index()
+        )
+        if not quiet:
+            print(f"[{pair}] Renko source resampled to {renko_source_timeframe}: {len(ohlcv)} bars")
 
     # Build Renko
     bricks = renko_from_close(ohlcv, box=box)
