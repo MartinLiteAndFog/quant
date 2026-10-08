@@ -208,6 +208,16 @@ export const DEFAULT_BOTS: FleetConfig["bots"] = [
     enabled: true,
   },
   {
+    id: "blaupunkt",
+    display_name: "Blaupunkt",
+    strategy_instance: "blaupunkt",
+    venue: "kucoin",
+    symbol: "SOL-USDT",
+    health_url: "https://blaupunkt-production.up.railway.app/health",
+    color: "#4682b4",
+    enabled: true,
+  },
+  {
     id: "quant-main",
     display_name: "Quant (KuCoin main)",
     strategy_instance: "quant",
