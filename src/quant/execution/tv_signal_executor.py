@@ -1194,6 +1194,86 @@ def _execute_locked(signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
     return {"ok": False, "action": signal.action, "reason": "unknown_action"}
 
 
+def _fresh_margin_qty(
+    broker: KucoinFuturesBroker,
+    config: TVExecConfig,
+    symbol: str,
+    *,
+    attempts: int = 4,
+    delay_sec: float = 0.5,
+) -> int:
+    """Bound a new order by live equity AND actually free margin.
+
+    A close may release collateral after the position endpoint reports flat.
+    Never use cached sizing for a new opening leg and never assume missing
+    available margin is usable. Preserve all existing absolute order caps.
+    """
+    for attempt in range(max(1, attempts)):
+        try:
+            balance = broker.get_account_balance(currency="USDT")
+            equity = float(balance.get("equity") or 0)
+            available = float(balance.get("available") or 0)
+            bid, ask = broker.get_best_bid_ask(symbol)
+            price = (bid + ask) / 2 if bid > 0 and ask > 0 else (ask or bid or 0)
+            mult = _resolve_contract_multiplier(broker, symbol)
+            if equity <= 0 or available <= 0 or price <= 0 or mult <= 0:
+                log.warning(
+                    "tv_executor no usable margin: equity=%.4f available=%.4f price=%.4f",
+                    equity, available, price,
+                )
+                qty = 0
+                target = 0
+            else:
+                target = _live_order_qty(
+                    equity=equity, pos_pct=config.pos_pct,
+                    leverage=config.leverage, mid_price=price,
+                    contract_multiplier=mult,
+                )
+                # Leave 10% of *free* margin untouched for exchange fees,
+                # mark-price movement, and rounding; never enlarge target.
+                affordable = _live_order_qty(
+                    equity=available * 0.90, pos_pct=1.0,
+                    leverage=config.leverage, mid_price=price,
+                    contract_multiplier=mult,
+                )
+                qty = max(0, min(target, affordable))
+            if qty >= target and qty > 0:
+                return qty
+            if attempt < attempts - 1:
+                time.sleep(max(0, delay_sec))
+            else:
+                log.info("tv_executor margin-capped entry qty=%d target=%d", qty, target)
+                return qty
+        except Exception as exc:
+            log.warning("tv_executor fresh margin read failed: %s", exc)
+            if attempt < attempts - 1:
+                time.sleep(max(0, delay_sec))
+    return 0
+
+
+def _open_with_margin_guard(
+    broker: KucoinFuturesBroker,
+    config: TVExecConfig,
+    symbol: str,
+    order_side: str,
+    label: str,
+) -> Tuple[Optional[str], int, Optional[str]]:
+    """Place at most one exchange order. No blind retry after uncertainty."""
+    qty = _fresh_margin_qty(broker, config, symbol)
+    if qty <= 0:
+        return None, 0, "insufficient_available_margin"
+    try:
+        return _place_market(
+            broker, symbol, order_side, qty, reduce_only=False,
+            action_label=label,
+        ), qty, None
+    except RuntimeError as exc:
+        if "insufficient" not in str(exc).lower() or "margin" not in str(exc).lower():
+            raise
+        log.error("tv_executor entry rejected by KuCoin after margin cap: %s", exc)
+        return None, qty, "exchange_insufficient_margin"
+
+
 def _do_flip(
     broker: KucoinFuturesBroker,
     config: TVExecConfig,
@@ -1252,9 +1332,6 @@ def _do_flip(
 
         return {"ok": True, "action": "flip", "reason": "flatten_only_gate_blocked", "qty_closed": close_qty, "order_id": oid}
 
-    if qty <= 0:
-        return {"ok": False, "action": "flip", "reason": "qty_zero_check_equity"}
-
     if config.dry_run:
         log.warning(
             "tv_executor DRY_RUN flip %s->%s close_qty=%d wait=%.1fs open_qty=%d",
@@ -1267,7 +1344,12 @@ def _do_flip(
         }
 
     if current_side == "flat":
-        oid = _place_market(broker, symbol, order_side, qty, reduce_only=False, action_label="flip_entry")
+        oid, qty, failure = _open_with_margin_guard(
+            broker, config, symbol, order_side, "flip_entry"
+        )
+        if failure:
+            _refresh_position_in_cache(broker, config)
+            return {"ok": False, "action": "flip", "reason": failure, "qty": qty}
         pos_after_i = 1 if want_side == "long" else -1
 
         _place_emergency_sl(broker, symbol, want_side, qty, cache.mid_price,
@@ -1342,9 +1424,17 @@ def _do_flip(
             "residual_position": pos_now, "order_id": close_oid,
         }
 
-    open_oid = _place_market(
-        broker, symbol, order_side, qty, reduce_only=False, action_label="flip_open"
+    open_oid, qty, failure = _open_with_margin_guard(
+        broker, config, symbol, order_side, "flip_open"
     )
+    if failure:
+        _refresh_position_in_cache(broker, config)
+        _log_bg(_log_action, symbol=symbol, seq=seq, action="flip_close_only",
+                action_side=want_side, reason="tv_flip_margin_rejected",
+                pos_before=pos_before_i, pos_after=0,
+                blocked=True, block_reason=failure)
+        return {"ok": False, "action": "flip", "reason": failure,
+                "qty": qty, "close_order_id": close_oid}
 
     _place_emergency_sl(broker, symbol, want_side, qty, cache.mid_price,
                         config.emergency_sl_pct, strategy_sl_price,
