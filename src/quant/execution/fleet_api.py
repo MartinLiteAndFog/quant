@@ -65,6 +65,17 @@ _DEFAULT_BOTS: List[Dict[str, Any]] = [
         "cashflow_unavailable_reason": "ledger_credentials_unavailable",
     },
     {
+        "id": "blaupunkt",
+        "display_name": "Blaupunkt",
+        "strategy_instance": "blaupunkt",
+        "equity_account": "blaupunkt",
+        "trade_instances": ["blaupunkt"],
+        "venue": "kucoin",
+        "symbol": "SOL-USDT",
+        "health_url": "https://blaupunkt-production.up.railway.app/health",
+        "color": "#4682b4",
+    },
+    {
         "id": "quant-main",
         "display_name": "Quant (KuCoin main)",
         "strategy_instance": "quant",
