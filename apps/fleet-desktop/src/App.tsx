@@ -142,9 +142,34 @@ export default function App() {
         probeConnection(config),
       ]);
       setConnection(probe);
+      // The Fleet API is authoritative for discovery. Preserve local names,
+      // colors and enabled flags, but automatically enroll newly registered bots.
+      // Do not delete local entries on temporary API failures.
+      const knownIds = new Set(config.bots.map((b) => b.id));
+      const additions = remote.filter((b) => b.id && !knownIds.has(b.id)).map((b) => ({
+        id: b.id,
+        display_name: b.display_name || b.id,
+        strategy_instance: b.strategy_instance || b.id,
+        venue: b.venue || "kucoin",
+        symbol: b.symbol || "SOL-USDT",
+        health_url: b.health_url || "",
+        color: b.color || "#6b8fad",
+        enabled: true,
+      }));
+      const localBots = additions.length ? [...config.bots, ...additions] : config.bots;
+      if (additions.length) {
+        setConfig((current) => {
+          const currentIds = new Set(current.bots.map((b) => b.id));
+          const fresh = additions.filter((b) => !currentIds.has(b.id));
+          if (!fresh.length) return current;
+          const next = { ...current, bots: [...current.bots, ...fresh] };
+          saveConfig(next);
+          return next;
+        });
+      }
       const byId = new Map(remote.map((b) => [b.id, b]));
       const hitById = new Map(probe.healthHits.map((h) => [h.id, h]));
-      const merged: FleetBot[] = config.bots
+      const merged: FleetBot[] = localBots
         .filter((b) => b.enabled)
         .map((local) => {
           const r = byId.get(local.id);
@@ -161,9 +186,7 @@ export default function App() {
       setBots(merged);
       setVisibleIds((prev) => {
         const next = new Set(prev);
-        for (const b of merged) {
-          if (!prev.size) next.add(b.id);
-        }
+        for (const b of additions) next.add(b.id);
         if (!next.size) return new Set(merged.map((b) => b.id));
         return next;
       });
