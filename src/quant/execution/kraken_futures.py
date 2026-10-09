@@ -7,6 +7,7 @@ import hmac
 import json
 import os
 import time
+import threading
 import urllib.parse
 import urllib.request
 from typing import Any, Dict, List, Optional
@@ -14,6 +15,20 @@ from typing import Any, Dict, List, Optional
 from quant.utils.log import get_logger
 
 log = get_logger("quant.kraken_futures")
+
+# Shared among all KrakenFuturesClient instances in this process. The original
+# millisecond timestamp nonce could be reused by concurrent health/poll/order
+# calls; Kraken rejects reused or lower nonces with nonceBelowThreshold.
+_NONCE_LOCK = threading.Lock()
+_LAST_NONCE = 0
+
+
+def _next_nonce() -> str:
+    global _LAST_NONCE
+    with _NONCE_LOCK:
+        _LAST_NONCE = max(int(time.time() * 1000), _LAST_NONCE + 1)
+        return str(_LAST_NONCE)
+
 
 
 class KrakenFuturesClient:
@@ -76,7 +91,7 @@ class KrakenFuturesClient:
             body = urllib.parse.urlencode(params).encode("utf-8")
 
         if private:
-            nonce = str(int(time.time() * 1000))
+            nonce = _next_nonce()
             headers.update(self._signed_headers(endpoint_path, body, nonce))
 
         req = urllib.request.Request(
