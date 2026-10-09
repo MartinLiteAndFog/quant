@@ -34,6 +34,7 @@ class DummyKrakenClient:
             "wallet_usd": self.equity_usd,
             "upnl_usd": 0.0,
             "equity_usd": self.equity_usd,
+            "available_usd": self.equity_usd,
         }
 
     def get_position(self, symbol=None) -> dict:
@@ -78,6 +79,7 @@ def _config(**overrides) -> KrakenTVConfig:
         "cancel_reduce_only_on_flip": True,
         "verify_after_order": True,
         "refill_partial": False,
+        "flat_first_flip": False,  # Explicitly pin existing optimistic-path tests.
     }
     values.update(overrides)
     return KrakenTVConfig(**values)
@@ -157,6 +159,33 @@ class KrakenTVExecutorTests(unittest.TestCase):
             ],
         )
         self.assertEqual(client.position_signed, -9.0)
+
+    def test_live_flat_first_closes_residual_before_reopen(self) -> None:
+        client = DummyKrakenClient(position_signed=-0.1, equity_usd=150.0, mark_price=110.0)
+        res = execute_kraken_tv_signal(
+            _signal("flip", "buy"), _config(dry_run=False, flat_first_flip=True), client
+        )
+        self.assertTrue(res["ok"])
+        self.assertEqual(res["fallback_reason"], "flat_first")
+        self.assertEqual(client.market_orders[0], {
+            "side": "buy", "size": 0.1, "symbol": "PF_SOLUSD", "reduce_only": True
+        })
+        self.assertTrue(client.market_orders[1]["side"] == "buy")
+        self.assertFalse(client.market_orders[1]["reduce_only"])
+        self.assertLess(client.market_orders[1]["size"], 14.0)
+        self.assertAlmostEqual(client.position_signed, client.market_orders[1]["size"], places=5)
+
+    def test_same_side_residual_uses_available_margin(self) -> None:
+        client = DummyKrakenClient(position_signed=0.1, equity_usd=150.0, mark_price=110.0)
+        # Expose only $90 free (rest collateral reserved for other reasons).
+        client.get_account_equity = lambda: {"equity_usd": 150.0, "available_usd": 90.0}
+        res = execute_kraken_tv_signal(
+            _signal("flip", "buy"), _config(dry_run=False, flat_first_flip=True), client
+        )
+        self.assertTrue(res["ok"])
+        self.assertEqual(len(client.market_orders), 1)
+        self.assertLess(client.market_orders[0]["size"], 9.0)
+        self.assertAlmostEqual(client.position_signed, 0.1 + client.market_orders[0]["size"], places=5)
 
     def test_flip_resizes_from_equity_with_unrealized_pnl_before_close(self) -> None:
         client = DummyKrakenClient(position_signed=9.0, equity_usd=111.0, mark_price=100.0)
