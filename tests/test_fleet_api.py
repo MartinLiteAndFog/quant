@@ -187,6 +187,34 @@ class CashflowCorrectedReturnTests(unittest.TestCase):
             places=5,
         )
 
+    def test_corrected_curve_matches_scalar_end_return(self) -> None:
+        from quant.execution.fleet_api import (
+            _cashflow_corrected_curve,
+            _cashflow_corrected_return,
+        )
+
+        points = [
+            {"t": 100, "equity": 100.0},
+            {"t": 200, "equity": 160.0},
+            {"t": 300, "equity": 176.0},
+        ]
+        flows = [{"t": 150, "reporting_amount": 50.0, "equity_after": None}]
+        curve = _cashflow_corrected_curve(points, flows)
+        self.assertEqual(curve[0], {"t": 100, "equity_pct": 0.0})
+        scalar = _cashflow_corrected_return(points, flows)
+        self.assertIsNotNone(scalar)
+        self.assertAlmostEqual(curve[-1]["equity_pct"], float(scalar), places=5)
+        self.assertAlmostEqual(curve[1]["equity_pct"], 10.0, places=5)
+        self.assertAlmostEqual(curve[2]["equity_pct"], 21.0, places=5)
+
+    def test_corrected_curve_empty_when_insufficient_points(self) -> None:
+        from quant.execution.fleet_api import _cashflow_corrected_curve
+
+        self.assertEqual(
+            _cashflow_corrected_curve([{"t": 1, "equity": 100.0}], []),
+            [],
+        )
+
     def test_portfolio_is_value_weighted_and_excludes_unavailable_bot(self) -> None:
         from quant.execution.fleet_api import _build_cashflow_return
 
@@ -359,6 +387,184 @@ class CashflowCorrectedReturnTests(unittest.TestCase):
         self.assertIsNone(metric["return_pct"])
         self.assertEqual(metric["reason"], "ledger_sync_unavailable")
         self.assertEqual(metric["unavailable_bot_ids"], ["a"])
+
+
+class BotCorrectedPayloadTests(unittest.TestCase):
+    def test_inactive_bot_has_empty_curve_but_still_loads_cashflows(self) -> None:
+        from quant.execution.fleet_api import _bot_corrected_payload
+
+        flows = [
+            {
+                "t": 150,
+                "reporting_amount": -20.0,
+                "direction": "out",
+                "currency": "USDT",
+                "flow_type": "TransferOut",
+                "amount": -20.0,
+                "status": "completed",
+                "equity_after": None,
+                "source_ref": "x",
+            }
+        ]
+        state = {
+            "coverage_start": pd.Timestamp(90, unit="s", tz="UTC"),
+            "coverage_end": pd.Timestamp(200, unit="s", tz="UTC"),
+            "last_success_at": pd.Timestamp(200, unit="s", tz="UTC"),
+            "last_error": None,
+            "source": "test",
+        }
+        with patch(
+            "quant.execution.fleet_api._load_cashflow_data",
+            return_value=(flows, state),
+        ) as load:
+            out = _bot_corrected_payload(
+                abs_points=[
+                    {"t": 100, "equity": 100.0},
+                    {"t": 200, "equity": 80.0},
+                ],
+                venue="kucoin",
+                account="a",
+                since=pd.Timestamp(100, unit="s", tz="UTC"),
+                until_ts=200,
+                bot_status="down",
+                bot_disabled=False,
+            )
+        load.assert_called_once()
+        self.assertEqual(out["corrected_curve"], [])
+        self.assertEqual(out["corrected_meta"]["method"], "unavailable")
+        self.assertEqual(out["corrected_meta"]["reason"], "inactive")
+        self.assertEqual(len(out["cashflows"]), 1)
+
+    def test_active_without_sync_uses_jump_twr(self) -> None:
+        from quant.execution.fleet_api import _bot_corrected_payload
+
+        pts = [
+            {"t": 100, "equity": 100.0},
+            {"t": 200, "equity": 102.0},
+            {"t": 300, "equity": 300.0},
+            {"t": 400, "equity": 306.0},
+        ]
+        with patch(
+            "quant.execution.fleet_api._load_cashflow_data",
+            return_value=([], None),
+        ):
+            out = _bot_corrected_payload(
+                abs_points=pts,
+                venue="kucoin",
+                account="a",
+                since=pd.Timestamp(100, unit="s", tz="UTC"),
+                until_ts=400,
+                bot_status="live",
+                bot_disabled=False,
+            )
+        self.assertEqual(out["corrected_meta"]["method"], "jump_twr")
+        self.assertAlmostEqual(out["corrected_curve"][-1]["equity_pct"], 4.04, places=5)
+
+    def test_active_with_ledger_uses_cashflow_curve(self) -> None:
+        from quant.execution.fleet_api import _bot_corrected_payload
+
+        pts = [
+            {"t": 100, "equity": 100.0},
+            {"t": 200, "equity": 160.0},
+        ]
+        flows = [
+            {
+                "t": 150,
+                "reporting_amount": 50.0,
+                "direction": "in",
+                "currency": "USDT",
+                "flow_type": "TransferIn",
+                "amount": 50.0,
+                "status": "completed",
+                "equity_after": None,
+                "source_ref": "y",
+            }
+        ]
+        state = {
+            "coverage_start": pd.Timestamp(90, unit="s", tz="UTC"),
+            "coverage_end": pd.Timestamp(200, unit="s", tz="UTC"),
+            "last_success_at": pd.Timestamp(200, unit="s", tz="UTC"),
+            "last_error": None,
+            "source": "test",
+        }
+        with patch(
+            "quant.execution.fleet_api._load_cashflow_data",
+            return_value=(flows, state),
+        ):
+            out = _bot_corrected_payload(
+                abs_points=pts,
+                venue="kucoin",
+                account="a",
+                since=pd.Timestamp(100, unit="s", tz="UTC"),
+                until_ts=200,
+                bot_status="live",
+                bot_disabled=False,
+            )
+        self.assertEqual(out["corrected_meta"]["method"], "ledger")
+        self.assertAlmostEqual(out["corrected_curve"][-1]["equity_pct"], 10.0, places=5)
+        self.assertEqual(out["corrected_meta"]["flow_count"], 1)
+        self.assertEqual(out["corrected_meta"]["net_cashflow"], 50.0)
+
+
+class BuildFleetCorrectedCurveTests(unittest.TestCase):
+    def test_performance_series_includes_corrected_fields(self) -> None:
+        registry = [
+            {
+                "id": "a",
+                "display_name": "A",
+                "strategy_instance": "a",
+                "venue": "kucoin",
+                "symbol": "SOL-USDT",
+                "color": "#fff",
+            }
+        ]
+        acct = [
+            {"t": 100, "equity": 100.0, "currency": "USDT"},
+            {"t": 200, "equity": 110.0, "currency": "USDT"},
+        ]
+        corrected = {
+            "corrected_curve": [
+                {"t": 100, "equity_pct": 0.0},
+                {"t": 200, "equity_pct": 10.0},
+            ],
+            "corrected_meta": {
+                "method": "jump_twr",
+                "available": True,
+                "reason": None,
+                "flow_count": 0,
+                "net_cashflow": 0.0,
+                "source": "db",
+            },
+            "cashflows": [],
+        }
+        with patch(
+            "quant.execution.fleet_api.fleet_bot_registry", return_value=registry
+        ), patch(
+            "quant.execution.fleet_api.list_fleet_bots",
+            return_value={
+                "bots": [{"id": "a", "status": "live", "equity": 110.0}]
+            },
+        ), patch(
+            "quant.execution.fleet_api._load_display_trades_for_bot",
+            return_value=pd.DataFrame(),
+        ), patch(
+            "quant.execution.fleet_api._load_account_points_for_bot",
+            return_value=acct,
+        ), patch(
+            "quant.execution.fleet_api._bot_corrected_payload",
+            return_value=corrected,
+        ), patch(
+            "quant.execution.fleet_api._build_cashflow_return",
+            return_value={"available": False},
+        ):
+            out = build_fleet_performance(hours=0)
+        row = out["series"][0]
+        self.assertIn("corrected_curve", row)
+        self.assertIn("corrected_meta", row)
+        self.assertIn("cashflows", row)
+        self.assertEqual(row["corrected_meta"]["method"], "jump_twr")
+        self.assertIn("corrected_curve", out["portfolio"])
+        self.assertTrue(len(out["portfolio"]["corrected_curve"]) >= 1)
 
 
 class FleetRegistryTests(unittest.TestCase):
