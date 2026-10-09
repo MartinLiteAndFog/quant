@@ -224,29 +224,41 @@ class TestPlaceOpenWithMarginRetry(unittest.TestCase):
         self.assertEqual(len(client.orders), 1, "must not retry a non-funds rejection")
 
     def test_surfaces_the_rejection_when_genuinely_broke(self) -> None:
-        # No collateral at all: attempts still happen (so the failure is visible
-        # to TradingView and the logs) and the error propagates rather than the
-        # bot quietly sitting flat.
+        # No verified free margin: reject safely rather than place a blind
+        # opening order that Kraken cannot collateralize.
         client = _FakeClient([0.0], reject_below=0.0)
         with self.assertRaises(RuntimeError):
             _place_open_with_margin_retry(
                 client, _config(), side="buy", size=58.3, mark_price=MARK, equity_usd=EQUITY,
             )
-        self.assertGreater(len(client.orders), 0, "must have actually tried")
+        self.assertEqual(len(client.orders), 0, "must not send without free margin")
 
-    def test_missing_available_field_still_places_the_order(self) -> None:
-        # Regression guard: an account payload without `available_usd` once made
-        # sizing collapse to 0 and skip the reopen entirely.
+    def test_missing_available_field_refuses_unverified_open(self) -> None:
+        # A missing balance field is not proof that margin is free.
         class _NoAvailable(_FakeClient):
             def get_account_equity(self):
                 return {"equity_usd": EQUITY, "wallet_usd": EQUITY}
 
         client = _NoAvailable([EQUITY])
+        with self.assertRaisesRegex(RuntimeError, "no verified usable free margin"):
+            _place_open_with_margin_retry(
+                client, _config(), side="buy", size=58.3, mark_price=MARK, equity_usd=EQUITY,
+            )
+        self.assertEqual(client.orders, [])
+
+    def test_2026_10_09_same_size_rejections_now_shrink(self) -> None:
+        # Reported collateral can be stale/overstated while exchange rejects:
+        # the observed 14.1 -> 14.1 -> 14.1 must never happen again.
+        client = _FakeClient([180.0], reject_below=140.0)
         result, size = _place_open_with_margin_retry(
-            client, _config(), side="buy", size=58.3, mark_price=MARK, equity_usd=EQUITY,
+            client, _config(), side="buy", size=14.1,
+            mark_price=110.0, equity_usd=180.0,
         )
         self.assertIsNotNone(result)
-        self.assertEqual(size, 58.3)
+        self.assertLess(size, 14.1)
+        self.assertEqual(client.orders[0]["size"], 14.1)
+        self.assertLess(client.orders[1]["size"], client.orders[0]["size"])
+
 
 
 if __name__ == "__main__":
