@@ -98,6 +98,7 @@ class KrakenTVConfig:
     margin_wait_attempts: int = 8
     margin_wait_delay_sec: float = 0.5
     open_retry_attempts: int = 3
+    flat_first_flip: bool = True
 
     @classmethod
     def from_env(cls) -> "KrakenTVConfig":
@@ -126,6 +127,7 @@ class KrakenTVConfig:
             margin_wait_attempts=int(float(_env_first("KRAKEN_TV_MARGIN_WAIT_ATTEMPTS", default="8"))),
             margin_wait_delay_sec=float(_env_first("KRAKEN_TV_MARGIN_WAIT_DELAY_SEC", default="0.5")),
             open_retry_attempts=int(float(_env_first("KRAKEN_TV_OPEN_RETRY_ATTEMPTS", default="3"))),
+            flat_first_flip=_truthy(_env_first("KRAKEN_TV_FLAT_FIRST_FLIP", default="1")),
         )
 
 
@@ -381,55 +383,68 @@ def _place_open_with_margin_retry(
     mark_price: float,
     equity_usd: float,
 ) -> Tuple[Optional[Dict[str, Any]], float]:
-    """Place the reopen, shrinking to fit if Kraken still reports insufficient funds.
+    """Open only against confirmed free margin, with bounded shrink-on-rejection.
 
-    Margin release can lag past the bounded wait, so a first attempt may still be
-    rejected. Rather than losing the signal entirely — which is what happened on
-    2026-07-25, leaving the account flat after a successful close — re-read free
-    collateral and retry at a size it can actually back. The size never grows
-    between attempts. Returns the order result and the size actually sent.
+    An account-equity read with missing available margin cannot authorize an
+    opening order. A Kraken funds rejection must lower the next attempted size:
+    repeating the same size is not a retry.
     """
     attempts = max(1, int(config.open_retry_attempts))
-    current = float(size)
+    current = _floor_to_step(float(size), config.size_step)
     for attempt in range(attempts):
         if current <= 0:
-            return None, 0.0
+            raise RuntimeError("kraken tv open aborted: order size below minimum step")
+
+        free = _available_margin_usd(client)
+        usable = (
+            free * max(0.0, min(float(config.margin_buffer), 1.0))
+            if free is not None else None
+        )
+        minimum_margin = _margin_required_usd(config.size_step, mark_price, config.leverage)
+        if usable is None or usable < minimum_margin:
+            if attempt < attempts - 1:
+                time.sleep(max(0.0, float(config.margin_wait_delay_sec)))
+                continue
+            raise RuntimeError(
+                "kraken tv open aborted: no verified usable free margin "
+                f"(available={free}, minimum_required={minimum_margin:.4f})"
+            )
+
+        fitted = _size_within_available(
+            equity_usd=equity_usd,
+            available_usd=free,
+            mark_price=mark_price,
+            leverage=config.leverage,
+            pos_pct=config.pos_pct,
+            step=config.size_step,
+            buffer=config.margin_buffer,
+        )
+        current = min(current, fitted)
+        if current <= 0:
+            raise RuntimeError("kraken tv open aborted: margin-capped size below step")
+
         try:
             result = _place_market_checked(
-                client,
-                side,
-                size=current,
-                symbol=config.venue_symbol,
-                reduce_only=False,
-                label="kraken tv fallback open",
+                client, side, size=current, symbol=config.venue_symbol,
+                reduce_only=False, label="kraken tv margin-checked open",
             )
             return result, current
         except RuntimeError as exc:
             if not _is_insufficient_funds(exc) or attempt == attempts - 1:
                 raise
-            time.sleep(max(0.0, float(config.margin_wait_delay_sec)))
-            resized = _size_within_available(
-                equity_usd=equity_usd,
-                available_usd=_available_margin_usd(client),
-                mark_price=mark_price,
-                leverage=config.leverage,
-                pos_pct=config.pos_pct,
-                step=config.size_step,
-                buffer=config.margin_buffer,
-            )
-            # Never grow the order on a retry — only ever fit it to what is free.
-            resized = min(resized, current)
-            if resized <= 0:
-                raise
+            smaller = _floor_to_step(current * 0.85, config.size_step)
+            if smaller <= 0 or smaller >= current:
+                raise RuntimeError(
+                    f"kraken tv open rejected at minimum viable size {current}"
+                ) from exc
             log.warning(
-                "kraken tv fallback open rejected for funds (attempt %s/%s): retrying %s -> %s",
-                attempt + 1,
-                attempts,
-                current,
-                resized,
+                "kraken tv open rejected for funds (attempt %s/%s): "
+                "reducing %s -> %s (free_margin=%.2f)",
+                attempt + 1, attempts, current, smaller, free,
             )
-            current = resized
-    return None, 0.0
+            current = smaller
+            time.sleep(max(0.0, float(config.margin_wait_delay_sec)))
+    raise RuntimeError("kraken tv open exhausted retries")
 
 
 def _wait_for_flat(
@@ -609,31 +624,35 @@ def _execute_target_side(
             cancel_result = client.cancel_all_reduce_only_orders(symbol=config.venue_symbol)
 
         if direction_change:
-            try:
-                order_result = _place_market_checked(
-                    client,
-                    order_side,
-                    size=order_size,
-                    symbol=config.venue_symbol,
-                    reduce_only=False,
-                    label="kraken tv optimistic flip",
-                )
-            except RuntimeError as exc:
-                net_order_error = str(exc)
+            if config.flat_first_flip:
+                fallback_reason = "flat_first"
+                net_position_after, net_signed_after = pos_raw, current_signed
+            else:
+                try:
+                    order_result = _place_market_checked(
+                        client,
+                        order_side,
+                        size=order_size,
+                        symbol=config.venue_symbol,
+                        reduce_only=False,
+                        label="kraken tv optimistic flip",
+                    )
+                except RuntimeError as exc:
+                    net_order_error = str(exc)
 
-            net_position_after, net_signed_after = _position_snapshot(client, config.venue_symbol)
-            if net_order_error:
-                fallback_reason = "net_order_rejected"
-            elif _at_target(float(net_signed_after or 0.0), desired_signed, config.size_step):
-                fallback_reason = None
-            elif _opposite_direction(float(net_signed_after or 0.0), desired_signed):
-                fallback_reason = "net_order_left_old_side"
-            elif abs(float(net_signed_after or 0.0)) <= _position_tolerance(config.size_step):
-                fallback_reason = "net_order_left_flat"
-            elif config.refill_partial and _same_direction(float(net_signed_after or 0.0), desired_signed):
-                fallback_reason = "net_order_partial_refill"
+                net_position_after, net_signed_after = _position_snapshot(client, config.venue_symbol)
+                if net_order_error:
+                    fallback_reason = "net_order_rejected"
+                elif _at_target(float(net_signed_after or 0.0), desired_signed, config.size_step):
+                    fallback_reason = None
+                elif _opposite_direction(float(net_signed_after or 0.0), desired_signed):
+                    fallback_reason = "net_order_left_old_side"
+                elif abs(float(net_signed_after or 0.0)) <= _position_tolerance(config.size_step):
+                    fallback_reason = "net_order_left_flat"
+                elif config.refill_partial and _same_direction(float(net_signed_after or 0.0), desired_signed):
+                    fallback_reason = "net_order_partial_refill"
 
-            if fallback_reason in {"net_order_rejected", "net_order_left_old_side", "net_order_left_flat"}:
+            if fallback_reason in {"flat_first", "net_order_rejected", "net_order_left_old_side", "net_order_left_flat"}:
                 fallback_used = True
                 after_signed = float(net_signed_after or 0.0)
                 if abs(after_signed) > _position_tolerance(config.size_step):
@@ -737,14 +756,21 @@ def _execute_target_side(
             order_plan[0]["reduce_only"] = reducing_same_side
 
         if not direction_change and order_size > 0:
-            order_result = _place_market_checked(
-                client,
-                order_side,
-                size=order_size,
-                symbol=config.venue_symbol,
-                reduce_only=bool(order_plan[-1]["reduce_only"]),
-                label="kraken tv target entry",
-            )
+            if bool(order_plan[-1]["reduce_only"]):
+                order_result = _place_market_checked(
+                    client, order_side, size=order_size,
+                    symbol=config.venue_symbol, reduce_only=True,
+                    label="kraken tv target reduction",
+                )
+            else:
+                # Covers a fresh entry AND retargeting from a residual 0.1-SOL
+                # position: neither may allocate more than verified free margin.
+                order_result, order_size = _place_open_with_margin_retry(
+                    client, config, side=order_side, size=order_size,
+                    mark_price=mark, equity_usd=equity_usd,
+                )
+                order_plan[0]["size"] = order_size
+                desired_signed = current_signed + (order_size if order_side == "buy" else -order_size)
 
         if config.verify_after_order:
             position_after = client.get_position(symbol=config.venue_symbol)
