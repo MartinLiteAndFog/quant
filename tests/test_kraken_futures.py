@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from quant.execution.kraken_futures import KrakenFuturesClient
+from quant.execution.kraken_futures import KrakenFuturesClient, _next_nonce
 
 
 class KrakenFuturesClientPriceTests(unittest.TestCase):
@@ -55,6 +55,17 @@ class KrakenFuturesClientPriceTests(unittest.TestCase):
 
         self.assertEqual(calls[-1][1], "/derivatives/api/v3/sendorder")
         self.assertEqual(calls[-1][2]["stopPrice"], "80.54000000")
+
+
+class KrakenNonceTests(unittest.TestCase):
+    def test_two_client_requests_same_millisecond_get_distinct_nonces(self) -> None:
+        from unittest.mock import patch
+
+        with patch("quant.execution.kraken_futures.time.time", return_value=12345678.0):
+            generated = [int(_next_nonce()) for _ in range(200)]
+        self.assertEqual(len(generated), len(set(generated)))
+        self.assertEqual(generated, sorted(generated))
+
 
 
 if __name__ == "__main__":
