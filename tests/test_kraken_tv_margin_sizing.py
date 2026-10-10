@@ -249,10 +249,12 @@ class TestPlaceOpenWithMarginRetry(unittest.TestCase):
     def test_2026_10_09_same_size_rejections_now_shrink(self) -> None:
         # Reported collateral can be stale/overstated while exchange rejects:
         # the observed 14.1 -> 14.1 -> 14.1 must never happen again.
-        client = _FakeClient([180.0], reject_below=140.0)
+        # Fake exchange prices orders at MARK; use that same price and a
+        # rejection threshold below the first order's margin requirement.
+        client = _FakeClient([180.0], reject_below=100.0)
         result, size = _place_open_with_margin_retry(
             client, _config(), side="buy", size=14.1,
-            mark_price=110.0, equity_usd=180.0,
+            mark_price=MARK, equity_usd=180.0,
         )
         self.assertIsNotNone(result)
         self.assertLess(size, 14.1)

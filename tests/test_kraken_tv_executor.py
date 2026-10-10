@@ -114,9 +114,13 @@ class KrakenTVExecutorTests(unittest.TestCase):
         self.assertEqual(res["target_size"], 9.0)
         self.assertEqual(res["desired_signed"], -9.0)
         self.assertEqual(res["order_side"], "sell")
-        self.assertEqual(res["order_size"], 18.0)
-        self.assertFalse(res["fallback_used"])
-        self.assertEqual(client.market_orders, [{"side": "sell", "size": 18.0, "symbol": "PF_SOLUSD", "reduce_only": False}])
+        # Legacy optimistic-flip configuration must no longer skip closing.
+        self.assertEqual(res["order_size"], 9.0)
+        self.assertTrue(res["fallback_used"])
+        self.assertEqual(client.market_orders, [
+            {"side": "sell", "size": 9.0, "symbol": "PF_SOLUSD", "reduce_only": True},
+            {"side": "sell", "size": 9.0, "symbol": "PF_SOLUSD", "reduce_only": False},
+        ])
         self.assertEqual(client.position_signed, -9.0)
         self.assertEqual(client.cancel_calls, ["PF_SOLUSD"])
 
@@ -145,20 +149,12 @@ class KrakenTVExecutorTests(unittest.TestCase):
                 return super().place_market(side, size, symbol=symbol, reduce_only=reduce_only, cli_ord_id=cli_ord_id)
 
         client = RejectFirstClient(position_signed=9.0, equity_usd=100.0, mark_price=100.0)
-        res = execute_kraken_tv_signal(_signal("flip", "sell"), _config(dry_run=False), client)
-
-        self.assertTrue(res["fallback_used"])
-        self.assertEqual(res["fallback_reason"], "net_order_rejected")
-        self.assertIn("insufficientavailablefunds", res["net_order_error"])
-        self.assertEqual(
-            client.market_orders,
-            [
-                {"side": "sell", "size": 18.0, "symbol": "PF_SOLUSD", "reduce_only": False},
-                {"side": "sell", "size": 9.0, "symbol": "PF_SOLUSD", "reduce_only": True},
-                {"side": "sell", "size": 9.0, "symbol": "PF_SOLUSD", "reduce_only": False},
-            ],
-        )
-        self.assertEqual(client.position_signed, -9.0)
+        with self.assertRaisesRegex(RuntimeError, "close all rejected"):
+            execute_kraken_tv_signal(_signal("flip", "sell"), _config(dry_run=False), client)
+        self.assertEqual(client.market_orders, [
+            {"side": "sell", "size": 9.0, "symbol": "PF_SOLUSD", "reduce_only": True},
+        ])
+        self.assertEqual(client.position_signed, 9.0)
 
     def test_live_flat_first_closes_residual_before_reopen(self) -> None:
         client = DummyKrakenClient(position_signed=-0.1, equity_usd=150.0, mark_price=110.0)

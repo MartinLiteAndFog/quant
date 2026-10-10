@@ -5,7 +5,7 @@ import os
 import threading
 import time
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_FLOOR
+from decimal import Decimal, ROUND_CEILING, ROUND_FLOOR
 from typing import Any, Dict, Optional, Tuple
 
 from quant.execution.kraken_futures import KrakenFuturesClient
@@ -98,6 +98,7 @@ class KrakenTVConfig:
     margin_wait_attempts: int = 8
     margin_wait_delay_sec: float = 0.5
     open_retry_attempts: int = 3
+    # Kept for config compatibility; flips always close fully before opening.
     flat_first_flip: bool = True
 
     @classmethod
@@ -454,15 +455,59 @@ def _wait_for_flat(
     attempts: int = 3,
     delay_sec: float = 0.25,
 ) -> Tuple[Dict[str, Any], float]:
-    tolerance = _position_tolerance(step)
     last_pos, last_signed = _position_snapshot(client, venue_symbol)
     for attempt in range(max(1, attempts)):
-        if abs(last_signed) <= tolerance:
+        # Entry-size precision must never turn a real residual into "flat".
+        if last_signed == 0.0:
             return last_pos, last_signed
         if attempt < attempts - 1:
             time.sleep(delay_sec)
             last_pos, last_signed = _position_snapshot(client, venue_symbol)
     return last_pos, last_signed
+
+
+def _close_all_size(size_signed: float, step: float) -> float:
+    """Cover the whole position; Kraken caps oversized reduce-only orders."""
+    if not math.isfinite(size_signed) or not math.isfinite(step) or step <= 0:
+        raise RuntimeError("kraken tv close aborted: invalid position size or step")
+    step_dec = Decimal(str(step))
+    units = (Decimal(str(abs(size_signed))) / step_dec).to_integral_value(rounding=ROUND_CEILING)
+    return float(units * step_dec)
+
+
+def _close_all_for_flip(
+    client: KrakenFuturesClient,
+    config: KrakenTVConfig,
+    attempts: int = 3,
+) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], float]:
+    """Retry remaining size after partial fills, and fail closed if not flat."""
+    result = None
+    position, signed = _position_snapshot(client, config.venue_symbol)
+    for attempt in range(max(1, attempts)):
+        if signed == 0.0:
+            return result, position, signed
+        size = _close_all_size(signed, config.size_step)
+        try:
+            result = _place_market_checked(
+                client,
+                "sell" if signed > 0 else "buy",
+                size=size,
+                symbol=config.venue_symbol,
+                reduce_only=True,
+                label="kraken tv close all",
+            )
+        except RuntimeError:
+            # A native stop can flatten between the snapshot and close order.
+            position, signed = _position_snapshot(client, config.venue_symbol)
+            if signed == 0.0:
+                return result, position, signed
+            raise
+        position, signed = _wait_for_flat(client, config.venue_symbol, config.size_step)
+        if signed != 0.0:
+            log.warning("kraken tv close all attempt=%s remaining=%s", attempt + 1, signed)
+    if signed != 0.0:
+        raise RuntimeError(f"kraken tv close all did not flatten position: signed={signed}")
+    return result, position, signed
 
 
 def execute_kraken_tv_signal(
@@ -559,8 +604,12 @@ def _execute_target_side(
     delta = desired_signed - current_signed
     order_size = _floor_to_step(abs(delta), config.size_step)
     order_side = "buy" if delta > 0 else "sell"
+    direction_change = current_signed != 0.0 and (
+        (current_signed > 0.0 and signal.side == "sell")
+        or (current_signed < 0.0 and signal.side == "buy")
+    )
 
-    if target_abs <= 0 or order_size <= 0:
+    if (target_abs <= 0 or order_size <= 0) and not direction_change:
         return {
             "ok": True,
             "action": signal.action,
@@ -576,7 +625,6 @@ def _execute_target_side(
             "dry_run": config.dry_run,
         }
 
-    direction_change = _opposite_direction(current_signed, desired_signed)
     cancel_result: Optional[Dict[str, Any]] = None
     close_result: Optional[Dict[str, Any]] = None
     close_position_after = None
@@ -601,13 +649,13 @@ def _execute_target_side(
     ]
 
     if direction_change:
-        order_plan[0]["role"] = "optimistic_net_flip"
+        order_plan = []
         order_plan.append(
             {
                 "side": "sell" if current_signed > 0 else "buy",
-                "size": _floor_to_step(abs(current_signed), config.size_step),
+                "size": _close_all_size(current_signed, config.size_step),
                 "reduce_only": True,
-                "role": "fallback_close_current",
+                "role": "close_all_current",
             }
         )
         order_plan.append(
@@ -615,7 +663,7 @@ def _execute_target_side(
                 "side": signal.side,
                 "size": target_abs,
                 "reduce_only": False,
-                "role": "fallback_open_target",
+                "role": "open_target_after_flat",
             }
         )
 
@@ -624,128 +672,62 @@ def _execute_target_side(
             cancel_result = client.cancel_all_reduce_only_orders(symbol=config.venue_symbol)
 
         if direction_change:
-            if config.flat_first_flip:
-                fallback_reason = "flat_first"
-                net_position_after, net_signed_after = pos_raw, current_signed
-            else:
-                try:
-                    order_result = _place_market_checked(
-                        client,
-                        order_side,
-                        size=order_size,
-                        symbol=config.venue_symbol,
-                        reduce_only=False,
-                        label="kraken tv optimistic flip",
-                    )
-                except RuntimeError as exc:
-                    net_order_error = str(exc)
+            # Close-first is mandatory even with a legacy flat_first_flip=False.
+            fallback_reason = "flat_first"
+            fallback_used = True
+            close_result, close_position_after, close_signed_after = _close_all_for_flip(client, config)
 
-                net_position_after, net_signed_after = _position_snapshot(client, config.venue_symbol)
-                if net_order_error:
-                    fallback_reason = "net_order_rejected"
-                elif _at_target(float(net_signed_after or 0.0), desired_signed, config.size_step):
-                    fallback_reason = None
-                elif _opposite_direction(float(net_signed_after or 0.0), desired_signed):
-                    fallback_reason = "net_order_left_old_side"
-                elif abs(float(net_signed_after or 0.0)) <= _position_tolerance(config.size_step):
-                    fallback_reason = "net_order_left_flat"
-                elif config.refill_partial and _same_direction(float(net_signed_after or 0.0), desired_signed):
-                    fallback_reason = "net_order_partial_refill"
-
-            if fallback_reason in {"flat_first", "net_order_rejected", "net_order_left_old_side", "net_order_left_flat"}:
-                fallback_used = True
-                after_signed = float(net_signed_after or 0.0)
-                if abs(after_signed) > _position_tolerance(config.size_step):
-                    close_side = "sell" if after_signed > 0 else "buy"
-                    close_size = _floor_to_step(abs(after_signed), config.size_step)
-                    if close_size > 0:
-                        close_result = _place_market_checked(
-                            client,
-                            close_side,
-                            size=close_size,
-                            symbol=config.venue_symbol,
-                            reduce_only=True,
-                            label="kraken tv fallback close",
-                        )
-                    close_position_after, close_signed_after = _wait_for_flat(
-                        client,
-                        config.venue_symbol,
-                        config.size_step,
-                    )
-                    if abs(float(close_signed_after or 0.0)) > _position_tolerance(config.size_step):
-                        raise RuntimeError(
-                            f"kraken tv fallback close did not flatten position: signed={close_signed_after}"
-                        )
-                else:
-                    close_position_after = net_position_after
-                    close_signed_after = after_signed
-
-                mark = float(client.get_mark_price(symbol=config.venue_symbol) or 0.0)
-                equity = client.get_account_equity()
-                equity_usd = float(equity.get("equity_usd", 0.0) or 0.0)
-                target_abs = compute_target_size(
-                    equity_usd=equity_usd,
-                    mark_price=mark,
-                    leverage=config.leverage,
-                    pos_pct=config.pos_pct,
-                    step=config.size_step,
+            mark = float(client.get_mark_price(symbol=config.venue_symbol) or 0.0)
+            equity = client.get_account_equity()
+            equity_usd = float(equity.get("equity_usd", 0.0) or 0.0)
+            target_abs = compute_target_size(
+                equity_usd=equity_usd,
+                mark_price=mark,
+                leverage=config.leverage,
+                pos_pct=config.pos_pct,
+                step=config.size_step,
+            )
+            # The close above releases margin asynchronously. Wait for the
+            # collateral to actually come back before sizing, so the normal
+            # case still reopens at full target instead of a shrunken one.
+            fallback_available_usd = _wait_for_available_margin(
+                client,
+                _margin_required_usd(target_abs, mark, config.leverage),
+                config.margin_wait_attempts,
+                config.margin_wait_delay_sec,
+            )
+            order_size = _size_within_available(
+                equity_usd=equity_usd,
+                available_usd=fallback_available_usd,
+                mark_price=mark,
+                leverage=config.leverage,
+                pos_pct=config.pos_pct,
+                step=config.size_step,
+                buffer=config.margin_buffer,
+            )
+            if order_size < target_abs:
+                fallback_sized_down = True
+                log.warning(
+                    "kraken tv fallback open sized down %s -> %s (equity=%.2f available=%.2f mark=%.4f)",
+                    target_abs,
+                    order_size,
+                    equity_usd,
+                    fallback_available_usd,
+                    mark,
                 )
-                # The close above releases margin asynchronously. Wait for the
-                # collateral to actually come back before sizing, so the normal
-                # case still reopens at full target instead of a shrunken one.
-                fallback_available_usd = _wait_for_available_margin(
+            order_side = signal.side
+            order_plan[-1]["size"] = order_size
+            if order_size > 0:
+                refill_result, order_size = _place_open_with_margin_retry(
                     client,
-                    _margin_required_usd(target_abs, mark, config.leverage),
-                    config.margin_wait_attempts,
-                    config.margin_wait_delay_sec,
-                )
-                order_size = _size_within_available(
-                    equity_usd=equity_usd,
-                    available_usd=fallback_available_usd,
+                    config,
+                    side=order_side,
+                    size=order_size,
                     mark_price=mark,
-                    leverage=config.leverage,
-                    pos_pct=config.pos_pct,
-                    step=config.size_step,
-                    buffer=config.margin_buffer,
+                    equity_usd=equity_usd,
                 )
-                if order_size < target_abs:
-                    fallback_sized_down = True
-                    log.warning(
-                        "kraken tv fallback open sized down %s -> %s (equity=%.2f available=%.2f mark=%.4f)",
-                        target_abs,
-                        order_size,
-                        equity_usd,
-                        fallback_available_usd,
-                        mark,
-                    )
-                order_side = signal.side
                 order_plan[-1]["size"] = order_size
-                if order_size > 0:
-                    refill_result, order_size = _place_open_with_margin_retry(
-                        client,
-                        config,
-                        side=order_side,
-                        size=order_size,
-                        mark_price=mark,
-                        equity_usd=equity_usd,
-                    )
-                    order_plan[-1]["size"] = order_size
-                desired_signed = order_size if signal.side == "buy" else -order_size
-            elif fallback_reason == "net_order_partial_refill":
-                fallback_used = True
-                after_signed = float(net_signed_after or 0.0)
-                refill_delta = desired_signed - after_signed
-                refill_size = _floor_to_step(abs(refill_delta), config.size_step)
-                if refill_size > 0:
-                    refill_side = "buy" if refill_delta > 0 else "sell"
-                    refill_result = _place_market_checked(
-                        client,
-                        refill_side,
-                        size=refill_size,
-                        symbol=config.venue_symbol,
-                        reduce_only=False,
-                        label="kraken tv optimistic flip refill",
-                    )
+            desired_signed = order_size if signal.side == "buy" else -order_size
         else:
             reducing_same_side = (
                 current_signed != 0
