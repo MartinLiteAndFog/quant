@@ -123,6 +123,15 @@ Postgres-first forensic system.
 
 ---
 
+## Active research — Elliott Wave forecast (2026-10-17)
+
+- Plan and test rules: [`docs/ELLIOTT_WAVE_FORECAST_BACKTEST.md`](ELLIOTT_WAVE_FORECAST_BACKTEST.md)
+- Reuse parity-corrected `src/quant/features/renko.py::renko_from_close()` with 5m-sourced 0.10 SOL Renko; see [`docs/RENKO_TRADINGVIEW_PARITY.md`](RENKO_TRADINGVIEW_PARITY.md).
+- Compare original Pine v3.2 forecast targets/stops and displayed grades on **ordinary 5m vs Traditional Renko**. Every fill must use subsequent **real SOL/USDT 1-minute OHLC**, not synthetic Renko prices.
+- Research/documentation only; no deployable strategy or final results yet.
+
+---
+
 ## Current priorities
 
 1. Monitor guard — confirm `GUARD FIRED` stops appearing in logs after f450c93
