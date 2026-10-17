@@ -1,0 +1,58 @@
+# Elliott Wave Detector Pro v3.2 — SOL Forecast / Renko backtest
+
+Status: **research specification / implementation pending** (2026-10-17). This document records the agreed test, not a completed TradingView-parity or profitable backtest. Do not infer live-trading readiness from this note.
+
+## Objective
+
+Evaluate the **unmodified** Pine Script EW Detector Pro v3.2 grades and its native `generateForecast()` action, target zone and stop. Compare:
+1. Ordinary SOL/USDT **5-minute OHLC** candles.
+2. **TradingView Traditional Renko**, fixed **0.10 USDT box** on a **5-minute source interval** (user's KuCoin SOLUSDT chart).
+
+Keep scenario generation separate from order fills: all entry, target and stop execution for both variants is priced from **real, timestamp-aligned SOL/USDT market OHLC**, preferably 1-minute with conservative same-minute ambiguity handling. Never fill trades at synthetic Renko open/close. No parameter optimization before the baseline is audited.
+
+## Existing Renko implementation — reuse, do not reinvent
+
+- **Canonical builder:** `src/quant/features/renko.py::renko_from_close()`.
+- **Validated parity investigation:** `docs/RENKO_TRADINGVIEW_PARITY.md` (2026-10-07).
+- Continuation = 1 box; established-trend reversal = **2 boxes measured from prior brick close**; first reversal brick opens 1 box beyond prior close. Multiple bricks from one source bar receive successive **1 ms** timestamps to prevent deduplication.
+- **Mandatory:** resample 1-minute OHLCV to the same **5-minute source candles** before constructing a 5m TradingView Renko series.
+- The parity document compared **Kraken SOLUSD.PM** TradingView export, whereas the screenshot for this EW study is **KuCoin SOLUSDT**. Feed-specific differences may remain. `renko_from_close()` is close-driven and explicitly does not guarantee exact TradingView history/wick/alert parity. Match source venue, interval, historical coverage and signal timestamps where possible.
+- Existing October 7 comparison: TV = **5,322 bricks / 99 IMBA flips**; corrected 5m-sourced reconstruction = **5,279 bricks / 105 flips** for the documented window. This is a major improvement, **not an exact byte-for-byte match**. Source-wick parity not established.
+
+## Pine Script forecast rules (must be ported literally)
+
+Source: user-supplied Pine Script text, `generateForecast()`, lines ~1035–1124 of the v3.2 file.
+
+Only evaluate a **confirmed, gated** pattern: `confirmedPattern != none`, confidence >= 0.35, and `endIdx == lastP.idx`. In the non-gated case, Pine shows **reference levels only, no stop**: **no trade**. Do not treat forecast labels painted on pivot bars as knowable before their confirmation.
+
+- **Completed motive impulse/diagonal**: forecast Wave A correction, direction opposite the motive trend; projected zone between the last primary pivot and `pivot ± 0.618 × lastWaveLen`, stop at `pivot ± 0.1 × lastWaveLen`; action `TAKE PROFIT / SHORT` or `TAKE PROFIT / LONG`. Treat these separately from unequivocal entries because the action also indicates closing a pre-existing trend trade.
+- **Completed corrective pattern** (zigzag, flat, triangle): direction **opposite correction direction**, `BUY ZONE` or `SELL ZONE`; target bounds include `pivot ± 1.618 × lastWaveLen` in the new trend direction with the secondary bound at `pivot ∓ 0.1 × lastWaveLen` for bulls or `pivot ± 0.5 × lastWaveLen` for bears, and stop `pivot ∓ 0.382 × lastWaveLen`. For comparisons, separately measure **first favorable target-zone boundary** vs **far projected target** if applicable and clearly label which TP is used.
+- Base grade `round(confidence × 5)` after HTF score adjustment; if completed correction and HTF1 trend is known, HTF1 bias can raise/lower the **displayed grade by one additional star**. The final grade for grouping must be the **displayed forecast grade**, not raw rule score.
+- MTF automatic selection on **5m** = **1h and 4h**. Use only higher-timeframe information confirmed by signal time.
+
+## Trade/event conventions for initial baseline
+
+- Preserve a unique confirmed forecast **event id**, signal-generation bar, **actual confirmation timestamp**, pattern, raw rule score, MTF inputs, final grade, action, direction, targetLow/targetHigh, stop.
+- A `BUY ZONE` or `SELL ZONE` is **not automatically a market-entry alert**. To quantify its actionable potential, baseline **entry at first available real-price candle open AFTER confirmed forecast publication**; tag as **hypothetical forecast-entry assumption**, not original Pine buy/sell execution. Provide separate subset for explicit W3 and wave-C signal markers, and optionally zone revisit entry later.
+- For synthetic Renko, the builder's source-bar timestamp labels **must not imply brick knowledge at the source bar open**. For a source 5m bar, mark resulting bricks as available **no earlier than its close**, including multiple same-bar bricks; signal confirmation and MTF must be causal. Entry at first following real 1m open or later (plus modeled latency).
+- Validate TP/SL direction/ordering and discard stale, missing, reversed, already-breached stop/target or nontradeable setups with logged rejection reasons.
+- Execute TP / SL against original **1m OHLC**, not Renko bars; when both touch inside one 1m bar and path is unknown, count **stop first** conservatively (and separately flag the ambiguous case). Account for gaps, taker fees and slippage at entry/exit; explicitly state assumed fees.
+- No overlapping positions in a single equity curve unless portfolio policy is separately modeled; do not count repeated render updates of the same forecast as fresh trades. Exit upon **first real-price TP or SL**, with a declared max holding cutoff to avoid indefinite positions (report cutoffs separately; evaluate alternatives only after baseline).
+- Calculate realized trade count, win %, average/median net %, profit factor, realized equity, max drawdown, exposure, long vs short, pattern, grade, calendar split, and out-of-sample performance. Keep unrealized MFE/MAE and true realized P&L distinct.
+
+## Inputs and known prior work
+
+- Historical SOL minute file (user Library): `SOLUSDT (2).csv.gz`, reported **3,235,682 1-minute bars from 2020-08-11 to 2026-10-07**, with **1,424 missing minutes**. Verify provenance and venue before declaring KuCoin parity; investigate gaps.
+- Earlier local baseline artifacts (not committed; no confidential market file to GitHub without request): `elliott_sol_5m/grade_events.csv`, `grade_events_with_targets.csv`, `grade_summary.csv`, `fixed_tp_sl_grid.csv`, `fib_target_stop_results.csv`, `data_and_run_metadata.json`.
+- Earlier **ordinary-candle Python approximation**: **17,733** confirmed pattern refresh events, including **1,667** labeled 5-star. These are **not** validated TradingView outputs, are **not Renko** and are **not 1,667 proven trade entries**. Earlier fixed TP/SL experiments do **not** resolve this study.
+- Screenshot example dated 2026-10-17 (outside historical data): KuCoin SOLUSDT 5m Traditional Renko 0.1; **expanded flat**, rule score 73/100, partial MTF 0.33, `SELL ZONE`, **five stars**, target **101.27**, stop **106.13**; *illustrative only, not a backtested fill*.
+
+## Next concrete actions
+
+1. Reuse the repository's parity-corrected `renko_from_close()`, on 5m-source-candle close; independently reconstruct ordinary 5m candles.
+2. Port full Pine swing/ATR, primary and secondary pivots, pattern selection, 1h/4h MTF, gated `generateForecast()` and grade corrections for **both** series, bar by bar, with event publication time.
+3. Compare a sample of forecast patterns/grades/levels/timestamps to actual TradingView exports; be explicit about any remaining Renko feed/wick parity deviation.
+4. Backtest next-real-1m-open forecast entries with **native** target and stop. Produce separate Renko vs candle, grade 3/4/5 and pattern-type tables with fees, realistic prices and maximum drawdown.
+5. Treat this baseline as frozen before exploring trend filters, zone-revisit entries, multiple profit targets or grade recalibration.
+
+No live bot, TradingView alert or existing strategy has been modified by recording this research specification.
