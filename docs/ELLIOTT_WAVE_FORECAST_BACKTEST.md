@@ -30,6 +30,18 @@ Only evaluate a **confirmed, gated** pattern: `confirmedPattern != none`, confid
 - Base grade `round(confidence × 5)` after HTF score adjustment; if completed correction and HTF1 trend is known, HTF1 bias can raise/lower the **displayed grade by one additional star**. The final grade for grouping must be the **displayed forecast grade**, not raw rule score.
 - MTF automatic selection on **5m** = **1h and 4h**. Use only higher-timeframe information confirmed by signal time.
 
+## Critical distinction: forecast versus signals (2026-10-17 code review)
+
+In the original Pine v3.2, `generateForecast()` is called **only inside `if barstate.islast`** (roughly lines 1247–1268). Consequently, forecast grade/action/target/stop are **drawn for the last/current bar only** and are not emitted as historical alert events, and there is **no forecast-entry order mechanism** in Pine. To backtest "forecast appears" causally, calculate a historical snapshot on **each confirmed bar** and log the first transition into a distinct confirmed, gated forecast; do not read a completed chart's last-bar display backwards.
+
+The actual `sigLong`/`sigShort`/`sigW5Exit*` alerts are separate (roughly lines 998–1029, 1396–1405): evaluated when `primaryPushed` and optional W3/WC/W5 logic fires. Some forecast appearances have **no accompanying** entry alert and some W3 signals exist without a gated forecast. A completed correction `BUY ZONE`/`SELL ZONE` is a **forecast action label**, not a concrete order/limit-entry band: its `targetHigh`/`targetLow` are forecast price **target zone** bounds. The visually extended `projectionBars = 30` only determines the drawn forward horizon; **not** an entry window, exit after 30 bricks, expiry or mandatory holding time. The chart draws a new forecast snapshot as pattern/HTF state changes, but must not count every redraw as another trade.
+
+Therefore test **two distinct, predeclared strategies**, both on realistic real-market prices:
+A. **Forecast-as-signal**: enter hypothetically at next eligible real bar after the **first confirmed new** BUY ZONE / SELL ZONE forecast (deduplicate same pattern/pivot; account for grade changes). Exit at native stop or directional projected target.
+B. **Forecast-plus-alert**: forecast defines direction/stop/target and remains valid in a documented state machine; enter only if a later matching original Pine W3 or wave-C `sigLong`/`sigShort` event occurs while it remains valid and before invalidation. Report how frequently/when those alerts arrive.
+
+Report setup/alert overlap matrix, delays from forecast onset to signal, percentage of forecast-only setups, realized P&L for A vs B. This is a **research extension** to the original baseline, not an assertion that Pine trades the forecast by itself.
+
 ## Trade/event conventions for initial baseline
 
 - Preserve a unique confirmed forecast **event id**, signal-generation bar, **actual confirmation timestamp**, pattern, raw rule score, MTF inputs, final grade, action, direction, targetLow/targetHigh, stop.
