@@ -68,3 +68,25 @@ Report setup/alert overlap matrix, delays from forecast onset to signal, percent
 5. Treat this baseline as frozen before exploring trend filters, zone-revisit entries, multiple profit targets or grade recalibration.
 
 No live bot, TradingView alert or existing strategy has been modified by recording this research specification.
+
+## Provisional 2025–2026 cleaned findings (2026-10-17)
+
+**Research only; NOT TradingView parity verified.** Underlying local, user-supplied SOL/USDT 1m price file, 2025-01-01–2026-10-07 test window (2024-06 warm-up), corrected 5m-source Renko two-box reversal, original native Forecast Fibonacci TP/SL formulas, NEXT REAL-minute-open fills, 0.10% assumed fee **plus** 0.02% slippage each side (0.24% roundtrip), one non-overlapping 100%-notional position per strategy:
+
+| Five-star only | Valid nonoverlapping trades | Win % | Average **net** return/trade | Profit factor | Compounded 1× return | Max equity drawdown |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Ordinary 5m, A forecast entry | 361 | 39.89% | -0.2677% | 0.733 | -64.97% | -73.12% |
+| **Ordinary 5m, B active-forecast + matching entry alert** | **331** | **39.27%** | **-0.2294%** | **0.765** | **-56.55%** | **-65.02%** |
+| Renko 0.10, A forecast entry | 473 | 42.07% | -0.1731% | 0.764 | -58.44% | -60.44% |
+| **Renko 0.10, B active-forecast + matching entry alert** | **469** | **42.00%** | **-0.1730%** | **0.764** | **-58.11%** | **-60.12%** |
+
+Forecast counts before execution screening (BUY/SELL only): 5-star ordinary **502**, Renko **565**. Earlier **1,667** event count refers to different all-history candle analysis and should not be compared directly.
+
+**Major discovery:** among matched forecast alerts, **2,523/2,528 (ordinary)** and **3,687/3,691 (Renko)** coincide with the same confirmed 5m source bar as the forecast. Of 5-star matched forecasts, **423/424** ordinary and **550/550** Renko have same-bar alerts. Therefore, this original W3/Wave-C indicator **almost never produces a later entry alert** during an already-present forecast; forecast-vs-alert is primarily a filtering decision. Do not present its original WC alert as a subsequent independent entry confirmation.
+
+Exclusion now enforced: no matching entry after its forecast's stop/target had already been reached by real 1m prices; only direction-matched BUY/SELL forecast entries; ignore displaced forecast after a newer one; conservative SL-first path if both levels touched within one minute. Historical 2025-26 minute source segment had no missing 1m bars.
+
+Gross B five-star mean returns **before** the assumed 0.24% roundtrip costs: +0.0106% ordinary, +0.0670% Renko. Both turn negative net. These are **provisional Python-port** outputs, not TradingView-verified broker fills, and no model selection should treat the observed pattern-specific subgroups as a validated edge.
+
+**Remaining required validation:** exact KuCoin/TV 5-minute Renko pivots, native historical wicks, original TradingView v3.2 forecast + W3/WC signal-by-signal parity, on-Renko 1h/4h MTF semantics, and non-gated primary pattern changes which may terminate an active forecast earlier. Local outputs (not uploaded/committed) `/mnt/data/elliott_sol_5m/forecast_ab/cleaned_summary.csv`, `cleaned_trade_candidates.csv`, `cleaned_match_audit.csv`, `ERGEBNISSE_VORLAEUFIG.md`, and executable reproducibility script `clean_backtest.py`. Do not claim the entire 2020–26 period was rerun.
+
