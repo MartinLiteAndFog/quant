@@ -1,0 +1,958 @@
+{
+  "venue": "BINANCE spot",
+  "symbol": "SOLUSDT",
+  "interval": "1m",
+  "start_ms": 1782864000000,
+  "end_exclusive_ms": 1792310400000,
+  "rows": 157440,
+  "chunks": [
+    {
+      "path": "inputs/binance_api_chunks/1782864000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1782864000000&endTime=1792310399999&limit=1000",
+      "sha256": "6a9dbf5efcf176c59d505d248c08242e001283d61086e5acc3b8db7998fa96d1",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1782924000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1782924000000&endTime=1792310399999&limit=1000",
+      "sha256": "56d1254daf7f3a04f5756218ae27e1e6be60e6b80639c005fcb9732322e59f8d",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1782984000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1782984000000&endTime=1792310399999&limit=1000",
+      "sha256": "44010aec29aa32469aceff049959d2b4afde76efe8e48318380da35c048accb6",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783044000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783044000000&endTime=1792310399999&limit=1000",
+      "sha256": "cd301d624d276a93a25798acff2d1480c52a0597c161f7f2024b430e9904f2ed",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783104000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783104000000&endTime=1792310399999&limit=1000",
+      "sha256": "95374895d63c8ab2322bedd6dfcc436310c912369b991b144570912242626f37",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783164000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783164000000&endTime=1792310399999&limit=1000",
+      "sha256": "562307e4f4e283ad703cf0ddc97ddf71b194a4b5a28ec27f02de555cdede9b2e",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783224000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783224000000&endTime=1792310399999&limit=1000",
+      "sha256": "bd1b00e0d63dcb891e10f4041ceacb541b57ed48d14dc4a5104d271089fdab3d",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783284000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783284000000&endTime=1792310399999&limit=1000",
+      "sha256": "df15b9e4eb123e885e680b13a945a3f0f0ddc08890395a72e27637ed46c5afb1",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783344000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783344000000&endTime=1792310399999&limit=1000",
+      "sha256": "ff7676ffbef6142417f34732889e48328eac80fd31c6263075d35fb50d43754b",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783404000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783404000000&endTime=1792310399999&limit=1000",
+      "sha256": "8113563a297c23693c46133298e366c5e63fab953e7aed4596f701944ee7dbde",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783464000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783464000000&endTime=1792310399999&limit=1000",
+      "sha256": "aacabb27ed49a5faa99d02f956e596d524b69000d4193d34b719be248827be3f",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783524000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783524000000&endTime=1792310399999&limit=1000",
+      "sha256": "2bf92f6121260816e56699488a4ea9c3e945f0720b80f87e85f3523b9267fa4b",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783584000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783584000000&endTime=1792310399999&limit=1000",
+      "sha256": "39f7e9fe711dc5fbdf129e4aace36334a04a832d89c2cd9a094d2373bb1eb290",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783644000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783644000000&endTime=1792310399999&limit=1000",
+      "sha256": "beb2ade63dc40a1c4e4ba4236e13bb03cc0fa9e6a295ee307a379f001719c815",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783704000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783704000000&endTime=1792310399999&limit=1000",
+      "sha256": "a695153c8fc6408660dd4a3ec1f8515eb0a8bbe99eb3c8c353eddab8ccf8fa56",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783764000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783764000000&endTime=1792310399999&limit=1000",
+      "sha256": "259a25b0c4c49cdbd8ec480e9ae54107abed8f83db4cfabbe390328cd74b25cb",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783824000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783824000000&endTime=1792310399999&limit=1000",
+      "sha256": "32db2b9bc8f280c91b6be0d10c6cb248f1957f8e726f371d47b8d6c776b49a71",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783884000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783884000000&endTime=1792310399999&limit=1000",
+      "sha256": "e9e50da037b07bca4cabe5613ed4fd03fde1a1a86233c48cb51fd6ea558efa41",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1783944000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1783944000000&endTime=1792310399999&limit=1000",
+      "sha256": "f7314904421eac5c3cf70d48248bfcad4b7194ab557078f5114c75422e7702e6",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784004000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784004000000&endTime=1792310399999&limit=1000",
+      "sha256": "4c2ed7821bbe43f28b54aed1c3af57858122c2955f501b2695cca2658d938c13",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784064000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784064000000&endTime=1792310399999&limit=1000",
+      "sha256": "ece206f65fd1cff98f7ade520568df669b54c5ece3fd5c53f1396a046eb43374",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784124000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784124000000&endTime=1792310399999&limit=1000",
+      "sha256": "069120ae87f8c6376ae4aa78af7cd938ace97055de7778775551a03e3c73be8f",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784184000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784184000000&endTime=1792310399999&limit=1000",
+      "sha256": "6fc96ae3332684681765b1fe663ae35062b5abcfe44e7ed635c4a3e31fdba90c",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784244000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784244000000&endTime=1792310399999&limit=1000",
+      "sha256": "8b4ddbbbfe327feb0a6118c5ecd7abb58a34e098182bcc086af1da0451d3d160",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784304000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784304000000&endTime=1792310399999&limit=1000",
+      "sha256": "7777db1429819fd1734c91d62935a5913e4d10279ec169ecf10a0800a661b76a",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784364000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784364000000&endTime=1792310399999&limit=1000",
+      "sha256": "0a40f3345dae15c3ff9db29e7d0a42cbcf6e4e829b46d29362c9efc5650a926b",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784424000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784424000000&endTime=1792310399999&limit=1000",
+      "sha256": "875e09d84b353837054802aa192072d91b3ccf64f2dbf13c59be07f52ee51cba",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784484000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784484000000&endTime=1792310399999&limit=1000",
+      "sha256": "ac708c2974b4d3a5bc99d07e5121280293e045d980cd885e3bee1a03e62d02dc",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784544000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784544000000&endTime=1792310399999&limit=1000",
+      "sha256": "3ae79601a0ff721202f353470ec2bea8eb552a6fd907a3e25ac35f3278f5bb8a",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784604000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784604000000&endTime=1792310399999&limit=1000",
+      "sha256": "2ecc35c8c597946ce725e1c54c54cf9709c9f11fa9f02bdcf25b3c197623dda4",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784664000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784664000000&endTime=1792310399999&limit=1000",
+      "sha256": "5f540b8bb2dbe3a9994d9b2ead6775923cd17f041c801361805ee4f464f19350",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784724000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784724000000&endTime=1792310399999&limit=1000",
+      "sha256": "22a22afc2f621aa63030e719fdd0b01145a460ec5e58229527f8897886362512",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784784000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784784000000&endTime=1792310399999&limit=1000",
+      "sha256": "d6231dd8a4cdf2ef4055fad359cabb3e35912f8d2220973af07beb2065553f64",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784844000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784844000000&endTime=1792310399999&limit=1000",
+      "sha256": "8a9e0e57be328f2d917ae156ebb0d0a4783de9828638ec911f9bdca2a82912f8",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784904000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784904000000&endTime=1792310399999&limit=1000",
+      "sha256": "0778dced00126dfb035dd5b6cd6a3cec6ed4dda60abb4cb851ab4f72585e7e16",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1784964000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1784964000000&endTime=1792310399999&limit=1000",
+      "sha256": "9b57a670f511661f894324db68b5d6e085608bcdcbb091ffaab4f9a9725f4ffc",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785024000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785024000000&endTime=1792310399999&limit=1000",
+      "sha256": "9a1b7382a6fe3185c0605f4273b4baa54056723c65423d3d172680f7cb03bed0",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785084000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785084000000&endTime=1792310399999&limit=1000",
+      "sha256": "e258677c729fb29f45a4f9f86aa52eacfd2679ed26f4ddbc2c124a811526b96d",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785144000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785144000000&endTime=1792310399999&limit=1000",
+      "sha256": "aae32cd08134698756ee5f4776aa8ceed7d9a5b326116cb25095e5f7e146bbcb",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785204000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785204000000&endTime=1792310399999&limit=1000",
+      "sha256": "e2f23f818a2945c3baf9fe221cf9d85f1022caa8cc7b05e1ab05d8b64c858060",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785264000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785264000000&endTime=1792310399999&limit=1000",
+      "sha256": "dcb2c79e96c100b2fb2037a130a3cdd8c75c77e9eba9fae35369c95a631c1849",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785324000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785324000000&endTime=1792310399999&limit=1000",
+      "sha256": "96fd187e235bb86b2f3b2b6515ae658b122293d92176c554338d33a6a08e6076",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785384000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785384000000&endTime=1792310399999&limit=1000",
+      "sha256": "3e6d40e852434814c240a4c77cb31d9d9a5b5c8b8c264f07f92ec6a256aa853e",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785444000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785444000000&endTime=1792310399999&limit=1000",
+      "sha256": "d8a3c12a3031823b414a2d6ace7f1c8156e82d8a0b989babbe08e2481b986ef1",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785504000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785504000000&endTime=1792310399999&limit=1000",
+      "sha256": "971275db317f69d2e094b739cb0077933283ca5810e1093164c40ab96f606ebe",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785564000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785564000000&endTime=1792310399999&limit=1000",
+      "sha256": "444cb793777adfbe4560d0b96977872943c7b009086a1dc14773e114f32c5965",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785624000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785624000000&endTime=1792310399999&limit=1000",
+      "sha256": "2bcf52d652679583c95bd345c0db617a601963bfa59a8c115d6926bbbed6d26d",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785684000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785684000000&endTime=1792310399999&limit=1000",
+      "sha256": "8df56a966329a20830743bcb92a45e6c4d31dc24f0b61741a5a9fa2b7222ac34",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785744000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785744000000&endTime=1792310399999&limit=1000",
+      "sha256": "10869a53ecdd34f081d153301e7c3fcb0b1c4824b4a2fbcf016d879a80626dea",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785804000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785804000000&endTime=1792310399999&limit=1000",
+      "sha256": "799a5427a543fd234d0d750dd3db9b4ea840edbf480fa1c5dc1ae7bc25ec6a80",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785864000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785864000000&endTime=1792310399999&limit=1000",
+      "sha256": "8b5822a551a4576fb45267b3e7d6a5e389627f879bf6c1ff6eb494da67ce962b",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785924000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785924000000&endTime=1792310399999&limit=1000",
+      "sha256": "bee86a8dc01185a3b19b262a0dd52682b2a2118a4d8d7f8f2a7f25f40dca5239",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1785984000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1785984000000&endTime=1792310399999&limit=1000",
+      "sha256": "75349a87b59495a0ad79d4cef72edd806cf048431bdcd075e6637c3ce48bf0a0",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786044000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786044000000&endTime=1792310399999&limit=1000",
+      "sha256": "bc1b6a3f411eb8675865ef0700ebff64abf9b7904a358a5b658a08397dd6a4fd",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786104000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786104000000&endTime=1792310399999&limit=1000",
+      "sha256": "0db7e4a046cdc7530ae0924dae4ac8ceab6bf191cb45b1963c43cfc2f8b120fa",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786164000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786164000000&endTime=1792310399999&limit=1000",
+      "sha256": "f929651ca68dac3d84315cd22a7dee4d1bc27fed89bc5347f86cbf0fc930ebac",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786224000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786224000000&endTime=1792310399999&limit=1000",
+      "sha256": "e6a1a62feec0c8d37c3b11ae0ef7cfda102f385f686b9190a6580753968f66b0",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786284000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786284000000&endTime=1792310399999&limit=1000",
+      "sha256": "1f0958830823b4b8910deff7088796205c74e244e15cfe13b1c2875189837f73",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786344000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786344000000&endTime=1792310399999&limit=1000",
+      "sha256": "59a4dd903e17bdfaafb3d0bdc1613216044aa909aca5278f7fbfeabd72228b78",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786404000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786404000000&endTime=1792310399999&limit=1000",
+      "sha256": "80114a7d25b8a035051d22951f146a17dec674dd2b03caabd4cbf347bcf8b351",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786464000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786464000000&endTime=1792310399999&limit=1000",
+      "sha256": "a8fbc2bba97a2ff33071f669cc286318e551fe05be605706a97fe28815ebd1f2",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786524000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786524000000&endTime=1792310399999&limit=1000",
+      "sha256": "f7c8190aa0e0358f56aaa473b098a84cad14d4e0b117bb0e4a9c507274b80432",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786584000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786584000000&endTime=1792310399999&limit=1000",
+      "sha256": "e11c027ce9f85d7bce5f71e800bd9e2f9d9be332f9b9c500966329c751af32d7",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786644000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786644000000&endTime=1792310399999&limit=1000",
+      "sha256": "c5d76138ae482bcb565576924653740491096ed509580e3c238c3d4d0022f9c0",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786704000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786704000000&endTime=1792310399999&limit=1000",
+      "sha256": "8ab1fb61f211153b7db0ca4658a0dfc2e813ae42ae94096976441b227883f687",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786764000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786764000000&endTime=1792310399999&limit=1000",
+      "sha256": "ce49fe63856a9b6682d473156327808b85e12b311dfacd907aba59bc666b28a9",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786824000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786824000000&endTime=1792310399999&limit=1000",
+      "sha256": "555e1f6d97a46c53080143b68253288e855c2127455f035347f12d2ce678b06f",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786884000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786884000000&endTime=1792310399999&limit=1000",
+      "sha256": "3fec9b71f1d1b7519a73cac32a515e7a5ca8004908bcf88ea8d2c8551265937c",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1786944000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1786944000000&endTime=1792310399999&limit=1000",
+      "sha256": "5a4c48448db04920cc5738c6603273d825e3c03f5e732a856aeb952d1aa0bf19",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787004000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787004000000&endTime=1792310399999&limit=1000",
+      "sha256": "f5cf5dee20d642348bf058944322e210502305080eca2ac36ef4b30c2898a95e",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787064000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787064000000&endTime=1792310399999&limit=1000",
+      "sha256": "f7382e6da11bca9cf38cb83b01f8ae6c866ca59054c3d4c44ba1f11e059234d5",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787124000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787124000000&endTime=1792310399999&limit=1000",
+      "sha256": "363a6d2ec58549bda884f760c019a346a7ba6d7df968de4910adaa6382c481fa",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787184000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787184000000&endTime=1792310399999&limit=1000",
+      "sha256": "5739c862857b788c44b235e80de6f1c73f836251d4c621f8c98b86258ce4f18f",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787244000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787244000000&endTime=1792310399999&limit=1000",
+      "sha256": "46a0c3e56f1f8ed2dffa750b1b576d1202653e1d8c0c9b5936012fd92783b52c",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787304000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787304000000&endTime=1792310399999&limit=1000",
+      "sha256": "5b02421443c133b643228c1668147b82e9e5cd0c823a620862861e601baf5d50",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787364000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787364000000&endTime=1792310399999&limit=1000",
+      "sha256": "12141f049387f782b268c968e6444240d2b5f2bb6aee914998b42af0a02d65e8",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787424000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787424000000&endTime=1792310399999&limit=1000",
+      "sha256": "5c9ef2f3fc0f47c77e1a93894398a381049ecb2b332f9c790ca8927b7e2a6067",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787484000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787484000000&endTime=1792310399999&limit=1000",
+      "sha256": "003b8b177353b9f13308c1687b13941fd054fd72d3820749b47ccc8fe79cc03e",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787544000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787544000000&endTime=1792310399999&limit=1000",
+      "sha256": "30f7664651cfa3732d9c77c98b2070f8ea185d515ea9a00987a89320555f4540",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787604000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787604000000&endTime=1792310399999&limit=1000",
+      "sha256": "c604d1042e6eed77be90f0b77f2608346448d69065e03c6557f51073566131f2",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787664000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787664000000&endTime=1792310399999&limit=1000",
+      "sha256": "bdb0fc42f3cf24366280051b643d5ae1c238d0efc324ced2c0d93bb6fb0723d0",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787724000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787724000000&endTime=1792310399999&limit=1000",
+      "sha256": "917c2101fde30b68f9611ccbd5f7d930e41fd5420b349128dedce88a09c8aa51",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787784000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787784000000&endTime=1792310399999&limit=1000",
+      "sha256": "b5330635e1d72bdeeb6637166cb0384033f2ac11fc8183d01aead564fd956db2",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787844000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787844000000&endTime=1792310399999&limit=1000",
+      "sha256": "01b659ab326150a328e7857f1f290fe7680dbb59422197e114b89f5ac446e5e6",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787904000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787904000000&endTime=1792310399999&limit=1000",
+      "sha256": "fb68fb0a5d1aca50dbca612a7cc14403a602ef65bdf0e2dfbbd13ed5ae6fe883",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1787964000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1787964000000&endTime=1792310399999&limit=1000",
+      "sha256": "af2c89efd331c24c5476c0736872d745a8c303c5aa109193eb45eb08360169ff",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788024000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788024000000&endTime=1792310399999&limit=1000",
+      "sha256": "606772e2cd34d949bee9a693420f2ea5cdc4a4359668b8cdf8c7dfdb71eec9aa",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788084000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788084000000&endTime=1792310399999&limit=1000",
+      "sha256": "9fd8b345ff804ecba2c97bd2236c3ed5f854d1720185de292ff93d563ac04591",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788144000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788144000000&endTime=1792310399999&limit=1000",
+      "sha256": "16a7a38b0572bb00ee04cc197dd13689609520f435eb270294abce1da97db6ac",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788204000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788204000000&endTime=1792310399999&limit=1000",
+      "sha256": "61e649f82eeab8aa6a6c16a311437679d0daeb8e506bede7a3cbff59bdfc13bc",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788264000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788264000000&endTime=1792310399999&limit=1000",
+      "sha256": "738953552eeeacd280b2ddb56b12a3058beb9edf0dcbf5e6fe111d8e230106b2",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788324000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788324000000&endTime=1792310399999&limit=1000",
+      "sha256": "fe2f1ee74e142296a1e21d1091546575846dca33d1fa306e90dae860d6752a3f",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788384000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788384000000&endTime=1792310399999&limit=1000",
+      "sha256": "7c4fee5ff7e1b33c026d10e3c8a9195c3b87330ce205678e62cef01a4d98f63e",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788444000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788444000000&endTime=1792310399999&limit=1000",
+      "sha256": "accc0bf0310aac4bbe4ef38ffb4ad8ac22a936f04ac30dc0e6a0e4a103e7751a",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788504000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788504000000&endTime=1792310399999&limit=1000",
+      "sha256": "55841dc5398a84f7f8c605af372ae3fcfdc33b0548c328d5356dea95ef4bce0d",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788564000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788564000000&endTime=1792310399999&limit=1000",
+      "sha256": "4eae7f1d0b78aec8797fd647e9720a085d4ec142148249cbbc699017e6c9c935",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788624000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788624000000&endTime=1792310399999&limit=1000",
+      "sha256": "24f5f35967abf0d4a304bc678ffb82cdacaeddbf8f44afeeda4727fdce43a436",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788684000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788684000000&endTime=1792310399999&limit=1000",
+      "sha256": "a3855c60ba848b22c32f7c12465c746bce483f71e3bf174e1593ae9d1893b045",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788744000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788744000000&endTime=1792310399999&limit=1000",
+      "sha256": "bb95f007d87e1b1880a978456b9a74817b79650d9a98620f6daeca2e4b879519",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788804000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788804000000&endTime=1792310399999&limit=1000",
+      "sha256": "eb5ce4c3efbe1097921acd89ed1b80bcd8077b45a1f252f540bf68d3778ea274",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788864000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788864000000&endTime=1792310399999&limit=1000",
+      "sha256": "09094b8ec11209719e08f177ad72e271fe3a9aab5d881d2b71f712e41cf3fc7f",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788924000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788924000000&endTime=1792310399999&limit=1000",
+      "sha256": "dee4ad32e539941955d97fbaec08bd046e574123a4ba678abd9b465883c79da6",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1788984000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1788984000000&endTime=1792310399999&limit=1000",
+      "sha256": "dad2895a7d702609e26b8b3dfdb837e2bab1877086d7ab1c7db7d69f459cde04",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789044000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789044000000&endTime=1792310399999&limit=1000",
+      "sha256": "6de2841f2f1e940e5973eaf8d0d912e32e27f29661cb4ecce968ddec7878ea41",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789104000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789104000000&endTime=1792310399999&limit=1000",
+      "sha256": "d07f7743ba39320ce37d51577a6ead07b4e3657bdb23b110ffb8f250915ca729",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789164000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789164000000&endTime=1792310399999&limit=1000",
+      "sha256": "98f924f3f80c846a5f4a2be08a9781fab6e59d2e791c12ba06bfdc13fe49c198",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789224000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789224000000&endTime=1792310399999&limit=1000",
+      "sha256": "062924ad45fc2c4046a637bebfac570ba58825aa7c7590c8e6abace4585b6038",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789284000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789284000000&endTime=1792310399999&limit=1000",
+      "sha256": "f9494f8fcbbcb1a42783c3f9b1d00c8022ddb2567850c612c0c8cbb0750943c5",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789344000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789344000000&endTime=1792310399999&limit=1000",
+      "sha256": "e3cb1a01d2b0683611a7b733e340cb1d01d2062e45a0de15135e675601de41af",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789404000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789404000000&endTime=1792310399999&limit=1000",
+      "sha256": "45ce4e6ce7f5c9d7c3da2faadb9e5b38ce114b4e636ca182ac32d7e54b6b9b6b",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789464000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789464000000&endTime=1792310399999&limit=1000",
+      "sha256": "2a38c7466d2c0eaffc55a65f5e22d4c0b0193d0c442c874d9c9bf487d75a9cc4",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789524000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789524000000&endTime=1792310399999&limit=1000",
+      "sha256": "4f8f92c4805b48febb624ac172635e72fedce461b41d0dbeb8347de856a585e7",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789584000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789584000000&endTime=1792310399999&limit=1000",
+      "sha256": "cc6743b64e5da46514218adf233e286e2bf3a6aeeeb91e363afed02768aa1017",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789644000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789644000000&endTime=1792310399999&limit=1000",
+      "sha256": "4580ccb6921fdd4a851f160d475def82f5f96fef67314f2b4bb879a747bd6157",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789704000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789704000000&endTime=1792310399999&limit=1000",
+      "sha256": "f67089be61682cfb3609728c9717031dff0b69f522b1a439f087c70518961d65",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789764000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789764000000&endTime=1792310399999&limit=1000",
+      "sha256": "78fc96080a7148557a31bcc8fdaa7359a1af8b26d98b7fee5aab04e58bdad96b",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789824000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789824000000&endTime=1792310399999&limit=1000",
+      "sha256": "8571a069f6e411a66f4daaec2aee61b57899e1eec72db2acc1edb3f59a0bcb75",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789884000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789884000000&endTime=1792310399999&limit=1000",
+      "sha256": "959d7fc6875e23283225d06946ef7a75cf1dfc28a863b3a24921eff7fc2cc7b6",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1789944000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1789944000000&endTime=1792310399999&limit=1000",
+      "sha256": "bdb9968ff9490a9ba13e2d2a3f73aba5ce86d71d68336cd364c37126b7206210",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790004000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790004000000&endTime=1792310399999&limit=1000",
+      "sha256": "5449dcfcd183ee4d1507fdfc15f80717390254cdba8a122dbe24f8a755937f6c",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790064000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790064000000&endTime=1792310399999&limit=1000",
+      "sha256": "3c1b7bb7b7dfa711bebfaf2579097713c76329a2bf5121675bd2611850ae35e8",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790124000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790124000000&endTime=1792310399999&limit=1000",
+      "sha256": "956b7c9804c89aff3f1b7f7967dc1ab3f7891a74a69caca626e418a3c4560c73",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790184000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790184000000&endTime=1792310399999&limit=1000",
+      "sha256": "5697b4dbf4e57979dd39e103d4424238400c55b720671dba29111d6bbb07fd7e",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790244000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790244000000&endTime=1792310399999&limit=1000",
+      "sha256": "ec2f50818bbedfc44f0acc9acd6fcfcd5494f0de7fa74b0f397d9f7c2ab69199",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790304000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790304000000&endTime=1792310399999&limit=1000",
+      "sha256": "b5fa5d03881598cc78c93f3bb6239a1d0df92b6ad014dabf0c970790b85b94ed",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790364000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790364000000&endTime=1792310399999&limit=1000",
+      "sha256": "4605e32da5a96887c3b3ed4f77367291eceb88e415bb315a23a2ac4205ebe970",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790424000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790424000000&endTime=1792310399999&limit=1000",
+      "sha256": "102ac2774c13abd63b172f5ada99916529784e37dcafe91c5f9f813cccc2eed8",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790484000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790484000000&endTime=1792310399999&limit=1000",
+      "sha256": "a783df96cf8d7a0b9c24422d0665daffe89c5b6c09e2d57415ffcf1b70442cd7",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790544000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790544000000&endTime=1792310399999&limit=1000",
+      "sha256": "353caa437312ccb206bb241d768d6c5449e69b8f41e7f4e80ea3aa1c09a4d5f8",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790604000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790604000000&endTime=1792310399999&limit=1000",
+      "sha256": "80c849c5c5857094e557e61699b01c9f7c41ac40942ea3bce7d65d43f2b9742b",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790664000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790664000000&endTime=1792310399999&limit=1000",
+      "sha256": "9a24f0252a5c4e9e5418c5408ec5b63e70c143a64ca9616c568345b4efb942ff",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790724000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790724000000&endTime=1792310399999&limit=1000",
+      "sha256": "4ca6c47282cf1f01ce1681a53daef150b20db97f93a229e9e5ae27ac24734f92",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790784000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790784000000&endTime=1792310399999&limit=1000",
+      "sha256": "3378e67cdc8c9a5def6f4d2b2f04fd4957825e6fc7fafbb4d3cb1b6f2caadc1b",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790844000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790844000000&endTime=1792310399999&limit=1000",
+      "sha256": "695903edf247a9748a95826dc473f2d9d3e065f71c8fccccd5d9df2162eb2dda",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790904000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790904000000&endTime=1792310399999&limit=1000",
+      "sha256": "9a252e93f9120cbec0408bac4a0a5bac7fd3dbc85b05ded0b03c4bd06269c45d",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1790964000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1790964000000&endTime=1792310399999&limit=1000",
+      "sha256": "a66a6be6272f1d9523e5cd2e1546944d9ea82098d4851a5ead4404c33b29923a",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791024000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791024000000&endTime=1792310399999&limit=1000",
+      "sha256": "d8a2cf6359a09785776805137570505d3341540d1eb8b77ce8c6aea649cece2d",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791084000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791084000000&endTime=1792310399999&limit=1000",
+      "sha256": "9db567099de9e355bb4916b7f5423c5bfaef41011f7381228696f201b6b80835",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791144000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791144000000&endTime=1792310399999&limit=1000",
+      "sha256": "2fd8527b94526a7d44db57a0d2465ff6a5533f911ead46cca509a35e1e2496b8",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791204000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791204000000&endTime=1792310399999&limit=1000",
+      "sha256": "351026e0e4eec4632b53c9cab75a4b1a7d6c46692daa2c0822b8bd0dcd8fd835",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791264000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791264000000&endTime=1792310399999&limit=1000",
+      "sha256": "260e81146e8b28708ac7fb4ad7d78f4558315780e44b7b8d6b3df006cd1da0d9",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791324000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791324000000&endTime=1792310399999&limit=1000",
+      "sha256": "8bd2b6dd6c6283c8824573193134d9c84c4b5f33019b9d6100f9dd22b2cec2c7",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791384000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791384000000&endTime=1792310399999&limit=1000",
+      "sha256": "b3cdd969ef6e875207c7f915812661a08634a2aa2c4963b7587ae8677f89b4d0",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791444000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791444000000&endTime=1792310399999&limit=1000",
+      "sha256": "8c4f489686669eba84a2e97b0c1cc36c52eff368ec1c14ed5f43960118102cb9",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791504000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791504000000&endTime=1792310399999&limit=1000",
+      "sha256": "418234770045a319552a9de1dcd0a7848e3df0ed1264cc11b2d910d672643119",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791564000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791564000000&endTime=1792310399999&limit=1000",
+      "sha256": "b25b73791f3f9adbbc9e0b3adf3ff66923789dcf41b94f6dbefb0aac1f74c210",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791624000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791624000000&endTime=1792310399999&limit=1000",
+      "sha256": "ae022653d822805b3d816cff1b2c8a8dc43a710f7435fa2ed5698cb8e7c50758",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791684000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791684000000&endTime=1792310399999&limit=1000",
+      "sha256": "fd76979d987dffef3c4e34b84a07ae15221e3e1fbef76f6086a51cac4e03f46b",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791744000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791744000000&endTime=1792310399999&limit=1000",
+      "sha256": "fa9a712f1c474ab107c0d80a00e18ca2515a8a7501bb974b43f2edd11e0569bf",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791804000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791804000000&endTime=1792310399999&limit=1000",
+      "sha256": "4efea1b1c0dc4e825ceffc1df9acfaaf3f6e14979cffba303d3ac86ce5f6dfc3",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791864000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791864000000&endTime=1792310399999&limit=1000",
+      "sha256": "7b752e804c58de4d30fc1d864aff832bbdaad794635a1a72ce4b3b0c04b9abba",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791924000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791924000000&endTime=1792310399999&limit=1000",
+      "sha256": "f357512effcd5cf1175c1183b365d2610692a4887649e69032350cb573409a4c",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1791984000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1791984000000&endTime=1792310399999&limit=1000",
+      "sha256": "c75d8b58810e0974de29599d059f078d88e65795b572849dec9ac9c0f86f9fcf",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1792044000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1792044000000&endTime=1792310399999&limit=1000",
+      "sha256": "1570a83cfd698ff74974c6c4f3da8511b711eb6f59dbb0ad7f9d80b78289c4a6",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1792104000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1792104000000&endTime=1792310399999&limit=1000",
+      "sha256": "19e2c96d254dded8ef11769da20d67b069faf8f723a83fab6dee6b9efd498e30",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1792164000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1792164000000&endTime=1792310399999&limit=1000",
+      "sha256": "fe8bdca6443328fd267613b4f79937acc73cc2cb7b725204fd4ff65a41ab4e24",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1792224000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1792224000000&endTime=1792310399999&limit=1000",
+      "sha256": "ac67011c914d826edf2cc126599b3a2953e4596fe880aeb697b5c39fe7a0de42",
+      "rows": 1000
+    },
+    {
+      "path": "inputs/binance_api_chunks/1792284000000.json",
+      "url": "https://api.binance.com/api/v3/klines?symbol=SOLUSDT&interval=1m&startTime=1792284000000&endTime=1792310399999&limit=1000",
+      "sha256": "8a4f3b0dae9bd6d1455ae89f8f6e94f0e2b2710e6939286a86b5ff09f4c0c7e0",
+      "rows": 440
+    }
+  ]
+}

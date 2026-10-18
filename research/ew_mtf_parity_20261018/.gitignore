@@ -1,0 +1,6 @@
+inputs/
+__pycache__/
+results/*.csv
+results/*.log
+results/*_properties.json
+manifest.json
