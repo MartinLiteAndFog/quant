@@ -61,6 +61,9 @@ function curveForBot(
   if (mode === "account_abs") {
     return (bot.account_curve_abs || []).map((p) => ({ t: p.t, value: p.equity }));
   }
+  if (mode === "corrected") {
+    return (bot.corrected_curve || []).map((p) => ({ t: p.t, value: p.equity_pct }));
+  }
   const curve = mode === "trade" ? bot.trade_curve : bot.account_curve;
   return (curve || []).map((p) => ({ t: p.t, value: p.equity_pct }));
 }
@@ -73,6 +76,12 @@ function curveForPortfolio(
     return (portfolio.account_curve_abs || []).map((p) => ({
       t: p.t,
       value: p.equity,
+    }));
+  }
+  if (mode === "corrected") {
+    return (portfolio.corrected_curve || []).map((p) => ({
+      t: p.t,
+      value: p.equity_pct,
     }));
   }
   return (portfolio.account_curve || []).map((p) => ({
@@ -103,7 +112,7 @@ function sharedDomain(
   for (const bot of series) {
     consider(curveForBot(bot, mode));
   }
-  if (portfolio && (mode === "account_abs" || mode === "account")) {
+  if (portfolio && (mode === "account_abs" || mode === "account" || mode === "corrected")) {
     consider(curveForPortfolio(portfolio, mode));
   }
   if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return null;
@@ -301,12 +310,12 @@ export function HeroChart({
       }
     }
 
-    // White portfolio aggregate — equity modes only (trade % does not sum honestly).
+    // White portfolio aggregate — equity / corrected modes only (trade % does not sum honestly).
     if (
       showPortfolio &&
       !isolatedId &&
       portfolio &&
-      (mode === "account_abs" || mode === "account")
+      (mode === "account_abs" || mode === "account" || mode === "corrected")
     ) {
       plotLine(PORTFOLIO_ID, "Portfolio", "#ffffff", curveForPortfolio(portfolio, mode), {
         width: 3,
