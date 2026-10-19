@@ -1316,9 +1316,11 @@ def api_dashboard_chart(
             end_ts=newest_bar_ts,
         )
         _mark_timing("load_markers")
-        # Render closed-trade markers when the trade overlaps the visible bar
-        # window, then map the surviving markers onto an existing series time
-        # because lightweight-charts only renders markers at bar timestamps.
+        # Only render markers whose semantic timestamp is inside the visible
+        # bar window, then map the surviving markers onto an existing series
+        # time because lightweight-charts only renders markers at bar
+        # timestamps. Keeping pre-window closed-trade entries and snapping
+        # them to the first visible bar creates the "arrow tower" artifact.
         if oldest_bar_ts is not None and newest_bar_ts is not None and markers:
             bar_times = [int(b["time"]) for b in bars]
             anchored_markers: list[dict[str, Any]] = []
@@ -1342,30 +1344,16 @@ def api_dashboard_chart(
                 except (TypeError, ValueError):
                     continue
 
-                exit_time: Optional[int] = None
-                try:
-                    raw_exit_time = m.get("exit_time")
-                    if raw_exit_time is not None:
-                        exit_time = int(raw_exit_time)
-                except (TypeError, ValueError):
-                    exit_time = None
-
                 entry_in_window = oldest_bar_ts <= entry_time <= newest_bar_ts
-                exits_in_window = (
-                    exit_time is not None
-                    and oldest_bar_ts <= int(exit_time) <= newest_bar_ts
-                )
-                if not entry_in_window and not (entry_time < oldest_bar_ts and exits_in_window):
+                if not entry_in_window:
                     continue
 
-                anchor_source_time = entry_time if entry_in_window else int(oldest_bar_ts)
+                anchor_source_time = entry_time
                 anchored_time = _asof_bar_time(anchor_source_time)
                 if anchored_time is None:
                     continue
                 anchored = {**m, "time": int(anchored_time), "original_time": entry_time}
-                if not entry_in_window:
-                    anchored["time_anchor"] = "window_start"
-                elif anchored_time != entry_time:
+                if anchored_time != entry_time:
                     anchored["time_anchor"] = "asof_bar"
                 else:
                     anchored.pop("time_anchor", None)

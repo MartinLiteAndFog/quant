@@ -285,16 +285,11 @@ class WebhookDashboardApiTests(unittest.TestCase):
             if m.get("trade_id") == "overlap_trade"
         ]
         self.assertEqual(old_markers, [])
-        self.assertEqual(len(overlap_markers), 2)
-        self.assertEqual([int(m.get("time", 0)) for m in overlap_markers], [first_bar_ts, first_bar_ts])
-        self.assertEqual({int(m.get("original_time", 0)) for m in overlap_markers}, {int(pd.Timestamp("2026-02-20T01:30:00Z").timestamp())})
-        self.assertEqual({int(m.get("exit_time", 0)) for m in overlap_markers}, {int(pd.Timestamp("2026-02-20T02:30:00Z").timestamp())})
-        self.assertEqual({m.get("time_anchor") for m in overlap_markers}, {"window_start"})
-        arrow = next(m for m in overlap_markers if m.get("shape") == "arrowDown")
-        text = next(m for m in overlap_markers if m.get("text") == "+1.92%")
-        self.assertEqual(arrow.get("position"), "aboveBar")
-        self.assertEqual(str(arrow.get("color")).lower(), "#ef4444")
-        self.assertEqual(str(text.get("color")).lower(), "#22c55e")
+        self.assertEqual(
+            overlap_markers,
+            [],
+            "pre-window entries must not be snapped onto the first visible bar",
+        )
 
     def test_chart_maps_stop_loss_marker_to_visible_renko_bar(self) -> None:
         root = Path(self.tmp.name)
