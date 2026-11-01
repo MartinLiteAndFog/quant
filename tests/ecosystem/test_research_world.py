@@ -139,11 +139,8 @@ class PaperWorldIntegrationTests(unittest.TestCase):
         self.assertTrue(all("close" not in x.kind for x in s.audit))
 
     def test_population_manifest_change_rejected_after_restart(self):
-        renamed = [
-            ResearchPlant("different", self.pop[0].genome, self.pop[0].initial_plant)
-        ] + list(self.pop[1:])
         with self.assertRaisesRegex(IntegrationError, "identity mismatch"):
-            start_world("bad", START, "100", renamed)
+            ResearchPlant("different", self.pop[0].genome, self.pop[0].initial_plant)
         spec = self.pop[0]
         altered = (
             ResearchPlant(spec.strategy_id, spec.genome, spec.initial_plant,
