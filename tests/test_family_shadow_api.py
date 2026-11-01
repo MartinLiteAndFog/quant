@@ -54,7 +54,7 @@ class ShadowAppTests(unittest.TestCase):
             self.assertEqual(response.status_code, 401)
 
     def test_missing_strategy_credential_rejected_without_db(self):
-        with patch.dict(os.environ, {"FAMILY_ROUTER_ENABLED": "1"}):
+        with patch.dict(os.environ, {"FAMILY_ROUTER_ENABLED": "1", "FAMILY_WEBHOOK_TOKEN": "configured-token"}):
             response = self.client.post(
                 "/webhook/family",
                 json={"strategy_id": "parent-002", "action": "entry", "side": "buy"},
