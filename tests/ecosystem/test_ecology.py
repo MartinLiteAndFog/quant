@@ -87,6 +87,18 @@ class EcologicalPhysiologyTests(unittest.TestCase):
         self.assertGreater(d.plants[1].effective_leverage, d.plants[0].effective_leverage)
         self.assertLessEqual(d.plants[1].effective_leverage, D("9"))
 
+    def test_dormancy_keeps_capital_as_entitlement_without_trading(self):
+        sleeping = gene(dormancy=1, root_growth=0)
+        awake = gene(dormancy=0, root_growth=0)
+        d = ecology_day(self.initial, TODAY, "100", [
+            PlantInput(plant("sleeper"), sleeping, 0, D("40"), True),
+            PlantInput(plant("awake"), awake, 0, D("40"), True),
+        ], WEATHER)
+        self.assertEqual(d.plants[0].intended_margin, D("0"))
+        self.assertGreater(d.plants[1].intended_margin, D("0"))
+        self.assertEqual(d.unassigned_budget, D("10"))
+        self.assertEqual(d.distributable, D("90"))
+
     def test_global_limits_override_sun_and_genome(self):
         cfg = EcologyConfig(global_leverage_cap=D("3"), global_margin_fraction_cap=0.2)
         out = ecology_day(initial_groundwater(TODAY, "100", cfg), TODAY, "100",
