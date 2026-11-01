@@ -459,3 +459,39 @@ Das Gesamtsystem läuft **noch nicht mit eigener geborener/gefressener Populatio
 **Abnahme:** mindestens zwei synthetische Generationen, eindeutig finanziert statt doppelt gebucht, sichere Archivreconciliation, Kaktus übersteht typische Durststrecke, alter Champion kann schrumpfen/gefressen werden, gleiche Inputs/Seeds erzeugen byte-identische Ergebnisse, Forschungs-Hive schafft niemals Geld. Erst nach diesem Integrationsmeilenstein ist echte selbstständige Evolution überhaupt als funktionierend zu bezeichnen.
 
 **Alle PRs #37–#50 bleiben gesonderte, noch nicht gemergte Forschungsänderungen**, bis Code-Review, gemeinsame Wire-Contracts und bewusste Integration erfolgt sind. Die Nutzerfreigabe für diese Paperforschung ist keine Freigabe für reale KuCoin-Orders, Auto-Transfers, TradingView-Autosignale, Venue-Hedge-Switch oder Live-Deployment.
+
+## 23. ECO-17: dynamische, reproduzierbare Paper-Evolution umgesetzt (2026-11-01)
+
+**Implementierung:** [Draft PR #52](https://github.com/MartinLiteAndFog/quant/pull/52) auf `codex/ecosystem-evolution-cycle`, als **Stack-PR auf ECO-16 / `codex/ecosystem-endtoend-paper` [#47](https://github.com/MartinLiteAndFog/quant/pull/47)**. Die GitHub-Workflows `Ecosystem Autonomous Paper Evolution CI` und `Ecosystem Daily End-to-End Paper Integration` sind **grün**, inklusive 30-Tage-Demolauf. **Nicht gemergt, nicht deployed, keine Live-Trades.**
+
+Neu: `src/quant/ecosystem/integration/evolution_cycle.py`, `tests/ecosystem/test_evolution_cycle.py`, `scripts/ecosystem_evolution_demo.py`, `docs/architecture/ecosystem-evolution-cycle.md`, `.github/workflows/ecosystem-evolution-cycle.yml`.
+
+### Jetzt tatsächlich miteinander verbunden
+
+- **Genau 3 Mutterpflanzen + 20 vorfinanzierte Keimlinge** als initiale synthetische ECO-16-Population. Ein Papierkonto in USDT, **eine** SOL-IMBA-Wiese mit echten Sensitivity-/TTP-Genachsen; keine weiteren Assetklassen oder historische Backtest-Trades impliziert.
+- **ECO-03 Tages-Uhr** mit Ereignis-/Day-ID und kanonischem JSON-Snapshot: `Netto-PnL/Fees/Funding → ECO-07 Metrics → ECO-05 Capital → ECO-06 Ecology → ECO-08 Breeding → ECO-09 Lifecycle → Snapshot`. Jede Phase sieht nur bis zu diesem Tagesende bekannte Inputdaten. Externe Einzahlungen/Entnahmen verändern NAV, nicht die strategische Rendite. Tatsächliche Signale/Trades und Marktgelegenheiten müssen **extern und kausal** zugeliefert werden.
+- **Dynamische Population:** ECO-08-Bienen erzeugen neue X/Y-Strategieparameter durch Kreuzung/Mutation; sichtbare lokale Kinder erhalten genau aus dem bestehenden Eltern-Entitlement eine kleine Decimal-Budgetumbuchung, eindeutige ID, Heimatkachel, Mutter/Vater/Bienen-Lineage und Generation. Ohne gültige Reife-/Credibility-Evidenz keine Saat. Eltern-Intents werden nach ihrer Kapitalabgabe erneut begrenzt. Hive-Kinder sind ausschließlich **unfinanzierte Research-Kandidaten**. Im 30-Tage-Test wachsen mindestens zwei Generationen; Seed/Datum/Genome bilden reproduzierbare Sowing-Events. Erst an Folgetagen sind Kinder Teil der Ergebnishistorie.
+- **Kapital und Kaktus:** Das gesamte laufende und `closing`-reservierte Entitlement-Budget bleibt **max. 90% globales positives NAV**, 10% ist unangetastete Reserve. Konto-free-margin ist zusätzlicher harter Einstiegscap; `used_margin`/reservierte Orders stammen extern. ECO-06-Wurzeln, Blätter, einblättrige photosynthetische Kaktus-Rinde, Sonne und Grundwasserpegel verändern **nur** die simulierten Intents unter geschützten `max_leverage`- und `max_margin_fraction`-Tradinggen-Grenzen. Ein optischer `visual_dna_ref` bleibt finanziell neutral; vollständiger TS-VisualDNA-Adapter aus ECO-15 fehlt noch.
+- **ECO-07 Fitness/Vitalität/Credibility** aus externen synthetischen täglicher Nettorendite und `trades/opportunities` mit getrenntem Langzeit-/Aktuell-/Reliability-Score. Dies ist **keine echte unabhängige Out-of-sample-Validierung**; die niedrigen Demo-Breeding-Schwellen sind nur für Mechaniktests vorgesehen.
+- **ECO-09 sichere Jagd:** Schwache Pflanzen können in `closing_requested` wechseln, das ist **keine** Handels-Order. Alle bisherigen Kapital-Claims bleiben als **Escrow** zugeordnet; sie dürfen erst nach *extern* bestätigter Flat-/Order-Cancel-/Fill-/Free-Margin-Reconciliation (mit bereits am Vortag begonnenem Closing und null locked Margin) entfernt und künftig neu allokiert werden. Archiv enthält unveränderliche Genom- und Verlaufshinweise, aber keine sichtbaren einzelnen „Totenpilze“. Keine Geldschöpfung und kein automatisches Flatten.
+- **Replay:** 30-Tage-Checkpoints sind über Neustart nach Tag 12 byte-identisch. Tests prüfen mehrfache Generationen, echte Achsmutationen, Kapitalerhaltung, free-margin-/Leverage-Hardcaps, Dormanz-Kaktus, unfinanzierte Hive-Kandidaten, optische Neutralität, Stopp bei zukünftigen Daten, offene Margin nicht archivierbar und negativen NAV ohne fingierten Positionsschluss.
+
+### Laufender Test / reproduzierbarer Report
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests/ecosystem -p test_evolution_cycle.py -v
+PYTHONPATH=src python scripts/ecosystem_evolution_demo.py --days 30 --seed 2026 --equity 100
+```
+
+Der CLI-Report enthält Equity, Reserve, Budget, Anzahl lebender/archivierter Pflanzen, Generationen, Research-Hive und Grundwasser sowie einen Snapshot-Hash. **Alle Ergebnisse sind synthetische Fixtures, keine bestätigten Trading-Strategiegewinne.**
+
+### Zusätzlicher gefundener und behobener Kapitalfehler
+
+Beim Test mit mehr als 23 Kapitalnehmern wurde ein **Decimal-Rundungsüberhang** aus der pro-rata-Gewichtung entdeckt. Die Zuteilung wurde fail-closed so geändert, dass keine individuell gerundete Aktie mehr als den verbleibenden Rest ausgeben kann; nur nachweisbar mikroskopische Restdifferenzen werden konservativ gekürzt, ein substantielles Overspend bleibt ein Hard-Fail. Derselbe Fix wurde direkt in [ECO-05 Draft PR #40](https://github.com/MartinLiteAndFog/quant/pull/40) übernommen, samt neuem 31-Pflanzen-×-35-Tage-Regressions-Test. **Auch dessen CI ist grün.**
+
+### Agenten- und Merge-Anweisungen
+
+1. #52 ist **stacked auf #47**, seine vorübergehend identisch kopierten Python-Abhängigkeiten von [ECO-07 #48](https://github.com/MartinLiteAndFog/quant/pull/48), [ECO-08 #50](https://github.com/MartinLiteAndFog/quant/pull/50) und [ECO-09 #49](https://github.com/MartinLiteAndFog/quant/pull/49) vor Merge deduplizieren und rebasen. ECO-05-Fix in #40 berücksichtigen. **Nicht mehrere getrennte Versionen zur dauerhaften Wahrheit machen.**
+2. **Als Nächstes echte kausale SOL-Historie anschließen:** [ECO-02 #37](https://github.com/MartinLiteAndFog/quant/pull/37), danach Gebühren/Slippage/Funding/echte Fills und sauber cashflow-adjustiertes Netto-TWR an ECO-07 übergeben. Strategie-Signal-/Preisdaten ausschließlich zum tatsächlich bekannten Zeitpunkt; OOS und Walk-forward abtrennen. Keine Data-Mining-Bestätigung anhand der synthetischen Demo beanspruchen.
+3. **Read-only UI-/Tile-/VisualDNA-Adapter** über ECO-01-Contracts (#23), ECO-14-Tiles [#41](https://github.com/MartinLiteAndFog/quant/pull/41) und ECO-15 [#45](https://github.com/MartinLiteAndFog/quant/pull/45) erst nach freigegebenem Schema bauen. Es gibt noch keine echte Multi-Asset-Welt, keine unabhängigen FX-/Öl-Daten und keine Unreal-5-App.
+4. Live-3×3-Blaupunkt, Kraken/KuCoin, Railway, TradingView, SL-Hedge-Logik, Kontoüberträge und Produktiv-Executor bleiben **unangetastet**. Ein Simulations-`closing_requested` darf **nie** als reale Schließungsanweisung interpretiert werden.
