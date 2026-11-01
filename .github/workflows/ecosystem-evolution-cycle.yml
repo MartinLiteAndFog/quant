@@ -1,0 +1,30 @@
+name: Ecosystem Autonomous Paper Evolution CI
+
+on:
+  pull_request:
+    paths:
+      - 'src/quant/ecosystem/integration/evolution_cycle.py'
+      - 'src/quant/ecosystem/metrics/**'
+      - 'src/quant/ecosystem/breeding/**'
+      - 'src/quant/ecosystem/lifecycle/**'
+      - 'tests/ecosystem/test_evolution_cycle.py'
+      - '.github/workflows/ecosystem-evolution-cycle.yml'
+  workflow_dispatch:
+
+jobs:
+  synthetic-evolution:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Deterministic self-evolution, budget conservation and flat-only safety
+        run: python -m unittest discover -s tests/ecosystem -p test_evolution_cycle.py -v
+      - name: 30-day synthetic multi-generation CLI report
+        run: python scripts/ecosystem_evolution_demo.py --days 30 --seed 2026 --equity 100

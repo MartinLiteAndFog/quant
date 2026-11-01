@@ -138,15 +138,18 @@ def _waterfill(
     # Iterative water-filling: unused capacity of capped plants goes to others.
     while remaining > ZERO and active:
         total_weight = sum((d.weight for d in active), ZERO)
-        distributed = ZERO
+        round_budget = remaining
+        unspent = remaining
         for d in active:
             headroom = max(ZERO, budget * d.max_entitlement_fraction - balances[d.strategy_id])
-            share = min(headroom, remaining * d.weight / total_weight)
+            # Decimal rounding may make the independent pro-rata shares sum
+            # to slightly more than the available budget. Never overspend.
+            share = min(headroom, round_budget * d.weight / total_weight, unspent)
             balances[d.strategy_id] += share
-            distributed += share
-        if distributed <= ZERO:
+            unspent -= share
+        if unspent >= remaining:
             break
-        remaining -= distributed
+        remaining = unspent
         active = [
             d for d in active
             if balances[d.strategy_id] < budget * d.max_entitlement_fraction
@@ -225,7 +228,22 @@ def allocate_groundwater(
                                       d.used_margin, d.reserved_order_margin, ZERO))
     allocated = sum((e.amount for e in claims), ZERO)
     if allocated > available:
-        raise GroundwaterError("allocator bug: reserve would be spent")
+        # A Decimal context's finite precision can still round the final
+        # per-account additions upwards by a tiny ULP. Trim only demonstrably
+        # microscopic excess from an uncommitted entitlement. Any material
+        # overspend remains a hard fail.
+        excess = allocated - available
+        tolerance = max(Decimal("1e-22"), available * Decimal("1e-22"))
+        if excess > tolerance:
+            raise GroundwaterError("allocator bug: reserve would be spent")
+        for index in range(len(claims)-1, -1, -1):
+            claim = claims[index]
+            if claim.amount - claim.locked >= excess:
+                claims[index] = replace(claim, amount=claim.amount-excess)
+                break
+        allocated = sum((e.amount for e in claims), ZERO)
+        if allocated > available:
+            raise GroundwaterError("allocator bug: reserve would be spent")
     result = _with_entry_capacities(claims, accts, frozen=risk_breach)
     return GroundwaterPlan(
         equity, reserve, available, next(iter(currencies)), result,
