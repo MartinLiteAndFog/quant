@@ -1,39 +1,67 @@
-import { useEffect, useState } from "react";
-import { advanceDay, advanceDays, createWorld, phenotype, type Plant, type World } from "./world";
+import { useEffect, useMemo, useState } from "react";
+import {
+  advanceSimulationDay,
+  advanceSimulationDays,
+  createSimulationWorld,
+  setConceptionPolicy,
+  visiblePopulation,
+  type BeeMode,
+  type GardenPlant,
+  type SimulationWorld,
+} from "./simulation";
+import { runControlledExperiment, type ExperimentReport } from "./experiments";
 
 type View = "meadow" | "understory";
-
-const pad = (value: number) => String(value).padStart(3, "0");
-const percent = (value: number) => `${Math.round(value)}%`;
+type GeneAxis = "root" | "leaf" | "water" | "sun";
+const axisLabels: Record<GeneAxis, string> = { root: "Root depth", leaf: "Leaf area", water: "Water tolerance", sun: "Sun tolerance" };
+const money = (amount: number) => `${amount.toFixed(2)} USDT`;
+const percent = (value: number) => `${Math.round(value * 100)}%`;
 
 function App() {
-  const [world, setWorld] = useState<World>(() => createWorld());
-  const [selectedId, setSelectedId] = useState("aster-04");
+  const [world, setWorld] = useState<SimulationWorld>(() => createSimulationWorld());
+  const [selectedId, setSelectedId] = useState("parent-01");
   const [view, setView] = useState<View>("meadow");
   const [playing, setPlaying] = useState(false);
-  const selected = world.plants.find((plant) => plant.id === selectedId) ?? world.plants[0];
+  const [axisX, setAxisX] = useState<GeneAxis>("root");
+  const [axisY, setAxisY] = useState<GeneAxis>("leaf");
+  const [experiment, setExperiment] = useState<ExperimentReport | null>(null);
+  const [experimentBusy, setExperimentBusy] = useState(false);
+
+  const population = visiblePopulation(world);
+  const selected = world.plants.find((plant) => plant.id === selectedId) ?? population[0] ?? world.plants[0];
 
   useEffect(() => {
     if (!playing) return;
-    const timer = window.setInterval(() => setWorld((current) => advanceDay(current)), 1800);
+    const timer = window.setInterval(() => setWorld((current) => advanceSimulationDay(current)), 700);
     return () => window.clearInterval(timer);
   }, [playing]);
 
-  const advanceWeek = () => setWorld((current) => advanceDays(current, 7));
+  const advance = (days: number) => setWorld((current) => advanceSimulationDays(current, days));
+  const reset = () => {
+    setPlaying(false);
+    setWorld(createSimulationWorld());
+    setSelectedId("parent-01");
+    setExperiment(null);
+  };
+  const runExperiment = async () => {
+    setExperimentBusy(true);
+    try {
+      const report = await runControlledExperiment({ seeds: ["CLOUD-071", "CLOUD-113", "CLOUD-208", "CLOUD-319"], days: 140 });
+      setExperiment(report);
+    } finally {
+      setExperimentBusy(false);
+    }
+  };
 
   return (
-    <main className="app-shell">
+    <main className="app-shell cloudgarden-app">
       <aside className="rail" aria-label="Main navigation">
         <a className="brand-mark" href="#home" aria-label="Cloudgarden home"><span>C</span><i /></a>
         <div className="rail-divider" />
-        <button className={`rail-button ${view === "meadow" ? "is-active" : ""}`} onClick={() => setView("meadow")} aria-label="Meadow" aria-pressed={view === "meadow"}>
-          <span className="rail-glyph glyph-meadow" aria-hidden="true">✳</span>
-        </button>
-        <button className={`rail-button ${view === "understory" ? "is-active" : ""}`} onClick={() => setView("understory")} aria-label="Understory" aria-pressed={view === "understory"}>
-          <span className="rail-glyph glyph-roots" aria-hidden="true">⌁</span>
-        </button>
+        <button className={`rail-button ${view === "meadow" ? "is-active" : ""}`} onClick={() => setView("meadow")} aria-label="Meadow" aria-pressed={view === "meadow"}><span className="rail-glyph">✳</span></button>
+        <button className={`rail-button ${view === "understory" ? "is-active" : ""}`} onClick={() => setView("understory")} aria-label="Understory" aria-pressed={view === "understory"}><span className="rail-glyph glyph-roots">⌁</span></button>
         <div className="rail-spacer" />
-        <div className="seed-mark" title={`World seed ${world.seed}`}>07</div>
+        <div className="seed-mark" title={`World seed ${world.seed}`}>CG</div>
       </aside>
 
       <section className="app-main" id="home">
@@ -48,18 +76,16 @@ function App() {
 
         {view === "meadow" ? (
           <Meadow
-            world={world}
-            selected={selected}
-            selectedId={selectedId}
-            playing={playing}
-            onSelect={setSelectedId}
-            onAdvance={() => setWorld((current) => advanceDay(current))}
-            onAdvanceWeek={advanceWeek}
-            onTogglePlay={() => setPlaying((current) => !current)}
-            onReset={() => { setPlaying(false); setWorld(createWorld()); setSelectedId("aster-04"); }}
+            world={world} population={population} selected={selected} selectedId={selectedId} playing={playing}
+            axisX={axisX} axisY={axisY} setAxisX={setAxisX} setAxisY={setAxisY}
+            onSelect={setSelectedId} onAdvance={advance} onTogglePlay={() => setPlaying((current) => !current)} onReset={reset}
+            onPolicy={(policy) => setWorld((current) => setConceptionPolicy(current, policy))}
           />
         ) : (
-          <Understory world={world} onReturn={() => setView("meadow")} />
+          <Understory
+            world={world} experiment={experiment} experimentBusy={experimentBusy} onRunExperiment={runExperiment}
+            onReturn={() => setView("meadow")} onSelectPlant={(id) => { setSelectedId(id); setView("meadow"); }}
+          />
         )}
       </section>
     </main>
@@ -67,186 +93,214 @@ function App() {
 }
 
 function Meadow({
-  world,
-  selected,
-  selectedId,
-  playing,
-  onSelect,
-  onAdvance,
-  onAdvanceWeek,
-  onTogglePlay,
-  onReset,
+  world, population, selected, selectedId, playing, axisX, axisY, setAxisX, setAxisY,
+  onSelect, onAdvance, onTogglePlay, onReset, onPolicy,
 }: {
-  world: World;
-  selected: Plant;
-  selectedId: string;
-  playing: boolean;
-  onSelect: (id: string) => void;
-  onAdvance: () => void;
-  onAdvanceWeek: () => void;
-  onTogglePlay: () => void;
-  onReset: () => void;
+  world: SimulationWorld; population: readonly GardenPlant[]; selected: GardenPlant; selectedId: string; playing: boolean;
+  axisX: GeneAxis; axisY: GeneAxis; setAxisX: (axis: GeneAxis) => void; setAxisY: (axis: GeneAxis) => void;
+  onSelect: (id: string) => void; onAdvance: (days: number) => void; onTogglePlay: () => void; onReset: () => void;
+  onPolicy: (policy: "mixed" | "random" | BeeMode) => void;
 }) {
+  const archivedCount = world.plants.length - population.length;
+  const usedSeeds = world.capital.seedlingEntitlements.filter((seed) => seed.status === "used").length;
+  const visiblePlants = useMemo(() => [...population].sort((a, b) => a.x - b.x), [population]);
+  const layout = useMemo(() => visiblePlants.map((plant, index) => ({
+    plant,
+    // Evenly spaced visual lanes keep a late-game population legible. The gene field
+    // below retains the true genome coordinates for analysis.
+    x: visiblePlants.length < 2 ? 50 : 5 + index * 90 / (visiblePlants.length - 1),
+  })), [visiblePlants]);
+
   return (
-    <div className="page-content meadow-page">
-      <div className="page-heading">
+    <div className="page-content game-page">
+      <div className="game-heading">
         <div>
-          <div className="eyebrow"><span className="eyebrow-line" /> The upper meadow <span className="eyebrow-coordinate">N 04° · W 11°</span></div>
-          <h1>A small world, <em>still growing.</em></h1>
-          <p className="lede">Five strategy-seeds take root in one shared climate. Watch what the genes make of it.</p>
+          <div className="eyebrow"><span className="eyebrow-line" /> A living strategy ecosystem <span className="eyebrow-coordinate">SYNTHETIC / REPLAYABLE</span></div>
+          <h1>A world shaped <em>by its genes.</em></h1>
+          <p className="lede">Every plant, seed and unit of capital follows the same deterministic rules.</p>
         </div>
-        <div className="weather-pill"><span className="sun-symbol">☼</span><span><b>Open sky</b><small>{percent(world.sunlight * 100)} light · soft wind</small></span></div>
+        <div className="weather-pill"><span className="sun-symbol">☼</span><span><b>Day {world.day}</b><small>{percent(world.climate.sunlight)} sunlight · {percent(world.climate.water)} water</small></span></div>
       </div>
 
-      <div className="workspace-grid">
-        <section className="world-column" aria-label="Cloudgarden meadow simulation">
-          <div className="scene-frame">
-            <div className="scene-toolbar">
-              <div className="biome-name"><span className="mini-world-icon">◌</span><span><b>Cloudgarden</b><small>Meadow 01 / home world</small></span></div>
-              <div className="scene-toolbar-right"><span className="fixture-tag">SIMULATION FIXTURE</span><button className="quiet-icon-button" onClick={onReset} aria-label="Reset world">↺</button></div>
+      <section className="ledger-strip" aria-label="Synthetic capital ledger">
+        <LedgerMetric label="Test NAV" value={money(world.capital.navUsdt)} detail="fixed synthetic equity" />
+        <LedgerMetric label="Budget ceiling" value={money(world.capital.allocationCeilingUsdt)} detail="90% maximum" />
+        <LedgerMetric label="Protected reserve" value={money(world.capital.protectedReserveUsdt)} detail="never allocated" />
+        <LedgerMetric label="Active / archived" value={`${population.length} / ${archivedCount}`} detail="archived plants hidden" />
+      </section>
+
+      <div className="game-layout">
+        <section className="garden-column" aria-label="Cloudgarden simulation">
+          <div className="garden-card">
+            <div className="garden-toolbar">
+              <div><span className="mini-world-icon">◌</span><span><b>Upper meadow</b><small>World seed {world.seed} · {world.plants.filter((plant) => plant.role === "parent").length} parents · {usedSeeds}/20 seedlings</small></span></div>
+              <div className="toolbar-actions"><span className="fixture-tag">SYNTHETIC FIXTURE</span><button className="quiet-icon-button" onClick={onReset} aria-label="Reset Cloudgarden">↺</button></div>
             </div>
 
-            <div className="landscape" role="group" aria-label="Select a plant in the meadow">
-              <div className="sky-grain" />
-              <div className="sun-disc" />
-              <div className="cloud cloud-a"><i /><i /><i /></div>
-              <div className="cloud cloud-b"><i /><i /><i /></div>
-              <div className="distant-hill hill-a" /><div className="distant-hill hill-b" />
-              <div className="flying-bee bee-a" aria-hidden="true"><span /><i /></div>
-              <div className="flying-bee bee-b" aria-hidden="true"><span /><i /></div>
-              <div className="garden-air-label label-air"><span className="air-dash" /> daylight rhythm</div>
-              <div className="garden-air-label label-hive">hive activity <span>3</span></div>
-
-              {world.plants.map((plant, index) => (
-                <PlantFigure key={plant.id} plant={plant} index={index} selected={plant.id === selectedId} onSelect={() => onSelect(plant.id)} />
-              ))}
-
-              <div className="ground-surface"><div className="grass-edge" /></div>
-              <div className="soil-layer soil-top" />
-              <div className="soil-layer soil-deep" />
-              <div className="soil-specks specks-one" /><div className="soil-specks specks-two" />
-              <div className="water-table" style={{ top: `${(1 - world.waterline) * 74 + 25}%` }}><span>shared water table</span></div>
-              {world.plants.map((plant, index) => <RootSystem key={`${plant.id}-roots`} plant={plant} index={index} selected={plant.id === selectedId} />)}
-              <div className="soil-depth-label"><span>root zone</span><i /></div>
-              <div className="landscape-bottom"><span>Above ground · active population</span><span>Below ground · {percent(world.waterline * 100)} waterline</span></div>
+            <div className={`garden-scene ${population.length > 10 ? "dense-population" : ""}`} role="group" aria-label="Select an active plant">
+              <div className="scene-sky" /><div className="scene-sun" /><div className="scene-cloud cloud-left" /><div className="scene-cloud cloud-right" />
+              <div className="scene-hill hill-left" /><div className="scene-hill hill-right" />
+              <div className="air-note"><span /> daylight rhythm · deterministic</div>
+              <div className="hive-note">🐝 {world.events.filter((event) => event.type === "conception").length} conceptions</div>
+              {layout.map(({ plant, x }, index) => <PlantFigure key={plant.id} plant={plant} x={x} index={index} selected={plant.id === selectedId} onSelect={() => onSelect(plant.id)} />)}
+              <div className="soil-surface"><i /></div><div className="soil-band soil-band-top" /><div className="soil-band soil-band-bottom" />
+              <div className="waterline" style={{ top: `${57 - world.climate.water * 18}%` }}><span>shared synthetic water table</span></div>
+              {layout.map(({ plant, x }, index) => <RootSystem key={`${plant.id}-root`} plant={plant} x={x} index={index} selected={plant.id === selectedId} />)}
+              <div className="scene-caption"><span>Above ground · funded population</span><span>Below ground · roots and water access</span></div>
             </div>
 
-            <div className="scene-footer">
-              <div className="timeline-label"><span className="timeline-seed" /> Day <b>{pad(world.day)}</b><span className="timeline-divider" /> Seed <b>{world.seed}</b></div>
+            <div className="garden-controls">
+              <div className="control-meta"><span>DAY <b>{String(world.day).padStart(3, "0")}</b></span><span className="control-dot" /><span>SEED <b>{world.seed}</b></span><span className="control-dot" /><span>CAPITAL <b>{money(world.capital.deployedCapitalUsdt + world.capital.reservedMarginUsdt)}</b></span></div>
               <div className="time-controls">
-                <button className="text-button" onClick={onAdvanceWeek}>+ 7 days</button>
-                <button className={`play-button ${playing ? "is-playing" : ""}`} onClick={onTogglePlay} aria-label={playing ? "Pause simulation" : "Play simulation"}>{playing ? "Ⅱ" : "▶"}<span>{playing ? "Pause" : "Let time flow"}</span></button>
-                <button className="step-button" onClick={onAdvance} aria-label="Advance one day">+ 1 day <span>↗</span></button>
+                <button className={`play-button ${playing ? "is-playing" : ""}`} onClick={onTogglePlay}>{playing ? "Ⅱ Pause" : "▶ Play"}</button>
+                <button className="garden-step" onClick={() => onAdvance(1)}>+ 1 day</button>
+                <button className="garden-step" onClick={() => onAdvance(7)}>+ 7 days</button>
+                <button className="garden-step garden-season" onClick={() => onAdvance(140)}>+ 140 days</button>
               </div>
             </div>
           </div>
 
-          <div className="meadow-underbar">
-            <span><i className="legend-flower" /> fitness</span>
-            <span><i className="legend-leaf" /> vitality</span>
-            <span><i className="legend-root" /> root reach</span>
-            <span className="underbar-note">A visual field guide to a deterministic toy world.</span>
+          <div className="ledger-details">
+            <div><span>Deployed</span><b>{money(world.capital.deployedCapitalUsdt)}</b></div>
+            <div><span>Reserved for seed bank</span><b>{money(world.capital.reservedMarginUsdt)}</b></div>
+            <div><span>Freed by predation</span><b>{money(world.capital.freeCapitalUsdt)}</b></div>
+            <div><span>Available seed entitlements</span><b>{20 - usedSeeds} / 20</b></div>
           </div>
+
+          <GeneField population={population} axisX={axisX} axisY={axisY} setAxisX={setAxisX} setAxisY={setAxisY} selectedId={selectedId} onSelect={onSelect} />
         </section>
 
-        <aside className="inspector" aria-label="Selected plant details">
-          <div className="inspector-heading"><span>SPECIMEN / {selected.family.toUpperCase()}</span><span className="specimen-index">{String(world.plants.findIndex((plant) => plant.id === selected.id) + 1).padStart(2, "0")}—05</span></div>
+        <aside className="plant-inspector" aria-label="Selected plant and ecosystem settings">
+          <div className="inspector-topline"><span>SPECIMEN / {selected.role.toUpperCase()}</span><span>{selected.status === "archived" ? "ARCHIVED" : selected.physiology.toUpperCase()}</span></div>
+          {selected.status === "archived" && <div className="archived-inspector">Archived genome record · no longer visible in the meadow or deployed.</div>}
           <h2>{selected.name}</h2>
-          <div className="specimen-subtitle">{phenotype(selected.genes)} phenotype <span>·</span> seedling line 0{world.plants.findIndex((plant) => plant.id === selected.id) + 1}</div>
-          <div className={`specimen-portrait portrait-${phenotype(selected.genes).toLowerCase()}`}><PlantPortrait plant={selected} /></div>
-
-          <div className="metric-pair">
-            <div className="metric-block"><span>Vigor</span><b>{Math.round(selected.vigor)}<small>%</small></b><div className="metric-track"><i style={{ width: `${selected.vigor}%` }} /></div></div>
-            <div className="metric-block"><span>Fitness</span><b>{Math.round(selected.fitness)}<small>%</small></b><div className="metric-track track-amber"><i style={{ width: `${selected.fitness}%` }} /></div></div>
+          <p className="plant-class">{selected.phenotype} phenotype <span>·</span> {selected.conceivedBy ? `${selected.conceivedBy} bee` : "parent line"}</p>
+          <div className={`plant-portrait portrait-${selected.phenotype.toLowerCase()}`}><PlantArt plant={selected} /></div>
+          <div className="specimen-stats">
+            <Stat label="Daily habitat fit · synthetic" value={selected.fitness} />
+            <Stat label="Vigor" value={selected.vigor} />
+            <Stat label="Synthetic evidence" value={selected.evidence} />
           </div>
-          <div className="evidence-line"><span className="evidence-mark">i</span><span>{selected.evidenceDays} synthetic observation days <small>Illustrative, not market evidence</small></span></div>
-
-          <div className="trait-heading"><span>Genome / four visible genes</span><button aria-label="Genome help" title="Gene values are bounded simulation inputs">?</button></div>
-          <GeneRow label="Growth tempo" value={selected.genes.tempo} variant="sage" />
-          <GeneRow label="Canopy" value={selected.genes.canopy} variant="gold" />
-          <GeneRow label="Root depth" value={selected.genes.rootDepth} variant="blue" />
-          <GeneRow label="Root spread" value={selected.genes.rootSpread} variant="moss" />
-
-          <div className="specimen-bottom"><span>Home tile</span><b>Meadow 01 <span>↗</span></b></div>
+          <p className="metrics-legend">Habitat fit reflects today’s synthetic climate match. Vigor is the plant’s accumulated state; evidence counts only simulated observation.</p>
+          <div className="plant-allocation"><span>Capital entitlement</span><b>{money(selected.allocationUsdt)}</b></div>
+          <div className="plant-allocation"><span>Observed in this world</span><b>{selected.evidenceDays} days</b></div>
+          <div className="genome-title"><span>Genome · heritable traits</span><small>protected policies fixed</small></div>
+          <GeneBar name="Root depth" value={selected.genes.root} color="blue" />
+          <GeneBar name="Leaf area" value={selected.genes.leaf} color="green" />
+          <GeneBar name="Water response" value={selected.genes.water} color="teal" />
+          <GeneBar name="Sun response" value={selected.genes.sun} color="gold" />
+          <div className="tradeoff-note">Root and leaf growth compete for daily energy. Neither gene can change the 90/10 capital boundary.</div>
+          <label className="bee-policy"><span>Conception policy</span>
+            <select value={world.conceptionPolicy} onChange={(event) => onPolicy(event.target.value as "mixed" | BeeMode)}>
+              <option value="mixed">Mixed modes · local / hive / hybrid</option><option value="random">Random-only baseline</option>
+              <option value="local">Local pairing</option><option value="hive">Hive recombination</option><option value="hybrid">Hybrid pollination</option>
+            </select>
+          </label>
         </aside>
       </div>
 
-      <footer className="page-footer"><span>Cloudgarden is a simulation toy. No live account, orders or exchange data.</span><span>Current cycle <b>{world.day} days</b><i /> Same seed, same weather, same outcome.</span></footer>
+      <footer className="game-footer"><span>Cloudgarden is a closed, synthetic simulation. No historical market feed, account, strategy executor or orders are connected.</span><span>Same seed + same actions = same garden.</span></footer>
     </div>
   );
 }
 
-function PlantFigure({ plant, index, selected, onSelect }: { plant: Plant; index: number; selected: boolean; onSelect: () => void }) {
-  const type = phenotype(plant.genes).toLowerCase();
+function LedgerMetric({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return <div className="ledger-metric"><span>{label}</span><b>{value}</b><small>{detail}</small></div>;
+}
+
+function PlantFigure({ plant, x, index, selected, onSelect }: { plant: GardenPlant; x: number; index: number; selected: boolean; onSelect: () => void }) {
   return (
-    <button className={`plant-figure plant-${type} ${selected ? "plant-selected" : ""}`} style={{ left: `${plant.x}%`, zIndex: 6 + index }} onClick={onSelect} aria-label={`Select ${plant.name}, ${phenotype(plant.genes)} phenotype`} aria-pressed={selected}>
-      <span className="plant-halo" />
-      <span className="plant-crown"><i className="stem" /><i className="leaf leaf-left" /><i className="leaf leaf-right" /><i className="leaf leaf-high" /><i className="flower-core" /></span>
-      <span className="plant-foot" />
-      <span className="plant-caption"><b>{plant.name}</b><small>{phenotype(plant.genes)} · {Math.round(plant.vigor)} vigor</small></span>
+    <button className={`garden-plant plant-${plant.phenotype.toLowerCase()} ${plant.role === "seedling" ? "plant-seedling" : ""} ${plant.physiology === "dormant" ? "plant-dormant" : ""} ${selected ? "plant-selected" : ""}`}
+      style={{ left: `${x}%`, zIndex: 8 + index }} onClick={onSelect} aria-label={`Select ${plant.name}, ${plant.phenotype}, ${Math.round(plant.vigor)} vigor`} aria-pressed={selected}>
+      <span className="plant-glow" /><PlantArt plant={plant} /><span className="plant-label">{plant.role === "parent" ? plant.name : `Seed ${plant.id.slice(-2)}`}</span>
     </button>
   );
 }
 
-function RootSystem({ plant, index, selected }: { plant: Plant; index: number; selected: boolean }) {
-  const width = 24 + plant.genes.rootSpread * 56;
-  const depth = 22 + plant.genes.rootDepth * 62;
-  return <div className={`root-system ${selected ? "roots-selected" : ""}`} style={{ left: `${plant.x}%`, width: `${width}px`, height: `${depth}px`, zIndex: index + 2 }} aria-hidden="true"><i /><i /><i /><i /><i /></div>;
+function PlantArt({ plant }: { plant: GardenPlant }) {
+  const height = 30 + plant.biomass * 0.55;
+  const spread = 20 + plant.genes.leaf * 32;
+  return <span className={`plant-art art-${plant.phenotype.toLowerCase()}`} style={{ height: `${height}px`, width: `${spread}px` }} aria-hidden="true">
+    <i className="plant-stem" /><i className="plant-leaf leaf-a" /><i className="plant-leaf leaf-b" /><i className="plant-leaf leaf-c" /><i className="plant-bloom" />
+  </span>;
 }
 
-function PlantPortrait({ plant }: { plant: Plant }) {
-  return <div className={`portrait-plant portrait-${phenotype(plant.genes).toLowerCase()}`} aria-hidden="true"><i className="portrait-stem" /><i className="portrait-leaf leaf-a" /><i className="portrait-leaf leaf-b" /><i className="portrait-leaf leaf-c" /><i className="portrait-bloom" /></div>;
+function RootSystem({ plant, x, index, selected }: { plant: GardenPlant; x: number; index: number; selected: boolean }) {
+  return <div className={`root-network ${selected ? "root-selected" : ""}`} style={{ left: `${x}%`, height: `${18 + plant.genes.root * 75}px`, width: `${25 + plant.genes.root * 38}px`, zIndex: index + 1 }} aria-hidden="true"><i /><i /><i /><i /></div>;
 }
 
-function GeneRow({ label, value, variant }: { label: string; value: number; variant: string }) {
-  return <div className="gene-row"><span>{label}</span><div className="gene-meter"><i className={`meter-${variant}`} style={{ width: `${Math.round(value * 100)}%` }} /></div><b>{value.toFixed(2)}</b></div>;
+function Stat({ label, value }: { label: string; value: number }) {
+  return <div className="plant-stat"><span>{label}</span><b>{Math.round(value)}<small>/100</small></b><div><i style={{ width: `${value}%` }} /></div></div>;
 }
 
-function Understory({ world, onReturn }: { world: World; onReturn: () => void }) {
-  const candidates = [
-    { code: "CG-114", form: "Deep-root / slow canopy", score: 0.78, source: "Local pollination", status: "Growing" },
-    { code: "CG-208", form: "Balanced spread / high tempo", score: 0.64, source: "Seed bank", status: "Observing" },
-    { code: "CG-319", form: "Wide canopy / shallow root", score: 0.52, source: "Hive suggestion", status: "Dormant" },
-    { code: "CG-427", form: "Low canopy / long root", score: 0.71, source: "Local pollination", status: "Growing" },
-  ];
+function GeneBar({ name, value, color }: { name: string; value: number; color: string }) {
+  return <div className="genome-row"><span>{name}</span><div><i className={`gene-${color}`} style={{ width: `${value * 100}%` }} /></div><b>{value.toFixed(2)}</b></div>;
+}
 
-  return (
-    <div className="page-content understory-page">
-      <div className="understory-heading">
-        <div><div className="eyebrow"><span className="eyebrow-line" /> Below the root line</div><h1>The <em>understory.</em></h1><p className="lede">Ideas are compost here. Nothing in this room receives capital.</p></div>
-        <button className="return-button" onClick={onReturn}>← Return to meadow</button>
-      </div>
-      <div className="understory-summary"><span className="summary-mark">⌁</span><div><b>Research bed / {world.seed}</b><p>Candidate records describe synthetic genomes and simulated conditions. They do not represent exchange-tested strategies.</p></div><span className="fixture-tag">NO CAPITAL</span></div>
-
-      <div className="research-layout">
-        <section className="research-main">
-          <div className="section-title"><div><span>SEED BANK</span><h2>Four ideas in the soil</h2></div><span className="record-count">04 records</span></div>
-          <div className="candidate-list">
-            {candidates.map((candidate, index) => (
-              <div className="candidate-row" key={candidate.code}>
-                <div className={`candidate-glyph glyph-${index}`}><i /><b>{String(index + 1).padStart(2, "0")}</b></div>
-                <div className="candidate-main"><b>{candidate.code}</b><span>{candidate.form}</span><small>{candidate.source}</small></div>
-                <div className="candidate-score"><span>Sim fitness</span><b>{Math.round(candidate.score * 100)}</b></div>
-                <span className={`candidate-status status-${candidate.status.toLowerCase()}`}>{candidate.status}</span>
-              </div>
-            ))}
-          </div>
-          <div className="research-footnote"><span>i</span><p>Scores summarize this toy world's own rules. They are not predictive and cannot be promoted to a trading system.</p></div>
-        </section>
-
-        <aside className="evolution-card">
-          <span className="evolution-kicker">POLLINATION / TODAY</span>
-          <h2>A little pollen<br /><em>goes a long way.</em></h2>
-          <div className="bee-flight"><span className="bee-dot" /><i /><b /><small>Local bee path</small></div>
-          <div className="parent-pair"><span><i className="parent-leaf leaf-one" />Aster 04</span><b>×</b><span><i className="parent-leaf leaf-two" />Cloud fern</span></div>
-          <p className="offspring-note">A bounded suggestion carries two visible genes forward and mutates one small step.</p>
-          <button className="pollen-button" disabled title="Breeding is a visual prototype action only">Watch pollination <span>↗</span></button>
-          <small className="offline-note">No capital entitlement is created.</small>
-        </aside>
-      </div>
-      <footer className="page-footer"><span>Synthetic research space · no live signals</span><span>World day <b>{world.day}</b><i /> deterministic seed <b>{world.seed}</b></span></footer>
+function GeneField({ population, axisX, axisY, setAxisX, setAxisY, selectedId, onSelect }: {
+  population: readonly GardenPlant[]; axisX: GeneAxis; axisY: GeneAxis; setAxisX: (axis: GeneAxis) => void; setAxisY: (axis: GeneAxis) => void;
+  selectedId: string; onSelect: (id: string) => void;
+}) {
+  return <section className="gene-field" aria-label="Genome parameter field">
+    <div className="gene-field-heading"><div><span>GENOME SPACE</span><h2>Change the axes, keep every plant.</h2></div>
+      <div className="axis-selectors"><label>X <select aria-label={`Horizontal axis: ${axisLabels[axisX]}`} value={axisX} onChange={(event) => setAxisX(event.target.value as GeneAxis)}>{Object.entries(axisLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label>
+      <label>Y <select aria-label={`Vertical axis: ${axisLabels[axisY]}`} value={axisY} onChange={(event) => setAxisY(event.target.value as GeneAxis)}>{Object.entries(axisLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label></div>
     </div>
-  );
+    <div className="gene-plot"><span className="plot-y-label">{axisLabels[axisY]}</span><div className="plot-area">
+      {population.map((plant) => <button key={plant.id} className={`plot-point point-${plant.phenotype.toLowerCase()} ${plant.id === selectedId ? "point-selected" : ""}`}
+        style={{ left: `${plant.genes[axisX] * 100}%`, bottom: `${plant.genes[axisY] * 100}%` }} onClick={() => onSelect(plant.id)} aria-label={`Select ${plant.name}; ${axisLabels[axisX]} ${plant.genes[axisX].toFixed(2)}, ${axisLabels[axisY]} ${plant.genes[axisY].toFixed(2)}`} title={`${plant.name} · ${plant.phenotype}`} />)}
+    </div><span className="plot-x-label">{axisLabels[axisX]}</span></div>
+    <p className="plot-note">All {population.length} living plants remain selectable when axes change. Archived genome records stay in the research archive.</p>
+  </section>;
+}
+
+function Understory({ world, experiment, experimentBusy, onRunExperiment, onReturn, onSelectPlant }: {
+  world: SimulationWorld; experiment: ExperimentReport | null; experimentBusy: boolean; onRunExperiment: () => void; onReturn: () => void; onSelectPlant: (id: string) => void;
+}) {
+  const active = visiblePopulation(world);
+  const archived = world.plants.filter((plant) => plant.status === "archived");
+  const conceptions = world.events.filter((event) => event.type === "conception");
+  const archiveEvents = world.events.filter((event) => event.type === "archive");
+  const candidates = [...world.plants].reverse();
+  const modeCounts = (['random', 'local', 'hive', 'hybrid'] as const).map((mode) => ({ mode, count: conceptions.filter((event) => event.detail.mode === mode).length }));
+
+  return <div className="page-content understory-page game-understory">
+    <div className="understory-heading"><div><div className="eyebrow"><span className="eyebrow-line" /> The research layer · no capital promotion</div><h1>What grows <em>below.</em></h1><p className="lede">The archive and seed bank are records, not hidden individual plants in the meadow.</p></div><button className="return-button" onClick={onReturn}>← Return to meadow</button></div>
+    <section className="research-status-grid">
+      <LedgerMetric label="Active population" value={String(active.length)} detail="shown above ground" />
+      <LedgerMetric label="Research archive" value={String(archived.length)} detail="records only · not rendered" />
+      <LedgerMetric label="Conceptions" value={String(conceptions.length)} detail="all event-logged" />
+      <LedgerMetric label="Seed bank" value={`${world.capital.seedlingEntitlements.filter((seed) => seed.status === "available").length} / 20`} detail="single-use funded slots" />
+    </section>
+
+    <div className="research-layout game-research-layout">
+      <section className="research-main"><div className="section-title"><div><span>GENOME ARCHIVE</span><h2>Plant and lineage records</h2></div><span className="record-count">{world.plants.length} records</span></div>
+        {candidates.length ? <div className="research-plant-list">{candidates.map((plant) => <button className="research-plant-row" key={plant.id} onClick={() => onSelectPlant(plant.id)} title={plant.status === "archived" ? "Open archived genome record" : "Inspect plant"}>
+          <span className={`research-seed seed-${plant.phenotype.toLowerCase()}`}><i /></span><span className="research-plant-info"><b>{plant.name}</b><small>{plant.phenotype} · {plant.conceivedBy ?? "parent line"} · {plant.evidenceDays} observation days · fit {Math.round(plant.fitness)}</small></span>
+          <span className="research-genome">R {plant.genes.root.toFixed(2)}<br />L {plant.genes.leaf.toFixed(2)}</span><span className={`archive-state ${plant.status === "archived" ? "archived" : plant.physiology}`}>{plant.status === "archived" ? "Archived" : plant.physiology === "dormant" ? "Dormant" : "Growing"}</span>
+        </button>)}</div> : <div className="research-empty"><span>⌁</span><b>The first seeds are still forming.</b><p>Step the world forward to day 7. The first conception is funded from an existing seed entitlement.</p></div>}
+        <div className="research-footnote"><span>i</span><p>Recent event window: {world.events.length} records (maximum 2,000). Archive events in this window: {archiveEvents.length}. Genome records remain available; archived plants leave the meadow.</p></div>
+      </section>
+
+      <aside className="evolution-card"><span className="evolution-kicker">CONTROLLED SYNTHETIC EXPERIMENT</span><h2>Four ways to<br /><em>spread genes.</em></h2>
+        <p className="experiment-intro">Each cohort gets the same world seeds, 90 USDT allocation ceiling, and 140 daily steps. This compares game-rule outcomes only.</p>
+        <div className="mode-counts">{modeCounts.map(({ mode, count }) => <div key={mode}><span>{mode}</span><b>{count}</b></div>)}</div>
+        <button className="experiment-button" onClick={onRunExperiment} disabled={experimentBusy}>{experimentBusy ? "Comparing worlds…" : "Run matched experiment"}<span>↗</span></button>
+        <small className="offline-note">Random · local · hive · hybrid / equal seeds</small>
+      </aside>
+    </div>
+
+    {experiment && <ExperimentResults report={experiment} />}
+    <footer className="game-footer"><span>Synthetic outcomes are not trading evidence and cannot qualify a strategy.</span><span>{archived.length} plants archived · {money(world.capital.freeCapitalUsdt)} returned to free allocation</span></footer>
+  </div>;
+}
+
+function ExperimentResults({ report }: { report: ExperimentReport }) {
+  return <section className="experiment-results"><div className="section-title"><div><span>MATCHED SEED COHORTS</span><h2>Rule-level outcomes</h2></div><span className="record-count">{report.days} days · {report.seeds.length} seeds</span></div>
+    <table className="experiment-table"><thead><tr><th scope="col">Pollination</th><th scope="col">Living</th><th scope="col">Archived</th><th scope="col">Mean habitat fit · synthetic</th><th scope="col">Mean vigor</th><th scope="col">Capital reconciled</th></tr></thead>
+      <tbody>{report.cohorts.map((cohort) => <tr key={cohort.policy}><th scope="row">{cohort.policy}</th><td>{cohort.meanActivePlants.toFixed(1)}</td><td>{cohort.meanArchivedPlants.toFixed(1)}</td><td>{cohort.meanHabitatFit.toFixed(1)}</td><td>{cohort.meanVigor.toFixed(1)}</td><td>{cohort.capitalConserved ? "Yes · 90/10" : "Check"}</td></tr>)}</tbody>
+    </table><p className="experiment-verdict">{report.interpretation}</p><p className="experiment-disclaimer">No market, return, Sharpe, or execution claim. These results only compare Cloudgarden's own synthetic rules.</p>
+  </section>;
 }
 
 export default App;
