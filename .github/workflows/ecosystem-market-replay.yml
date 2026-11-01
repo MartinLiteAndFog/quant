@@ -1,0 +1,26 @@
+name: Ecosystem Causal OHLCV Paper Replay
+
+on:
+  pull_request:
+    paths:
+      - 'src/quant/ecosystem/integration/market_replay.py'
+      - 'src/quant/ecosystem/market_data/**'
+      - 'tests/ecosystem/test_market_replay.py'
+      - '.github/workflows/ecosystem-market-replay.yml'
+  workflow_dispatch:
+
+jobs:
+  replay:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Causal market-to-ecosystem integration tests
+        run: python -m unittest discover -s tests/ecosystem -p test_market_replay.py -v
