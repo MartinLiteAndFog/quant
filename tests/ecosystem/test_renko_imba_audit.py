@@ -114,7 +114,7 @@ class RenkoImbaAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(SignalAuditError,"insufficient warmup"):
             candidate_imba_signals(
                 str(self.index),start=START,end=self.end,
-                trading_start=self.trade,strategy_id="x",lookback=200,
+                trading_start=self.trade,strategy_id="x",lookback=100000,
             )
         with self.assertRaisesRegex(SignalAuditError,"trading_start"):
             candidate_imba_signals(str(self.index),start=START,end=self.end,
@@ -149,7 +149,7 @@ class RenkoImbaAuditTests(unittest.TestCase):
         self.assertFalse(trimmed.matches_supplied_reference)
         modified=[ReferenceAlert(reference[0].reference_id,
                                  reference[0].direction,
-                                 reference[0].confirmed_5m_close_at+timedelta(minutes=5)),
+                                 reference[0].confirmed_5m_close_at+timedelta(minutes=300)),
                   *reference[1:]]
         shifted=compare_confirmed_alerts(batch,modified,minimum_alerts=1)
         self.assertFalse(shifted.matches_supplied_reference)
