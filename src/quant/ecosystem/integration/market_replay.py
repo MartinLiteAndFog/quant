@@ -224,7 +224,7 @@ def replay_market(
         desired[s.strategy_id]=s.target_quantity
         last_fill[s.strategy_id]=fill.executed_at
         fills.append(fill)
-        actions.append((fill.executed_at,1,s.signal_id,(fill,change)))
+        actions.append((fill.executed_at,3,s.signal_id,(fill,change)))
 
     for tick in funding:
         if tick.at<bars[0].timestamp or tick.at>bars[-1].timestamp+timedelta(seconds=interval):
@@ -254,12 +254,15 @@ def replay_market(
         age=(next_midnight-known_at).total_seconds()
         if age>config.max_mark_staleness_seconds and config.require_full_utc_days:
             # Incomplete history must not count as a day-end NAV.
-            actions.append((known_at,3,"stale-mark:"+day.isoformat(),(bar,True)))
+            actions.append((known_at,1,"stale-mark:"+day.isoformat(),(bar,True)))
         else:
-            actions.append((known_at,3,"mark:"+day.isoformat(),(bar,False)))
+            actions.append((known_at,1,"mark:"+day.isoformat(),(bar,False)))
     # A full day with only its last 23:59 candle has no causally known
     # same-day mark and cannot value any open position that night.
 
+    # At the same boundary the just-completed candle's close is known
+    # *before* an order can fill at the next candle's open. Marking
+    # after filling would falsely grant the newborn position previous-bar PnL.
     actions.sort(key=lambda x:(x[0],x[1],x[2]))
     positions:dict[str,Decimal]={}
     last_ref:dict[str,Decimal]={}
