@@ -1,6 +1,6 @@
 import { useMemo, useState, type KeyboardEvent } from "react";
 import {
-  BOUNDS, ROOT_COLORS, createInitialMeadow, mutateMeadow, seedCount,
+  BOUNDS, ROOT_COLORS, createInitialMeadow, mutateMeadow, seedCount, findFitnessClusters,
   type MeadowFlower,
 } from "../lib/evolutionMeadow";
 
@@ -37,6 +37,7 @@ export function EvolutionMeadow() {
   const shown = useMemo(() => flowers.filter(f => family === "all" || f.rootId === family), [flowers, family]);
   const selected = byId.get(selectedId);
   const active = shown.filter(f => seedCount(f) > 0).length;
+  const clusters = useMemo(() => findFitnessClusters(shown), [shown]);
   const sorted = useMemo(() => [...shown].sort((a, b) => {
     const p = world(a), q = world(b);
     return project(p.x, p.y, p.z, angle).depth - project(q.x, q.y, q.z, angle).depth;
@@ -95,7 +96,8 @@ export function EvolutionMeadow() {
       <div className="grid grid-cols-2 gap-2 border-b border-[var(--line)] px-4 py-2 text-[11px] sm:grid-cols-4">
         <div><span className="text-[var(--muted)]">Generation</span><div className="font-mono text-[16px]">{generation}</div></div>
         <div><span className="text-[var(--muted)]">Pflanzen</span><div className="font-mono text-[16px]">{shown.length}</div></div>
-        <div><span className="text-[var(--muted)]">Fortpflanzungsfähig</span><div className="font-mono text-[16px]">{active}</div></div>
+        <div><span className="text-[var(--muted)]">Fortpflanzungsfähig / Cluster</span>
+          <div className="font-mono text-[16px]">{active} / {clusters.length}</div></div>
         <div><span className="text-[var(--muted)]">Max. Nettorendite (sim.)</span>
           <div className="font-mono text-[16px]">{shown.length ? fmt(Math.max(...shown.map(f => f.roi))) : "—"}</div>
         </div>
@@ -128,6 +130,22 @@ export function EvolutionMeadow() {
             <path d="M43 64 L48 56 L53 64" fill="none" stroke="#a4cbb3" strokeWidth="1.6"/>
             <text x={corners[0].x - 17} y={corners[0].y + 20} fontSize="11" fill="#9fada9">12 / 0.25</text>
             <text x={corners[2].x - 10} y={corners[2].y + 20} fontSize="11" fill="#9fada9">25 / 1.65</text>
+            {clusters.map(cluster => {
+              const wx = 2 * (cluster.sensitivity - BOUNDS.sensitivity[0]) /
+                (BOUNDS.sensitivity[1] - BOUNDS.sensitivity[0]) - 1;
+              const wy = 2 * (cluster.ttp - BOUNDS.ttp[0]) /
+                (BOUNDS.ttp[1] - BOUNDS.ttp[0]) - 1;
+              const point = c(wx, wy);
+              const size = 14 + 3 * Math.sqrt(cluster.members);
+              return <g key={"cluster-" + cluster.id} pointerEvents="none">
+                <ellipse cx={point.x} cy={point.y} rx={size * 1.8} ry={size * .65}
+                  fill="#9ecbb1" fillOpacity=".12"
+                  stroke="#b3dfc3" strokeWidth="1.2" strokeDasharray="3 5"/>
+                <circle cx={point.x} cy={point.y} r="2.3" fill="#d7efce"/>
+                <text x={point.x + size * .75} y={point.y - size * .35}
+                  fontSize="10" fill="#c0dfcb">Cluster {cluster.id}</text>
+              </g>;
+            })}
             {showSeeds && shown.filter(f => f.parentId && f.generation === generation).slice(0, 160).map(f => {
               const parent = byId.get(f.parentId || "");
               if (!parent) return null;
@@ -195,6 +213,15 @@ export function EvolutionMeadow() {
             <input type="checkbox" checked={showSeeds} onChange={e => setShowSeeds(e.target.checked)}/>
             Saatflug anzeigen
           </label>
+          <div className="border-t border-[var(--line)] pt-3">
+            <h3 className="mb-2 font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Erfolgscluster</h3>
+            {clusters.length ? clusters.map(cluster =>
+              <div key={cluster.id} className="mb-2 flex justify-between gap-2 text-[10px]">
+                <span>Cluster {cluster.id} · {cluster.members} Pflanzen</span>
+                <span className="font-mono text-[#a4cbb3]">{cluster.sensitivity.toFixed(2)} / {cluster.ttp.toFixed(2)} %</span>
+              </div>
+            ) : <p className="text-[10px] text-[var(--muted)]">Noch keine verlässlichen Zentren.</p>}
+          </div>
           <div className="border-t border-[var(--line)] pt-3">
             <h3 className="mb-2 font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Ausgewählte Blume</h3>
             {selected ? <>
