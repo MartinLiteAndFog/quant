@@ -16,11 +16,13 @@ from fastapi import FastAPI
 from quant.execution.family_ingress import router as family_ingress_router
 from quant.execution.family_control_plane import router as family_control_router
 from quant.execution.family_bootstrap_pilot import router as family_roster_router
+from quant.execution.family_monthly_api import router as family_monthly_router
 
 app = FastAPI(title="blaupunkt-family-shadow", version="0.1.0")
 app.include_router(family_ingress_router)
 app.include_router(family_control_router)
 app.include_router(family_roster_router)
+app.include_router(family_monthly_router)
 
 
 @app.get("/health")
