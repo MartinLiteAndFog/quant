@@ -150,7 +150,7 @@ class MarketReplayTests(unittest.TestCase):
         with self.assertRaisesRegex(ReplayError,"quantity cap"):
             replay_market(bars(),[large])
         with self.assertRaisesRegex(ReplayError,"signal .*timely"):
-            replay_market(bars(),[signal("late",START+timedelta(days=1),23,58,"1")])
+            replay_market(bars(),[signal("late",START+timedelta(days=1),23,59,"1")])
         with self.assertRaisesRegex(ReplayError,"cross-day trade confirmation"):
             replay_market(
                 bars(),[signal("edge",START,23,58,"1")],
