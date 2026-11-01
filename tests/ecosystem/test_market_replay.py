@@ -1,7 +1,14 @@
 """Causal market-data/fill -> ECO-03/ECO-17 bridge checks (no venue I/O)."""
 from datetime import date, datetime, timedelta, timezone
-from dataclasses import replace
+from dataclasses import asdict, replace
 from decimal import Decimal as D
+from pathlib import Path
+import csv
+import json
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
 
 from quant.ecosystem.market_data import Provenance, normalize, Costs, timestamp
@@ -166,6 +173,55 @@ class MarketReplayTests(unittest.TestCase):
                 bars(),[signal("edge",START,23,58,"1")],
                 config=ReplayConfig(fill_confirmation_latency_seconds=60),
             )
+
+    def test_offline_cli_csv_inputs_emits_auditable_paper_events(self):
+        dataset=bars()
+        with tempfile.TemporaryDirectory() as root:
+            parent=Path(root)
+            path=parent/"bars.csv"
+            with path.open("w",newline="",encoding="utf-8") as handle:
+                writer=csv.DictWriter(handle,fieldnames=[
+                    "timestamp","open","high","low","close","volume"])
+                writer.writeheader()
+                for candle in dataset.bars[:10]:
+                    writer.writerow({
+                        "timestamp":candle.timestamp.isoformat(),
+                        "open":str(candle.open),"high":str(candle.high),
+                        "low":str(candle.low),"close":str(candle.close),
+                        "volume":str(candle.volume),
+                    })
+            provenance=parent/"provenance.json"
+            provenance.write_text(json.dumps(asdict(FUTURES)),encoding="utf-8")
+            signals=parent/"signals.csv"
+            with signals.open("w",newline="",encoding="utf-8") as handle:
+                writer=csv.DictWriter(handle,fieldnames=[
+                    "signal_id","strategy_id","target_quantity",
+                    "signal_at","available_at","received_at"])
+                writer.writeheader()
+                at=time_on(START,0,1).isoformat()
+                writer.writerow(dict(signal_id="entry",strategy_id="parent-00",
+                                     target_quantity="1",signal_at=at,
+                                     available_at=at,received_at=at))
+            output=parent/"output"
+            run=subprocess.run(
+                [sys.executable,"scripts/ecosystem_market_replay.py",
+                 "--bars",str(path),"--signals",str(signals),
+                 "--provenance",str(provenance),
+                 "--allow-partial-days","--output",str(output)],
+                capture_output=True,text=True,check=True,
+                env={**os.environ,"PYTHONPATH":"src"},
+            )
+            manifest=json.loads((output/"manifest.json").read_text())
+            self.assertEqual(manifest["paper_fills"],1)
+            self.assertEqual(manifest["net_pnl"],"-0.080012")
+            self.assertFalse(manifest["verified_oos"])
+            self.assertFalse(manifest["capital_risk_cleared"])
+            self.assertEqual(manifest["live_orders_sent"],0)
+            self.assertTrue(manifest["source_data_synthetic"])
+            self.assertTrue((output/"paper_events.jsonl").exists())
+            self.assertTrue((output/"daily_positions.jsonl").exists())
+            self.assertEqual(json.loads(run.stdout)["dataset_fingerprint"],
+                             manifest["dataset_fingerprint"])
 
     def test_clock_to_evolution_requires_independent_opportunity_and_margin(self):
         market=replay_market(bars(),[
