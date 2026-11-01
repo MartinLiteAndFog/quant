@@ -1,0 +1,25 @@
+name: Ecosystem Strategy Vitality and Risk Metrics
+
+on:
+  pull_request:
+    paths:
+      - 'src/quant/ecosystem/metrics/**'
+      - 'tests/ecosystem/test_vitality.py'
+      - '.github/workflows/ecosystem-vitality.yml'
+  workflow_dispatch:
+
+jobs:
+  metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      contents: read
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Time-aware risk and opportunity-based vitality tests
+        run: python -m unittest discover -s tests/ecosystem -p test_vitality.py -v
