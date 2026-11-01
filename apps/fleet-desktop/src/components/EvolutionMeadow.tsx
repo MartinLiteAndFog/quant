@@ -1,8 +1,12 @@
-import { useMemo, useState, type KeyboardEvent } from "react";
+import { useMemo, useState, type KeyboardEvent, type FormEvent } from "react";
 import {
   BOUNDS, ROOT_COLORS, createInitialMeadow, mutateMeadow, seedCount, findFitnessClusters,
   type MeadowFlower,
 } from "../lib/evolutionMeadow";
+import {
+  BEE_BREEDS, GENE_LIBRARY_KEY, addGene, loadGeneLibrary,
+  geneCount, visualPlantHeight, type BeeBreed, type GeneDefinition,
+} from "../lib/geneLibrary";
 
 /** Orthographic interactive 3D projection. DEMO ONLY: simulated profits. */
 const GROUPS: Array<[string, string]> = [
@@ -16,7 +20,7 @@ function world(f: MeadowFlower) {
   return {
     x: 2 * (f.sensitivity - BOUNDS.sensitivity[0]) / (BOUNDS.sensitivity[1] - BOUNDS.sensitivity[0]) - 1,
     y: 2 * (f.ttp - BOUNDS.ttp[0]) / (BOUNDS.ttp[1] - BOUNDS.ttp[0]) - 1,
-    z: Math.max(0, f.roi),
+    z: Math.min(1.9, 0.28 * visualPlantHeight(f.biomass)),
   };
 }
 function project(x: number, y: number, z: number, azimuth: number) {
@@ -27,8 +31,19 @@ function project(x: number, y: number, z: number, azimuth: number) {
 }
 
 export function EvolutionMeadow() {
-  const [flowers, setFlowers] = useState<MeadowFlower[]>(createInitialMeadow);
+  const [library, setLibrary] = useState<GeneDefinition[]>(loadGeneLibrary);
+  const [flowers, setFlowers] = useState<MeadowFlower[]>(() => createInitialMeadow(loadGeneLibrary()));
   const [generation, setGeneration] = useState(1);
+  const [beeBreed, setBeeBreed] = useState<BeeBreed["id"]>("mixer");
+  const [geneFormOpen, setGeneFormOpen] = useState(false);
+  const [geneError, setGeneError] = useState("");
+  const [geneId, setGeneId] = useState("");
+  const [geneLabel, setGeneLabel] = useState("");
+  const [geneType, setGeneType] = useState<"number" | "switch">("number");
+  const [geneMin, setGeneMin] = useState("0");
+  const [geneMax, setGeneMax] = useState("100");
+  const [geneStep, setGeneStep] = useState("1");
+  const [geneDefault, setGeneDefault] = useState("50");
   const [family, setFamily] = useState("all");
   const [angle, setAngle] = useState(25);
   const [showSeeds, setShowSeeds] = useState(true);
@@ -44,16 +59,57 @@ export function EvolutionMeadow() {
   }), [shown, angle]);
 
   function grow() {
-    const next = mutateMeadow(flowers, generation + 1);
+    const next = mutateMeadow(flowers, generation + 1, library, beeBreed);
     if (next !== flowers) {
       setFlowers(next);
       setGeneration(generation + 1);
     }
   }
   function reset() {
-    setFlowers(createInitialMeadow());
+    setFlowers(createInitialMeadow(library));
     setGeneration(1);
     setSelectedId("blaupunkt");
+  }
+  function saveGene(e: FormEvent<HTMLFormElement>) {
+    e.preventDefault();
+    try {
+      const proposed: GeneDefinition = geneType === "number"
+        ? {
+            id: geneId.trim().toLowerCase(), label: geneLabel.trim(), group:"Baustein",
+            kind:"number", required:false,
+            min: Number(geneMin), max:Number(geneMax), step:Number(geneStep),
+            defaultValue:Number(geneDefault),
+          }
+        : {
+            id:geneId.trim().toLowerCase(), label:geneLabel.trim(), group:"Baustein",
+            kind:"switch", required:false, defaultValue:false,
+          };
+      const nextLibrary = addGene(library, proposed);
+      localStorage.setItem(GENE_LIBRARY_KEY, JSON.stringify(nextLibrary));
+      setLibrary(nextLibrary);
+      setGeneId(""); setGeneLabel(""); setGeneError("");
+      setGeneFormOpen(false);
+    } catch (err) {
+      setGeneError(String(err instanceof Error ? err.message : err));
+    }
+  }
+  function deleteGene(id: string) {
+    try {
+      const nextLibrary = library.filter(g => g.id !== id);
+      // addGene validates all required genes and the full collection.
+      const checked = nextLibrary.some(g => g.required)
+        ? nextLibrary : [];
+      if (checked.length < 2) throw new Error("Pflichtgene können nicht gelöscht werden");
+      localStorage.setItem(GENE_LIBRARY_KEY, JSON.stringify(checked));
+      setLibrary(checked);
+      setFlowers(current => current.map(f => {
+        const genome = {...f.genome};
+        delete genome[id];
+        return {...f, genome};
+      }));
+    } catch(err) {
+      setGeneError(String(err instanceof Error ? err.message : err));
+    }
   }
   function press(e: KeyboardEvent<SVGGElement>, id: string) {
     if (e.key === "Enter" || e.key === " ") {
@@ -125,7 +181,7 @@ export function EvolutionMeadow() {
             <text x="450" y="528" fontSize="12" textAnchor="middle" fill="#b4b8a8">
               Parameterebene · Sensitivität (12–25) / TTP (0,25–1,65 %)
             </text>
-            <text x="34" y="40" fill="#a4cbb3" fontSize="12">↑ Profit</text>
+            <text x="34" y="40" fill="#a4cbb3" fontSize="12">↑ Wachstum (log.)</text>
             <line x1="48" y1="118" x2="48" y2="58" stroke="#a4cbb3" strokeWidth="1.6"/>
             <path d="M43 64 L48 56 L53 64" fill="none" stroke="#a4cbb3" strokeWidth="1.6"/>
             <text x={corners[0].x - 17} y={corners[0].y + 20} fontSize="11" fill="#9fada9">12 / 0.25</text>
@@ -161,9 +217,10 @@ export function EvolutionMeadow() {
             {sorted.map(f => {
               const w = world(f), foot = c(w.x, w.y);
               const head = project(w.x, w.y, w.z, angle);
-              const positive = f.roi > 0, selectedFlower = selectedId === f.id;
+              const positive = f.biomass > 0.08, selectedFlower = selectedId === f.id;
+              const healthy = f.roi > 0;
               const color = ROOT_COLORS[f.rootId] || "#acc19b";
-              const radius = clamp(3 + Math.sqrt(Math.max(0, f.score)) * 1.4, 3, 12);
+              const radius = clamp(3 + 4.4 * visualPlantHeight(f.biomass), 2.8, 17);
               return <g key={f.id} role="button" tabIndex={0}
                 aria-label={f.id + ": simulated return " + fmt(f.roi)}
                 onClick={() => setSelectedId(f.id)} onKeyDown={e => press(e, f.id)}
@@ -179,7 +236,7 @@ export function EvolutionMeadow() {
                     const py = head.y + radius * Math.sin(theta);
                     return <ellipse key={j} cx={px} cy={py} rx={radius * .72} ry={radius * .59}
                       transform={"rotate(" + (j * 60) + " " + px + " " + py + ")"}
-                      fill={color} opacity={selectedFlower ? ".97" : ".72"}/>;
+                      fill={healthy ? color : "#6e7969"} opacity={selectedFlower ? ".97" : healthy ? ".72" : ".45"}/>;
                   })}
                   <circle cx={head.x} cy={head.y} r={radius * .58} fill="#e4ddae"/>
                   {selectedFlower && <circle cx={head.x} cy={head.y} r={radius * 2.15}
@@ -213,6 +270,73 @@ export function EvolutionMeadow() {
             <input type="checkbox" checked={showSeeds} onChange={e => setShowSeeds(e.target.checked)}/>
             Saatflug anzeigen
           </label>
+          <div className="space-y-2 border-t border-[var(--line)] pt-3">
+            <h3 className="font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Bienen-Genetik</h3>
+            <label htmlFor="meadow-bee" className="block text-[10px] text-[var(--muted)]">Kreuzungstyp</label>
+            <select id="meadow-bee" value={beeBreed} onChange={e => setBeeBreed(e.target.value as BeeBreed["id"])}
+              className="w-full rounded border border-[var(--line)] bg-[#171e20] px-2 py-2 text-[12px]">
+              {BEE_BREEDS.map(bee => <option value={bee.id} key={bee.id}>{bee.label}</option>)}
+            </select>
+            <p className="text-[10px] leading-relaxed text-[var(--muted)]">
+              {BEE_BREEDS.find(b => b.id === beeBreed)?.description}
+            </p>
+          </div>
+          <div className="space-y-2 border-t border-[var(--line)] pt-3">
+            <div className="flex items-center justify-between">
+              <h3 className="font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">
+                Genbibliothek ({library.length})
+              </h3>
+              <button type="button" onClick={() => {setGeneFormOpen(v => !v); setGeneError("");}}
+                className="rounded border border-[var(--line)] px-2 py-1 text-[10px]">
+                {geneFormOpen ? "Schließen" : "+ Gen"}
+              </button>
+            </div>
+            <div className="max-h-36 space-y-1 overflow-y-auto">
+              {library.map(g => <div key={g.id} className="flex items-center justify-between gap-2 text-[10px]">
+                <span>{g.label} <span className="text-[var(--muted)]">· {g.kind === "switch" ? "Modul" : "Zahl"}</span></span>
+                {!g.required && <button type="button" onClick={() => deleteGene(g.id)}
+                  title="Optionales Gen aus der Bibliothek entfernen"
+                  className="rounded px-2 py-1 text-[#d28d82]">×</button>}
+              </div>)}
+            </div>
+            {geneFormOpen && <form onSubmit={saveGene} className="space-y-2 rounded border border-[var(--line)] p-2">
+              <label className="block">Gen-ID
+                <input required pattern="[a-z][a-z0-9_]{1,39}" value={geneId}
+                  onChange={e => setGeneId(e.target.value)}
+                  className="mt-1 w-full bg-[#1d2728] px-2 py-1" placeholder="z_b_rsi_exit"/>
+              </label>
+              <label className="block">Name
+                <input required maxLength={100} value={geneLabel}
+                  onChange={e => setGeneLabel(e.target.value)}
+                  className="mt-1 w-full bg-[#1d2728] px-2 py-1" placeholder="RSI Exit-Periode"/>
+              </label>
+              <label className="block">Art
+                <select value={geneType} onChange={e => setGeneType(e.target.value as "number" | "switch")}
+                  className="mt-1 w-full bg-[#1d2728] px-2 py-1">
+                  <option value="number">Zahlenparameter</option>
+                  <option value="switch">Strategie-Modul (ein/aus)</option>
+                </select>
+              </label>
+              {geneType === "number" && <div className="grid grid-cols-2 gap-2">
+                {([
+                  ["Min",geneMin,setGeneMin],["Max",geneMax,setGeneMax],
+                  ["Schritt",geneStep,setGeneStep],["Standard",geneDefault,setGeneDefault],
+                ] as const).map(([label,value,setter]) =>
+                  <label key={label}>{label}
+                    <input required type="number" step="any" value={value}
+                      onChange={e=>setter(e.target.value)}
+                      className="mt-1 w-full bg-[#1d2728] px-2 py-1"/>
+                  </label>
+                )}
+              </div>}
+              <button type="submit" className="rounded bg-[#234134] px-3 py-2 font-semibold">In Bibliothek aufnehmen</button>
+            </form>}
+            {geneError && <p role="alert" className="text-[#e7a094]">{geneError}</p>}
+            <p className="text-[10px] leading-relaxed text-[var(--muted)]">
+              Neue Gene erscheinen erst durch Bestäubung. Die Sammlerin kann bisher fehlende Module übernehmen.
+              Bibliothek nur lokal gespeichert; keine Pine-Code-Ausführung.
+            </p>
+          </div>
           <div className="border-t border-[var(--line)] pt-3">
             <h3 className="mb-2 font-semibold uppercase tracking-[0.08em] text-[var(--muted)]">Erfolgscluster</h3>
             {clusters.length ? clusters.map(cluster =>
@@ -231,11 +355,24 @@ export function EvolutionMeadow() {
                 <dt>Sensitivität</dt><dd className="text-right font-mono">{selected.sensitivity.toFixed(3)}</dd>
                 <dt>TTP</dt><dd className="text-right font-mono">{selected.ttp.toFixed(3)} %</dd>
                 <dt>Gewinn*</dt><dd className="text-right font-mono">{fmt(selected.roi)}</dd>
+                <dt>Biomasse*</dt><dd className="text-right font-mono">{selected.biomass.toFixed(3)}×</dd>
+                <dt>Genanzahl</dt><dd className="text-right font-mono">{geneCount(selected.genome)}</dd>
                 <dt>Drawdown*</dt><dd className="text-right font-mono">{fmt(selected.drawdown)}</dd>
                 <dt>Fitness*</dt><dd className="text-right font-mono">{selected.score.toFixed(2)}</dd>
                 <dt>Trades*</dt><dd className="text-right font-mono">{selected.trades}</dd>
                 <dt>Samen / Zyklus*</dt><dd className="text-right font-mono">{seedCount(selected)}</dd>
               </dl>
+              <div className="mt-2 text-[10px] text-[var(--muted)]">
+                Bestäubt von: {selected.beeBreed || "–"} · zweiter Elternbot: {selected.fatherId || "–"}
+              </div>
+              <div className="mt-2 max-h-32 overflow-y-auto rounded border border-[var(--line)] p-2">
+                {Object.entries(selected.genome).map(([key, value]) =>
+                  <div key={key} className="flex justify-between gap-2 py-0.5 text-[10px]">
+                    <span>{library.find(g => g.id === key)?.label || key}</span>
+                    <span className="font-mono">{String(value)}</span>
+                  </div>
+                )}
+              </div>
             </> : <p>Eine Blume wählen.</p>}
           </div>
           <p className="border-t border-[var(--line)] pt-3 text-[10px] leading-relaxed text-[var(--muted)]">
