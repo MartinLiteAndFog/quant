@@ -121,7 +121,7 @@ class BeeBreedingTests(unittest.TestCase):
         self.assertIn("rsi_length",result.child_genome.values())
 
     def test_capital_conservation_only_local_seed_and_parent_quota(self):
-        children=pollinate(DAY,100,[bee("worker")],self.p,self.specs,mode="hybrid")
+        children=pollinate(DAY,100,[bee("worker",hive_share_probability=1)],self.p,self.specs,mode="hybrid")
         funded, claims=fund_local_seeds(children,{"a":D("30"),"b":D("30")},
                         {"a":D("2"),"b":D("0")},
                         {"a":D(".10"),"b":D(".10")},child_share=".02")
@@ -176,7 +176,7 @@ class BeeBreedingTests(unittest.TestCase):
     def test_invalid_gene_schema_and_bee_rates_rejected(self):
         with self.assertRaisesRegex(BreedingError,"drop rate capped"):
             bee("bad",optional_gene_drop_rate=.2)
-        with self.assertRaisesRegex(BreedingError,"protective stop"):
+        with self.assertRaisesRegex(BreedingError,"required financial/safety"):
             bad=[s for s in self.specs if s.gene_id!="protective_stop"]
             spec_catalog(bad)
         with self.assertRaisesRegex(BreedingError,"duplicate gene"):
