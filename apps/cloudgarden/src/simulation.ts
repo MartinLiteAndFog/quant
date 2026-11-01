@@ -83,6 +83,18 @@ export type ClosedPaperReplayBooking = Readonly<{
   endedFlat: boolean;
   riskBreach: boolean;
   fillCount: number;
+  signalStatus?: "trade" | "no_trade";
+  strategyId?: string;
+  signalGenome?: Readonly<{
+    schemaVersion: 1;
+    lookbackBars: number;
+    entryThresholdBps: number;
+    exitThresholdBps: number;
+    targetQuantity: string;
+  }>;
+  observations?: number;
+  opportunities?: number;
+  generatedSignals?: number;
   allocationLimitUsdt: number;
   startingCashUsdt: number;
   endingCashUsdt: number;
@@ -205,12 +217,28 @@ export function bookClosedPaperReplay(
 ): SimulationWorld {
   assertSimulationInvariants(world);
   const plant = world.plants.find((candidate) => candidate.id === plantId && candidate.status === "active");
-  if (!plant) throw new RangeError("Paper PnL can only be booked to a living plant.");
+  if (!plant) throw new RangeError("A paper replay can only be booked to a living plant.");
+  const signalStatus = booking.signalStatus ?? "trade";
+  const noTradeObservation = signalStatus === "no_trade"
+    && booking.fillCount === 0
+    && booking.generatedSignals === 0
+    && booking.opportunities === 0
+    && (booking.observations ?? 0) > 0
+    && booking.realizedPricePnlUsdt === 0
+    && booking.feesUsdt === 0
+    && booking.fundingUsdt === 0
+    && booking.netPnlUsdt === 0
+    && booking.maxMarginUsedUsdt === 0
+    && Math.abs(booking.endingCashUsdt - booking.startingCashUsdt) <= 0.0001;
   if (!booking.synthetic || !booking.endedFlat || booking.riskBreach
     || !/^[0-9a-f]{64}$/.test(booking.datasetFingerprint)
     || !Number.isInteger(booking.days) || booking.days <= 0
     || !Number.isInteger(booking.startDay) || world.day !== booking.startDay + booking.days
-    || !Number.isInteger(booking.fillCount) || booking.fillCount <= 0) {
+    || !Number.isInteger(booking.fillCount) || booking.fillCount < 0
+    || (signalStatus === "no_trade" ? !noTradeObservation : booking.fillCount <= 0)
+    || (booking.signalStatus !== undefined && booking.signalStatus !== "trade" && booking.signalStatus !== "no_trade")
+    || [booking.observations, booking.opportunities, booking.generatedSignals].some((count) =>
+      count !== undefined && (!Number.isInteger(count) || count < 0))) {
     throw new RangeError("Only a flat synthetic replay aligned to the garden clock can be booked.");
   }
   const amounts = [booking.realizedPricePnlUsdt, booking.feesUsdt, booking.fundingUsdt, booking.netPnlUsdt];
@@ -270,6 +298,18 @@ export function bookClosedPaperReplay(
       detail: {
         days: booking.days,
         fillCount: booking.fillCount,
+        signalStatus,
+        ...(booking.strategyId ? { strategyId: booking.strategyId } : {}),
+        ...(booking.signalGenome ? {
+          genomeVersion: booking.signalGenome.schemaVersion,
+          lookbackBars: booking.signalGenome.lookbackBars,
+          entryThresholdBps: booking.signalGenome.entryThresholdBps,
+          exitThresholdBps: booking.signalGenome.exitThresholdBps,
+          targetQuantity: booking.signalGenome.targetQuantity,
+        } : {}),
+        ...(booking.observations !== undefined ? { observations: booking.observations } : {}),
+        ...(booking.opportunities !== undefined ? { opportunities: booking.opportunities } : {}),
+        ...(booking.generatedSignals !== undefined ? { generatedSignals: booking.generatedSignals } : {}),
         realizedPricePnlUsdt: round4(booking.realizedPricePnlUsdt),
         feesUsdt: round4(booking.feesUsdt),
         fundingUsdt: round4(booking.fundingUsdt),

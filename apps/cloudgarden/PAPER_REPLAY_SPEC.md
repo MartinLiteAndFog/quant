@@ -23,12 +23,18 @@ evidence.
 
 ## Signal and execution semantics
 
-- Signals are externally supplied target quantities; v1 uses a fixed scripted
-  fixture only. No signal is inferred from future or current-bar close values.
+- Signals are externally supplied target quantities. The first generated stream
+  uses a versioned `TradingSignalGenome` separate from the ecological genome;
+  its close-to-close momentum threshold is a synthetic fixture, not strategy
+  alpha. No signal is inferred from future or current-bar close values.
 - Signal, availability, and receipt timestamps are distinct and timezone-aware.
 - A market order fills at the first observed bar open strictly after both
   availability and receipt. The delay is bounded from availability; missing or
   stale bars and zero-volume bars reject rather than fabricate a fill.
+- Signal reports count observations, qualifying opportunities, and emitted
+  targets separately. A week with no qualifying move is `no_trade`; it has no
+  invented trading loss. Strategy output remains `not_comparable` to market
+  performance and does not alter habitat fit, vigor, or plant evidence.
 - Spread and slippage are adverse adjustments embedded in execution price.
   Fees are charged once on filled notional. Slippage cost is diagnostic and is
   never debited a second time.

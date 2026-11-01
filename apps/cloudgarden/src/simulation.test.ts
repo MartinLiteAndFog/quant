@@ -80,6 +80,53 @@ test("closed paper PnL updates the same NAV, reserve, and allocation ledger", ()
   assertSimulationInvariants(booked);
 });
 
+test("a zero-trade observation is recorded only when cash, margin, and PnL are unchanged", () => {
+  const afterWeek = advanceSimulationDays(createSimulationWorld("paper-no-trade"), 7);
+  const booked = bookClosedPaperReplay(afterWeek, "parent-01", {
+    startDay: 0,
+    days: 7,
+    datasetFingerprint: "d".repeat(64),
+    synthetic: true,
+    endedFlat: true,
+    riskBreach: false,
+    fillCount: 0,
+    signalStatus: "no_trade",
+    strategyId: "parent-01:synthetic-momentum-v1",
+    signalGenome: { schemaVersion: 1, lookbackBars: 5, entryThresholdBps: 3000, exitThresholdBps: 10, targetQuantity: "0.1" },
+    observations: 10073,
+    opportunities: 0,
+    generatedSignals: 0,
+    allocationLimitUsdt: 20,
+    startingCashUsdt: 20,
+    endingCashUsdt: 20,
+    maxMarginUsedUsdt: 0,
+    realizedPricePnlUsdt: 0,
+    feesUsdt: 0,
+    fundingUsdt: 0,
+    netPnlUsdt: 0,
+  });
+  const event = booked.events.find((entry) => entry.type === "paper_replay");
+  assert.equal(booked.capital.navUsdt, 100);
+  assert.equal(booked.capital.paperReplayCount, 1);
+  assert.equal(event?.detail.signalStatus, "no_trade");
+  assert.equal(event?.detail.strategyId, "parent-01:synthetic-momentum-v1");
+  assert.equal(event?.detail.opportunities, 0);
+  assert.equal(event?.detail.generatedSignals, 0);
+  assertSimulationInvariants(booked);
+
+  assert.throws(() => bookClosedPaperReplay(afterWeek, "parent-01", {
+    startDay: 0, days: 7, datasetFingerprint: "e".repeat(64), synthetic: true, endedFlat: true,
+    riskBreach: false, fillCount: 0, signalStatus: "no_trade", observations: 4, opportunities: 0, generatedSignals: 0,
+    allocationLimitUsdt: 20, startingCashUsdt: 20, endingCashUsdt: 19.99, maxMarginUsedUsdt: 0,
+    realizedPricePnlUsdt: 0, feesUsdt: 0.01, fundingUsdt: 0, netPnlUsdt: -0.01,
+  }), /flat synthetic replay/);
+  assert.throws(() => bookClosedPaperReplay(afterWeek, "parent-01", {
+    startDay: 0, days: 7, datasetFingerprint: "f".repeat(64), synthetic: true, endedFlat: true,
+    riskBreach: false, fillCount: 0, allocationLimitUsdt: 20, startingCashUsdt: 20, endingCashUsdt: 20, maxMarginUsedUsdt: 0,
+    realizedPricePnlUsdt: 0, feesUsdt: 0, fundingUsdt: 0, netPnlUsdt: 0,
+  }), /flat synthetic replay/);
+});
+
 test("paper losses reduce the selected entitlement and a failed replay cannot book", () => {
   const afterWeek = advanceSimulationDays(createSimulationWorld("paper-loss"), 7);
   const booked = bookClosedPaperReplay(afterWeek, "parent-01", {
