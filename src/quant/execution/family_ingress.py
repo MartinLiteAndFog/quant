@@ -12,7 +12,6 @@ import hmac
 import json
 import os
 import re
-import secrets
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Request
@@ -52,6 +51,16 @@ def _token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def _check_shared_token(supplied: str) -> None:
+    """All strategy IDs use one family secret, stored only in Railway."""
+    _enabled()
+    expected = str(os.getenv("FAMILY_WEBHOOK_TOKEN", "")).strip()
+    if not expected:
+        raise HTTPException(status_code=503, detail="family webhook token is not configured")
+    if not hmac.compare_digest(str(supplied or ""), expected):
+        raise HTTPException(status_code=401, detail="invalid family token")
+
+
 def _symbol(symbol: str) -> str:
     sym = str(symbol).upper().replace("-", "").replace("/", "").replace("_", "")
     if sym not in ("SOLUSDT", "SOLUSDTM"):
@@ -68,13 +77,15 @@ def _schema() -> None:
       parent_strategy_id text,
       display_name text not null,
       pool text not null check (pool in ('evolution', 'angel')),
-      token_sha256 text not null,
+      token_sha256 text not null default '', -- deprecated: auth is FAMILY_WEBHOOK_TOKEN
       config_json jsonb not null default '{}'::jsonb,
       -- Registration is not authorization for trading.
       execution_status text not null default 'shadow'
         check (execution_status in ('shadow', 'disabled')),
       created_at timestamptz not null default now()
     );
+    -- Compat with shadow databases created before shared-token mode.
+    alter table family_strategy_registry alter column token_sha256 set default '';
     create index if not exists idx_family_strategy_registry_family
       on family_strategy_registry (family_id, created_at desc);
     create table if not exists family_signal_inbox (
@@ -120,11 +131,10 @@ def register_strategy(
     data: NewStrategy,
     x_family_admin_token: Optional[str] = Header(default=None),
 ) -> Dict[str, Any]:
-    """Create a shadow-only strategy and issue its per-strategy secret ONCE."""
+    """Register a strategy ID; all IDs use the shared family webhook token."""
     _admin(x_family_admin_token)
     _validate_registration(data)
     family = _family_id()
-    secret = secrets.token_urlsafe(32)
     _schema()
     with get_conn() as conn:
         with conn.transaction():
@@ -143,13 +153,13 @@ def register_strategy(
                 cur.execute(
                     """insert into family_strategy_registry
                        (family_id, strategy_id, parent_strategy_id,
-                        display_name, pool, token_sha256, config_json)
-                       values (%s,%s,%s,%s,%s,%s,%s::jsonb)
+                        display_name, pool, config_json)
+                       values (%s,%s,%s,%s,%s,%s::jsonb)
                        on conflict(strategy_id) do nothing
                        returning strategy_id""",
                     (
                         family, data.strategy_id, data.parent_strategy_id,
-                        data.display_name, data.pool, _token_hash(secret),
+                        data.display_name, data.pool,
                         json.dumps(data.configuration, separators=(",", ":")),
                     ),
                 )
@@ -162,16 +172,15 @@ def register_strategy(
         "pool": data.pool,
         "execution_status": "shadow",
         "webhook_path": "/webhook/family",
-        "token_once": secret,
         "tradingview_message_example": {
             "strategy_id": data.strategy_id,
             "event_id": "REPLACE_WITH_UNIQUE_SIGNAL_ID",
-            "token": secret,
+            "token": "INSERT_SHARED_FAMILY_WEBHOOK_TOKEN",
             "action": "entry",
             "side": "buy",
             "symbol": "SOL-USDT",
         },
-        "note": "This endpoint records signals but NEVER places orders.",
+        "note": "One shared FAMILY_WEBHOOK_TOKEN authenticates all registered strategy IDs. No orders are sent.",
     }
 
 
@@ -210,23 +219,25 @@ async def ingest_family_signal(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="invalid JSON")
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="expected JSON object")
+    # All alerts authenticate with the same token. Strategy ID determines
+    # ownership and capital allocation but is NEVER an authentication secret.
+    _check_shared_token(str(payload.get("token") or "").strip())
     strategy_id = str(payload.get("strategy_id") or "").strip().lower()
-    token = str(payload.get("token") or "").strip()
-    if not ID_RE.fullmatch(strategy_id) or not token:
-        raise HTTPException(status_code=401, detail="invalid strategy credentials")
+    if not ID_RE.fullmatch(strategy_id):
+        raise HTTPException(status_code=401, detail="invalid strategy ID")
     family = _family_id()
     _schema()
     with get_conn() as conn, conn.cursor() as cur:
         cur.execute(
-            """select token_sha256, execution_status
+            """select execution_status
                from family_strategy_registry
                where family_id=%s and strategy_id=%s""",
             (family, strategy_id),
         )
         row = cur.fetchone()
-    if row is None or not hmac.compare_digest(_token_hash(token), row[0]):
-        raise HTTPException(status_code=401, detail="invalid strategy credentials")
-    if row[1] != "shadow":
+    if row is None:
+        raise HTTPException(status_code=401, detail="unregistered strategy ID")
+    if row[0] != "shadow":
         raise HTTPException(status_code=403, detail="strategy disabled")
 
     event_id = str(payload.get("event_id") or "").strip()
