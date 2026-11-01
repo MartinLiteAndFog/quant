@@ -94,6 +94,16 @@ class MarketReplayTests(unittest.TestCase):
         self.assertEqual(run.days[1].trade_counts()["parent-00"],1)
         self.assertEqual(run.days[1].end_positions[0][1],D("0"))
 
+    def test_simultaneous_previous_close_and_new_open_never_mints_past_profit(self):
+        # 23:58 candle closes at 23:59 with a synthetic 110 print.
+        # New order opens at 23:59 with reference=100. The new position
+        # must NOT receive the previous candle's +10 return.
+        run=replay_market(bars(),[signal("edge",START,23,58,"1")])
+        self.assertEqual(run.fills[0].executed_at,time_on(START,23,59))
+        self.assertEqual(run.days[0].net_pnl,D("-0.080012"))
+        self.assertEqual(run.days[1].net_pnl,D("-10"))
+        self.assertEqual(run.days[0].end_positions[0][1],D("1"))
+
     def test_cross_day_funding_or_spot_short_are_refused(self):
         with self.assertRaisesRegex(ReplayError,"shorting"):
             replay_market(bars(spot=True),[signal("s",START,9,0,"-1")])
