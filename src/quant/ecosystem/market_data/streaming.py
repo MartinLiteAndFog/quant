@@ -184,6 +184,7 @@ def ingest_ohlcv(
     if start and end and start >= end:
         raise StreamImportError("expected_end must follow expected_start")
 
+    source_stat = src.stat()
     dest.parent.mkdir(parents=True, exist_ok=True)
     temp = dest.parent / f".{dest.name}.{uuid4().hex}.partial"
     db: sqlite3.Connection | None = None
@@ -256,18 +257,31 @@ def ingest_ohlcv(
                 {"day": day, "observed_bars": n}
                 for day, n in daily_counts.items() if n != expected_day_bars
             ]
+            # An immutable research dataset must not depend on a file
+            # concurrently rewritten during the source scan/hash pass.
+            after_stat = src.stat()
+            if (after_stat.st_size, after_stat.st_mtime_ns) != (
+                source_stat.st_size, source_stat.st_mtime_ns
+            ):
+                raise StreamImportError("source file changed during import")
             provenance_dict = asdict(provenance)
             canonical_hash = hasher.hexdigest()
             fingerprint = sha256(_canonical({
                 "schema": VERSION, "provenance": provenance_dict,
                 "candles_sha256": canonical_hash, "rows": count,
             }).encode()).hexdigest()
+            raw_checksum = _sha256_raw(src)
+            after_hash_stat = src.stat()
+            if (after_hash_stat.st_size, after_hash_stat.st_mtime_ns) != (
+                source_stat.st_size, source_stat.st_mtime_ns
+            ):
+                raise StreamImportError("source file changed during hashing")
             report = {
                 "schema_version": VERSION,
                 "status": "validated_index_only; not a trading backtest",
                 "source_name": src.name,
                 "source_layout": layout,
-                "source_file_sha256": _sha256_raw(src),
+                "source_file_sha256": raw_checksum,
                 "canonical_candles_sha256": canonical_hash,
                 "dataset_fingerprint": fingerprint,
                 "source_bytes": src.stat().st_size,
@@ -279,6 +293,7 @@ def ingest_ohlcv(
                 "expected_start": start.isoformat() if start else None,
                 "expected_end": end.isoformat() if end else None,
                 "coverage_claim": ("explicit_expected_window" if start and end
+                                   else "partial_declared_window" if start or end
                                    else "observed_window_only"),
                 "missing_bars": totals["missing_bars"],
                 "gap_runs": totals["gap_runs"],
