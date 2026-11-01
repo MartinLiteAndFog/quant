@@ -4,6 +4,11 @@
  * Flower size / seed count = risk- and sample-adjusted fitness.
  * Seeds: stratified uniform angular distribution + area-uniform sqrt(U) radii.
  */
+import {
+  BEE_BREEDS, DEFAULT_GENES, breedGenomes, defaultGenome,
+  growBiomass, normalizeGenome, type BeeBreed, type GeneDefinition, type Genome,
+} from "./geneLibrary";
+
 export const BOUNDS = {
   sensitivity: [12, 25] as const,
   ttp: [0.25, 1.65] as const,
@@ -20,6 +25,10 @@ export interface MeadowFlower {
   drawdown: number; // synthetic DD as fraction
   trades: number;
   score: number; // display-only risk/credibility-adjusted fitness
+  genome: Genome; // complete parameter record, including hidden genes
+  biomass: number; // persistent visual organism size (NOT account equity)
+  beeBreed?: BeeBreed["id"];
+  fatherId?: string;
 }
 
 const ROOTS = [
@@ -66,19 +75,24 @@ function makeFlower(
   id: string, parentId: string | null, rootId: string,
   generation: number, sensitivity: number, ttp: number,
   trades: number, rand: () => number,
+  genome: Genome, biomass: number, beeBreed?: BeeBreed["id"], fatherId?: string,
 ): MeadowFlower {
   const { roi, drawdown } = syntheticMonth(sensitivity, ttp, rand);
   return {
     id, parentId, rootId, generation, sensitivity, ttp, roi,
     drawdown, trades, score: scoreFlower(roi, drawdown, trades),
+    genome, biomass, beeBreed, fatherId,
   };
 }
 
-export function createInitialMeadow(): MeadowFlower[] {
+export function createInitialMeadow(library: GeneDefinition[] = DEFAULT_GENES): MeadowFlower[] {
   const rand = seeded(71337);
   const plants: MeadowFlower[] = [];
   for (const root of ROOTS) {
-    const rootFlower = makeFlower(root.id, null, root.id, 0, root.x, root.y, 60, rand);
+    const rootFlower = makeFlower(
+      root.id, null, root.id, 0, root.x, root.y, 60, rand,
+      defaultGenome(library, root.x, root.y), 1.0,
+    );
     plants.push(rootFlower);
     // Three manually configured daughters are initial placeholders in this
     // visual DEMO. Not proof of live TradingView configuration or funding.
@@ -90,7 +104,11 @@ export function createInitialMeadow(): MeadowFlower[] {
       const id = root.id === "blaupunkt"
         ? "blaupunkt-d0" + (k + 1)
         : root.id + "-d0" + (k + 1);
-      plants.push(makeFlower(id, root.id, root.id, 1, sensitivity, ttp, 7 + Math.floor(rand() * 9), rand));
+      plants.push(makeFlower(
+        id, root.id, root.id, 1, sensitivity, ttp,
+        7 + Math.floor(rand() * 9), rand,
+        defaultGenome(library, sensitivity, ttp), 0.28,
+      ));
     }
   }
   return plants;
@@ -101,19 +119,27 @@ export function seedCount(flower: MeadowFlower): number {
   return clamp(Math.round(5 + 10 * (flower.score - 3) / 20), 5, 15);
 }
 
-export function mutateMeadow(previous: MeadowFlower[], generation: number): MeadowFlower[] {
+export function mutateMeadow(
+  previous: MeadowFlower[], generation: number,
+  library: GeneDefinition[] = DEFAULT_GENES,
+  beeBreed: BeeBreed["id"] = BEE_BREEDS[0].id,
+): MeadowFlower[] {
   // Rendering-only guard: NEVER used to constrain live bot populations.
   if (previous.length > 440 || generation > 4) return previous;
   const rand = seeded(71337 + 811 * generation);
   const updated = previous.map(f => {
     const trades = f.trades + 15 + Math.floor(rand() * 22);
     const m = syntheticMonth(f.sensitivity, f.ttp, rand);
-    return { ...f, ...m, trades, score: scoreFlower(m.roi, m.drawdown, trades) };
+    return {
+      ...f, ...m, trades, score: scoreFlower(m.roi, m.drawdown, trades),
+      biomass: growBiomass(f.biomass, m.roi),
+    };
   });
   const parents = updated.filter(f => seedCount(f) > 0)
     .sort((a, b) => b.score - a.score).slice(0, 10); // visual density, not exchange cap
   const next = [...updated];
   for (const flower of parents) {
+    const potentialMates = parents.filter(p => p.id !== flower.id && p.score > 3);
     const n = seedCount(flower);
     const spread = clamp(0.05 + Math.max(0, flower.score - 3) * 0.0038, 0.05, 0.16);
     for (let k = 0; k < n; k++) {
@@ -122,11 +148,26 @@ export function mutateMeadow(previous: MeadowFlower[], generation: number): Mead
       // uniform density over the disk, unlike radius = U.
       const angle = 2 * Math.PI * (k + 0.5 + (rand() - 0.5) * 0.60) / n;
       const radius = spread * Math.sqrt(rand());
-      const x = clamp(flower.sensitivity + Math.cos(angle) * radius * 13, ...BOUNDS.sensitivity);
-      const y = clamp(flower.ttp + Math.sin(angle) * radius * 1.4, ...BOUNDS.ttp);
+      const mate = potentialMates.length
+        ? potentialMates[Math.floor(rand() * potentialMates.length)]
+        : flower;
+      const cross = breedGenomes(flower.genome, mate.genome, library, beeBreed, rand);
+      // Seeds explore a sector around the selected parent. Other hidden
+      // genes are inherited/crossed; visible axes are further localized.
+      const x = clamp(
+        Number(cross.sensitivity) + Math.cos(angle) * radius * 13,
+        ...BOUNDS.sensitivity,
+      );
+      const y = clamp(
+        Number(cross.ttp) + Math.sin(angle) * radius * 1.4,
+        ...BOUNDS.ttp,
+      );
+      const genome = normalizeGenome({ ...cross, sensitivity:x, ttp:y }, library);
+      const sx = Number(genome.sensitivity), ty = Number(genome.ttp);
       next.push(makeFlower(
         flower.id + "-g" + generation + "s" + k, flower.id,
-        flower.rootId, generation, x, y, 3, rand,
+        flower.rootId, generation, sx, ty, 3, rand,
+        genome, 0.10, beeBreed, mate.id,
       ));
     }
   }
