@@ -25,7 +25,11 @@ export function TileWorldOverview({world = TILE_WORLD_DEMO}: {world?: TileWorld}
         <div>
           <h2 className="text-xl font-semibold">Evolution · Kachelwelt</h2>
           <p className="mt-1 text-xs opacity-70">
-            {world.synthetic ? "SYNTHETISCHE DEMO · KEINE ECHTEN TRADES" : "Validierter Forschungssnapshot"}
+            {world.evidence.status === "synthetic"
+              ? "SYNTHETISCHE DEMO · KEINE ECHTEN TRADES"
+              : world.evidence.status === "validated"
+                ? "VALIDIERTER FORSCHUNGSSNAPSHOT"
+                : "UNVERIFIZIERTER SNAPSHOT · KEINE TRADING-FREIGABE"}
             {" · "}{stats.regionCount} Regionen · {stats.tileCount} Wiesen · {stats.population} unterschiedliche Strategien
           </p>
         </div>

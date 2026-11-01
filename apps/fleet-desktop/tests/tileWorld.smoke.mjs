@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import {
   focusTile, getWorldStats, listTiles, proposeCrossTileKnowledge,
-  tileWorldPosition, validateTileWorld,
+  focusWorldViewport, initialWorldViewport, tileWorldPosition,
+  validateTileWorld, validateWorldViewport, zoomWorldViewport,
 } from "../src/lib/tileWorld.ts";
 import {TILE_WORLD_DEMO} from "../src/lib/tileWorldDemo.ts";
 
@@ -29,7 +30,23 @@ const insight = proposeCrossTileKnowledge(world,"rsi-knowledge");
 assert.equal(insight.kind, "research-only");
 assert.equal(insight.fundingTransfer, false);
 assert.equal(insight.requiresOutOfSampleValidation, true);
+assert.equal(insight.moduleVersion, "1");
+assert.deepEqual(insight.parameter, {
+  geneId: "rsi_length", unit: "bars", min: 5, max: 50, step: 1,
+});
 assert.throws(() => proposeCrossTileKnowledge(world,"unknown"),/unknown knowledge/);
+
+const viewport = initialWorldViewport();
+assert.deepEqual(viewport, {focus:{kind:"world"},zoom:1,panX:0,panY:0});
+assert.deepEqual(focusWorldViewport(world,viewport,{kind:"region",regionId:"crypto"}),
+  {...viewport,focus:{kind:"region",regionId:"crypto"}});
+assert.deepEqual(focusWorldViewport(world,viewport,{kind:"tile",tileId:"sol-rsi"}),
+  {...viewport,focus:{kind:"tile",tileId:"sol-rsi"}});
+assert.equal(zoomWorldViewport(world,viewport,2).zoom,2);
+assert.throws(() => zoomWorldViewport(world,viewport,4.1),/zoom/);
+assert.throws(() => validateWorldViewport(world,{...viewport,panX:Infinity}),/pan/);
+assert.throws(() => focusWorldViewport(world,viewport,{kind:"tile",tileId:"missing"}),/unknown tile/);
+assert.deepEqual(getWorldStats(world), stats); // viewport transitions never mutate ecology state
 
 assert.throws(
   () => validateTileWorld({...world, plants:[world.plants[0],world.plants[0]]}),
@@ -49,6 +66,40 @@ assert.throws(
   () => validateTileWorld({...world,mycelium:[{
     ...world.mycelium[0], sourceTileId:"btc-trend",targetTileId:"oil-rsi",
   }]}),
-  /cross-module knowledge/,
+  /cross-module\/version/,
+);
+assert.throws(
+  () => validateTileWorld({...world,tiles:world.tiles.map(t=>
+    t.id==="oil-rsi" ? {...t,moduleVersion:"2"} : t)}),
+  /module\/version/,
+);
+assert.throws(
+  () => validateTileWorld({...world,tiles:world.tiles.map(t=>
+    t.id==="oil-rsi" ? {...t,axisX:{...t.axisX,unit:"minutes"}} : t)}),
+  /range, step, and unit/,
+);
+assert.throws(
+  () => validateTileWorld({...world,tiles:world.tiles.map(t=>
+    t.id==="oil-rsi" ? {...t,axisX:{...t.axisX,max:60}} : t)}),
+  /range, step, and unit/,
+);
+assert.throws(
+  () => validateTileWorld({...world,synthetic:false,evidence:{
+    status:"validated",validatorVersion:"v1",validatedAt:"2026-11-01T00:00:00Z",
+  }}),
+  /evidence IDs/,
+);
+assert.throws(
+  () => validateTileWorld({...world,evidence:{status:"unverified"}}),
+  /synthetic flag and evidence status disagree/,
+);
+const attested = {...world,synthetic:false,evidence:{status:"validated",
+  validationIds:["walk-forward-2026-01"],validatorVersion:"validator-1",
+  validatedAt:"2026-11-01T00:00:00Z"}};
+assert.equal(validateTileWorld(attested),attested);
+assert.throws(
+  () => validateTileWorld({...world,regions:world.regions.map(r=>
+    r.id==="fx" ? {...r,worldX:0} : r)}),
+  /overlapping world tile positions/,
 );
 console.log("ECO-14 tile world: valid 6 tiles, 4 regions, deduplicated views, safe mycelium.");
