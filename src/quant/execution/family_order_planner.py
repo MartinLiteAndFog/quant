@@ -99,18 +99,6 @@ def plan_signal(
     current_side = "LONG" if long_pos else ("SHORT" if short_pos else None)
     current_qty = long_pos or short_pos
     wanted_side = "LONG" if side == "buy" else "SHORT"
-    margin_budget = _num(bot_margin_budget, "bot_margin_budget")
-    available = _num(free_margin, "free_margin")
-    reserve = _num(reserve_floor, "reserve_floor")
-    px = _num(mark_price, "mark_price", positive=True)
-    lev = _num(leverage, "leverage", positive=True)
-    mult = _num(contract_multiplier, "contract_multiplier", positive=True)
-    part = _num(tp1_close_share, "tp1_close_share")
-    if part > 1:
-        raise PlanningError("tp1_close_share must be <= 1")
-    if mult != ledger.contract_multiplier:
-        raise PlanningError("contract_multiplier differs from ledger")
-
     def make_intent(operation: str, pos_side: str, contracts: int, phase: str) -> OrderPlan:
         if contracts <= 0:
             return OrderPlan(strategy_id, event_id, None, "below_venue_contract_minimum")
@@ -125,6 +113,16 @@ def plan_signal(
         return OrderPlan(strategy_id, event_id, intent, "planned_no_execution")
 
     def new_entry(phase: str) -> OrderPlan:
+        # A new leveraged entry needs fresh margin and pricing. Closing an
+        # existing bot-owned position must NOT depend on these inputs.
+        margin_budget = _num(bot_margin_budget, "bot_margin_budget")
+        available = _num(free_margin, "free_margin")
+        reserve = _num(reserve_floor, "reserve_floor")
+        px = _num(mark_price, "mark_price", positive=True)
+        lev = _num(leverage, "leverage", positive=True)
+        mult = _num(contract_multiplier, "contract_multiplier", positive=True)
+        if mult != ledger.contract_multiplier:
+            raise PlanningError("contract_multiplier differs from ledger")
         capacity = min(margin_budget, max(Decimal(0), available - reserve))
         contract_margin = px * mult / lev
         qty = int((capacity / contract_margin).to_integral_value(rounding=ROUND_DOWN))
@@ -147,6 +145,9 @@ def plan_signal(
     if current_side is None:
         return OrderPlan(strategy_id, event_id, None, "already_flat")
     if action == "tp1":
+        part = _num(tp1_close_share, "tp1_close_share")
+        if part > 1:
+            raise PlanningError("tp1_close_share must be <= 1")
         close_qty = max(1, int((Decimal(current_qty) * part).to_integral_value(rounding=ROUND_DOWN)))
     else:
         close_qty = current_qty
