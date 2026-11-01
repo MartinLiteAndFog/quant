@@ -26,6 +26,18 @@ Der Adapter `replay_market(dataset, signals, funding=(), config=())` produziert 
 
 WICHTIG: Das Replay von **vorgegebenen Zielgrößen** ist noch **nicht** durch die dynamische ECO-17-Positionsgrößen-/Margin-Intents risikofreigegeben. Es kann historische PnL eines vorgegebenen Signals rekonstruieren und die resultierenden Tage an die Ökologie geben, ist **aber kein investierbarer, geschlossener Evolutionsbacktest**, solange Volumen-, Lot-, Venue-/Liquidationsregeln, historische Signal-Generation je Genom, Orderbook-Slippage, Portfolio-Allocations, OOS und Multipletest-Korrektur fehlen. `dataset.provenance.synthetic=False` ist nur Marktdaten-Provenienz, **niemals automatisch** `oos_verified=True`.
 
+## Offline-Eingabe / direkt nutzbares CSV-CLI
+
+```bash
+PYTHONPATH=src python scripts/ecosystem_market_replay.py \
+  --bars /data/SOLUSDT_1m.csv \
+  --signals /data/signals.csv \
+  --provenance /data/solusdt-provenance.json \
+  --output /data/paper-replay
+```
+
+`signals.csv` benötigt genau diese Spalten: `signal_id,strategy_id,target_quantity,signal_at,available_at,received_at`. Zeitwerte mit expliziter Zeitzone, keine nachträgliche Outcome-Sortierung. `provenance.json` verwendet das vorhandene ECO-02-`Provenance`-Schema (u.a. Quelle, Lizenz, `symbol`, `market_type`, `contract_multiplier`, Intervall, `synthetic`). Optional `--funding funding.csv` (`funding_id,at,known_at,rate,mark_price`), `--start`, `--end`; `--allow-partial-days` **nur für Fixtures**. CLI ist offline und liest Eingaben nur; Ausgabe: `manifest.json`, `paper_events.jsonl`, `paper_fills.jsonl`, `daily_positions.jsonl` mit Datensatz-/Signalfingerabdruck und expliziten Warnfeldern `verified_oos=false`, `capital_risk_cleared=false`, `live_orders_sent=0`. Der CLI-Export allein schaltet **keine** Positionen in der Wiese frei.
+
 ## Tests / Hand-off
 
 ```bash
