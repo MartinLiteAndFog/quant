@@ -68,13 +68,35 @@ export type CapitalLedger = Readonly<{
   freeCapitalUsdt: number;
   reservedMarginUsdt: number;
   deployedCapitalUsdt: number;
+  realizedPricePnlUsdt: number;
+  paperFeesUsdt: number;
+  paperFundingUsdt: number;
+  paperReplayCount: number;
   seedlingEntitlements: readonly SeedEntitlement[];
+}>;
+
+export type ClosedPaperReplayBooking = Readonly<{
+  startDay: number;
+  days: number;
+  datasetFingerprint: string;
+  synthetic: boolean;
+  endedFlat: boolean;
+  riskBreach: boolean;
+  fillCount: number;
+  allocationLimitUsdt: number;
+  startingCashUsdt: number;
+  endingCashUsdt: number;
+  maxMarginUsedUsdt: number;
+  realizedPricePnlUsdt: number;
+  feesUsdt: number;
+  fundingUsdt: number;
+  netPnlUsdt: number;
 }>;
 
 export type GardenEvent = Readonly<{
   id: string;
   day: number;
-  type: "daily_tick" | "conception" | "predation" | "archive" | "dormancy" | "awakening";
+  type: "daily_tick" | "conception" | "predation" | "archive" | "dormancy" | "awakening" | "paper_replay";
   actor?: string;
   subject?: string;
   detail: Readonly<Record<string, string | number | boolean>>;
@@ -156,6 +178,10 @@ export function createSimulationWorld(
       freeCapitalUsdt: 0,
       reservedMarginUsdt: round4(SEEDLING_ENTITLEMENTS * SEEDLING_ALLOCATION_USDT),
       deployedCapitalUsdt: round4(PARENT_COUNT * PARENT_ALLOCATION_USDT),
+      realizedPricePnlUsdt: 0,
+      paperFeesUsdt: 0,
+      paperFundingUsdt: 0,
+      paperReplayCount: 0,
       seedlingEntitlements: entitlements,
     },
     events: [],
@@ -167,6 +193,92 @@ export function createSimulationWorld(
 /** Return an immutable world snapshot with a selected bee/seed conception policy. */
 export function setConceptionPolicy(world: SimulationWorld, conceptionPolicy: ConceptionPolicy): SimulationWorld {
   const next = { ...world, conceptionPolicy };
+  assertSimulationInvariants(next);
+  return next;
+}
+
+/** Book a completed, flat synthetic replay into the garden's single NAV ledger. */
+export function bookClosedPaperReplay(
+  world: SimulationWorld,
+  plantId: string,
+  booking: ClosedPaperReplayBooking,
+): SimulationWorld {
+  assertSimulationInvariants(world);
+  const plant = world.plants.find((candidate) => candidate.id === plantId && candidate.status === "active");
+  if (!plant) throw new RangeError("Paper PnL can only be booked to a living plant.");
+  if (!booking.synthetic || !booking.endedFlat || booking.riskBreach
+    || !/^[0-9a-f]{64}$/.test(booking.datasetFingerprint)
+    || !Number.isInteger(booking.days) || booking.days <= 0
+    || !Number.isInteger(booking.startDay) || world.day !== booking.startDay + booking.days
+    || !Number.isInteger(booking.fillCount) || booking.fillCount <= 0) {
+    throw new RangeError("Only a flat synthetic replay aligned to the garden clock can be booked.");
+  }
+  const amounts = [booking.realizedPricePnlUsdt, booking.feesUsdt, booking.fundingUsdt, booking.netPnlUsdt];
+  const accountAmounts = [booking.allocationLimitUsdt, booking.startingCashUsdt, booking.endingCashUsdt, booking.maxMarginUsedUsdt];
+  if ([...amounts, ...accountAmounts].some((amount) => !Number.isFinite(amount))
+    || booking.feesUsdt < 0 || booking.maxMarginUsedUsdt < 0
+    || booking.allocationLimitUsdt <= 0 || booking.allocationLimitUsdt > plant.allocationUsdt
+    || booking.startingCashUsdt <= 0 || booking.startingCashUsdt > plant.allocationUsdt
+    || booking.maxMarginUsedUsdt > booking.allocationLimitUsdt + 0.0001
+    || Math.abs(booking.endingCashUsdt - (booking.startingCashUsdt + booking.netPnlUsdt)) > 0.0001) {
+    throw new RangeError("Paper replay amounts must be finite and fees non-negative.");
+  }
+  const expectedNet = booking.realizedPricePnlUsdt - booking.feesUsdt + booking.fundingUsdt;
+  if (Math.abs(expectedNet - booking.netPnlUsdt) > 0.0001) {
+    throw new RangeError("Paper replay net PnL does not reconcile to price PnL, fees, and funding.");
+  }
+  const capital = world.capital;
+  const navUsdt = round4(capital.navUsdt + booking.netPnlUsdt);
+  if (navUsdt <= 0) throw new RangeError("Paper replay would exhaust NAV; booking rejected.");
+  const protectedReserveUsdt = round4(navUsdt * PROTECTED_RESERVE_RATE);
+  const allocationCeilingUsdt = round4(navUsdt * MAX_ALLOCATION_RATE);
+  const availableForPlants = round4(allocationCeilingUsdt - capital.reservedMarginUsdt);
+  if (availableForPlants < 0) throw new RangeError("Replay loss would breach reserved seed entitlements; booking rejected.");
+  let deployedCapitalUsdt = capital.deployedCapitalUsdt;
+  let freeCapitalUsdt = round4(availableForPlants - deployedCapitalUsdt);
+  let plants = world.plants;
+  if (freeCapitalUsdt < 0) {
+    const reduction = round4(-freeCapitalUsdt);
+    if (reduction >= plant.allocationUsdt) throw new RangeError("Replay loss exceeds the selected plant's remaining allocation.");
+    plants = world.plants.map((candidate) => candidate.id === plantId
+      ? { ...candidate, allocationUsdt: round4(candidate.allocationUsdt - reduction) }
+      : candidate);
+    deployedCapitalUsdt = round4(deployedCapitalUsdt - reduction);
+    freeCapitalUsdt = 0;
+  }
+  const next: SimulationWorld = {
+    ...world,
+    plants,
+    capital: {
+      ...capital,
+      navUsdt,
+      protectedReserveUsdt,
+      allocationCeilingUsdt,
+      freeCapitalUsdt,
+      deployedCapitalUsdt,
+      realizedPricePnlUsdt: round4(capital.realizedPricePnlUsdt + booking.realizedPricePnlUsdt),
+      paperFeesUsdt: round4(capital.paperFeesUsdt + booking.feesUsdt),
+      paperFundingUsdt: round4(capital.paperFundingUsdt + booking.fundingUsdt),
+      paperReplayCount: capital.paperReplayCount + 1,
+    },
+    events: appendEvents(world.events, [{
+      id: `${world.seed}:d${world.day}:paper-replay:${capital.paperReplayCount + 1}`,
+      day: world.day,
+      type: "paper_replay",
+      actor: "synthetic-paper-engine",
+      subject: plantId,
+      detail: {
+        days: booking.days,
+        fillCount: booking.fillCount,
+        realizedPricePnlUsdt: round4(booking.realizedPricePnlUsdt),
+        feesUsdt: round4(booking.feesUsdt),
+        fundingUsdt: round4(booking.fundingUsdt),
+        netPnlUsdt: round4(booking.netPnlUsdt),
+        datasetFingerprint: booking.datasetFingerprint,
+        synthetic: true,
+      },
+    }]),
+  };
   assertSimulationInvariants(next);
   return next;
 }
@@ -453,16 +565,21 @@ export function advanceSimulationDays(world: SimulationWorld, count: number): Si
 export function assertSimulationInvariants(world: SimulationWorld): void {
   const { capital } = world;
   if (world.events.length > MAX_EVENT_HISTORY) throw new Error("Event history exceeded its bounded retention window.");
-  const finiteValues = [capital.navUsdt, capital.allocationCeilingUsdt, capital.protectedReserveUsdt,
-    capital.freeCapitalUsdt, capital.reservedMarginUsdt, capital.deployedCapitalUsdt];
-  if (finiteValues.some((value) => !Number.isFinite(value) || value < -0.0001)) {
-    throw new Error("Capital ledger must contain finite, non-negative amounts.");
+  const balances = [capital.navUsdt, capital.allocationCeilingUsdt, capital.protectedReserveUsdt,
+    capital.freeCapitalUsdt, capital.reservedMarginUsdt, capital.deployedCapitalUsdt, capital.paperFeesUsdt];
+  const signedTotals = [capital.realizedPricePnlUsdt, capital.paperFundingUsdt];
+  if ([...balances, ...signedTotals].some((value) => !Number.isFinite(value))
+    || balances.some((value) => value < -0.0001)) {
+    throw new Error("Capital ledger must contain finite values and non-negative balances.");
   }
-  if (Math.abs(capital.navUsdt - STARTING_NAV_USDT) > 0.0001) throw new Error("Synthetic NAV must remain 100 USDT.");
-  if (Math.abs(capital.protectedReserveUsdt - STARTING_NAV_USDT * PROTECTED_RESERVE_RATE) > 0.0001) {
+  if (!Number.isInteger(capital.paperReplayCount) || capital.paperReplayCount < 0) {
+    throw new Error("Paper replay count must be a non-negative integer.");
+  }
+  if (capital.navUsdt <= 0) throw new Error("Synthetic NAV must remain positive.");
+  if (Math.abs(capital.protectedReserveUsdt - capital.navUsdt * PROTECTED_RESERVE_RATE) > 0.0001) {
     throw new Error("The 10% protected reserve cannot be allocated.");
   }
-  if (Math.abs(capital.allocationCeilingUsdt - STARTING_NAV_USDT * MAX_ALLOCATION_RATE) > 0.0001) {
+  if (Math.abs(capital.allocationCeilingUsdt - capital.navUsdt * MAX_ALLOCATION_RATE) > 0.0001) {
     throw new Error("The deployable allocation ceiling must remain 90% of NAV.");
   }
   const allocated = capital.freeCapitalUsdt + capital.reservedMarginUsdt + capital.deployedCapitalUsdt;

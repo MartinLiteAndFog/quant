@@ -17,9 +17,11 @@ Plant forms (Grass, Bush, and Cactus) are derived from root and leaf genes. Thos
 
 The Understory view aggregates archive and seed-bank activity and can run matched Random, Local, Hive, and Hybrid cohorts over the same world seeds and day horizon. Reports include synthetic daily habitat fit and vigor alongside population outcomes. The experiment compares only Cloudgarden's synthetic rules. Its result is marked `not_comparable` to market performance and must not be treated as evidence for a trading strategy.
 
+The Understory also runs an isolated seven-day paper-execution fixture over 10,080 generated UTC minute bars. It uses a fixed external long/flat position script, strictly-next-open fills after signal availability and receipt, bounded delay, zero-volume rejection, spread/slippage embedded in price, fees debited once, and separate signed funding settlements. A closed result books into the same 100-USDT garden NAV; the 10% reserve and 90% allocation ceiling are recalculated and tested. The replay advances the daily garden clock by the same seven days. It is an execution-mechanics demonstration, not a strategy or market test.
+
 ## Scope and evidence
 
-All weather, genes, biomass, vigor, synthetic evidence, conception, predation, and capital values are illustrative game fixtures. The app has no historical SOL import or data-quality report, minute bars, signals, paper fills, fees, funding, slippage, or performance claims. Those are separate research and execution work packages; this prototype cannot qualify or promote a strategy. No real capital is available to any plant.
+All garden state and the built-in market week are generated fixtures. No historical SOL market source, venue/contract provenance, license, or quality-qualified dataset is connected. Costs and funding are configurable assumptions, not venue-calibrated values. The fixture cannot qualify or promote a strategy, and no account, exchange, order, Fleet API, or real capital is available to any plant.
 
 ## Verify
 

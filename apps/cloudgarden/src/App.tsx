@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   advanceSimulationDay,
   advanceSimulationDays,
+  bookClosedPaperReplay,
   createSimulationWorld,
   setConceptionPolicy,
   visiblePopulation,
@@ -10,6 +11,7 @@ import {
   type SimulationWorld,
 } from "./simulation";
 import { runControlledExperiment, type ExperimentReport } from "./experiments";
+import { runSyntheticPaperDemo, type PaperReplayReport } from "./paperReplay";
 
 type View = "meadow" | "understory";
 type GeneAxis = "root" | "leaf" | "water" | "sun";
@@ -26,22 +28,33 @@ function App() {
   const [axisY, setAxisY] = useState<GeneAxis>("leaf");
   const [experiment, setExperiment] = useState<ExperimentReport | null>(null);
   const [experimentBusy, setExperimentBusy] = useState(false);
+  const [paperReplay, setPaperReplay] = useState<PaperReplayReport | null>(null);
+  const [paperReplayBusy, setPaperReplayBusy] = useState(false);
+  const [paperReplayError, setPaperReplayError] = useState<string | null>(null);
+  const paperReplayLock = useRef(false);
 
   const population = visiblePopulation(world);
   const selected = world.plants.find((plant) => plant.id === selectedId) ?? population[0] ?? world.plants[0];
 
   useEffect(() => {
     if (!playing) return;
-    const timer = window.setInterval(() => setWorld((current) => advanceSimulationDay(current)), 700);
+    const timer = window.setInterval(() => {
+      if (!paperReplayLock.current) setWorld((current) => advanceSimulationDay(current));
+    }, 700);
     return () => window.clearInterval(timer);
   }, [playing]);
 
-  const advance = (days: number) => setWorld((current) => advanceSimulationDays(current, days));
+  const advance = (days: number) => {
+    if (!paperReplayLock.current) setWorld((current) => advanceSimulationDays(current, days));
+  };
   const reset = () => {
+    if (paperReplayLock.current) return;
     setPlaying(false);
     setWorld(createSimulationWorld());
     setSelectedId("parent-01");
     setExperiment(null);
+    setPaperReplay(null);
+    setPaperReplayError(null);
   };
   const runExperiment = async () => {
     setExperimentBusy(true);
@@ -50,6 +63,46 @@ function App() {
       setExperiment(report);
     } finally {
       setExperimentBusy(false);
+    }
+  };
+  const runPaperReplay = async (plantId: string) => {
+    if (paperReplayLock.current) return;
+    const sourceWorld = world;
+    const plant = sourceWorld.plants.find((candidate) => candidate.id === plantId && candidate.status === "active");
+    if (!plant) return;
+    paperReplayLock.current = true;
+    setPlaying(false);
+    setPaperReplayBusy(true);
+    setPaperReplayError(null);
+    try {
+      const allocation = plant.allocationUsdt.toFixed(4);
+      const report = await runSyntheticPaperDemo(allocation, allocation, plant.id);
+      const advanced = advanceSimulationDays(sourceWorld, report.days);
+      const booked = bookClosedPaperReplay(advanced, plant.id, {
+        startDay: sourceWorld.day,
+        days: report.days,
+        datasetFingerprint: report.dataset.fingerprint,
+        synthetic: report.dataset.synthetic,
+        endedFlat: report.endedFlat,
+        riskBreach: report.riskBreach,
+        fillCount: report.fills.length,
+        allocationLimitUsdt: Number(report.allocationLimit),
+        startingCashUsdt: Number(report.startingCash),
+        endingCashUsdt: Number(report.endingCash),
+        maxMarginUsedUsdt: Number(report.maxMarginUsed),
+        realizedPricePnlUsdt: Number(report.realizedPricePnl),
+        feesUsdt: Number(report.fees),
+        fundingUsdt: Number(report.funding),
+        netPnlUsdt: Number(report.netPnl),
+      });
+      setWorld(booked);
+      setPaperReplay(report);
+      setSelectedId(plant.id);
+    } catch (error) {
+      setPaperReplayError(error instanceof Error ? error.message : "The synthetic replay could not be reconciled.");
+    } finally {
+      paperReplayLock.current = false;
+      setPaperReplayBusy(false);
     }
   };
 
@@ -77,13 +130,15 @@ function App() {
         {view === "meadow" ? (
           <Meadow
             world={world} population={population} selected={selected} selectedId={selectedId} playing={playing}
+            paperReplayBusy={paperReplayBusy}
             axisX={axisX} axisY={axisY} setAxisX={setAxisX} setAxisY={setAxisY}
-            onSelect={setSelectedId} onAdvance={advance} onTogglePlay={() => setPlaying((current) => !current)} onReset={reset}
-            onPolicy={(policy) => setWorld((current) => setConceptionPolicy(current, policy))}
+            onSelect={setSelectedId} onAdvance={advance} onTogglePlay={() => { if (!paperReplayLock.current) setPlaying((current) => !current); }} onReset={reset}
+            onPolicy={(policy) => { if (!paperReplayLock.current) setWorld((current) => setConceptionPolicy(current, policy)); }}
           />
         ) : (
           <Understory
             world={world} experiment={experiment} experimentBusy={experimentBusy} onRunExperiment={runExperiment}
+            paperReplay={paperReplay} paperReplayBusy={paperReplayBusy} paperReplayError={paperReplayError} onRunPaperReplay={runPaperReplay}
             onReturn={() => setView("meadow")} onSelectPlant={(id) => { setSelectedId(id); setView("meadow"); }}
           />
         )}
@@ -93,10 +148,10 @@ function App() {
 }
 
 function Meadow({
-  world, population, selected, selectedId, playing, axisX, axisY, setAxisX, setAxisY,
+  world, population, selected, selectedId, playing, paperReplayBusy, axisX, axisY, setAxisX, setAxisY,
   onSelect, onAdvance, onTogglePlay, onReset, onPolicy,
 }: {
-  world: SimulationWorld; population: readonly GardenPlant[]; selected: GardenPlant; selectedId: string; playing: boolean;
+  world: SimulationWorld; population: readonly GardenPlant[]; selected: GardenPlant; selectedId: string; playing: boolean; paperReplayBusy: boolean;
   axisX: GeneAxis; axisY: GeneAxis; setAxisX: (axis: GeneAxis) => void; setAxisY: (axis: GeneAxis) => void;
   onSelect: (id: string) => void; onAdvance: (days: number) => void; onTogglePlay: () => void; onReset: () => void;
   onPolicy: (policy: "mixed" | "random" | BeeMode) => void;
@@ -123,7 +178,7 @@ function Meadow({
       </div>
 
       <section className="ledger-strip" aria-label="Synthetic capital ledger">
-        <LedgerMetric label="Test NAV" value={money(world.capital.navUsdt)} detail="fixed synthetic equity" />
+        <LedgerMetric label="Test NAV" value={money(world.capital.navUsdt)} detail="single synthetic 90/10 ledger" />
         <LedgerMetric label="Budget ceiling" value={money(world.capital.allocationCeilingUsdt)} detail="90% maximum" />
         <LedgerMetric label="Protected reserve" value={money(world.capital.protectedReserveUsdt)} detail="never allocated" />
         <LedgerMetric label="Active / archived" value={`${population.length} / ${archivedCount}`} detail="archived plants hidden" />
@@ -134,7 +189,7 @@ function Meadow({
           <div className="garden-card">
             <div className="garden-toolbar">
               <div><span className="mini-world-icon">◌</span><span><b>Upper meadow</b><small>World seed {world.seed} · {world.plants.filter((plant) => plant.role === "parent").length} parents · {usedSeeds}/20 seedlings</small></span></div>
-              <div className="toolbar-actions"><span className="fixture-tag">SYNTHETIC FIXTURE</span><button className="quiet-icon-button" onClick={onReset} aria-label="Reset Cloudgarden">↺</button></div>
+              <div className="toolbar-actions"><span className="fixture-tag">SYNTHETIC FIXTURE</span><button className="quiet-icon-button" onClick={onReset} disabled={paperReplayBusy} aria-label="Reset Cloudgarden">↺</button></div>
             </div>
 
             <div className={`garden-scene ${population.length > 10 ? "dense-population" : ""}`} role="group" aria-label="Select an active plant">
@@ -152,10 +207,10 @@ function Meadow({
             <div className="garden-controls">
               <div className="control-meta"><span>DAY <b>{String(world.day).padStart(3, "0")}</b></span><span className="control-dot" /><span>SEED <b>{world.seed}</b></span><span className="control-dot" /><span>CAPITAL <b>{money(world.capital.deployedCapitalUsdt + world.capital.reservedMarginUsdt)}</b></span></div>
               <div className="time-controls">
-                <button className={`play-button ${playing ? "is-playing" : ""}`} onClick={onTogglePlay}>{playing ? "Ⅱ Pause" : "▶ Play"}</button>
-                <button className="garden-step" onClick={() => onAdvance(1)}>+ 1 day</button>
-                <button className="garden-step" onClick={() => onAdvance(7)}>+ 7 days</button>
-                <button className="garden-step garden-season" onClick={() => onAdvance(140)}>+ 140 days</button>
+                <button className={`play-button ${playing ? "is-playing" : ""}`} onClick={onTogglePlay} disabled={paperReplayBusy}>{playing ? "Ⅱ Pause" : "▶ Play"}</button>
+                <button className="garden-step" onClick={() => onAdvance(1)} disabled={paperReplayBusy}>+ 1 day</button>
+                <button className="garden-step" onClick={() => onAdvance(7)} disabled={paperReplayBusy}>+ 7 days</button>
+                <button className="garden-step garden-season" onClick={() => onAdvance(140)} disabled={paperReplayBusy}>+ 140 days</button>
               </div>
             </div>
           </div>
@@ -191,7 +246,7 @@ function Meadow({
           <GeneBar name="Sun response" value={selected.genes.sun} color="gold" />
           <div className="tradeoff-note">Root and leaf growth compete for daily energy. Neither gene can change the 90/10 capital boundary.</div>
           <label className="bee-policy"><span>Conception policy</span>
-            <select value={world.conceptionPolicy} onChange={(event) => onPolicy(event.target.value as "mixed" | BeeMode)}>
+            <select value={world.conceptionPolicy} onChange={(event) => onPolicy(event.target.value as "mixed" | BeeMode)} disabled={paperReplayBusy}>
               <option value="mixed">Mixed modes · local / hive / hybrid</option><option value="random">Random-only baseline</option>
               <option value="local">Local pairing</option><option value="hive">Hive recombination</option><option value="hybrid">Hybrid pollination</option>
             </select>
@@ -254,8 +309,10 @@ function GeneField({ population, axisX, axisY, setAxisX, setAxisY, selectedId, o
   </section>;
 }
 
-function Understory({ world, experiment, experimentBusy, onRunExperiment, onReturn, onSelectPlant }: {
-  world: SimulationWorld; experiment: ExperimentReport | null; experimentBusy: boolean; onRunExperiment: () => void; onReturn: () => void; onSelectPlant: (id: string) => void;
+function Understory({ world, experiment, experimentBusy, onRunExperiment, paperReplay, paperReplayBusy, paperReplayError, onRunPaperReplay, onReturn, onSelectPlant }: {
+  world: SimulationWorld; experiment: ExperimentReport | null; experimentBusy: boolean; onRunExperiment: () => void;
+  paperReplay: PaperReplayReport | null; paperReplayBusy: boolean; paperReplayError: string | null; onRunPaperReplay: (plantId: string) => void;
+  onReturn: () => void; onSelectPlant: (id: string) => void;
 }) {
   const active = visiblePopulation(world);
   const archived = world.plants.filter((plant) => plant.status === "archived");
@@ -290,9 +347,38 @@ function Understory({ world, experiment, experimentBusy, onRunExperiment, onRetu
       </aside>
     </div>
 
+    <PaperReplayPanel plants={active} worldDay={world.day} navUsdt={world.capital.navUsdt} report={paperReplay} busy={paperReplayBusy} error={paperReplayError} onRun={onRunPaperReplay} />
     {experiment && <ExperimentResults report={experiment} />}
     <footer className="game-footer"><span>Synthetic outcomes are not trading evidence and cannot qualify a strategy.</span><span>{archived.length} plants archived · {money(world.capital.freeCapitalUsdt)} returned to free allocation</span></footer>
   </div>;
+}
+
+function PaperReplayPanel({ plants, worldDay, navUsdt, report, busy, error, onRun }: {
+  plants: readonly GardenPlant[]; worldDay: number; navUsdt: number; report: PaperReplayReport | null; busy: boolean; error: string | null; onRun: (plantId: string) => void;
+}) {
+  const [plantId, setPlantId] = useState(plants.find((plant) => plant.role === "parent")?.id ?? plants[0]?.id ?? "");
+  const selected = plants.find((plant) => plant.id === plantId) ?? plants[0];
+  return <section className="paper-replay-panel">
+    <div className="section-title"><div><span>SYNTHETIC INTRADAY PAPER REPLAY</span><h2>Test the execution clock</h2></div><span className="record-count">10,080 UTC minute bars</span></div>
+    <p className="paper-replay-intro">A fixed external position script opens and closes one plant’s 1× paper position. Bars are generated, not historical SOL; the script is a fill-mechanics fixture, not a strategy.</p>
+    <div className="paper-replay-controls">
+      <label>Funded plant<select value={selected?.id ?? ""} onChange={(event) => setPlantId(event.target.value)} disabled={busy || plants.length === 0}>
+        {plants.map((plant) => <option key={plant.id} value={plant.id}>{plant.name} · {money(plant.allocationUsdt)} available</option>)}
+      </select></label>
+      <button className="experiment-button" onClick={() => selected && onRun(selected.id)} disabled={busy || !selected}>{busy ? "Replaying synthetic week…" : `Run 7-day paper replay · garden day ${worldDay}`}<span>↗</span></button>
+    </div>
+    {error && <p className="paper-replay-error" role="alert">Replay not booked: {error}</p>}
+    {report && <>
+      <div className="paper-replay-metrics">
+        <LedgerMetric label="Net replay PnL" value={`${Number(report.netPnl) >= 0 ? "+" : ""}${money(Number(report.netPnl))}`} detail="fees and funding included" />
+        <LedgerMetric label="Fills / rejected" value={`${report.fills.length} / ${report.rejectedSignals.length}`} detail="strict next-open timing" />
+        <LedgerMetric label="Peak margin" value={money(Number(report.maxMarginUsed))} detail={`plant limit ${money(Number(report.allocationLimit))}`} />
+        <LedgerMetric label="Garden NAV now" value={money(navUsdt)} detail="same portfolio ledger" />
+      </div>
+      <div className="paper-replay-accounting"><span>Price PnL <b>{money(Number(report.realizedPricePnl))}</b></span><span>Fees <b>−{money(Number(report.fees))}</b></span><span>Funding <b>{money(Number(report.funding))}</b></span><span>Dataset <b>{report.dataset.fingerprint.slice(0, 12)}…</b></span></div>
+      <p className="experiment-disclaimer">{report.claim} Benchmark: cash / no trade. Verdict: <b>not_comparable</b>. The garden clock advanced {report.days} days and the closed result was booked into the single 90/10 ledger.</p>
+    </>}
+  </section>;
 }
 
 function ExperimentResults({ report }: { report: ExperimentReport }) {

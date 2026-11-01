@@ -253,3 +253,18 @@ h1 em, h2 em { color: #73886b; font-weight: 400; }
 .metrics-legend { margin: 6px 0 11px; color: #929d8e; font-size: 8px; line-height: 1.5; }
 .experiment-results { overflow-x: auto; }
 .experiment-table { min-width: 620px; }
+.paper-replay-panel { margin-top: 14px; padding: 18px; border: 1px solid #dce4d7; border-radius: 13px; background: #fbfcf7; }
+.paper-replay-intro { max-width: 760px; margin: 0 0 13px; color: #849181; font-size: 9px; line-height: 1.55; }
+.paper-replay-controls { display: grid; grid-template-columns: minmax(180px,.7fr) minmax(260px,1.3fr); gap: 12px; align-items: end; }
+.paper-replay-controls label { display: block; color: #788675; font: 8px var(--mono); }
+.paper-replay-controls select { width: 100%; min-height: 36px; margin-top: 6px; padding: 0 10px; border: 1px solid #d7e0d4; border-radius: 8px; background: #f8f8f2; color: #62775d; font-size: 9px; }
+.paper-replay-controls .experiment-button { min-height: 36px; }
+.paper-replay-metrics { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 1px; margin-top: 14px; overflow: hidden; border: 1px solid #d9e1d6; border-radius: 10px; background: #dfe5dc; }
+.paper-replay-metrics .ledger-metric { padding: 10px; background: #f4f6ef; }
+.paper-replay-metrics .ledger-metric > span { display: block; color: #8d9888; font: 7px var(--mono); }
+.paper-replay-metrics .ledger-metric > b { display: block; margin: 4px 0; color: #586d55; font: 13px var(--mono); }
+.paper-replay-metrics .ledger-metric > small { display: block; color: #9aa494; font-size: 7px; line-height: 1.4; }
+.paper-replay-accounting { display: flex; flex-wrap: wrap; gap: 8px 18px; margin: 11px 0; color: #879283; font: 8px var(--mono); }
+.paper-replay-accounting b { margin-left: 4px; color: #65775f; font-weight: 600; }
+.paper-replay-error { margin: 10px 0 0; padding: 9px; border-radius: 8px; background: #f5ebe7; color: #a06d5e; font-size: 8px; }
+@media (max-width: 660px) { .paper-replay-controls { grid-template-columns: 1fr; }.paper-replay-metrics { grid-template-columns: repeat(2,minmax(0,1fr)); }.paper-replay-panel { padding: 13px; } }

@@ -4,6 +4,7 @@ import {
   advanceSimulationDay,
   advanceSimulationDays,
   assertSimulationInvariants,
+  bookClosedPaperReplay,
   createSimulationWorld,
   derivePhenotype,
   MAX_EVENT_HISTORY,
@@ -45,6 +46,72 @@ test("daily advancement is deterministic and does not mutate earlier snapshots",
   assert.equal(fingerprint(before), beforeJson);
   assert.equal(after.day, 21);
   assert.ok(after.events.length > 21); // tick, conception, and weather/predator audit trail
+});
+
+test("closed paper PnL updates the same NAV, reserve, and allocation ledger", () => {
+  const initial = createSimulationWorld("paper-booking");
+  const afterWeek = advanceSimulationDays(initial, 7);
+  const booked = bookClosedPaperReplay(afterWeek, "parent-01", {
+    startDay: 0,
+    days: 7,
+    datasetFingerprint: "a".repeat(64),
+    synthetic: true,
+    endedFlat: true,
+    riskBreach: false,
+    fillCount: 2,
+    allocationLimitUsdt: 20,
+    startingCashUsdt: 20,
+    endingCashUsdt: 20.022,
+    maxMarginUsedUsdt: 10,
+    realizedPricePnlUsdt: 0.03,
+    feesUsdt: 0.01,
+    fundingUsdt: 0.002,
+    netPnlUsdt: 0.022,
+  });
+  assert.equal(booked.capital.navUsdt, 100.022);
+  assert.equal(booked.capital.protectedReserveUsdt, 10.0022);
+  assert.equal(booked.capital.allocationCeilingUsdt, 90.0198);
+  assert.equal(booked.capital.freeCapitalUsdt, 0.0198);
+  assert.equal(booked.capital.realizedPricePnlUsdt, 0.03);
+  assert.equal(booked.capital.paperFeesUsdt, 0.01);
+  assert.equal(booked.capital.paperFundingUsdt, 0.002);
+  assert.equal(booked.capital.paperReplayCount, 1);
+  assert.equal(booked.events.filter((event) => event.type === "paper_replay").length, 1);
+  assertSimulationInvariants(booked);
+});
+
+test("paper losses reduce the selected entitlement and a failed replay cannot book", () => {
+  const afterWeek = advanceSimulationDays(createSimulationWorld("paper-loss"), 7);
+  const booked = bookClosedPaperReplay(afterWeek, "parent-01", {
+    startDay: 0,
+    days: 7,
+    datasetFingerprint: "b".repeat(64),
+    synthetic: true,
+    endedFlat: true,
+    riskBreach: false,
+    fillCount: 2,
+    allocationLimitUsdt: 20,
+    startingCashUsdt: 20,
+    endingCashUsdt: 19.981,
+    maxMarginUsedUsdt: 10,
+    realizedPricePnlUsdt: 0.001,
+    feesUsdt: 0.02,
+    fundingUsdt: 0,
+    netPnlUsdt: -0.019,
+  });
+  assert.equal(booked.capital.navUsdt, 99.981);
+  assert.equal(booked.capital.protectedReserveUsdt, 9.9981);
+  assert.equal(booked.capital.allocationCeilingUsdt, 89.9829);
+  assert.equal(booked.capital.deployedCapitalUsdt, 61.4829);
+  assert.equal(booked.plants.find((plant) => plant.id === "parent-01")?.allocationUsdt, 19.9829);
+  assert.equal(booked.capital.freeCapitalUsdt, 0);
+  assertSimulationInvariants(booked);
+
+  assert.throws(() => bookClosedPaperReplay(afterWeek, "parent-01", {
+    startDay: 0, days: 7, datasetFingerprint: "c".repeat(64), synthetic: true, endedFlat: false,
+    riskBreach: false, fillCount: 2, allocationLimitUsdt: 20, startingCashUsdt: 20, endingCashUsdt: 20, maxMarginUsedUsdt: 0,
+    realizedPricePnlUsdt: 0, feesUsdt: 0, fundingUsdt: 0, netPnlUsdt: 0,
+  }), /flat synthetic replay/);
 });
 
 test("the three bee modes deterministically conceive funded local, hive, and hybrid seedlings", () => {
