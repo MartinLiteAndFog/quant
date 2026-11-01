@@ -1,4 +1,4 @@
-import {validateTileWorld, type TileWorld} from "./tileWorld";
+import {validateTileWorld, type TileWorld} from "./tileWorld.ts";
 
 /** Labels represent SYNTHETIC previews, not verified signal modules or feeds. */
 export const TILE_WORLD_DEMO: TileWorld = {
