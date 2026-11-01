@@ -325,3 +325,16 @@ Nur sichtbare Tiles erhalten Render-Budget. Unsichtbare Tiles werden im Simulato
 **[ECO-14 / Issue #39](https://github.com/MartinLiteAndFog/quant/issues/39)** beschreibt die selbstständig umsetzbare Tile-/Region-/Myzel-Schicht inklusive Codeeigentum, Prompt, Tests und optionaler Unreal-Bridge. Sie ist als getrenntes Paket neben [ECO-11 / #33](https://github.com/MartinLiteAndFog/quant/issues/33) geplant: #39 verantwortet Welt-/Regionskarte, Tile-Registrierung, Kompatibilitäts-/Deduplikationslogik und Datenadapter; #33 den Detail-Pflanzenrenderer und Wurzel-/Tier-Effekte. Nicht beide Agenten gleichzeitig dieselben UI-Dateien ändern.
 
 **Demo-Assets (nur synthetisch bis echte Daten vorhanden):** SOL-IMBA Sensitivity×TTP, SOL-RSI Periode×Einstiegsschwelle, BTC-Trend Trendlänge×Exit, WTI-Mean-Reversion RSI×Exit, FX-Breakout Fenster×Stop, optional Nasdaq. Die Asset-Kacheln sind keine Aussage, dass Historie oder Strategiemodul implementiert sind.
+
+## 18. Tatsächlich auf Git vorhandener Implementierungsstand (2026-11-01)
+
+**Wichtig: Draft-PR ≠ gemergt ≠ produktiv.** Aktueller Stand auf getrennten Entwicklungsbranches:
+
+- **#23 / ECO-01 Data Contracts:** Branch `codex/ecosystem-contracts` enthält bereits `src/quant/ecosystem/contracts.py`, `apps/fleet-desktop/src/lib/ecosystemContracts.ts` und Contract-Dokumentation. Zum Kontrollzeitpunkt noch kein eigener verifizierter PR/Merge; andere ECO-Agenten sollen die Wire-Interfaces abstimmen.
+- **#24 / ECO-02 Market Data:** [Draft PR #37](https://github.com/MartinLiteAndFog/quant/pull/37) enthält read-only OHLCV-Import, Datenqualität und kostenorientierte Paper-Fills; historische fünf Jahre SOL **noch nicht** nachgewiesen/importiert, PR ungemergt.
+- **#26 / ECO-04 Protected Genes:** [Draft PR #38](https://github.com/MartinLiteAndFog/quant/pull/38) enthält geschützte Gene/Strategiemodul-Descriptors, Tests; noch kein produktiver Interpreter, PR ungemergt.
+- **#27 / ECO-05 Groundwater:** [Draft PR #40](https://github.com/MartinLiteAndFog/quant/pull/40) auf `codex/ecosystem-groundwater-capital`: eigenständiger Decimal-Paper-Allokator für 90/10-Reserve, konfigurierbare Gewichte und Caps, nicht-exklusive Kapazitätsplanung, Child-Budget-Split, globales Distress-Freeze; 10 Standardbibliotheks-Unit-Tests, eigener grüner GitHub CI-Lauf. Python-Paket-Konflikt mit #23 durch Entfernen des doppelten Root-`__init__.py` vermieden. **Kein** Cross-Account-Transfer und keine echte Exchange-Reconciliation.
+- **#39 / ECO-14 Tile World:** [Draft PR #41](https://github.com/MartinLiteAndFog/quant/pull/41) auf `codex/ecosystem-tile-world`: 6 **synthetische** Parameter-Kacheln in 4 Regionen, React/Fleet-Kachelwelt-Button, Welt-/Kachel-Fokus, einmalige Home-Population trotz Sekundärprojektionen, aggregierte Myzelvorschläge, Docs, Node-Smoke/TypeScript/Vite; eigene Tile-CI und bestehende Fleet-CI **grün**. **Noch keine** Unreal-5-Implementierung, live Daten oder echte Multi-Asset-Positionen.
+- **Alle übrigen ECO-Tasks:** als GitHub-Issues spezifiziert, nicht dadurch als erledigt zu betrachten.
+
+Die PRs #40 und #41 sind absichtlich separat und zielen auf den bestehenden Entwicklungsbranch, nicht auf `main`. Vor Review/Merge sind die neuen Funktionen in PR #22 beziehungsweise Produktion **noch nicht enthalten**. Live-KuCoin, Railway, TradingView und bestehende Positionen wurden nicht verändert.
