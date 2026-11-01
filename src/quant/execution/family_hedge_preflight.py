@@ -50,7 +50,7 @@ def _items(raw: Any, field: str) -> list[dict]:
     if isinstance(raw, dict):
         raw = raw.get("items", raw.get("data"))
     if raw is None:
-        return []
+        raise HedgePreflightError(f"{field} response unavailable")
     if not isinstance(raw, list) or any(not isinstance(x, dict) for x in raw):
         raise HedgePreflightError(f"{field} response has unexpected shape")
     return raw
@@ -77,6 +77,13 @@ def inspect_hedge_account(broker: Any, symbol: str = "SOLUSDTM") -> HedgePreflig
     long_qty = short_qty = 0
     for pos in raw_positions:
         if pos.get("symbol") != symbol:
+            # A family account with an unrelated open symbol is NOT dedicated.
+            try:
+                other_qty = float(pos.get("currentQty") or 0)
+            except (TypeError, ValueError, OverflowError):
+                raise HedgePreflightError("unrecognized other-symbol quantity") from None
+            if other_qty:
+                raise HedgePreflightError("unrelated open position on family account")
             continue
         try:
             qty_raw = pos.get("currentQty")
