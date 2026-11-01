@@ -1,0 +1,198 @@
+{
+  "schema_version": "1.0",
+  "simulation_id": "cactus",
+  "as_of": "2026-01-01T00:00:00Z",
+  "seed": 42,
+  "rng_state": "seed:42;draw:0",
+  "day_index": 0,
+  "plants": [
+    {
+      "strategy_id": "cactus",
+      "as_of": "2026-01-01T00:00:00Z",
+      "genome_id": "cactus",
+      "lifecycle": "capitalized",
+      "biomass": 1.0,
+      "root_depth": 1.5,
+      "root_spread": 0.2,
+      "leaf_area": 0.1,
+      "bark_strength": 0.1,
+      "fitness": {
+        "start": "2026-01-01T00:00:00Z",
+        "end": "2026-01-01T00:00:00Z",
+        "score": null,
+        "net_return": null,
+        "max_drawdown": 0.0,
+        "observations": 0,
+        "out_of_sample": false,
+        "formula_version": "1.0"
+      },
+      "vitality": 0.8,
+      "evidence": {
+        "effective_trades": 0.0,
+        "observed_days": 0,
+        "confidence": 0.0,
+        "data_quality": 0.0,
+        "opportunities": 0,
+        "out_of_sample": false
+      }
+    }
+  ],
+  "genomes": [
+    {
+      "genome_id": "cactus",
+      "version": 1,
+      "strategy_code_version": "synthetic-1",
+      "genes": {
+        "protective_stop": true,
+        "max_leverage": 2.0,
+        "max_margin_fraction": 0.5,
+        "reproduction_budget": 0.1
+      },
+      "policies": [
+        {
+          "gene_id": "protective_stop",
+          "kind": "immutable_safety_policy",
+          "minimum": null,
+          "maximum": null
+        },
+        {
+          "gene_id": "max_leverage",
+          "kind": "required_bounded_financial",
+          "minimum": 0.0,
+          "maximum": 5.0
+        },
+        {
+          "gene_id": "max_margin_fraction",
+          "kind": "required_bounded_financial",
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        {
+          "gene_id": "reproduction_budget",
+          "kind": "required_bounded_financial",
+          "minimum": 0.0,
+          "maximum": 1.0
+        }
+      ],
+      "parent_genome_ids": [],
+      "complexity_penalty_weight": 0.0
+    }
+  ],
+  "groundwater": {
+    "as_of": "2026-01-01T00:00:00Z",
+    "currency": "USDT",
+    "accounts": [
+      {
+        "account_id": "paper",
+        "currency": "USDT",
+        "as_of": "2026-01-01T00:00:00Z",
+        "equity": "100",
+        "free_margin": "100"
+      }
+    ],
+    "equity": "100",
+    "reserve": "10",
+    "distributable": "90",
+    "entitlements": [
+      {
+        "strategy_id": "cactus",
+        "account_id": "paper",
+        "amount": "90",
+        "used_margin": "0",
+        "reserved_order_margin": "0",
+        "realizable_margin": "90",
+        "notional_exposure": "0"
+      }
+    ],
+    "depth": 1.0,
+    "risk_breach": false,
+    "allocations_frozen": false
+  },
+  "events": [
+    {
+      "schema_version": "1.0",
+      "event_id": "cactus:0",
+      "simulation_id": "cactus",
+      "day_index": 0,
+      "sequence": 0,
+      "phase": "execution",
+      "occurred_at": "2026-01-01T00:00:00Z",
+      "known_at": "2026-01-01T00:00:00Z",
+      "kind": "execution.completed",
+      "payload": {}
+    },
+    {
+      "schema_version": "1.0",
+      "event_id": "cactus:1",
+      "simulation_id": "cactus",
+      "day_index": 0,
+      "sequence": 1,
+      "phase": "metrics",
+      "occurred_at": "2026-01-01T00:00:00Z",
+      "known_at": "2026-01-01T00:00:00Z",
+      "kind": "metrics.completed",
+      "payload": {}
+    },
+    {
+      "schema_version": "1.0",
+      "event_id": "cactus:2",
+      "simulation_id": "cactus",
+      "day_index": 0,
+      "sequence": 2,
+      "phase": "capital",
+      "occurred_at": "2026-01-01T00:00:00Z",
+      "known_at": "2026-01-01T00:00:00Z",
+      "kind": "capital.completed",
+      "payload": {}
+    },
+    {
+      "schema_version": "1.0",
+      "event_id": "cactus:3",
+      "simulation_id": "cactus",
+      "day_index": 0,
+      "sequence": 3,
+      "phase": "ecology",
+      "occurred_at": "2026-01-01T00:00:00Z",
+      "known_at": "2026-01-01T00:00:00Z",
+      "kind": "ecology.completed",
+      "payload": {}
+    },
+    {
+      "schema_version": "1.0",
+      "event_id": "cactus:4",
+      "simulation_id": "cactus",
+      "day_index": 0,
+      "sequence": 4,
+      "phase": "breeding",
+      "occurred_at": "2026-01-01T00:00:00Z",
+      "known_at": "2026-01-01T00:00:00Z",
+      "kind": "breeding.completed",
+      "payload": {}
+    },
+    {
+      "schema_version": "1.0",
+      "event_id": "cactus:5",
+      "simulation_id": "cactus",
+      "day_index": 0,
+      "sequence": 5,
+      "phase": "lifecycle",
+      "occurred_at": "2026-01-01T00:00:00Z",
+      "known_at": "2026-01-01T00:00:00Z",
+      "kind": "lifecycle.completed",
+      "payload": {}
+    },
+    {
+      "schema_version": "1.0",
+      "event_id": "cactus:6",
+      "simulation_id": "cactus",
+      "day_index": 0,
+      "sequence": 6,
+      "phase": "snapshot",
+      "occurred_at": "2026-01-01T00:00:00Z",
+      "known_at": "2026-01-01T00:00:00Z",
+      "kind": "snapshot.completed",
+      "payload": {}
+    }
+  ],
+  "provenance": "synthetic"
+}

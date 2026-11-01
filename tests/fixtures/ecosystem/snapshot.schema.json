@@ -1,0 +1,702 @@
+{
+  "$defs": {
+    "AccountNAV": {
+      "additionalProperties": false,
+      "properties": {
+        "account_id": {
+          "title": "Account Id",
+          "type": "string"
+        },
+        "currency": {
+          "title": "Currency",
+          "type": "string"
+        },
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "equity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Equity"
+        },
+        "free_margin": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "ge": 0,
+          "title": "Free Margin"
+        }
+      },
+      "required": [
+        "account_id",
+        "currency",
+        "as_of",
+        "equity",
+        "free_margin"
+      ],
+      "title": "AccountNAV",
+      "type": "object"
+    },
+    "CapitalEntitlement": {
+      "additionalProperties": false,
+      "properties": {
+        "strategy_id": {
+          "title": "Strategy Id",
+          "type": "string"
+        },
+        "account_id": {
+          "title": "Account Id",
+          "type": "string"
+        },
+        "amount": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "ge": 0,
+          "title": "Amount"
+        },
+        "used_margin": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "ge": 0,
+          "title": "Used Margin"
+        },
+        "reserved_order_margin": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "default": "0",
+          "ge": 0,
+          "title": "Reserved Order Margin"
+        },
+        "realizable_margin": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "ge": 0,
+          "title": "Realizable Margin"
+        },
+        "notional_exposure": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "ge": 0,
+          "title": "Notional Exposure"
+        }
+      },
+      "required": [
+        "strategy_id",
+        "account_id",
+        "amount",
+        "used_margin",
+        "realizable_margin",
+        "notional_exposure"
+      ],
+      "title": "CapitalEntitlement",
+      "type": "object"
+    },
+    "DailyPlantState": {
+      "additionalProperties": false,
+      "properties": {
+        "strategy_id": {
+          "title": "Strategy Id",
+          "type": "string"
+        },
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "genome_id": {
+          "title": "Genome Id",
+          "type": "string"
+        },
+        "lifecycle": {
+          "enum": [
+            "proposed",
+            "screened",
+            "backtested",
+            "out_of_sample_verified",
+            "paper_forward",
+            "eligible_for_sowing",
+            "capitalized",
+            "dormant",
+            "closing",
+            "archived"
+          ],
+          "title": "Lifecycle",
+          "type": "string"
+        },
+        "biomass": {
+          "minimum": 0,
+          "title": "Biomass",
+          "type": "number"
+        },
+        "root_depth": {
+          "minimum": 0,
+          "title": "Root Depth",
+          "type": "number"
+        },
+        "root_spread": {
+          "minimum": 0,
+          "title": "Root Spread",
+          "type": "number"
+        },
+        "leaf_area": {
+          "minimum": 0,
+          "title": "Leaf Area",
+          "type": "number"
+        },
+        "bark_strength": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Bark Strength",
+          "type": "number"
+        },
+        "fitness": {
+          "$ref": "#/$defs/MetricWindow"
+        },
+        "vitality": {
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Vitality",
+          "type": "number"
+        },
+        "evidence": {
+          "$ref": "#/$defs/EvidenceState"
+        }
+      },
+      "required": [
+        "strategy_id",
+        "as_of",
+        "genome_id",
+        "lifecycle",
+        "biomass",
+        "root_depth",
+        "root_spread",
+        "leaf_area",
+        "bark_strength",
+        "fitness",
+        "vitality",
+        "evidence"
+      ],
+      "title": "DailyPlantState",
+      "type": "object"
+    },
+    "EvidenceState": {
+      "additionalProperties": false,
+      "properties": {
+        "effective_trades": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Effective Trades",
+          "type": "number"
+        },
+        "observed_days": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Observed Days",
+          "type": "integer"
+        },
+        "confidence": {
+          "default": 0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "data_quality": {
+          "default": 0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Data Quality",
+          "type": "number"
+        },
+        "opportunities": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Opportunities",
+          "type": "integer"
+        },
+        "out_of_sample": {
+          "default": false,
+          "title": "Out Of Sample",
+          "type": "boolean"
+        }
+      },
+      "title": "EvidenceState",
+      "type": "object"
+    },
+    "GenePolicy": {
+      "additionalProperties": false,
+      "properties": {
+        "gene_id": {
+          "title": "Gene Id",
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "immutable_safety_policy",
+            "required_bounded_financial",
+            "optional_strategy_gene"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "minimum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Minimum"
+        },
+        "maximum": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Maximum"
+        }
+      },
+      "required": [
+        "gene_id",
+        "kind"
+      ],
+      "title": "GenePolicy",
+      "type": "object"
+    },
+    "GroundwaterState": {
+      "additionalProperties": false,
+      "properties": {
+        "as_of": {
+          "format": "date-time",
+          "title": "As Of",
+          "type": "string"
+        },
+        "currency": {
+          "title": "Currency",
+          "type": "string"
+        },
+        "accounts": {
+          "items": {
+            "$ref": "#/$defs/AccountNAV"
+          },
+          "title": "Accounts",
+          "type": "array"
+        },
+        "equity": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "title": "Equity"
+        },
+        "reserve": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "ge": 0,
+          "title": "Reserve"
+        },
+        "distributable": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "pattern": "^(?!^[-+.]*$)[+-]?0*\\d*\\.?\\d*$",
+              "type": "string"
+            }
+          ],
+          "ge": 0,
+          "title": "Distributable"
+        },
+        "entitlements": {
+          "items": {
+            "$ref": "#/$defs/CapitalEntitlement"
+          },
+          "title": "Entitlements",
+          "type": "array"
+        },
+        "depth": {
+          "exclusiveMinimum": 0,
+          "title": "Depth",
+          "type": "number"
+        },
+        "risk_breach": {
+          "default": false,
+          "title": "Risk Breach",
+          "type": "boolean"
+        },
+        "allocations_frozen": {
+          "default": false,
+          "title": "Allocations Frozen",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "as_of",
+        "currency",
+        "accounts",
+        "equity",
+        "reserve",
+        "distributable",
+        "entitlements",
+        "depth"
+      ],
+      "title": "GroundwaterState",
+      "type": "object"
+    },
+    "MetricWindow": {
+      "additionalProperties": false,
+      "properties": {
+        "start": {
+          "format": "date-time",
+          "title": "Start",
+          "type": "string"
+        },
+        "end": {
+          "format": "date-time",
+          "title": "End",
+          "type": "string"
+        },
+        "score": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Score"
+        },
+        "net_return": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Net Return"
+        },
+        "max_drawdown": {
+          "default": 0,
+          "maximum": 1,
+          "minimum": 0,
+          "title": "Max Drawdown",
+          "type": "number"
+        },
+        "observations": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Observations",
+          "type": "integer"
+        },
+        "out_of_sample": {
+          "default": false,
+          "title": "Out Of Sample",
+          "type": "boolean"
+        },
+        "formula_version": {
+          "default": "1.0",
+          "title": "Formula Version",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "title": "MetricWindow",
+      "type": "object"
+    },
+    "SimulationEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": "1.0",
+          "default": "1.0",
+          "title": "Schema Version",
+          "type": "string"
+        },
+        "event_id": {
+          "title": "Event Id",
+          "type": "string"
+        },
+        "simulation_id": {
+          "title": "Simulation Id",
+          "type": "string"
+        },
+        "day_index": {
+          "minimum": 0,
+          "title": "Day Index",
+          "type": "integer"
+        },
+        "sequence": {
+          "minimum": 0,
+          "title": "Sequence",
+          "type": "integer"
+        },
+        "phase": {
+          "$ref": "#/$defs/TickPhase"
+        },
+        "occurred_at": {
+          "format": "date-time",
+          "title": "Occurred At",
+          "type": "string"
+        },
+        "known_at": {
+          "format": "date-time",
+          "title": "Known At",
+          "type": "string"
+        },
+        "kind": {
+          "title": "Kind",
+          "type": "string"
+        },
+        "payload": {
+          "additionalProperties": true,
+          "title": "Payload",
+          "type": "object"
+        }
+      },
+      "required": [
+        "event_id",
+        "simulation_id",
+        "day_index",
+        "sequence",
+        "phase",
+        "occurred_at",
+        "known_at",
+        "kind"
+      ],
+      "title": "SimulationEvent",
+      "type": "object"
+    },
+    "StrategyGenome": {
+      "additionalProperties": false,
+      "properties": {
+        "genome_id": {
+          "title": "Genome Id",
+          "type": "string"
+        },
+        "version": {
+          "minimum": 1,
+          "title": "Version",
+          "type": "integer"
+        },
+        "strategy_code_version": {
+          "title": "Strategy Code Version",
+          "type": "string"
+        },
+        "genes": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "title": "Genes",
+          "type": "object"
+        },
+        "policies": {
+          "items": {
+            "$ref": "#/$defs/GenePolicy"
+          },
+          "title": "Policies",
+          "type": "array"
+        },
+        "parent_genome_ids": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "title": "Parent Genome Ids",
+          "type": "array"
+        },
+        "complexity_penalty_weight": {
+          "default": 0,
+          "minimum": 0,
+          "title": "Complexity Penalty Weight",
+          "type": "number"
+        }
+      },
+      "required": [
+        "genome_id",
+        "version",
+        "strategy_code_version",
+        "genes",
+        "policies"
+      ],
+      "title": "StrategyGenome",
+      "type": "object"
+    },
+    "TickPhase": {
+      "enum": [
+        "execution",
+        "metrics",
+        "capital",
+        "ecology",
+        "breeding",
+        "lifecycle",
+        "snapshot"
+      ],
+      "title": "TickPhase",
+      "type": "string"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.0",
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "simulation_id": {
+      "title": "Simulation Id",
+      "type": "string"
+    },
+    "as_of": {
+      "format": "date-time",
+      "title": "As Of",
+      "type": "string"
+    },
+    "seed": {
+      "title": "Seed",
+      "type": "integer"
+    },
+    "rng_state": {
+      "title": "Rng State",
+      "type": "string"
+    },
+    "day_index": {
+      "minimum": 0,
+      "title": "Day Index",
+      "type": "integer"
+    },
+    "plants": {
+      "items": {
+        "$ref": "#/$defs/DailyPlantState"
+      },
+      "title": "Plants",
+      "type": "array"
+    },
+    "genomes": {
+      "items": {
+        "$ref": "#/$defs/StrategyGenome"
+      },
+      "title": "Genomes",
+      "type": "array"
+    },
+    "groundwater": {
+      "$ref": "#/$defs/GroundwaterState"
+    },
+    "events": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/SimulationEvent"
+      },
+      "title": "Events",
+      "type": "array"
+    },
+    "provenance": {
+      "default": "synthetic",
+      "enum": [
+        "synthetic",
+        "historical",
+        "shadow"
+      ],
+      "title": "Provenance",
+      "type": "string"
+    }
+  },
+  "required": [
+    "simulation_id",
+    "as_of",
+    "seed",
+    "rng_state",
+    "day_index",
+    "plants",
+    "genomes",
+    "groundwater"
+  ],
+  "title": "SimulationSnapshot",
+  "type": "object"
+}
