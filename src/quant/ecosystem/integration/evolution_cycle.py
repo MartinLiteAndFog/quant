@@ -354,13 +354,21 @@ def step_evolution(
             organ=state["organisms"][id_]
             organ["plant"]=asdict(output.plant)
             limit=Decimal(state["entry_capacities"][id_])
-            capacity=min(limit,output.intended_margin)
+            values=organ["trading_genome"]["genes"]
+            capacity=min(
+                limit,output.intended_margin,
+                Decimal(state["entitlements"][id_]) *
+                Decimal(str(values["max_margin_fraction"])),
+            )
             if organ["status"]=="closing" or state["risk_frozen"]:
                 capacity=ZERO
+            safe_leverage=min(
+                output.effective_leverage,Decimal(str(values["max_leverage"])),
+            )
             intents[id_]={
                 "entry_margin":str(capacity),
-                "notional":str(capacity*output.effective_leverage),
-                "leverage":str(output.effective_leverage),
+                "notional":str(capacity*safe_leverage),
+                "leverage":str(safe_leverage),
                 "water_eligible":output.water_eligible,
                 "light_area":output.effective_leaf_area,
                 "root_depth":output.plant.root_depth,
@@ -472,6 +480,20 @@ def step_evolution(
             })
         for id_,amount in claims.items():
             state["entitlements"][id_]=str(amount)
+        # Ecology ran before births. Reduce any already computed parent's
+        # day-end *proposal* so it never exceeds the now smaller entitlement.
+        for child in financed:
+            parent_id=child.mother_strategy_id
+            current_intent=state["intents"][parent_id]
+            new_cap=min(
+                Decimal(current_intent["entry_margin"]),
+                Decimal(state["entitlements"][parent_id]) *
+                Decimal(str(state["organisms"][parent_id]["trading_genome"]["genes"]["max_margin_fraction"])),
+            )
+            current_intent["entry_margin"]=str(new_cap)
+            current_intent["notional"]=str(
+                new_cap*Decimal(current_intent["leverage"])
+            )
         if sum((Decimal(x) for x in state["entitlements"].values()),ZERO)>Decimal(payload["distributable"]):
             raise EvolutionError("birth created unbacked equity")
         return state
