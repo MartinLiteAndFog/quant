@@ -157,6 +157,8 @@ def _validate_genome(genome: Mapping[str, Any]):
     for name in required - {"protective_stop"}:
         if policy_by_gene[name].get("kind") != "required_bounded_financial":
             raise ValueError(f"{name} must use a required bounded financial policy")
+        if isinstance(genes[name], bool) or not isinstance(genes[name], (int, float)):
+            raise ValueError(f"{name} must be numeric")
     for name, value in genes.items():
         if isinstance(value, bool):
             numeric_value = None
@@ -169,6 +171,14 @@ def _validate_genome(genome: Mapping[str, Any]):
         policy = policy_by_gene[name]
         if numeric_value is not None:
             minimum, maximum = policy.get("minimum"), policy.get("maximum")
+            for bound in (minimum, maximum):
+                if bound is not None and (
+                    isinstance(bound, bool)
+                    or not isinstance(bound, (int, float))
+                    or bound != bound
+                    or bound in (float("inf"), float("-inf"))
+                ):
+                    raise ValueError(f"{name} has an invalid policy bound")
             if minimum is not None and numeric_value < minimum:
                 raise ValueError(f"{name} is below its authorized minimum")
             if maximum is not None and numeric_value > maximum:

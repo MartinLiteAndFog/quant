@@ -106,6 +106,11 @@ class ShadowBridgeTests(unittest.TestCase):
             prepare_strategy_snapshot(item)
 
         item = candidate()
+        item["genome"]["genes"]["max_leverage"] = True
+        with self.assertRaisesRegex(ValueError, "must be numeric"):
+            prepare_strategy_snapshot(item)
+
+        item = candidate()
         item["genome"]["genes"]["protective_stop"] = False
         with self.assertRaisesRegex(ValueError, "missing or disabled"):
             prepare_strategy_snapshot(item)
