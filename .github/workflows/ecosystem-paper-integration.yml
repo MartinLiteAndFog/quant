@@ -1,0 +1,31 @@
+name: Ecosystem Daily End-to-End Paper Integration
+
+on:
+  pull_request:
+    paths:
+      - 'src/quant/ecosystem/integration/**'
+      - 'src/quant/ecosystem/sim_clock/**'
+      - 'src/quant/ecosystem/capital/**'
+      - 'src/quant/ecosystem/ecology/**'
+      - 'tests/ecosystem/test_research_world.py'
+      - 'scripts/ecosystem_paper_demo.py'
+      - '.github/workflows/ecosystem-paper-integration.yml'
+  workflow_dispatch:
+
+jobs:
+  research-world:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Cross-module deterministic paper tests
+        run: python -m unittest discover -s tests/ecosystem -p test_research_world.py -v
+      - name: 365-day reproducible synthetic report
+        run: python scripts/ecosystem_paper_demo.py --days 365 --equity 100 --seed 2026
