@@ -21,10 +21,12 @@ from quant.execution.bot_webhook import app as app
 from quant.execution.family_ingress import router as family_ingress_router
 from quant.execution.family_control_plane import router as family_control_router
 from quant.execution.family_bootstrap_pilot import router as family_roster_router
+from quant.execution.family_monthly_api import router as family_monthly_router
 
 app.include_router(family_ingress_router)
 app.include_router(family_control_router)
 app.include_router(family_roster_router)
+app.include_router(family_monthly_router)
 
 
 def main() -> None:
