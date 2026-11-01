@@ -266,17 +266,21 @@ def advance_day(
             "delta_nav": str(event.amount), "available_at": event.available_at.isoformat(),
         }, event_id=f"input:{previous.simulation_id}:{event.event_id}", when=event.available_at)
 
-    record("metrics", "daily-accounting", {"net_pnl": str(net_pnl), "external_cashflow": str(external)})
     reserve = max(ZERO, equity) * Decimal("0.10")
     distributable = max(ZERO, equity) - reserve
-    record("capital", "groundwater-90-10", {
-        "equity": str(equity), "reserve": str(reserve), "distributable": str(distributable),
-        "risk_frozen": equity < ZERO,
-    })
-    for phase in ("metrics", "capital", "ecology", "breeding", "lifecycle"):
+    for phase in PHASES[1:]:
+        if phase == "metrics":
+            record("metrics", "daily-accounting", {
+                "net_pnl": str(net_pnl), "external_cashflow": str(external),
+            })
+        if phase == "capital":
+            record("capital", "groundwater-90-10", {
+                "equity": str(equity), "reserve": str(reserve),
+                "distributable": str(distributable), "risk_frozen": equity < ZERO,
+            })
         if phase in rules:
-            # Market inputs intentionally have no future data here; reducers
-            # only see data known at today's UTC close.
+            # Reducers receive only data known by UTC close; each works with
+            # an isolated copied state and deterministic phase-specific RNG.
             payload = {
                 "as_of": day.isoformat(), "day_index": today,
                 "equity": str(equity), "reserve": str(reserve),
@@ -287,17 +291,12 @@ def advance_day(
             if not isinstance(value, Mapping):
                 raise ClockError(f"{phase} reducer must return a JSON mapping")
             extras = json.loads(_canonical(dict(value)))
-        # Audit order must match protocol. Phase markers are grouped after
-        # execution/metrics/capital; see phase marker ordering fix below.
-    # Build protocol-ordered day audit independent of reducers.
-    marker = {
-        "ecology": {"growth_updated": "ecology" in rules},
-        "breeding": {"breeding_updated": "breeding" in rules},
-        "lifecycle": {"lifecycle_updated": "lifecycle" in rules},
-        "snapshot": {"state_digest": sha256(_canonical(extras).encode()).hexdigest()},
-    }
-    for phase in ("ecology", "breeding", "lifecycle", "snapshot"):
-        record(phase, "phase-complete", marker[phase])
+        if phase in ("ecology", "breeding", "lifecycle"):
+            record(phase, "phase-complete", {"updated": phase in rules})
+        if phase == "snapshot":
+            record(phase, "phase-complete", {
+                "state_digest": sha256(_canonical(extras).encode()).hexdigest(),
+            })
     state = SimulationState(
         previous.simulation_id, previous.seed, day, today, equity, reserve,
         distributable,
