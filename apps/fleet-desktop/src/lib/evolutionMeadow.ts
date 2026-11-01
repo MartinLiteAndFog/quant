@@ -8,6 +8,10 @@ import {
   BEE_BREEDS, DEFAULT_GENES, breedGenomes, defaultGenome,
   growBiomass, normalizeGenome, type BeeBreed, type GeneDefinition, type Genome,
 } from "./geneLibrary";
+import {
+  breedFunctionalMorphology, breedVisualDNA, randomFunctionalMorphology, randomVisualDNA,
+  type FunctionalMorphology, type VisualDNA, type Morphotype,
+} from "./plantAppearance";
 
 export const BOUNDS = {
   sensitivity: [12, 25] as const,
@@ -26,6 +30,8 @@ export interface MeadowFlower {
   trades: number;
   score: number; // display-only risk/credibility-adjusted fitness
   genome: Genome; // complete parameter record, including hidden genes
+  visual: VisualDNA; // purely optical, seeded/inherited; never affects PnL
+  morphology: FunctionalMorphology; // demo physiology genes; ECO-06 is canonical later
   biomass: number; // persistent visual organism size (NOT account equity)
   beeBreed?: BeeBreed["id"];
   fatherId?: string;
@@ -76,22 +82,28 @@ function makeFlower(
   generation: number, sensitivity: number, ttp: number,
   trades: number, rand: () => number,
   genome: Genome, biomass: number, beeBreed?: BeeBreed["id"], fatherId?: string,
+  visual?: VisualDNA, morphology?: FunctionalMorphology,
 ): MeadowFlower {
   const { roi, drawdown } = syntheticMonth(sensitivity, ttp, rand);
   return {
     id, parentId, rootId, generation, sensitivity, ttp, roi,
     drawdown, trades, score: scoreFlower(roi, drawdown, trades),
-    genome, biomass, beeBreed, fatherId,
+    genome, visual:visual ?? randomVisualDNA(rand),
+    morphology:morphology ?? randomFunctionalMorphology(rand),
+    biomass, beeBreed, fatherId,
   };
 }
 
 export function createInitialMeadow(library: GeneDefinition[] = DEFAULT_GENES): MeadowFlower[] {
   const rand = seeded(71337);
   const plants: MeadowFlower[] = [];
-  for (const root of ROOTS) {
+  for (const [rootIndex, root] of ROOTS.entries()) {
+    // Presets are seed distributions for DEMO genetics, not trading archetypes.
+    const preset: Morphotype = (["flower","shrub","cactus"] as const)[rootIndex];
     const rootFlower = makeFlower(
       root.id, null, root.id, 0, root.x, root.y, 60, rand,
-      defaultGenome(library, root.x, root.y), 1.0,
+      defaultGenome(library, root.x, root.y), 1.0, undefined, undefined,
+      randomVisualDNA(rand, preset), randomFunctionalMorphology(rand, preset),
     );
     plants.push(rootFlower);
     // Three manually configured daughters are initial placeholders in this
@@ -107,7 +119,9 @@ export function createInitialMeadow(library: GeneDefinition[] = DEFAULT_GENES): 
       plants.push(makeFlower(
         id, root.id, root.id, 1, sensitivity, ttp,
         7 + Math.floor(rand() * 9), rand,
-        defaultGenome(library, sensitivity, ttp), 0.28,
+        defaultGenome(library, sensitivity, ttp), 0.28, undefined, undefined,
+        breedVisualDNA(rootFlower.visual, rootFlower.visual, rand),
+        breedFunctionalMorphology(rootFlower.morphology, rootFlower.morphology, rand),
       ));
     }
   }
@@ -168,6 +182,8 @@ export function mutateMeadow(
         flower.id + "-g" + generation + "s" + k, flower.id,
         flower.rootId, generation, sx, ty, 3, rand,
         genome, 0.10, beeBreed, mate.id,
+        breedVisualDNA(flower.visual, mate.visual, rand),
+        breedFunctionalMorphology(flower.morphology, mate.morphology, rand),
       ));
     }
   }

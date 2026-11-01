@@ -7,6 +7,7 @@ import {
   BEE_BREEDS, GENE_LIBRARY_KEY, addGene, loadGeneLibrary,
   geneCount, visualPlantHeight, type BeeBreed, type GeneDefinition,
 } from "../lib/geneLibrary";
+import {classifyMorphotype, visualColor} from "../lib/plantAppearance";
 
 /** Orthographic interactive 3D projection. DEMO ONLY: simulated profits. */
 const GROUPS: Array<[string, string]> = [
@@ -219,31 +220,77 @@ export function EvolutionMeadow() {
               const head = project(w.x, w.y, w.z, angle);
               const positive = f.biomass > 0.08, selectedFlower = selectedId === f.id;
               const healthy = f.roi > 0;
-              const color = ROOT_COLORS[f.rootId] || "#acc19b";
+              const color = visualColor(f.visual);
+              const morphotype = classifyMorphotype(f.morphology);
+              const cactus = morphotype === "cactus";
               const radius = clamp(3 + 4.4 * visualPlantHeight(f.biomass), 2.8, 17);
+              const branchCount = Math.min(5, Math.round(f.morphology.branching * 5));
+              const stemWidth = cactus ? 3.5 + radius * .3 : selectedFlower ? 2.6 : 1.7;
               return <g key={f.id} role="button" tabIndex={0}
                 aria-label={f.id + ": simulated return " + fmt(f.roi)}
                 onClick={() => setSelectedId(f.id)} onKeyDown={e => press(e, f.id)}
                 className="cursor-pointer">
                 <circle cx={foot.x} cy={foot.y} r={positive ? 3.3 : 4.1} fill="#a6a49a" opacity={positive ? ".3" : ".55"}/>
-                {positive && <line x1={foot.x} y1={foot.y} x2={head.x} y2={head.y}
-                  stroke={color} strokeWidth={selectedFlower ? 2.6 : 1.7}
-                  opacity={selectedFlower ? 1 : .67}/>}
+                {positive && <g>
+                  <line x1={foot.x} y1={foot.y} x2={head.x + f.visual.stemCurve * radius * .35}
+                    y2={head.y} stroke={cactus ? "#4f9b70" : "#619c68"} strokeWidth={stemWidth}
+                    strokeLinecap="round" opacity={selectedFlower ? 1 : .79}/>
+                  {cactus ? <g>
+                    <ellipse cx={head.x} cy={head.y + radius * .7} rx={radius * .54}
+                      ry={radius * 1.5} fill="#5fbb7f" stroke={color}
+                      strokeWidth={1 + f.visual.ribbing * 2}/>
+                    {Array.from({length: 3}, (_, j) => <line key={"rib-"+j}
+                      x1={head.x - radius * (.25-j*.25)} y1={head.y-radius*.2}
+                      x2={head.x - radius * (.25-j*.25)} y2={head.y + radius*1.9}
+                      stroke="#d2efb6" opacity={f.visual.ribbing*.65} strokeWidth=".8"/>)}
+                    {Array.from({length: Math.round(f.visual.spineDensity*10)}, (_, j) => {
+                      const side = j%2 ? 1:-1;
+                      const y = head.y + (j/10) * radius * 1.8;
+                      return <line key={"spine-"+j}
+                        x1={head.x+side*radius*.45} y1={y}
+                        x2={head.x+side*radius*.85} y2={y-radius*.18}
+                        stroke="#e0dc9d" strokeWidth=".8"/>;
+                    })}
+                  </g> : <g>
+                    {Array.from({length:branchCount},(_,j)=>{
+                      const t=(j+1)/(branchCount+1);
+                      const bx=foot.x+(head.x-foot.x)*t;
+                      const by=foot.y+(head.y-foot.y)*t;
+                      const side=j%2?1:-1;
+                      const reach=radius*(.8+f.morphology.leaf_count/34);
+                      return <g key={"branch-"+j}>
+                        <line x1={bx} y1={by} x2={bx+side*reach} y2={by-radius*.65}
+                          stroke="#76ab77" strokeWidth="1.2"/>
+                        <ellipse cx={bx+side*reach} cy={by-radius*.65}
+                          rx={radius*(.25+f.morphology.leaf_size*.24)}
+                          ry={radius*(.15+f.visual.leafShape*.24)}
+                          fill="#7ebb89" opacity=".76"
+                          transform={`rotate(${side*35} ${bx+side*reach} ${by-radius*.65})`}/>
+                      </g>;
+                    })}
+                  </g>}
+                </g>}
                 {positive ? <g className="meadow-bloom">
-                  {Array.from({length: 6}, (_, j) => {
-                    const theta = 2 * Math.PI * j / 6;
+                  {!cactus && Array.from({length:f.visual.petalCount}, (_, j) => {
+                    const theta = 2 * Math.PI * j / f.visual.petalCount +
+                      f.visual.bloomTwist * Math.PI / 180;
                     const px = head.x + radius * Math.cos(theta);
                     const py = head.y + radius * Math.sin(theta);
-                    return <ellipse key={j} cx={px} cy={py} rx={radius * .72} ry={radius * .59}
-                      transform={"rotate(" + (j * 60) + " " + px + " " + py + ")"}
-                      fill={healthy ? color : "#6e7969"} opacity={selectedFlower ? ".97" : healthy ? ".72" : ".45"}/>;
+                    const direction = theta * 180 / Math.PI;
+                    return <ellipse key={j} cx={px} cy={py}
+                      rx={radius * (.53 + f.visual.petalRoundness*.28)}
+                      ry={radius * (.34 + (1-f.visual.petalRoundness)*.32)}
+                      transform={`rotate(${direction} ${px} ${py})`}
+                      fill={healthy ? color : "#6e7969"}
+                      opacity={selectedFlower ? ".97" : healthy ? ".72" : ".45"}/>;
                   })}
-                  <circle cx={head.x} cy={head.y} r={radius * .58} fill="#e4ddae"/>
+                  {!cactus && <circle cx={head.x} cy={head.y} r={radius * .58} fill="#e4ddae"/>}
                   {selectedFlower && <circle cx={head.x} cy={head.y} r={radius * 2.15}
                     stroke="#f7f4d8" strokeWidth="1.2" fill="none" opacity=".83"/>}
                 </g> : <circle cx={foot.x} cy={foot.y} r={selectedFlower ? 8 : 5}
                   fill="#596361" stroke={selectedFlower ? "#d6d8c0" : "#78837e"} strokeWidth="1.5"/>}
-                <title>{f.id + " | Sensitivität " + f.sensitivity.toFixed(2) +
+                <title>{f.id + " | " + morphotype + " | Blattzahl " + f.morphology.leaf_count +
+                  " | Sensitivität " + f.sensitivity.toFixed(2) +
                   " | TTP " + f.ttp.toFixed(3) + "% | (sim.) " + fmt(f.roi)}</title>
               </g>;
             })}
