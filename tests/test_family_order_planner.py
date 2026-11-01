@@ -102,6 +102,24 @@ class OrderPlannerTests(unittest.TestCase):
             with self.subTest(val=val), self.assertRaises(PlanningError):
                 self._plan(free_margin=val)
 
+    def test_emergency_exit_does_not_depend_on_margin_or_price(self):
+        self._fill("a-buy", "a", "LONG", 2, 100)
+        plan = self._plan(
+            action="sl", side="", free_margin="NaN",
+            mark_price="NaN", leverage="NaN", bot_margin_budget="NaN",
+        )
+        self.assertEqual(plan.intent.contracts, 2)
+        self.assertEqual(plan.intent.operation, "CLOSE")
+
+    def test_flip_close_is_possible_without_fresh_market_inputs(self):
+        self._fill("a-buy", "a", "LONG", 2, 100)
+        plan = self._plan(
+            action="flip", side="sell",
+            free_margin="NaN", mark_price="NaN",
+        )
+        self.assertEqual(plan.intent.operation, "CLOSE")
+        self.assertEqual(plan.deferred_side, "SHORT")
+
     def test_broker_contract_multiplier_mismatch_is_blocked(self):
         with self.assertRaises(PlanningError):
             self._plan(contract_multiplier="1")
