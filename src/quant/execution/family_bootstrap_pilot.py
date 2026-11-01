@@ -1,20 +1,19 @@
 """Explicit, one-time 3x3 Blaupunkt pilot registration.
 
 This is an opt-in administrative action on a SHADOW-ONLY control plane.
-Registers ONE existing legacy parent and ELEVEN new profiles; returns their
-random webhook tokens once. Nothing touches TradingView or KuCoin orders.
+Registers ONE existing legacy parent and ELEVEN new profiles. All use one
+shared FAMILY_WEBHOOK_TOKEN (configured separately on Railway).
+Nothing touches TradingView or KuCoin orders.
 """
 from __future__ import annotations
 
-import hashlib
 import json
-import secrets
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Header, HTTPException
 
 from quant.execution.event_store import get_conn
-from quant.execution.family_ingress import _admin, _family_id, _schema, _token_hash
+from quant.execution.family_ingress import _admin, _family_id, _schema
 from quant.execution.family_pilot_roster import BLAUPUNKT_PILOT_ROSTER
 
 router = APIRouter(tags=["family-roster"])
@@ -29,7 +28,8 @@ def pilot_roster(x_family_admin_token: Optional[str] = Header(default=None)) -> 
         "parents": 3,
         "daughters_per_parent": 3,
         "total": 12,
-        "new_tokens_needed": 11,
+        "shared_webhook_token_required": True,
+        "shared_webhook_path": "/webhook/family",
         "strategies": [
             {
                 "strategy_id": p.strategy_id,
@@ -47,24 +47,16 @@ def pilot_roster(x_family_admin_token: Optional[str] = Header(default=None)) -> 
 def bootstrap_pilot(x_family_admin_token: Optional[str] = Header(default=None)) -> Dict[str, Any]:
     """Atomically create the Blaupunkt 3x3 roster. Call only ONCE.
 
-    Security: returns 11 random tokens only in the initial API response.
-    Afterward the server retains SHA-256 token hashes only.
-    An existing roster entry (including any earlier manual registration)
-    aborts the entire transaction instead of silently stealing/rotating
-    credentials. The legacy parent is permitted only with matching family,
-    null parent, evolution pool and a legacy source marker.
+    All IDs authenticate with ONE shared FAMILY_WEBHOOK_TOKEN. This call
+    never creates or returns secrets. Existing manually registered children
+    cause a transaction rollback; legacy root can be reused only when its
+    original metadata matches.
     """
     _admin(x_family_admin_token)
     family_id = _family_id()
     if family_id != "blaupunkt":
         raise HTTPException(status_code=422, detail="pilot registration is Blaupunkt-only")
     _schema()
-    # Generate secret material only inside the authenticated request.
-    issued_tokens = {
-        p.strategy_id: secrets.token_urlsafe(32)
-        for p in BLAUPUNKT_PILOT_ROSTER if not p.existing_legacy
-    }
-    legacy_token_hash = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
     with get_conn() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
@@ -96,11 +88,9 @@ def bootstrap_pilot(x_family_admin_token: Optional[str] = Header(default=None)) 
                     else:
                         raise HTTPException(
                             status_code=409,
-                            detail=f"{p.strategy_id} exists: no tokens were changed; "
-                                   "use token rotation or register the others individually",
+                            detail=f"{p.strategy_id} already registered; no changes made",
                         )
                 for p in BLAUPUNKT_PILOT_ROSTER:
-                    token = issued_tokens.get(p.strategy_id)
                     payload = (
                         {"source": "legacy_tv_execute", "legacy_live": True}
                         if p.existing_legacy else
@@ -109,13 +99,12 @@ def bootstrap_pilot(x_family_admin_token: Optional[str] = Header(default=None)) 
                     cur.execute(
                         """insert into family_strategy_registry
                            (family_id,strategy_id,parent_strategy_id,display_name,
-                            pool,token_sha256,config_json,execution_status)
-                           values (%s,%s,%s,%s,%s,%s,%s::jsonb,'shadow')
+                            pool,config_json,execution_status)
+                           values (%s,%s,%s,%s,%s,%s::jsonb,'shadow')
                            on conflict(strategy_id) do nothing""",
                         (
                             family_id, p.strategy_id, p.parent_strategy_id,
                             p.display_name, p.pool,
-                            _token_hash(token) if token else legacy_token_hash,
                             json.dumps(payload, separators=(",", ":")),
                         ),
                     )
@@ -128,11 +117,11 @@ def bootstrap_pilot(x_family_admin_token: Optional[str] = Header(default=None)) 
             {
                 "strategy_id": p.strategy_id,
                 "parent_strategy_id": p.parent_strategy_id,
-                "token_once": issued_tokens[p.strategy_id],
                 "webhook_path": "/webhook/family",
             }
             for p in BLAUPUNKT_PILOT_ROSTER if not p.existing_legacy
         ],
-        "important": "SAVE EACH TOKEN NOW. This API never returns it again.",
+        "shared_auth_env": "FAMILY_WEBHOOK_TOKEN",
+        "important": "Configure ONE shared webhook token on Railway, reuse it for all strategy IDs.",
         "order_sent": False,
     }
