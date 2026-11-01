@@ -6,6 +6,7 @@ on:
       - 'src/quant/ecosystem/integration/market_replay.py'
       - 'src/quant/ecosystem/market_data/**'
       - 'tests/ecosystem/test_market_replay.py'
+      - 'scripts/ecosystem_market_replay.py'
       - '.github/workflows/ecosystem-market-replay.yml'
   workflow_dispatch:
 
