@@ -1,0 +1,35 @@
+name: Blaupunkt Family Shadow Tests
+
+on:
+  pull_request:
+    paths:
+      - 'src/quant/execution/family_*.py'
+      - 'src/quant/execution/blaupunkt_family_app.py'
+      - 'tests/test_family_*.py'
+      - '.github/workflows/blaupunkt-family-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install package and API test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . httpx
+      - name: Compile family code
+        run: python -m compileall -q src/quant/execution/family_*.py src/quant/execution/blaupunkt_family_app.py
+      - name: Run dry-only family tests
+        env:
+          FAMILY_ROUTER_ENABLED: '0'
+          LIVE_TRADING_ENABLED: '0'
+          TV_EXEC_DRY_RUN: '1'
+        run: |
+          python -m unittest discover -s tests -p 'test_family_*.py' -v
