@@ -13,6 +13,7 @@ import {
 import { runControlledExperiment, type ExperimentReport } from "./experiments";
 import { createSyntheticMarketWeek, runPaperReplay as executePaperReplay, type PaperReplayReport } from "./paperReplay";
 import { generateSyntheticMomentumSignals, type StrategySignalResult, type TradingSignalGenome } from "./strategySignals";
+import { buildSyntheticReplayEvidence, type SyntheticReplayEvidence } from "./replayEvidence";
 
 type View = "meadow" | "understory";
 type GeneAxis = "root" | "leaf" | "water" | "sun";
@@ -24,6 +25,7 @@ type PaperReplayRun = Readonly<{
   execution: PaperReplayReport;
   strategy: StrategySignalResult["report"];
   genome: TradingSignalGenome;
+  evidence: SyntheticReplayEvidence;
 }>;
 
 function quantityForPlantAllocation(allocationUsdt: number): string {
@@ -97,6 +99,7 @@ function App() {
       };
       const strategy = generateSyntheticMomentumSignals(dataset, genome);
       const report = executePaperReplay({ dataset, signals: strategy.signals, allocationLimit: allocation, startingCash: allocation });
+      const evidence = buildSyntheticReplayEvidence(strategy.report, report);
       const advanced = advanceSimulationDays(sourceWorld, report.days);
       const booked = bookClosedPaperReplay(advanced, plant.id, {
         startDay: sourceWorld.day,
@@ -128,7 +131,7 @@ function App() {
         netPnlUsdt: Number(report.netPnl),
       });
       setWorld(booked);
-      setPaperReplay({ execution: report, strategy: strategy.report, genome });
+      setPaperReplay({ execution: report, strategy: strategy.report, genome, evidence });
       setSelectedId(plant.id);
     } catch (error) {
       setPaperReplayError(error instanceof Error ? error.message : "The synthetic replay could not be reconciled.");
@@ -410,7 +413,7 @@ function PaperReplayPanel({ plants, worldDay, navUsdt, run, busy, error, onRun }
     </div>
     {error && <p className="paper-replay-error" role="alert">Replay not booked: {error}</p>}
     {report && <>
-      {run && <div className="paper-replay-accounting"><span>Strategy <b>Momentum v1 · {run.strategy.status === "trade" ? "targets" : "no_trade"}</b></span><span>Opportunity observations <b>{run.strategy.opportunities} / {run.strategy.observations}</b></span><span>Generated targets <b>{run.strategy.generatedSignals}</b></span><span>Target size <b>{run.genome.targetQuantity} units · 1× cap</b></span></div>}
+      {run && <div className="paper-replay-accounting"><span>Strategy <b>Momentum v1 · {run.evidence.strategyStatus}</b></span><span>Executable opportunities / observations <b>{run.evidence.executableOpportunityObservations} / {run.evidence.observations}</b></span><span>Targets / fills / rejected <b>{run.evidence.generatedTargets} / {run.evidence.fills} / {run.evidence.rejectedSignals}</b></span><span>Target size <b>{run.genome.targetQuantity} units · 1× cap</b></span></div>}
       <div className="paper-replay-metrics">
         <LedgerMetric label="Net replay PnL" value={report.fills.length ? `${Number(report.netPnl) >= 0 ? "+" : ""}${money(Number(report.netPnl))}` : "—"} detail={report.fills.length ? "fees and funding included" : "no executed fill"} />
         <LedgerMetric label="Fills / rejected" value={`${report.fills.length} / ${report.rejectedSignals.length}`} detail="strict next-open timing" />
@@ -418,8 +421,9 @@ function PaperReplayPanel({ plants, worldDay, navUsdt, run, busy, error, onRun }
         <LedgerMetric label="Garden NAV now" value={money(navUsdt)} detail="same portfolio ledger" />
       </div>
       <div className="paper-replay-accounting">{report.fills.length > 0 && <><span>Price PnL <b>{money(Number(report.realizedPricePnl))}</b></span><span>Fees <b>−{money(Number(report.fees))}</b></span><span>Funding <b>{money(Number(report.funding))}</b></span></>}<span>Dataset <b>{report.dataset.fingerprint.slice(0, 12)}…</b></span></div>
-      {run?.strategy.status === "no_trade" && <p className="paper-replay-error">No synthetic move crossed the strategy threshold. No trade occurred; no trading loss was invented.</p>}
-      <p className="experiment-disclaimer">{report.claim} The signal recipe is versioned as synthetic Momentum v1 and is not alpha. Benchmark: cash / no trade. Verdict: <b>not_comparable</b>. The garden clock advanced {report.days} days and the closed result was booked into the single 90/10 ledger. Habitat fit and vigor were not changed by this result.</p>
+      {run && <div className="paper-replay-accounting"><span>Evidence <b>{run.evidence.claim}</b></span><span>Inference <b>{run.evidence.statisticalStatus} · independent N unavailable</b></span><span>Max daily drawdown <b>{run.evidence.maxDailyDrawdownUsdt === null ? "unavailable" : `${money(run.evidence.maxDailyDrawdownUsdt)} · ${((run.evidence.maxDailyDrawdownPct ?? 0) * 100).toFixed(2)}%`}</b></span><span>Cost / cash reconciliation <b>{Math.abs(run.evidence.netPnlResidualUsdt) < 0.0001 && Math.abs(run.evidence.cashResidualUsdt) < 0.0001 ? "passed" : "failed"}</b></span></div>}
+      {run?.strategy.status === "no_trade" && <p className="paper-replay-error">No eligible pre-close observation crossed the strategy threshold. No trade occurred; no trading loss was invented.</p>}
+      <p className="experiment-disclaimer">{report.claim} The signal recipe is versioned as synthetic Momentum v1 and is not alpha. Executable opportunities depend on this genome's synthetic entry threshold; they are not independent market opportunities. The {run?.evidence.dailyMarkCount ?? 0} daily marks provide descriptive drawdown only: no Sharpe, CVaR, confidence, OOS, fitness, or independent-sample claim is available. Benchmark: cash / no trade. Verdict: <b>not_comparable</b>. The garden clock advanced {report.days} days and the closed result was booked into the single 90/10 ledger. Habitat fit and vigor were not changed by this result.</p>
     </>}
   </section>;
 }

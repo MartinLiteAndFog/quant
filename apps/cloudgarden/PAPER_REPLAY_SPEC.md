@@ -31,10 +31,14 @@ evidence.
 - A market order fills at the first observed bar open strictly after both
   availability and receipt. The delay is bounded from availability; missing or
   stale bars and zero-volume bars reject rather than fabricate a fill.
-- Signal reports count observations, qualifying opportunities, and emitted
-  targets separately. A week with no qualifying move is `no_trade`; it has no
-  invented trading loss. Strategy output remains `not_comparable` to market
-  performance and does not alter habitat fit, vigor, or plant evidence.
+- Signal reports count observations, pre-close executable opportunity
+  observations, and emitted targets separately. The final eligible observation
+  is reserved to close positions and cannot open a new one. These opportunities
+  are not independent market events; a genome-specific threshold is not a fair
+  denominator for comparing strategies. A week with no eligible move is
+  `no_trade`; it has no invented trading loss. Strategy output remains
+  `not_comparable` to market performance and does not alter habitat fit, vigor,
+  or plant evidence.
 - Spread and slippage are adverse adjustments embedded in execution price.
   Fees are charged once on filled notional. Slippage cost is diagnostic and is
   never debited a second time.
@@ -60,6 +64,12 @@ evidence.
   snapshot and the resulting NAV is carried forward. World-mutating controls
   are locked during replay so a stale snapshot cannot overwrite a step, policy
   change, or reset.
+- A versioned synthetic evidence report reconciles price PnL, fees, funding,
+  net PnL, ending cash, and daily marked drawdown, then lists observations,
+  executable opportunity observations, targets, fills, and rejected signals. Seven synthetic
+  days always remain `insufficient_sample`; independent opportunity count,
+  confidence, fitness, Sharpe, CVaR, and OOS claims are unavailable. Drawdown
+  is descriptive for this fixture only.
 
 ## Verification
 
