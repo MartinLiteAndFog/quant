@@ -8,9 +8,11 @@ ROOT = Path(__file__).resolve().parents[1]
 
 def normalized_lines(filename: str) -> list[str]:
     lines = (ROOT / "tradingview" / filename).read_text(encoding="utf-8").splitlines()
-    # The family fork has two comment lines documenting the different webhook.
+    # Keep Pine //@version=6 on line 1; remove only the two fork comments.
     if filename == "sol_imba_family.pine":
-        lines = lines[2:]
+        if not lines or lines[0] != "//@version=6":
+            raise AssertionError("Pine version directive must remain first")
+        lines = [lines[0]] + lines[3:]
     result = []
     for line in lines:
         if line.startswith("strategy("):
