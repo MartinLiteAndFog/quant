@@ -1,0 +1,25 @@
+name: Ecosystem Streaming GZIP OHLCV Research Index
+on:
+  pull_request:
+    paths:
+      - 'src/quant/ecosystem/market_data/streaming.py'
+      - 'scripts/ecosystem_stream_ohlcv.py'
+      - 'tests/ecosystem/test_streaming_ohlcv.py'
+      - '.github/workflows/ecosystem-streaming-ohlcv.yml'
+  workflow_dispatch:
+
+jobs:
+  source-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Streaming provenance, gaps, gzip and bounded-memory index
+        run: python -m unittest discover -s tests/ecosystem -p test_streaming_ohlcv.py -v
