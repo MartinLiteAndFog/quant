@@ -424,3 +424,38 @@ Zusätzliche Reports: `sharpe`, `max_drawdown`, `current_drawdown`, `underwater_
 - ECO-07 läuft **noch nicht** automatisch in ECO-16; nach Code-Review und Merge ist der separate, versionierte `metrics -> capital weight / predation eligibility`-Adapter anzuschließen. Kein direkter Eingriff in Produktions-Positionen.
 
 **Nächste sinnvolle Arbeitspakete:** ECO-08 (Bienen/Vererbung) und ECO-09 (Fresser/Rinde) können mit diesen klar getrennten Metric-Dimensionen arbeiten. Parallel benötigt ECO-16 die Wire-Adapter von ECO-01 und reale, nicht synthetische SOL-Daten. Go-Live nur nach eigenständigen Venue-/Hedge-Risk-Gates und expliziter Freigabe.
+
+## 22. ECO-08 Bienen, ECO-09 Fresser – Genetik und Selektion als sichere Paper-Module (2026-11-01)
+
+**Beide Pakete wurden separat auf eigenständigen Branches implementiert und durch GitHub Actions erfolgreich getestet.** Die PRs sind **Drafts**, kein Merge oder Live-Deployment.
+
+### ECO-08 / [Draft PR #50](https://github.com/MartinLiteAndFog/quant/pull/50) – Genetische Bienen
+
+Implementierung: `src/quant/ecosystem/breeding/bees.py`, Tests `tests/ecosystem/test_bees.py`, Dokumentation `docs/architecture/ecosystem-bees.md`, Workflow `ecosystem-bees.yml` (CI erfolgreich).
+
+- Die **fünf vorhandenen Bienenarten** aus Fleet erhalten äquivalente Python-Recherche-Mechanik: `mixer` (numerische Mittelwerte), `mosaic` (Gene pro Elternteil), `explorer` (höhere Mutation), `collector` (optionale Gene aufnehmen), `pruner` (optionales Pruning 10%). Bienen-Suchparameter `search_radius`, `mutation_strength`, `optional_gene_drop_rate`, `optional_gene_add_rate` und `hive_share_probability` können begrenzt mutieren.
+- **Echte 2D-Aussaat statt Illustration:** Eine Kachel hat genau zwei verpflichtende numerische Achs-Gene. Der Mutter-/Vater-Crossover erzeugt neue echte Genwerte; `normalized_x/y` des Kindes werden **aus genau diesen Genwerten** berechnet. Eingehende Elternpositionen, die nicht mit ihren Achs-Genwerten übereinstimmen, werden verworfen. Fremdartige Genmodule dürfen sich nicht ungeprüft zu einer vermeintlich handelbaren Strategie kreuzen.
+- **Sicherheit:** Unveränderliches `protective_stop=True` und verpflichtende, kontrolliert mutierbare `max_leverage`, `max_margin_fraction`, `reproduction_budget` sowie die zwei Achs-Gene können nicht wegfallen. Nur optionale Gene können hinzugefügt (nur aus validiertem Katalog) oder mit 5–10% Rate abgeworfen werden. Schaltgene werden typisiert geprüft; numerische Werte an Bounds/Schrittweiten gebunden. Kein beliebiger Python-/Pine-Code als Strategiegen.
+- **Drei Evolutionsexperimente:** `local` liefert einen Kind-Vorschlag in der Home-Kachel (nur Eltern in Suchradius), `central` einen **unfinanzierten ResearchCandidate** aus einem Hive, `hybrid` beide (Hive-Anteil kontrollierbar). Alle Seed-IDs, Genome-IDs und Eltern/Bienen-Lineages sind stabil nach Seed/Datum/Quelle.
+- **ECO-05-kompatible Grundregel für Kapital:** Alle Vorschläge sind zunächst **unfinanziert**, ohne Orders. Die optionale `fund_local_seeds`-Funktion verschiebt nach expliziter Zulassung exakte Decimal-Entitlement-Beträge vom Mutterbudget aufs lokale Kind, bis zur genetischen Reproduktionsgrenze und ohne gebundene Margin abzuziehen. Die Summe der Entitlements bleibt exakt erhalten. Hive-Forschung bekommt **kein** Kapital. Cross-Account-Sicherheit und eventlog-basierte Idempotenz bedürfen des ECO-05/ECO-03-Integrationsadapters; daraus ist **kein** Live-Recht ableitbar.
+- **Honig:** `bee_honey` bewertet eine Biene ausschließlich anhand ausdrücklich als unabhängig Out-of-sample-verifiziert markierter Nachkommen; es erzeugt weder neues Geld noch Profitbehauptungen auf Trainingsdaten. Eine echte ECO-12-Mehrfachtestkorrektur bleibt erforderlich.
+
+### ECO-09 / [Draft PR #49](https://github.com/MartinLiteAndFog/quant/pull/49) – evidenzabhängige Rinde, Fresser und Lebenszyklus
+
+Implementierung: `src/quant/ecosystem/lifecycle/predation.py`, Tests `tests/ecosystem/test_predation.py`, Dokumentation `docs/architecture/ecosystem-predation.md`, Workflow `ecosystem-predation.yml` (CI erfolgreich).
+
+- **Drei Jägertypen:** `weakest`, `weighted_random`, `age`; alle nur unter konfigurierbarer **70%-Vitalitätsschwelle**, 70–80% Schonzone und >80% Schutz. Tages-/Simulationsseed macht Zufallsauswahl reproduzierbar. Kein spontaner Fraß einer exzellenten Pflanze.
+- **Rinde ohne Unsterblichkeit:** Verringerung der Attackenwahrscheinlichkeit proportional zu `bark_strength * bark_evidence * credibility`, mit konfigurierbarer Schutzobergrenze. Ein genetisch stark gepanzerter, aber nie belegter Bot kann sich nicht durch bloße Rinde dauerhaft vor Selektion drücken. Der Wert `bark_evidence` kommt später aus ECO-07, ist **nicht** zusätzlich erzeugter Profit.
+- **Zeit statt Scheinsicherheit:** Jungpflanzen erhalten zuerst geschützte Tage und eine begrenzte Evidenz-Schonfrist. Ein Kaktus kann in Dormanz über Hunderte Tage geschützt bleiben, wenn **wirklich keine Marktgelegenheiten** auftraten und keine laufenden Mark-to-Market-Verluste entstehen. Chance verschwendet / weiter laufender Verlust / extrem lange Dormanz beendet diese spezifische Schonung. ECO-07 misst die Opportunity-Lage kausal und unabhängig von den Ausreden des Bots.
+- **Fressen ist zweistufig:** Jagd erzeugt lediglich `closing_requested` mit `reusable_entitlement=0`. Keine echte Order, keine automatische Position-Glättung und kein verfügbares Geld während offener Trades. Das Pflanzenarchiv `ArchiveRecord` entsteht erst nach extern bestätigten `positions_flat`, `orders_cancelled`, `fills_reconciled`, `free_margin_confirmed` und nachweislich `used_margin=reserved_margin=0`. Dann wird der **vorherige Budgetanspruch** als mögliches neues Allokatorinput ausgewiesen; Equity steigt dadurch **nicht**. Die Pflanze verschwindet aus der Oberwelt, Genomversion und Handelsdaten bleiben nur als Archivverweis in der Unterwelt (keine sichtbaren individuellen Pilze).
+- Alle drei Jägertypen und der bestätigte Fraß-/Archivpfad sind durch deterministische Unit-Tests abgedeckt. Die Module ändern weder echten Orderwriter noch Railway/KuCoin.
+
+### Kritischer noch fehlender Verbindungsbaustein: [ECO-17 / Issue #51](https://github.com/MartinLiteAndFog/quant/issues/51)
+
+Das Gesamtsystem läuft **noch nicht mit eigener geborener/gefressener Population**. #51 enthält den autonom verwendbaren Prompt, um ECO-16 (tägliche Paperwelt), ECO-07 (Netto-Returns/Vitalität/Evidenz), ECO-08 (Bienen/Kindfunding), ECO-09 (Fresser/Closing/Archiv) und ECO-01-Contract-/Tile-Adapter phasenrichtig und deterministisch zu verbinden:
+
+`Paper-Fills / Netto-TWR → Fitness/Vitalität/Evidenz → 90/10-Capital → Root-/Leaf-Ökologie → Bienen-Gene/Seeds → Fresser/Archiv → Snapshot/Replay`.
+
+**Abnahme:** mindestens zwei synthetische Generationen, eindeutig finanziert statt doppelt gebucht, sichere Archivreconciliation, Kaktus übersteht typische Durststrecke, alter Champion kann schrumpfen/gefressen werden, gleiche Inputs/Seeds erzeugen byte-identische Ergebnisse, Forschungs-Hive schafft niemals Geld. Erst nach diesem Integrationsmeilenstein ist echte selbstständige Evolution überhaupt als funktionierend zu bezeichnen.
+
+**Alle PRs #37–#50 bleiben gesonderte, noch nicht gemergte Forschungsänderungen**, bis Code-Review, gemeinsame Wire-Contracts und bewusste Integration erfolgt sind. Die Nutzerfreigabe für diese Paperforschung ist keine Freigabe für reale KuCoin-Orders, Auto-Transfers, TradingView-Autosignale, Venue-Hedge-Switch oder Live-Deployment.
