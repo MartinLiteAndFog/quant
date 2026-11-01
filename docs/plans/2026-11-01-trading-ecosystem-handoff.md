@@ -495,3 +495,45 @@ Beim Test mit mehr als 23 Kapitalnehmern wurde ein **Decimal-Rundungsüberhang**
 2. **Als Nächstes echte kausale SOL-Historie anschließen:** [ECO-02 #37](https://github.com/MartinLiteAndFog/quant/pull/37), danach Gebühren/Slippage/Funding/echte Fills und sauber cashflow-adjustiertes Netto-TWR an ECO-07 übergeben. Strategie-Signal-/Preisdaten ausschließlich zum tatsächlich bekannten Zeitpunkt; OOS und Walk-forward abtrennen. Keine Data-Mining-Bestätigung anhand der synthetischen Demo beanspruchen.
 3. **Read-only UI-/Tile-/VisualDNA-Adapter** über ECO-01-Contracts (#23), ECO-14-Tiles [#41](https://github.com/MartinLiteAndFog/quant/pull/41) und ECO-15 [#45](https://github.com/MartinLiteAndFog/quant/pull/45) erst nach freigegebenem Schema bauen. Es gibt noch keine echte Multi-Asset-Welt, keine unabhängigen FX-/Öl-Daten und keine Unreal-5-App.
 4. Live-3×3-Blaupunkt, Kraken/KuCoin, Railway, TradingView, SL-Hedge-Logik, Kontoüberträge und Produktiv-Executor bleiben **unangetastet**. Ein Simulations-`closing_requested` darf **nie** als reale Schließungsanweisung interpretiert werden.
+
+## 24. ECO-18: OHLCV- und Handels-Signal-Replay an die Evolutionssimulation angebunden (2026-11-01)
+
+**Umgesetzt in [Draft PR #53](https://github.com/MartinLiteAndFog/quant/pull/53)**, Entwicklungsbranch `codex/ecosystem-market-replay-bridge`, als **Stack auf ECO-17 / PR #52**; ECO-02-Module aus [Draft PR #37](https://github.com/MartinLiteAndFog/quant/pull/37) wurden vorübergehend unverändert auf diesen Branch kopiert. Sowohl der neue Workflow `Ecosystem Causal OHLCV Paper Replay` als auch die vorherige `Ecosystem Daily End-to-End Paper Integration` sind **grün**. **PR #53 ist nicht gemergt oder deployed. Es wurden keinerlei echten Börsenorders oder Kontoänderungen ausgelöst.**
+
+### Neu implementierte Dateien / API
+
+- `src/quant/ecosystem/integration/market_replay.py`: `TargetSignal` mit eindeutiger ID, Strategie-ID, numerischem **signierten Zielbestand**, `signal_at`, `available_at`, `received_at`; optional `FundingTick` mit eigenem Settlement-Zeitpunkt, Known-at und echtem externen Funding-Satz; `ReplayConfig` für Kosten-/Daten-/Mengenlimits.
+- `replay_market(dataset, signals, funding=(), config=())`: Rechnet auf einer normalisierten und mit Quellen-Fingerprint versehenen ECO-02-OHLCV-Reihe tatsächlich kausale **Paper-Fills und Marktwert-/Pnl-Deltas** aus; erfindet keine Strategie-Kaufsignale. Ergebnis `ReplayOutput` enthält tägliche `IntradayEvent`-Listen für die ECO-03-Clock, genaue `PaperFill`-Belege, Nettoergebnisse, Tagesendbestände und Anzahl **abgeschlossener logischer** (nicht bloß einzelner Teil-)Trades, inkl. Original-Provenienz.
+- `apply_replay_to_evolution(initial_evolution_state, replay, weather_by_day, opportunities_by_day, free_margin_by_day, config)`: Neue read-only Brücke von tatsächlich vorher festgelegten Signalen/Preis-Ausführungen zu ECO-17. **Marktwetter, ex-ante-Handelsgelegenheiten und verfügbare Margin müssen explizit kausal vorliegen**. Die Bridge darf sie weder aus vergangenen Gewinnern noch aus Bienen-DNA erfinden. Bei fehlenden Angaben wird abgebrochen.
+- `scripts/ecosystem_market_replay.py`: Offline-CLI zum Lesen **eigener** `--bars OHLCV.csv`, `--signals targets.csv`, `--provenance source.json` und optional `--funding settlements.csv`. Ausgabe ausschließlich in ein lokales gewähltes Verzeichnis: `manifest.json`, `paper_events.jsonl`, `paper_fills.jsonl`, `daily_positions.jsonl`. Die Dateien tragen Dataset-/Signal-Fingerprint, `source_data_synthetic`, `verified_oos=false`, `capital_risk_cleared=false`, `live_orders_sent=0`.
+- `tests/ecosystem/test_market_replay.py`, `docs/architecture/ecosystem-market-replay.md` und `.github/workflows/ecosystem-market-replay.yml`, inkl. tatsächlichem CLI-CSV-Test mit synthetischem Mini-Input.
+
+### Deterministische, konservative Marktmechanik
+
+1. **Kausalität:** Signale erst handeln, wenn sie entstanden **und** nachweisbar verfügbar/empfangen sind; erster möglicher Fill ist das **erste Kerzen-Open streng nach der Empfangs-/Verfügbarkeitszeit**. Nicht auf der noch nicht abgeschlossenen Signal-/Renko-Bar füllen. Fills nach Timeout, doppelten IDs, widersprüchlichen Same-Open-Zielwechseln oder außerhalb vorhandener Kursdaten werden verworfen.
+2. **Keine doppelte PnL:** Signiertes Delta vom alten zum neuen Zielbestand, Preis des ersten zulässigen Opens ± Halbspead plus adverser Slippage, Gebühren separat. `fill-pnl` ist `alter Bestand × Kontraktmultiplikator × (fair Open − vorheriger Referenzpreis) − bestandsändernde Menge × Multiplikator × (Fillpreis − fair Open)`; die bereits im Fill eingepreiste Slippage **nicht noch einmal abziehen**. Tägliches unrealized/realized MTM wird inkrementell fortgeschrieben. Es wird niemals sowohl der kumulierte Gesamt-Drawdown als auch der realisierte Anteil erneut gutgeschrieben.
+3. **Tagesend-Mark:** Nur der letzte tatsächlich **bereits geschlossene** UTC-Kerzen-Close darf verwendet werden; Beispiel 23:58-Open → 23:59-Close. Die 23:59-Kerze schließt am **nächsten Tag**. Wenn Marktwertinformation und nächster Open-Fill zeitgleich bekannt werden, wird **zuerst die alte Kerze bewertet und erst dann die neu eröffnete Position**. Ein Test beweist: Eine um 23:59 eröffnete Position erhält niemals den vorangegangenen +10-Candle-Gewinn.
+4. **Funding / Short:** Eigenständige, eindeutig datierte Funding-Zahlungen nur für ausgewiesene `linear_futures` und mit tatsächlich gelieferten Sätzen/Mark-Preisen; positive Funding-Rate belastet Long und begünstigt Short. Unbekanntes oder erst an einem **späteren Kalendertag bekanntes** Settlement wird bis zu einem eigenen Deferred-Event-Adapter abgelehnt. Spot-Shorts ohne spezifizierte Margin-/Borrow-Regeln ebenfalls abgelehnt.
+5. **Datenintegrität:** Keine OHLCV-Interpolation. Eine Lücke, während eine Position offen ist, blockiert den gesamten Replay; vollständige 24h-UTC-Tage sind Default. `--allow-partial-days` ist **nur** zur expliziten Fixture-/Pilot-Ausführung vorgesehen, nicht zur Erfindung vollwertiger Handelstage. Maximaler Zielbestand muss konfiguriert werden. Volumen-/Market-Impact-/Limit-/SL-/Liquidation-Realismus bleibt ausstehend; der Replay ist **noch kein** vollständig venue-konformer Backtest.
+6. **Kapitallimits strikt getrennt:** Externe Zielbestände sind noch **nicht durch ECO-17-Intents vor dem Füllen risikocleared**. Der Adapter kann zwar den aus bereits festgelegten Signalen ermittelten Portfolio-Netto-Cashflow an ECO-17 reichen, aber die visuelle Pflanze steuert die historischen Fills noch nicht als vollwertiger live-fähiger Allocator. Eigenständiger `capital_risk_cleared=false`-Marker im CLI-Metadatensatz kennzeichnet diese Grenze.
+
+### Lokal reproduzierbarer Dateiworkflow
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests/ecosystem -p test_market_replay.py -v
+PYTHONPATH=src python scripts/ecosystem_market_replay.py \
+  --bars /data/SOLUSDT_1m.csv \
+  --signals /data/target_signals.csv \
+  --provenance /data/solusdt_provenance.json \
+  --output /data/paper_ohlcv_replay
+```
+
+CSV-Signalschema: `signal_id,strategy_id,target_quantity,signal_at,available_at,received_at`. Markt-CSV: `timestamp,open,high,low,close,volume`. Provenienz enthält **Quelle, Lizenz, Symbol, Spot-vs-Futures, Kontraktmultiplikator, UTC-Open-Zeitbasis und Synthetic-Flag**. Der CLI-Aufruf ist nur ein Beispiel für später vom Anwender **tatsächlich gelieferte Dateien** und bedeutet nicht, dass `/data/SOLUSDT_1m.csv` in diesem Projekt bereits existiert.
+
+### Noch nicht erledigt / direkt nächster Agentenauftrag
+
+**[ECO-19 / Issue #54](https://github.com/MartinLiteAndFog/quant/issues/54)** wurde als eigenständiges, detailliert abnahmefähiges Paket erstellt. Es verlangt **tatsächlich verifizierbare historische SOL-1m-Daten** mit Quelle/Lizenz/Hash (idealerweise fünf Jahre, ca. 2,6 Mio. Bars), streaming-fähigen GZIP-Import, echte historische TradingView-/Pine-Signaläquivalenz der Strategie-Genome (insb. Renko 0,1 / Countertrend/TP2/IMBA), tatsächliche Gebühren/Funding/Slippage, unabhängig optimierte **Out-of-sample-/Walk-forward-Validierung** statt Millionen-Genome-In-Sample-Selektion und eindeutige Asset-/Venue-Kontrakte. Fehlen Daten oder Signalmodule, muss der Agent dies feststellen, statt Profit zu erfinden.
+
+**Akute Datenlage:** In ECO-02 [PR #37] wurden bisher nur synthetische OHLCV-Fixtures nachgewiesen. Beim aktuellen Dateibibliothek-Suchlauf zeigten sich frühere SOL-Trading-Reports und Trades-CSV, jedoch **kein eindeutig identifizierter, zugänglicher und importierter kompletter 5-Jahres-SOL-1m-Originaldatensatz**. Es wurde deshalb **kein tatsächlicher Backtest mit echter SOL-Historie behauptet**.
+
+**Abhängigkeiten vor einer Zusammenführung:** PR #53 ist auf #52 gestapelt, der auf #47 gestapelt ist; die aus #37 kopierten Marktmodule müssen nach deren Review sauber dedupliziert werden. Alte live Trade-/Signal-Module, Railway, Kraken/KuCoin, TradingView-Webhooks und deren Schutzstopps wurden **nicht** verändert.
