@@ -2,6 +2,14 @@
  * Pure SIMULATION: a gene is a schema/parameter, NOT executable Pine code.
  * Required genes (the two meadow axes) cannot be deleted.
  */
+export const GENE_SCHEMA_VERSION = 2;
+export const DEFAULT_COMPLEXITY_PENALTY_WEIGHT = 0;
+export interface GenePolicy {
+  gene_id: string;
+  kind: "immutable_safety_policy" | "required_bounded_financial" | "optional_strategy_gene";
+  minimum: number | null;
+  maximum: number | null;
+}
 export type GeneKind = "number" | "switch";
 export type GeneValue = number | boolean;
 export type Genome = Record<string, GeneValue>;
@@ -15,6 +23,8 @@ export interface GeneDefinition {
   step?: number;
   defaultValue: GeneValue;
   required: boolean;
+  schemaVersion?: 2;
+  policy?: GenePolicy;
 }
 export interface BeeBreed {
   id: "mixer" | "mosaic" | "explorer" | "collector" | "pruner";
@@ -29,14 +39,30 @@ export const BEE_BREEDS: BeeBreed[] = [
   { id: "pruner", label: "Gärtnerin", description: "Kreuzt erfolgreich, entfernt aber 10 % optionaler Gene und hält Genome schlank." },
 ];
 export const DEFAULT_GENES: GeneDefinition[] = [
+  { id:"protective_stop", label:"Schutz-Stop verpflichtend", group:"Sicherheit", kind:"switch", defaultValue:true, required:true, schemaVersion:2, policy:{gene_id:"protective_stop",kind:"immutable_safety_policy",minimum:null,maximum:null} },
+  { id:"max_leverage", label:"Maximaler Hebel", group:"Finanzen", kind:"number", min:1,max:3,step:0.1,defaultValue:1,required:true,schemaVersion:2,policy:{gene_id:"max_leverage",kind:"required_bounded_financial",minimum:1,maximum:3} },
+  { id:"max_margin_fraction", label:"Maximaler Marginanteil", group:"Finanzen", kind:"number", min:0.01,max:0.9,step:0.01,defaultValue:0.5,required:true,schemaVersion:2,policy:{gene_id:"max_margin_fraction",kind:"required_bounded_financial",minimum:0.01,maximum:0.9} },
+  { id:"reproduction_budget", label:"Reproduktionsbudget", group:"Finanzen", kind:"number", min:0.08,max:0.15,step:0.01,defaultValue:0.1,required:true,schemaVersion:2,policy:{gene_id:"reproduction_budget",kind:"required_bounded_financial",minimum:0.08,maximum:0.15} },
   { id:"sensitivity", label:"IMBA Sensitivität", group:"Signal", kind:"number", min:12, max:25, step:0.1, defaultValue:17.2, required:true },
   { id:"ttp", label:"TTP Abstand (%)", group:"Exit", kind:"number", min:0.25, max:1.65, step:0.05, defaultValue:0.65, required:true },
-  { id:"stop_loss_pct", label:"Stop Loss (%)", group:"Risiko", kind:"number", min:0.5, max:5, step:0.1, defaultValue:1.8, required:false },
+  { id:"stop_loss_pct", label:"Optionales Stop-Tuning (%)", group:"Risiko", kind:"number", min:0.5, max:5, step:0.1, defaultValue:1.8, required:false },
   { id:"rsi_length", label:"RSI Periode", group:"Signal", kind:"number", min:5, max:50, step:1, defaultValue:14, required:false },
   { id:"rsi_entry", label:"RSI Einstiegsschwelle", group:"Signal", kind:"number", min:10, max:50, step:1, defaultValue:30, required:false },
   { id:"adx_gate", label:"ADX Gate", group:"Regime", kind:"switch", defaultValue:false, required:false },
   { id:"adx_length", label:"ADX Periode", group:"Regime", kind:"number", min:5, max:40, step:1, defaultValue:14, required:false },
 ];
+/** Legacy required axes remain required for the existing meadow UI. */
+export function policyFor(gene: GeneDefinition): GenePolicy {
+  return gene.policy ?? {gene_id:gene.id, kind:gene.required ? "required_bounded_financial" : "optional_strategy_gene", minimum:gene.min ?? null, maximum:gene.max ?? null};
+}
+export function migrateLibrary(input: unknown): GeneDefinition[] {
+  if (!Array.isArray(input)) throw new Error("Ungültige Bibliothek");
+  const migrated = input.map(g => ({...g}));
+  for (const gene of DEFAULT_GENES.filter(g => g.policy)) {
+    if (!migrated.some(g => g.id === gene.id)) migrated.push({...gene});
+  }
+  return validateLibrary(migrated);
+}
 const ID_PATTERN = /^[a-z][a-z0-9_]{1,39}$/;
 export const GENE_LIBRARY_KEY = "fleet-evolution-gene-library-v1";
 export function validateLibrary(input: unknown): GeneDefinition[] {
@@ -57,6 +83,13 @@ export function validateLibrary(input: unknown): GeneDefinition[] {
           (g.defaultValue as number) < g.min! || (g.defaultValue as number) > g.max!)
         throw new Error("Ungültiger Wertebereich für " + g.id);
     } else if (typeof g.defaultValue !== "boolean") throw new Error("Schaltgen muss Boolean sein: " + g.id);
+    if (g.schemaVersion !== undefined && g.schemaVersion !== GENE_SCHEMA_VERSION) throw new Error("Unbekannte Genversion");
+    const policy = policyFor(g);
+    if (policy.gene_id !== g.id || !["immutable_safety_policy", "required_bounded_financial", "optional_strategy_gene"].includes(policy.kind) ||
+        (policy.kind !== "optional_strategy_gene" && !g.required) ||
+        (g.kind === "number" && (policy.minimum !== g.min || policy.maximum !== g.max)) ||
+        (g.kind === "switch" && (policy.minimum !== null || policy.maximum !== null)))
+      throw new Error("Ungültige Genpolicy: " + g.id);
     seen.add(g.id); output.push({...g});
   }
   for (const def of DEFAULT_GENES.filter(g => g.required)) {
@@ -70,23 +103,31 @@ export function loadGeneLibrary(): GeneDefinition[] {
   try {
     const text = localStorage.getItem(GENE_LIBRARY_KEY);
     if (!text) return DEFAULT_GENES.map(g => ({...g}));
-    return validateLibrary(JSON.parse(text));
+    return migrateLibrary(JSON.parse(text));
   } catch {
     return DEFAULT_GENES.map(g => ({...g}));
   }
 }
 export function normalizeGene(g: GeneDefinition, value: GeneValue): GeneValue {
-  if (g.kind === "switch") return Boolean(value);
-  const x = typeof value === "number" && Number.isFinite(value) ? value : Number(g.defaultValue);
+  if (policyFor(g).kind === "immutable_safety_policy" && value !== g.defaultValue)
+    throw new Error("Sicherheitsgen darf nicht deaktiviert werden: " + g.id);
+  if (g.kind === "switch") {
+    if (typeof value !== "boolean") throw new Error("Ungültiger Genwert: " + g.id);
+    return value;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("Ungültiger Genwert: " + g.id);
+  const x = value;
   const steps = Math.round((x - g.min!) / g.step!);
   const quantized = g.min! + steps * g.step!;
   return Number(Math.min(g.max!, Math.max(g.min!, quantized)).toFixed(8));
 }
 export function normalizeGenome(genome: Genome, library: GeneDefinition[]): Genome {
+  validateLibrary(library);
+  for (const key of Object.keys(genome)) if (!library.some(g => g.id === key)) throw new Error("Unbekanntes Gen: " + key);
   const out: Genome = {};
   for (const g of library) {
     if (g.required || Object.prototype.hasOwnProperty.call(genome, g.id))
-      out[g.id] = normalizeGene(g, genome[g.id] ?? g.defaultValue);
+      out[g.id] = normalizeGene(g, Object.hasOwn(genome, g.id) ? genome[g.id] : g.defaultValue);
   }
   return out;
 }
@@ -105,10 +146,14 @@ export function breedGenomes(
   leftRaw: Genome, rightRaw: Genome, library: GeneDefinition[],
   breed: BeeBreed["id"], rng: () => number,
 ): Genome {
+  if (!BEE_BREEDS.some(b => b.id === breed)) throw new Error("Unbekannte Bienenart");
+  const source = rng;
+  rng = () => { const value = source(); if (!Number.isFinite(value) || value < 0 || value >= 1) throw new Error("Ungültiger RNG-Wert"); return value; };
   const left = normalizeGenome(leftRaw, library);
   const right = normalizeGenome(rightRaw, library);
   const result: Genome = {};
   for (const gene of library) {
+    if (policyFor(gene).kind === "immutable_safety_policy") { result[gene.id] = gene.defaultValue; continue; }
     const hasL = Object.hasOwn(left, gene.id);
     const hasR = Object.hasOwn(right, gene.id);
     const a = left[gene.id], b = right[gene.id];
