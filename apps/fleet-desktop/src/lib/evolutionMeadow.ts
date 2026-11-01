@@ -124,8 +124,8 @@ export function mutateMeadow(
   library: GeneDefinition[] = DEFAULT_GENES,
   beeBreed: BeeBreed["id"] = BEE_BREEDS[0].id,
 ): MeadowFlower[] {
-  // Rendering-only guard: NEVER used to constrain live bot populations.
-  if (previous.length > 440 || generation > 4) return previous;
+  // Existing plants ALWAYS keep aging, even when the visualization is at
+  // its rendering limit. Only NEW seed generation is capped below.
   const rand = seeded(71337 + 811 * generation);
   const updated = previous.map(f => {
     const trades = f.trades + 15 + Math.floor(rand() * 22);
