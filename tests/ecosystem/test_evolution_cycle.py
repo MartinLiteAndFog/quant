@@ -237,9 +237,8 @@ class EvolutionIntegrationTests(unittest.TestCase):
         self.assertEqual(next_world.equity,D("150"))
         self.assertEqual(next_world.reserve,D("15"))
         self.assertTrue(all(
-            x["history"][0]["net_return"]==0 for x in [next_world.ecology]
-        ) if False else all(
-            row[0]["net_return"]==0 for row in next_world.ecology["history"].values()
+            row[0]["net_return"] == 0
+            for row in next_world.ecology["history"].values()
         ))
 
     def test_negative_equity_frozen_without_pretending_to_flatten(self):
