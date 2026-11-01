@@ -91,6 +91,60 @@ and must not distort the strategy meadow/parent count.
 - .github/workflows/fleet-evolution-meadow.yml
   TypeScript typechecking and Vite build on the draft PR.
 
+## Gene library, pollinators and slow biomass dynamics (added)
+
+The Fleet desktop Evolution Meadow now has a **local, editable Gene Library**:
+numeric strategy parameters with min/max/step/default or Boolean on/off
+modules. Example genes: sensitivity, TTP, Stop Loss %, RSI period, RSI entry
+threshold, ADX gate and ADX period. The two visible ground-axis genes are
+immutable. User-added optional genes are persisted to the browser's
+localStorage, not to the production strategy registry or Pine script.
+
+Every simulated plant now carries its own typed, independently inherited
+parameter genome. Adding a gene to the library does NOT force it into all
+plants. Bees may inherit newly introduced genes from one parent or the
+collector breed can introduce an as-yet-absent gene from the library.
+
+Five bee algorithms are selectable in the UI:
+
+1. **Mixer**: average of numerical parental genes; occasional 5% optional
+   gene deletion.
+2. **Mosaic**: per-gene allele choice from one parent.
+3. **Explorer**: widened numerical mutation for parameter-space exploration.
+4. **Collector**: high probability of incorporating a gene present in only
+   one parent and 10% chance to introduce a gene absent in both.
+5. **Pruner**: deletes optional genes with 10% probability to reduce bloat.
+   Required axis genes cannot be deleted.
+
+All current bee output is deterministic for repeatable simulations (given
+the demo RNG) and does not modify any real TradingView settings.
+
+**Gradual monthly plant growth:**
+
+    biomass_next = max(0.04, biomass_now * (1 + clamp(net_return, -0.25, +0.36)))
+    screen_height ~ log(1 + biomass)
+
+A +36% net month yields 36% biomass growth at most, and a poor month shrinks
+biomass progressively rather than deleting the plant. Shrinkage capped
+at -25% per month avoids visually wiping out strategies in two months.
+The logarithmic scale keeps unusually successful plants visible without
+dominating the entire scene. A young seed starts small (biomass 0.10)
+and remains on the board as a growing plant. Months continue to age all
+existing flowers even when the visual maximum number of displayed flowers
+is reached. That visual guard has nothing to do with limits on live bots.
+
+**Important distinction:** Numerical gene definitions and Boolean modules
+are parameter schemas, not arbitrary executable strategy code. Before new
+modules have trading effects, each must be implemented in a versioned,
+sandboxed strategy interpreter or compiled Pine/engine code with semantic
+validation. Arbitrary user-pasted code must NEVER be directly executed by
+the production order manager.
+
+The user also suggested fungi/mycelium: future candidate role is a
+read-only knowledge network for horizontal transfer of useful gene patterns
+and past failed configurations. It must not transfer account equity by
+itself; all capital changes remain ledger events with conservation checks.
+
 ## Next integration work
 
 1. Store immutable strategy parameter snapshots on each strategy ID. Family
