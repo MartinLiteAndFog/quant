@@ -132,3 +132,62 @@ export function mutateMeadow(previous: MeadowFlower[], generation: number): Mead
   }
   return next;
 }
+
+
+/** DBSCAN-like neighborhoods of independently credible profitable strategies.
+ * Centers are weighted by fitness, not by which parent first occupied them.
+ */
+export interface MeadowCluster {
+  id: number;
+  sensitivity: number;
+  ttp: number;
+  members: number;
+  averageRoi: number;
+}
+
+export function findFitnessClusters(flowers: readonly MeadowFlower[]): MeadowCluster[] {
+  const winners = flowers.filter(f => f.trades >= 15 && f.roi > 0.05 && f.score > 3);
+  const xSpan = BOUNDS.sensitivity[1] - BOUNDS.sensitivity[0];
+  const ySpan = BOUNDS.ttp[1] - BOUNDS.ttp[0];
+  const radiusSq = 0.18 ** 2;
+  const near = (i: number): number[] => winners.flatMap((other, j) => {
+    const dx = (other.sensitivity - winners[i].sensitivity) / xSpan;
+    const dy = (other.ttp - winners[i].ttp) / ySpan;
+    return dx * dx + dy * dy <= radiusSq ? [j] : [];
+  });
+  const visited = new Set<number>();
+  const assigned = new Set<number>();
+  const clusters: MeadowCluster[] = [];
+
+  for (let i = 0; i < winners.length; i++) {
+    if (visited.has(i)) continue;
+    visited.add(i);
+    const neighbors = near(i);
+    if (neighbors.length < 3) continue;
+    const members = new Set<number>();
+    const queue = [...neighbors];
+    while (queue.length) {
+      const j = queue.shift()!;
+      if (assigned.has(j)) continue;
+      members.add(j);
+      assigned.add(j);
+      if (!visited.has(j)) {
+        visited.add(j);
+        const expanded = near(j);
+        if (expanded.length >= 3) queue.push(...expanded);
+      }
+    }
+    const selected = [...members].map(index => winners[index]);
+    if (selected.length < 3) continue;
+    const weight = (f: MeadowFlower) => Math.max(0.1, f.score);
+    const sumW = selected.reduce((acc, f) => acc + weight(f), 0);
+    clusters.push({
+      id: clusters.length + 1,
+      sensitivity: selected.reduce((acc, f) => acc + f.sensitivity * weight(f), 0) / sumW,
+      ttp: selected.reduce((acc, f) => acc + f.ttp * weight(f), 0) / sumW,
+      members: selected.length,
+      averageRoi: selected.reduce((acc, f) => acc + f.roi, 0) / selected.length,
+    });
+  }
+  return clusters.sort((a, b) => b.members - a.members).slice(0, 5);
+}
