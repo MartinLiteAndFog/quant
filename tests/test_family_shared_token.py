@@ -15,8 +15,20 @@ class SharedTokenTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def test_one_webhook_route_regardless_of_id(self):
-        routes = [getattr(r, 'path', None) for r in app.routes]
-        self.assertEqual(routes.count("/webhook/family"), 1)
+        # Test actual HTTP dispatch rather than Starlette route internals.
+        # Every strategy uses the same path and shared secret.
+        with patch.dict(os.environ, {
+            "FAMILY_ROUTER_ENABLED": "1",
+            "FAMILY_WEBHOOK_TOKEN": "one-shared-secret",
+        }):
+            for item in BLAUPUNKT_PILOT_ROSTER:
+                response = self.client.post("/webhook/family", json={
+                    "strategy_id": item.strategy_id,
+                    "token": "bad-secret",
+                    "event_id": "unique-1",
+                    "action": "entry", "side": "buy",
+                })
+                self.assertEqual(response.status_code, 401)
         self.assertEqual(len(BLAUPUNKT_PILOT_ROSTER), 12)
         self.assertEqual(
             len({x.strategy_id for x in BLAUPUNKT_PILOT_ROSTER}), 12,
