@@ -89,6 +89,20 @@ class GroundwaterTests(unittest.TestCase):
         self.assertEqual(p.unallocated, D("90"))
         self.assertEqual(p.by_strategy("idle").amount, D("0"))
 
+    def test_one_account_negative_freezes_global_budget(self):
+        distressed = Account("distressed", "USDT", D("-50"), D("0"))
+        p = allocate_groundwater([self.a, distressed], [
+            Demand("healthy", "kucoin", D("1")),
+            Demand("trapped", "distressed", D("1"), used_margin=D("10")),
+        ])
+        self.assertEqual(p.equity, D("50"))
+        self.assertEqual(p.reserve, D("5"))
+        self.assertEqual(p.distributable, D("45"))
+        self.assertEqual(sum((e.amount for e in p.entitlements), D("0")), D("45"))
+        self.assertTrue(p.allocations_frozen)
+        self.assertEqual(p.by_strategy("trapped").used_margin, D("10"))
+        self.assertEqual(sum((e.entry_capacity for e in p.entitlements), D("0")), D("0"))
+
     def test_non_finite_or_float_input_rejected(self):
         for invalid in ("NaN", "Infinity", "-1", 3.2):
             with self.subTest(invalid=invalid):
