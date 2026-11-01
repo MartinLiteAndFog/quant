@@ -205,7 +205,14 @@ def candidate_imba_signals(
     manifest=get_manifest(database)
     selected:dict[datetime,ImbaCandidate]={}
     for _,row in detected.iterrows():
-        brick_at=timestamp(row["ts"])
+        # The repository's legacy IMBA routine builds its signal DataFrame
+        # from .values, which strips the timezone on recent pandas versions.
+        # Its input was explicitly UTC from our strict indexed source, so
+        # restore that known UTC (never infer a timezone for external data).
+        legacy_stamp=pd.Timestamp(row["ts"])
+        if legacy_stamp.tzinfo is None:
+            legacy_stamp=legacy_stamp.tz_localize("UTC")
+        brick_at=timestamp(legacy_stamp)
         # Multi-brick 1ms offsets are *display/source sequencing* only.
         # Bucket close-time, not brick event timestamp, is when it is known.
         bucket_unix=int(brick_at.timestamp())//300*300
