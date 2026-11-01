@@ -4,9 +4,7 @@ Mount beside family_ingress. No broker methods are called here.
 """
 from __future__ import annotations
 
-import hashlib
 import json
-import secrets
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -29,7 +27,7 @@ def bootstrap_legacy(
     """Register the existing Blaupunkt live bot as a root WITHOUT touching it.
 
     Its old /webhook/tv-execute URL and BOT_WEBHOOK_TOKEN remain unchanged.
-    No new family token is issued for the legacy bot.
+    The legacy and the new strategies will ultimately share FAMILY_WEBHOOK_TOKEN.
     """
     _admin(x_family_admin_token)
     family = _family_id()
@@ -38,20 +36,18 @@ def bootstrap_legacy(
         raise HTTPException(status_code=422, detail="bootstrap only approved for Blaupunkt")
     legacy = "blaupunkt"
     _schema()
-    unused_secret_hash = hashlib.sha256(secrets.token_bytes(32)).hexdigest()
     with get_conn() as conn:
         with conn.transaction():
             with conn.cursor() as cur:
                 cur.execute(
                     """insert into family_strategy_registry
                        (family_id, strategy_id, parent_strategy_id, display_name,
-                        pool, token_sha256, config_json, execution_status)
-                       values (%s,%s,null,%s,'evolution',%s,%s::jsonb,'shadow')
+                        pool, config_json, execution_status)
+                       values (%s,%s,null,%s,'evolution',%s::jsonb,'shadow')
                        on conflict (strategy_id) do nothing
                        returning strategy_id""",
                     (
                         family, legacy, "Blaupunkt (existing TradingView parent)",
-                        unused_secret_hash,
                         json.dumps({"source": "legacy_tv_execute", "legacy_live": True}),
                     ),
                 )
@@ -174,7 +170,7 @@ def alert_template(
         "webhook_path": "/webhook/family",
         "alert_message": {
             "strategy_id": strategy_id,
-            "token": "INSERT_STRATEGY_TOKEN_FROM_REGISTRATION",
+            "token": "INSERT_SHARED_FAMILY_WEBHOOK_TOKEN",
             "event_id": "{{ticker}}:{{timenow}}:{{strategy.order.id}}",
             "action": "entry",
             "side": "buy",
