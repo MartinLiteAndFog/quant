@@ -99,8 +99,8 @@ def spec_catalog(specs: Sequence[GeneSpec]) -> dict[str, GeneSpec]:
         "max_leverage", "max_margin_fraction", "reproduction_budget",
     )):
         raise BreedingError("mandatory financial genes must be bounded and required")
-    if sum(s.policy == "required_axis" for s in specs) < 2:
-        raise BreedingError("two parameter-axis genes required")
+    if sum(s.policy == "required_axis" for s in specs) != 2:
+        raise BreedingError("exactly two parameter-axis genes required per meadow")
     return known
 
 
@@ -176,6 +176,8 @@ class SeedProposal:
     research_only: bool
     source: Literal["local", "hive"]
     lineage: tuple[str, str, str]
+    normalized_x: float
+    normalized_y: float
     funded: bool = False
     allocated_budget: Decimal = ZERO
 
@@ -282,8 +284,18 @@ def pollinate(
         raise BreedingError("duplicate plant identity")
     if len(set(b.bee_id for b in bees))!=len(bees):
         raise BreedingError("duplicate bee identity")
+    catalog = spec_catalog(specs)
+    axes = sorted((s for s in catalog.values() if s.policy=="required_axis"),
+                  key=lambda spec: spec.gene_id)
     for plant in plants:
         validate_genome(plant.genome,specs)
+        values=plant.genome.values()
+        true_x=(float(values[axes[0].gene_id])-axes[0].min_value) / (
+            axes[0].max_value-axes[0].min_value)
+        true_y=(float(values[axes[1].gene_id])-axes[1].min_value) / (
+            axes[1].max_value-axes[1].min_value)
+        if abs(true_x-plant.x)>1e-7 or abs(true_y-plant.y)>1e-7:
+            raise BreedingError("plant coordinates must equal its axis gene values")
     proposals=[]
     seen_genomes={p.genome.genome_id for p in plants}
     for bee in sorted(bees,key=lambda b:b.bee_id):
@@ -306,12 +318,18 @@ def pollinate(
             seen_genomes.add(genome_id)
             child=breed_genomes(mother.genome,mate.genome,bee,specs,rng,
                                 child_id=genome_id,target_tile=target_tile)
+            values=child.values()
+            x=(float(values[axes[0].gene_id])-axes[0].min_value) / (
+               axes[0].max_value-axes[0].min_value)
+            y=(float(values[axes[1].gene_id])-axes[1].min_value) / (
+               axes[1].max_value-axes[1].min_value)
             proposals.append(SeedProposal(strategy_id,bee.bee_id,mother.strategy_id,
                 mate.strategy_id,child,target_tile,source=="hive",source,
-                (mother.strategy_id,mate.strategy_id,bee.bee_id)))
+                (mother.strategy_id,mate.strategy_id,bee.bee_id),x,y))
         if mode in ("local","hybrid"):
             seed_child("local",father,mother.tile_id,0)
-        if mode in ("central","hybrid"):
+        if mode=="central" or (mode=="hybrid" and
+                               rng.random()<=bee.hive_share_probability):
             # Different tiles may provide compatible *research ideas*, never
             # auto-funded orders. All offspring still share real GeneSpec IDs.
             hive=[p for p in sorted(plants,key=lambda p:p.strategy_id)
