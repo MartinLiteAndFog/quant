@@ -11,7 +11,7 @@ import {
   type SimulationWorld,
 } from "./simulation";
 import { runControlledExperiment, type ExperimentReport } from "./experiments";
-import { createSyntheticMarketWeek, runPaperReplay as executePaperReplay, type PaperReplayReport } from "./paperReplay";
+import { createSyntheticMarketRange, runPaperReplay as executePaperReplay, type PaperReplayReport } from "./paperReplay";
 import { generateSyntheticMomentumSignals, type StrategySignalResult, type TradingSignalGenome } from "./strategySignals";
 import { buildSyntheticReplayEvidence, type SyntheticReplayEvidence } from "./replayEvidence";
 
@@ -79,7 +79,7 @@ function App() {
       setExperimentBusy(false);
     }
   };
-  const runPaperReplay = async (plantId: string, controls: StrategyControls) => {
+  const runPaperReplay = async (plantId: string, controls: StrategyControls, days: 7 | 30) => {
     if (paperReplayLock.current) return;
     const sourceWorld = world;
     const plant = sourceWorld.plants.find((candidate) => candidate.id === plantId && candidate.status === "active");
@@ -90,7 +90,8 @@ function App() {
     setPaperReplayError(null);
     try {
       const allocation = plant.allocationUsdt.toFixed(4);
-      const dataset = await createSyntheticMarketWeek();
+      const fixtureStart = new Date(Date.parse("2024-01-01T00:00:00Z") + sourceWorld.day * 86_400_000).toISOString();
+      const dataset = await createSyntheticMarketRange(days, fixtureStart, sourceWorld.seed, Math.floor(sourceWorld.day / 7));
       const genome: TradingSignalGenome = {
         schemaVersion: 1,
         strategyId: `${plant.id}:synthetic-momentum-v1`,
@@ -347,7 +348,7 @@ function GeneField({ population, axisX, axisY, setAxisX, setAxisY, selectedId, o
 function Understory({ world, experiment, experimentBusy, onRunExperiment, paperReplay, paperReplayBusy, paperReplayError, onRunPaperReplay, onReturn, onSelectPlant }: {
   world: SimulationWorld; experiment: ExperimentReport | null; experimentBusy: boolean; onRunExperiment: () => void;
   paperReplay: PaperReplayRun | null; paperReplayBusy: boolean; paperReplayError: string | null;
-  onRunPaperReplay: (plantId: string, controls: StrategyControls) => void;
+  onRunPaperReplay: (plantId: string, controls: StrategyControls, days: 7 | 30) => void;
   onReturn: () => void; onSelectPlant: (id: string) => void;
 }) {
   const active = visiblePopulation(world);
@@ -391,25 +392,29 @@ function Understory({ world, experiment, experimentBusy, onRunExperiment, paperR
 
 function PaperReplayPanel({ plants, worldDay, navUsdt, run, busy, error, onRun }: {
   plants: readonly GardenPlant[]; worldDay: number; navUsdt: number; run: PaperReplayRun | null; busy: boolean; error: string | null;
-  onRun: (plantId: string, controls: StrategyControls) => void;
+  onRun: (plantId: string, controls: StrategyControls, days: 7 | 30) => void;
 }) {
   const [plantId, setPlantId] = useState(plants.find((plant) => plant.role === "parent")?.id ?? plants[0]?.id ?? "");
+  const [days, setDays] = useState<7 | 30>(7);
   const [lookbackBars, setLookbackBars] = useState(5);
   const [entryThresholdBps, setEntryThresholdBps] = useState(40);
   const [exitThresholdBps, setExitThresholdBps] = useState(10);
   const selected = plants.find((plant) => plant.id === plantId) ?? plants[0];
   const report = run?.execution;
   return <section className="paper-replay-panel">
-    <div className="section-title"><div><span>SYNTHETIC INTRADAY PAPER REPLAY</span><h2>Give one plant a signal gene</h2></div><span className="record-count">10,080 UTC minute bars</span></div>
+    <div className="section-title"><div><span>SYNTHETIC INTRADAY PAPER REPLAY</span><h2>Give one plant a signal gene</h2></div><span className="record-count">{(days * 24 * 60).toLocaleString()} UTC minute bars</span></div>
     <p className="paper-replay-intro">A separate versioned Trading Genome reads completed synthetic closes and emits causal target positions. It is not the habitat genome, strategy alpha, or market evidence.</p>
     <div className="paper-replay-controls">
       <label>Funded plant<select value={selected?.id ?? ""} onChange={(event) => setPlantId(event.target.value)} disabled={busy || plants.length === 0}>
         {plants.map((plant) => <option key={plant.id} value={plant.id}>{plant.name} · {money(plant.allocationUsdt)} available</option>)}
       </select></label>
+      <label>Replay horizon<select value={days} onChange={(event) => setDays(Number(event.target.value) as 7 | 30)} disabled={busy}>
+        <option value={7}>7 days · one ecology week</option><option value={30}>30 days · one ecology month</option>
+      </select></label>
       <label>Lookback · bars<input type="number" min="1" max="120" value={lookbackBars} onChange={(event) => setLookbackBars(Math.max(1, Math.min(120, Number(event.target.value) || 1)))} disabled={busy} /></label>
       <label>Entry · basis points<input type="number" min={Math.max(1, exitThresholdBps)} max="3000" step="5" value={entryThresholdBps} onChange={(event) => setEntryThresholdBps(Math.max(exitThresholdBps, Math.min(3000, Number(event.target.value) || 1)))} disabled={busy} /></label>
       <label>Exit · basis points<input type="number" min="0" max={entryThresholdBps} step="5" value={exitThresholdBps} onChange={(event) => setExitThresholdBps(Math.max(0, Math.min(entryThresholdBps, Math.min(3000, Number(event.target.value) || 0))))} disabled={busy} /></label>
-      <button className="experiment-button" onClick={() => selected && onRun(selected.id, { lookbackBars, entryThresholdBps, exitThresholdBps })} disabled={busy || !selected}>{busy ? "Generating and replaying…" : `Run 7-day strategy · garden day ${worldDay}`}<span>↗</span></button>
+      <button className="experiment-button" onClick={() => selected && onRun(selected.id, { lookbackBars, entryThresholdBps, exitThresholdBps }, days)} disabled={busy || !selected}>{busy ? "Generating and replaying…" : `Run ${days}-day strategy · garden day ${worldDay}`}<span>↗</span></button>
     </div>
     {error && <p className="paper-replay-error" role="alert">Replay not booked: {error}</p>}
     {report && <>
@@ -420,7 +425,7 @@ function PaperReplayPanel({ plants, worldDay, navUsdt, run, busy, error, onRun }
         <LedgerMetric label="Peak margin" value={money(Number(report.maxMarginUsed))} detail={`plant limit ${money(Number(report.allocationLimit))}`} />
         <LedgerMetric label="Garden NAV now" value={money(navUsdt)} detail="same portfolio ledger" />
       </div>
-      <div className="paper-replay-accounting">{report.fills.length > 0 && <><span>Price PnL <b>{money(Number(report.realizedPricePnl))}</b></span><span>Fees <b>−{money(Number(report.fees))}</b></span><span>Funding <b>{money(Number(report.funding))}</b></span></>}<span>Dataset <b>{report.dataset.fingerprint.slice(0, 12)}…</b></span></div>
+      <div className="paper-replay-accounting">{report.fills.length > 0 && <><span>Price PnL <b>{money(Number(report.realizedPricePnl))}</b></span><span>Fees <b>−{money(Number(report.fees))}</b></span><span>Funding <b>{money(Number(report.funding))}</b></span></>}<span>Last closed replay <b>{report.days} days · {report.dataset.barCount.toLocaleString()} UTC minute bars</b></span><span>Dataset <b>{report.dataset.fingerprint.slice(0, 12)}…</b></span></div>
       {run && <div className="paper-replay-accounting"><span>Evidence <b>{run.evidence.claim}</b></span><span>Inference <b>{run.evidence.statisticalStatus} · independent N unavailable</b></span><span>Max daily drawdown <b>{run.evidence.maxDailyDrawdownUsdt === null ? "unavailable" : `${money(run.evidence.maxDailyDrawdownUsdt)} · ${((run.evidence.maxDailyDrawdownPct ?? 0) * 100).toFixed(2)}%`}</b></span><span>Cost / cash reconciliation <b>{Math.abs(run.evidence.netPnlResidualUsdt) < 0.0001 && Math.abs(run.evidence.cashResidualUsdt) < 0.0001 ? "passed" : "failed"}</b></span></div>}
       {run?.strategy.status === "no_trade" && <p className="paper-replay-error">No eligible pre-close observation crossed the strategy threshold. No trade occurred; no trading loss was invented.</p>}
       <p className="experiment-disclaimer">{report.claim} The signal recipe is versioned as synthetic Momentum v1 and is not alpha. Executable opportunities depend on this genome's synthetic entry threshold; they are not independent market opportunities. The {run?.evidence.dailyMarkCount ?? 0} daily marks provide descriptive drawdown only: no Sharpe, CVaR, confidence, OOS, fitness, or independent-sample claim is available. Benchmark: cash / no trade. Verdict: <b>not_comparable</b>. The garden clock advanced {report.days} days and the closed result was booked into the single 90/10 ledger. Habitat fit and vigor were not changed by this result.</p>

@@ -318,6 +318,77 @@ export async function createSyntheticMarketWeek(start = "2024-01-01T00:00:00Z"):
   return normalizeMarketData(bars, demoProvenance);
 }
 
+function stableHash(value: string): number {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return hash >>> 0;
+}
+
+function seededUnit(value: string): number {
+  return stableHash(value) / 0x1_0000_0000;
+}
+
+/**
+ * Generated, deterministic synthetic fixture for bounded garden-cycle replays.
+ * Every day has a seed- and cycle-specific regime; no historical prices are used.
+ */
+export async function createSyntheticMarketRange(
+  days: number,
+  start = "2024-01-01T00:00:00Z",
+  gardenSeed = "cloudgarden-demo",
+  weekIndex = 0,
+): Promise<MarketDataset> {
+  if (!Number.isInteger(days) || days < 1 || days > 30) {
+    throw new RangeError("Synthetic range must contain between 1 and 30 whole days.");
+  }
+  if (typeof gardenSeed !== "string" || gardenSeed.length === 0) {
+    throw new RangeError("A non-empty garden seed is required.");
+  }
+  if (!Number.isInteger(weekIndex) || weekIndex < 0) {
+    throw new RangeError("Week index must be a non-negative whole number.");
+  }
+  const startMs = parseUtc(start, "Synthetic fixture start");
+  if (startMs % MINUTE_MS !== 0) throw new RangeError("Synthetic fixture start must align to a UTC minute.");
+
+  const cycleKey = `${gardenSeed}:${weekIndex}:${days}`;
+  const fixtureProvenance: MarketProvenance = {
+    ...demoProvenance,
+    source: `Cloudgarden synthetic_range v1 seed-${stableHash(gardenSeed).toString(16)} week-${weekIndex} days-${days}`,
+  };
+  const bars: MarketBarInput[] = [];
+  let previousClose = 100 + seededUnit(`${cycleKey}:initial`) * 4;
+  const barCount = days * 24 * 60;
+
+  for (let index = 0; index < barCount; index += 1) {
+    const day = Math.floor(index / (24 * 60));
+    const minuteOfDay = index % (24 * 60);
+    const dayKey = `${cycleKey}:${day}`;
+    const regime = (stableHash(`${dayKey}:regime`) % 3) - 1;
+    const phase = seededUnit(`${dayKey}:phase`) * Math.PI * 2;
+    const volatility = 0.00006 + seededUnit(`${dayKey}:volatility`) * 0.00008;
+    const cycle = Math.sin((minuteOfDay / 240) * Math.PI * 2 + phase);
+    const shorterCycle = Math.sin((minuteOfDay / 37) * Math.PI * 2 + phase / 2);
+    const change = previousClose * (regime * 0.000015 + cycle * volatility + shorterCycle * 0.000025);
+    const open = Number(previousClose.toFixed(2));
+    const close = Math.max(1, Number((open + change).toFixed(2)));
+    const wick = 0.03 + seededUnit(`${dayKey}:wick:${minuteOfDay}`) * 0.07;
+    const timestamp = isoUtc(startMs + index * MINUTE_MS);
+    bars.push({
+      timestamp,
+      open: open.toFixed(2),
+      high: (Math.max(open, close) + wick).toFixed(2),
+      low: Math.max(0.01, Math.min(open, close) - wick).toFixed(2),
+      close: close.toFixed(2),
+      volume: (50 + seededUnit(`${dayKey}:volume:${minuteOfDay}`) * 1_950).toFixed(2),
+    });
+    previousClose = close;
+  }
+  return normalizeMarketData(bars, fixtureProvenance);
+}
+
 function fixtureTime(start: string, minutesFromStart: number): string {
   return isoUtc(parseUtc(start, "Synthetic fixture start") + minutesFromStart * MINUTE_MS);
 }

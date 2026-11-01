@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createSyntheticMarketRange,
   createSyntheticMarketWeek,
   normalizeMarketData,
   runPaperReplay,
@@ -55,6 +56,47 @@ test("synthetic week is reproducible, complete, and has a canonical SHA-256 fing
   assert.equal(first.report.eligibility, "synthetic_demo_only");
   assert.match(first.fingerprint, /^[a-f0-9]{64}$/);
   assert.equal(first.fingerprint, second.fingerprint);
+});
+
+test("synthetic ranges repeat for the same seed and cycle, and differ across seeds or weeks", async () => {
+  const first = await createSyntheticMarketRange(2, "2024-01-01T00:00:00Z", "garden-a", 0);
+  const repeat = await createSyntheticMarketRange(2, "2024-01-01T00:00:00Z", "garden-a", 0);
+  const nextWeek = await createSyntheticMarketRange(2, "2024-01-01T00:00:00Z", "garden-a", 1);
+  const otherSeed = await createSyntheticMarketRange(2, "2024-01-01T00:00:00Z", "garden-b", 0);
+
+  assert.equal(first.fingerprint, repeat.fingerprint);
+  assert.deepEqual(first.bars, repeat.bars);
+  assert.notEqual(first.fingerprint, nextWeek.fingerprint);
+  assert.notEqual(first.fingerprint, otherSeed.fingerprint);
+  assert.notDeepEqual(first.bars, nextWeek.bars);
+  assert.notDeepEqual(first.bars, otherSeed.bars);
+  assert.match(first.provenance.source, /seed-[a-f0-9]+ week-0 days-2/);
+});
+
+test("30-day synthetic ranges are bounded, complete, varied, and valid OHLCV", async () => {
+  const dataset = await createSyntheticMarketRange(30, "2024-01-01T00:00:00Z", "garden-30d", 3);
+
+  assert.equal(dataset.bars.length, 30 * 24 * 60);
+  assert.equal(dataset.report.missingBars, 0);
+  assert.equal(dataset.report.gapCount, 0);
+  assert.equal(dataset.report.eligibility, "synthetic_demo_only");
+  assert.equal(dataset.provenance.synthetic, true);
+  assert.equal(dataset.report.start, "2024-01-01T00:00:00.000Z");
+  assert.equal(dataset.report.endExclusive, "2024-01-31T00:00:00.000Z");
+  assert.ok(new Set(dataset.bars.map((entry) => entry.close)).size > 100);
+  assert.ok(new Set(dataset.bars.map((entry) => entry.volume)).size > 1_000);
+  for (const entry of dataset.bars) {
+    const open = Number(entry.open);
+    const high = Number(entry.high);
+    const low = Number(entry.low);
+    const close = Number(entry.close);
+    const volume = Number(entry.volume);
+    assert.ok(open > 0 && low > 0 && close > 0 && high >= Math.max(open, low, close));
+    assert.ok(low <= Math.min(open, close));
+    assert.ok(volume >= 0);
+  }
+  await assert.rejects(() => createSyntheticMarketRange(31), { name: "RangeError" });
+  await assert.rejects(() => createSyntheticMarketRange(0), { name: "RangeError" });
 });
 
 test("normalization sorts deterministically and rejects duplicate, naive, off-grid, and malformed bars", async () => {
@@ -252,5 +294,44 @@ test("the actual synthetic replay advances ecology and books once into the singl
   assert.ok(Math.abs(booked.capital.navUsdt - (100 + Number(report.netPnl))) < 0.0001);
   assert.equal(booked.capital.protectedReserveUsdt, Math.round(booked.capital.navUsdt * 0.1 * 10_000) / 10_000);
   assert.equal(booked.capital.allocationCeilingUsdt, Math.round(booked.capital.navUsdt * 0.9 * 10_000) / 10_000);
+  assert.equal(booked.capital.paperFeesUsdt, Math.round(Number(report.fees) * 10_000) / 10_000);
+});
+
+test("a 30-day synthetic replay books the exact horizon and keeps the shared ledger reconciled", async () => {
+  const world = createSimulationWorld("integrated-month-fixture");
+  const start = "2024-01-01T00:00:00Z";
+  const dataset = await createSyntheticMarketRange(30, start, world.seed, 0);
+  const report = runPaperReplay({
+    dataset,
+    signals: syntheticDemoSignals(start, "parent-01"),
+    allocationLimit: "20",
+    startingCash: "20",
+  });
+  assert.equal(report.days, 30);
+  assert.equal(report.dailyMarks.length, 30);
+  assert.equal(report.endedFlat, true);
+  assert.equal(report.benchmarkConclusion, "not_comparable");
+
+  const booked = bookClosedPaperReplay(advanceSimulationDays(world, report.days), "parent-01", {
+    startDay: world.day,
+    days: report.days,
+    datasetFingerprint: report.dataset.fingerprint,
+    synthetic: report.dataset.synthetic,
+    endedFlat: report.endedFlat,
+    riskBreach: report.riskBreach,
+    fillCount: report.fills.length,
+    allocationLimitUsdt: Number(report.allocationLimit),
+    startingCashUsdt: Number(report.startingCash),
+    endingCashUsdt: Number(report.endingCash),
+    maxMarginUsedUsdt: Number(report.maxMarginUsed),
+    realizedPricePnlUsdt: Number(report.realizedPricePnl),
+    feesUsdt: Number(report.fees),
+    fundingUsdt: Number(report.funding),
+    netPnlUsdt: Number(report.netPnl),
+  });
+
+  assert.equal(booked.day, 30);
+  assert.equal(booked.capital.paperReplayCount, 1);
+  assert.ok(Math.abs(booked.capital.navUsdt - (100 + Number(report.netPnl))) < 0.0001);
   assert.equal(booked.capital.paperFeesUsdt, Math.round(Number(report.fees) * 10_000) / 10_000);
 });
