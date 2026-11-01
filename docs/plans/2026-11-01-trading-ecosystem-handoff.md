@@ -537,3 +537,62 @@ CSV-Signalschema: `signal_id,strategy_id,target_quantity,signal_at,available_at,
 **Akute Datenlage:** In ECO-02 [PR #37] wurden bisher nur synthetische OHLCV-Fixtures nachgewiesen. Beim aktuellen Dateibibliothek-Suchlauf zeigten sich frühere SOL-Trading-Reports und Trades-CSV, jedoch **kein eindeutig identifizierter, zugänglicher und importierter kompletter 5-Jahres-SOL-1m-Originaldatensatz**. Es wurde deshalb **kein tatsächlicher Backtest mit echter SOL-Historie behauptet**.
 
 **Abhängigkeiten vor einer Zusammenführung:** PR #53 ist auf #52 gestapelt, der auf #47 gestapelt ist; die aus #37 kopierten Marktmodule müssen nach deren Review sauber dedupliziert werden. Alte live Trade-/Signal-Module, Railway, Kraken/KuCoin, TradingView-Webhooks und deren Schutzstopps wurden **nicht** verändert.
+
+## 25. ECO-19a — Datenimport für echte SOL-Minutenhistorie vorbereitet (Draft PR #55)
+
+**Neuer isolierter, geprüfter Implementierungsstand:** [Draft PR #55](https://github.com/MartinLiteAndFog/quant/pull/55), Entwicklungsbranch `codex/ecosystem-sol-streaming-import` (Stack auf ECO-18 / PR #53). Beide GitHub-Actions-Workflows (Streaming OHLCV und ECO-18 Market Replay) sind **grün**. Keine reale Datenquelle wurde ungeprüft als echte Historie ausgegeben, kein Merge, kein Produktionsdeploy.
+
+Dateien: `src/quant/ecosystem/market_data/streaming.py`, `scripts/ecosystem_stream_ohlcv.py`, `tests/ecosystem/test_streaming_ohlcv.py`, `docs/architecture/ecosystem-streaming-ohlcv.md`, `.github/workflows/ecosystem-streaming-ohlcv.yml`.
+
+### Genau implementiert
+- **Bounded memory für echte Langzeitreihen:** Line-by-line-Streaming aus CSV oder `.csv.gz`, mit schrittweiser Speicherung in **SQLite mit UTC-Open-Timestamp-Primary-Key**, maximal 4096 gleichzeitig zu insertierende Candles. **Kein** Aufruf des alten `normalize()` auf mehrere Millionen Bars im RAM. `iter_candles(db,start,end)` liefert nur eine indexierte Zeitspanne; `read_window_as_dataset(max_bars=10080)` materialisiert nur kleine nachgewiesene Fenster kompatibel zu ECO-02. Volljähriger 5-Jahres-PnL-Streaming-Backtest ist **dadurch noch nicht** implementiert; ECO-18 benötigt dafür zusätzlich eine fortlaufende State-/Fills-Engine.
+- **Quellen/Zeit/Format:** Entweder `canonical` mit CSV-Header `timestamp,open,high,low,close,volume`, ISO-Zeitstempel **mit UTC-Zeitzonenumrechnung**, oder `binance_klines` als rein **technisches Headerless-12-Spalten-Format** mit Epoch-Millisekunden. Der Layoutname ist **keine** Behauptung zum tatsächlichen Anbieter oder Venue. Headerzeiten müssen ausdrücklich **Kerzen-Open** sein, nicht Close und nicht Trade-Zeit. Die genau gemeldeten Source-Intervalle müssen UTC-Tagesraster teilen.
+- **Integritätsprüfungen:** Ungültige/infinite/negative OHLCV, inkonsistente High/Low, nicht sortierte oder doppelte Kerzen, nicht-zeitlich-aligned-Bar-Opens, ungültige Close-Time bei 12-Spalten-Klines und abgeschnittene GZIP-Quelle führen zu **vollständigem Fail-Closed**. Datenlücken werden mit Anzahl und den ersten 64 Intervallen ausgewiesen, **nie interpoliert**; optionales `--reject-gaps` verweigert den Import. Explizite `--expected-start/--expected-end` erlauben das Erkennen fehlender Randdaten; nur beobachtete Grenzen ergeben ausdrücklich **keine** Behauptung über einen vollständigen längeren Datenzeitraum.
+- **Wiederholbarkeit:** Original-Source-Byte-SHA256 und separate kanonisch normalisierte Candle-SHA256 plus Persisted DataSet-Fingerprint. Source-Datei darf während Import/Hashing nicht verändert werden (Größe und mtime werden vorher/nachher geprüft). Eine Zieldatei wird **nie überschrieben**; Temp-SQLite wird nur nach vollständiger erfolgreicher Prüfung per Rename freigegeben; fehlerhafte Daten hinterlassen kein als gültig aussehendes Ziel.
+- **Pflicht-Provenienz:** Der CLI fordert ausdrücklich Source, License, genaues Symbol, Spot/Linear-Futures-Modell, Contract-Multiplier, Intervall, UTC-Open-Timestamp-Semantik und das Feld `synthetic` als **expliziten Boolean**. Fehlende Flagge darf nicht stillschweigend `synthetic=false` bedeuten. Der Importer prüft Syntax und Kohärenz, kann aber **nicht** juristisch bestätigen, dass die selbstdeklarierte Datenlizenz oder Kursherkunft korrekt ist. Manifest zeigt `tradingview_parity_verified=false`, `signal_engine_connected=false`, `oos_verified=false` und `live_orders_sent=0`.
+- Testbeleg: **40.000 synthetische Minutenkerzen** erfolgreich mit `tracemalloc`-Peak-Grenze, GZIP, Duplikate, Gaps, fehlende Randtakte, korrupte Daten, 12-Spalten-Layout, Datenhash-Repro, SQLite-Abfragen und CLI-Negativtest ohne `synthetic`. **Das ist keine gemessene Verarbeitung von fünf Jahren echter SOL-1m-Daten.**
+
+### Reproduktionsbefehl und nächster Schritt
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests/ecosystem -p test_streaming_ohlcv.py -v
+PYTHONPATH=src python scripts/ecosystem_stream_ohlcv.py \
+  --source /TATSAECHLICHE_DATEI/SOL_1m.csv.gz \
+  --layout canonical \
+  --provenance /TATSAECHLICHE_DATEI/marktherkunft.json \
+  --output /DATEN/sol_1m_index.sqlite
+```
+
+Die Pfade sind **Platzhalter**, nicht eine bereits gefundene SOL-Historie. Vor realem Import sind tatsächliches Venue-Instrument (z.B. Kraken SOLUSD.PM vs KuCoin SOL-USDT), Lizenz, Contract-Multiplier, Datenzeitraum und SHA256 zu identifizieren und Funding/Fees getrennt zu belegen. Die bestehenden realen Strategie-/Positions-CSV aus früheren Gesprächen sind **kein Ersatz für die exakten 1m-OHLCV-Kerzen**.
+
+## 26. ECO-19b — 5-Minuten-Renko/IMBA-Probanden und explizite TV-Paritätsdiagnostik (Draft PR #56)
+
+**Implementiert in [Draft PR #56](https://github.com/MartinLiteAndFog/quant/pull/56)**, Branch `codex/ecosystem-renko-5m-signal-audit` **gestapelt auf #55**. Sowohl die eigene `Ecosystem Renko 5m IMBA Research Signal Audit`-CI als auch ECO-18 Market-Replay-CI sind **grün**. Keine eigenmächtige neue Strategieformel.
+
+Dateien: `src/quant/ecosystem/market_data/renko_imba_audit.py`, `scripts/ecosystem_renko_imba_audit.py`, `tests/ecosystem/test_renko_imba_audit.py`, `docs/architecture/ecosystem-renko-imba-audit.md`, `.github/workflows/ecosystem-renko-imba-audit.yml`.
+
+### Exakte historische Grundlage aus dem echten Repository
+
+Die Reponotiz `docs/RENKO_TRADINGVIEW_PARITY.md` dokumentiert am **2026-10-07** für Kraken SOLUSD.PM:
+- Traditional Renko `box=0.1` dreht erst nach **zwei** Boxen, nicht einer; mehrere Bricks aus derselben 5m-Kerze tragen 1-ms-sequenzierte **Anzeigezeitstempel**.
+- Die TV-Chartquelle ist **5-Minuten-OHLC**, nicht direkt 1m. Im dokumentierten Zeitraum 2026-09-15 bis 2026-10-07 wurden **5.322 TV-Renko-Bricks / 99 IMBA-Flips (Lookback 50)** gegen **5.279 korrekt 5m-vorverarbeitete lokale Bricks / 105 Flips** beobachtet. Direkt aus 1m waren es sogar **7.859 Bricks / 144 Flips**.
+- TV-Wicks sind bei `high/low` für die IMBA-Schwellen wichtig. `src/quant/features/renko.py::renko_from_close()` ist explizit **Close-getrieben** und emittiert keine nachgewiesenen historischen TV-Wicks. Die bestehende `src/quant/strategies/imba.py::compute_imba_signals()` ist eine Sticky-Flip-Implementierung, aber keine externe TV-Paritätserklärung. Aus den Zahlen wird **keine Gleichheit** behauptet.
+
+### Neu geprüfte Pipeline
+
+1. `source_5min_bars(index,start,end)` aggregiert strikt **fünf vorhandene 1m-Open-Bars** je UTC-5m-Quelle; Hoch/Tief/Volumen bleiben korrekt, unvollständige Buckets oder Zeitlücken stoppen den Lauf. Jede Quelle ist erst zu `source_open+300 Sekunden` bekannt.
+2. `candidate_imba_signals(...box=0.1,lookback=50,trading_start=...)` nutzt **die bereits existierenden Renko- und IMBA-Implementierungen** mit explizitem Vorlauf. Weil TV-Wicks fehlen, werden für die Forschung nur Body-High/Low genutzt. Ein solcher Flip ist **unverifizierter Kandidat**, nicht echte TV-Alarmbestätigung. Legacy-IMBA verliert bei neueren Pandas-Versionen beim DataFrame-Bau die Zeitzone; der Adapter stellt die aus seiner eigenen bereits geprüften UTC-Quelle **bekannte** Zeitzone wieder her – ohne externe unbekannte Zeitstempel zu erraten.
+3. Die künstlichen **1-ms-Brick-Stempel** erhalten keine Handelbarkeit vor dem 5m-Barabschluss. Falls mehrere Renko-Flips aus derselben noch laufenden Quellkerze hervorgehen, wird nur die **letzte** am tatsächlichen Kerzenschluss bekannte Richtung als Forschungkandidat gewertet.
+4. `compare_confirmed_alerts(batch, reference)` akzeptiert **nur** extern gelieferte, auf den wirklichen 5m-Quellschluss normalisierte Referenz-Alarme mit ID/Side/Time. Bericht zeigt exakte Paarungen, fehlende/zusätzliche oder falsche Richtungen. Selbst bei 100% Übereinstimmung zu einer gelieferten Liste bleiben `full_TradingView_parity_established=false` und `safe_to_claim_oos_alpha=false`, solange Wick-/Venue-/Pine-Fidelity und unabhängige OOS-Evidenz nicht separat geprüft sind. Webhook-`received_at` ist **kein** belegter 5m-Quellschluss.
+5. Die CLI `scripts/ecosystem_renko_imba_audit.py` exportiert ausschließlich Kandidaten und Vergleichsdiagnostik – **keine** `TargetSignal`-Orders, keine PnL, keinen Bot-Trade, kein Geld. Die synthetischen Tests verifizieren Source-Zeitpunkt und Nicht-Lookahead, echte Legacy-IMBA-Funktionsaufrufe, Paritäts-Negativfälle, fehlende 1m/5m-Kerzen, CLI und das immer-falsche OOS-Verifizierungsflag.
+
+### Noch offene kritische Voraussetzungen
+
+- **Tatsächliche Originaldateien** mit demselben Venue-/5m-Feed plus TradingView-Kraken-5m-Renko-Export (incl. Wick-/High-/Low-Referenzen) und echten TradingView-Alert-Paaren. Ohne diese können nur **synthetische Tests** laufen.
+- **Parität der Strategie** erst herstellen und an unabhängiger Referenz testen; IMBA-Wick-Rekonstruktion und Renko-Anker-/Historienabhängigkeit dürfen nicht blind aus 5m-Schlusskursen als richtig ausgegeben werden.
+- **Laufende Backtest-Evaluation statt kurzer Fenster:** Der 1m-Importer ist streamingfähig, die derzeitige 5m-Kandidatenpipeline ist bewusst auf **1 Woche** limitiert. Für echte fünf Jahre müssen Renko-/IMBA-States über Fenstergrenzen aufrechterhalten werden. Die ECO-18-Paper-Fill-Engine braucht zusätzlich eine sequenzielle, account- und margin-cleared Quelle statt retrospektiv über sämtliche Zielsignale zu verfügen.
+- Erst **danach** pro Genom echte TargetSignale und realistische Paper-Orders generieren; Gebühren, Slippage, Funding, Futures-Kontraktgröße und echtes Venue-Risikomanagement inklusive TP2/Flip-Verhalten prüfen. Anschließend Walk-forward/OOS und Vergleich mit nicht evolutionären Baselines. **Keine** PnL-Zahl aus beiden neuen Drafts als Investmentergebnis bezeichnen.
+
+**Agenten-Prompt für nächste Übernahme:** „Baue auf ECO-19a [#55] und ECO-19b [#56] nach Review auf. Fordere zuerst den belegten Original-SOL-1m-Datensatz und echten TV-Export inkl. Wick/Alerts an. Reproduziere die dokumentierten 5m/0.1-Geometriedifferenzen, implementiere nur nach Quellenvergleich historisch echte Wicks und überprüfe Renko→IMBA-Flipzeiten/Seiten strikt. Dann erst entwickle einen persistenten, inkrementellen IMBA-/Flip-/TP2-Zielpositions- und Stop-Executor mit echten Marktpreisen, nicht mit Renko-Kerzenpreisen. Verwende die unveränderliche 90/10-Ledger-Grenze, kein Future-Leak, kein Blind-Hebel und einen zeitlich unabhängigen OOS-Fold. Änderungen nur als neue Draft-PR, keinerlei Live-Railway-/KuCoin-/Kraken-Befehle.“
+
+**Stack-Status:** #56 basiert auf #55 → #53 → #52 → #47. Wie zuvor: vor Merge auf den Integrationsbranch zuerst die jeweiligen Eltern-PRs überprüfen und identische Abhängigkeitskopien deduplizieren; bis dahin nur Forschungsbranches. Masterissue [ECO-19 #54](https://github.com/MartinLiteAndFog/quant/issues/54) bleibt offen, bis echte Originaldaten, Signalsource-Parität und unabhängig geprüfter Backtest nachgewiesen sind.
