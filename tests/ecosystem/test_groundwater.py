@@ -103,6 +103,25 @@ class GroundwaterTests(unittest.TestCase):
         self.assertEqual(p.by_strategy("trapped").used_margin, D("10"))
         self.assertEqual(sum((e.entry_capacity for e in p.entitlements), D("0")), D("0"))
 
+    def test_many_weighted_plants_do_not_overspend_from_decimal_rounding(self):
+        # Detected by ECO-17 day-cycle on populations larger than 23.
+        for day in range(35):
+            nav = D("100") + D(".02") * (day + 1)
+            account = Account("kucoin", "USDT", nav, D("20"))
+            plants = [
+                Demand(f"plant-{i:02d}", "kucoin",
+                       D(str(i + 1)) * (D(".80") + D(str(day % 7)) * D(".003")),
+                       used_margin=D("0.05") if i == 0 else D("0"))
+                for i in range(31)
+            ]
+            plan = allocate_groundwater([account], plants)
+            used = sum((item.amount for item in plan.entitlements), D(0))
+            free = sum((item.entry_capacity for item in plan.entitlements), D(0))
+            self.assertLessEqual(used, plan.distributable)
+            self.assertGreaterEqual(plan.unallocated, D(0))
+            self.assertLessEqual(free, account.free_margin)
+            self.assertEqual(plan.reserve, nav * D(".10"))
+
     def test_non_finite_or_float_input_rejected(self):
         for invalid in ("NaN", "Infinity", "-1", 3.2):
             with self.subTest(invalid=invalid):
