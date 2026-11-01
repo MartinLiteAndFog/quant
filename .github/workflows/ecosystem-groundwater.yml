@@ -1,0 +1,25 @@
+name: Ecosystem Groundwater Paper-Only Tests
+
+on:
+  pull_request:
+    paths:
+      - 'src/quant/ecosystem/capital/**'
+      - 'tests/ecosystem/test_groundwater.py'
+      - '.github/workflows/ecosystem-groundwater.yml'
+  workflow_dispatch:
+
+jobs:
+  pure-capital:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    permissions:
+      contents: read
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Pure Decimal capital and safety tests (no venue access)
+        run: python -m unittest discover -s tests/ecosystem -p test_groundwater.py -v
