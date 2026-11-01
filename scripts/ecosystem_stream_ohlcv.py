@@ -38,6 +38,15 @@ def main() -> None:
         details=json.loads(args.provenance.read_text(encoding="utf-8"))
         if type(details) is not dict:
             raise ValueError("provenance must be a JSON object")
+        required={"source","license","symbol","market_type",
+                  "contract_multiplier","interval_seconds",
+                  "synthetic","timezone","timestamp_semantics"}
+        missing=required-set(details)
+        if missing:
+            raise ValueError("provenance must explicitly specify: "+
+                             ", ".join(sorted(missing)))
+        if type(details["synthetic"]) is not bool:
+            raise ValueError("synthetic provenance flag must be explicit boolean")
         provenance=Provenance(**details)
         manifest=ingest_ohlcv(
             args.source,args.output,provenance,
