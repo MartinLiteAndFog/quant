@@ -180,6 +180,23 @@ class TestStreamingIndex(unittest.TestCase):
             read_window_as_dataset(self.dest,FIRST,FIRST+timedelta(minutes=10),
                                    max_bars=100_001)
 
+    def test_cli_refuses_implicit_real_data_without_explicit_synthetic_flag(self):
+        source=self.root/"provenance-flag.csv"
+        make_file(source,[0,1,2])
+        details=asdict(PROVENANCE)
+        del details["synthetic"]
+        prov=self.root/"missing_flag.json"
+        prov.write_text(json.dumps(details),encoding="utf-8")
+        run=subprocess.run([
+            sys.executable,"scripts/ecosystem_stream_ohlcv.py",
+            "--source",str(source),"--provenance",str(prov),
+            "--output",str(self.dest),
+        ],capture_output=True,text=True)
+        self.assertEqual(run.returncode,2)
+        self.assertIn("explicitly specify",run.stderr)
+        self.assertIn("synthetic",run.stderr)
+        self.assertFalse(self.dest.exists())
+
     def test_large_fixture_does_not_materialize_entire_series_in_memory(self):
         large=self.root/"large.csv.gz"
         n=40_000
