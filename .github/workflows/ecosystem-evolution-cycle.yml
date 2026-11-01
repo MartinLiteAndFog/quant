@@ -26,3 +26,5 @@ jobs:
           python-version: '3.11'
       - name: Deterministic self-evolution, budget conservation and flat-only safety
         run: python -m unittest discover -s tests/ecosystem -p test_evolution_cycle.py -v
+      - name: 30-day synthetic multi-generation CLI report
+        run: python scripts/ecosystem_evolution_demo.py --days 30 --seed 2026 --equity 100
