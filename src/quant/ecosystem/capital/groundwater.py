@@ -205,10 +205,14 @@ def allocate_groundwater(
     reserve = max(ZERO, equity) * (Decimal("1") - RATIO)
     available = max(ZERO, equity) * RATIO
     risk_breach = any(a.equity < ZERO for a in accts)
+    # Distressed/negative accounts reduce the portfolio's net NAV. Do not
+    # allocate 90% of gross positive NAV and accidentally spend the reserve.
+    gross_positive_budget = sum((max(ZERO, a.equity) * RATIO for a in accts), ZERO)
+    scale = min(Decimal("1"), available / gross_positive_budget) if gross_positive_budget else ZERO
     claims: list[Entitlement] = []
     for a in accts:
         own = [d for d in desires if d.account_id == a.account_id]
-        budget = max(ZERO, a.equity) * RATIO
+        budget = max(ZERO, a.equity) * RATIO * scale
         if not own:
             continue
         balances = _waterfill(budget, own)
