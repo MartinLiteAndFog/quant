@@ -1,0 +1,23 @@
+name: Ecosystem Bee Breeding Paper Research
+on:
+  pull_request:
+    paths:
+      - 'src/quant/ecosystem/breeding/**'
+      - 'tests/ecosystem/test_bees.py'
+      - '.github/workflows/ecosystem-bees.yml'
+  workflow_dispatch:
+jobs:
+  genetics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 7
+    permissions:
+      contents: read
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Protected gene breeding and budget invariants
+        run: python -m unittest discover -s tests/ecosystem -p test_bees.py -v
