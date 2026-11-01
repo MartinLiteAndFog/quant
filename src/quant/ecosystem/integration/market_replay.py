@@ -15,7 +15,7 @@ import json
 from typing import Mapping, Sequence
 
 from quant.ecosystem.market_data import (
-    Costs, Dataset, PaperFill, PaperOrder, funding_cashflow, number,
+    Costs, Dataset, PaperFill, PaperOrder, number,
     paper_fill, timestamp,
 )
 from quant.ecosystem.sim_clock.clock import IntradayEvent, SimulationState, DayResult
@@ -252,9 +252,8 @@ def replay_market(
         known_at,bar=items[-1]
         next_midnight=datetime.combine(day+timedelta(days=1),time.min,UTC)
         age=(next_midnight-known_at).total_seconds()
-        if age>config.max_mark_staleness_seconds:
-            # Incomplete history is acceptable only while flat; below, at
-            # mark execution, open positions fail closed.
+        if age>config.max_mark_staleness_seconds and config.require_full_utc_days:
+            # Incomplete history must not count as a day-end NAV.
             actions.append((known_at,3,"stale-mark:"+day.isoformat(),(bar,True)))
         else:
             actions.append((known_at,3,"mark:"+day.isoformat(),(bar,False)))
@@ -266,7 +265,6 @@ def replay_market(
     last_ref:dict[str,Decimal]={}
     all_events:dict[date,list[IntradayEvent]]={}
     completed_trades:dict[date,dict[str,int]]={}
-    position_snapshots:dict[date,dict[str,Decimal]]={}
     active_intervals:dict[str,list[tuple[datetime,datetime|None]]]={}
     opened_at:dict[str,datetime]={}
     multiplier=_decimal(dataset.provenance.contract_multiplier,"contract multiplier")
@@ -354,33 +352,24 @@ def replay_market(
     event_days=set(all_events)
     if event_days-set(days):
         raise ReplayError("event day not covered by market history")
-    accumulated:dict[str,Decimal]={}
-    daily=[]
-    for day in days:
-        for event in sorted(all_events.get(day,()),key=lambda e:(e.available_at,e.event_id)):
-            if event.available_at.date()!=day:
-                raise ReplayError("known-next-day event requires carryover adapter")
-        for at,prio,key,payload in actions:
-            if at.date()!=day:
-                continue
-            if isinstance(payload,tuple) and isinstance(payload[0],PaperFill):
-                accumulated[payload[0].strategy_id]=positions.get(payload[0].strategy_id,ZERO)
-        # Track end positions via executed fills only; derive from chronological
-        # per-day fills instead of looking at future overall positions.
-        daily.append(ReplayDay(day,tuple(sorted(all_events.get(day,()),
-                                                key=lambda e:(e.available_at,e.event_id))),
-                               tuple(sorted(completed_trades.get(day,{}).items())),
-                               tuple(sorted(signal_counts.get(day,{}).items())),
-                               ()))
     positions_now:dict[str,Decimal]={}
     results=[]
-    for record in daily:
+    for day in days:
+        day_events=tuple(sorted(all_events.get(day,()),
+                                key=lambda e:(e.available_at,e.event_id)))
+        for event in day_events:
+            if event.available_at.date()!=day:
+                raise ReplayError("known-next-day event requires carryover adapter")
         for fill in fills:
-            if fill.executed_at.date()==record.day:
+            if fill.executed_at.date()==day:
                 signed=fill.quantity if fill.side=="buy" else -fill.quantity
                 positions_now[fill.strategy_id]=positions_now.get(fill.strategy_id,ZERO)+signed
-        results.append(ReplayDay(record.day,record.events,record.completed_trades,
-                                  record.signals_seen,tuple(sorted(positions_now.items()))))
+        if any(q for q in positions_now.values()) and day not in completed:
+            raise ReplayError("open position without causal daily closing mark")
+        results.append(ReplayDay(day,day_events,
+                                  tuple(sorted(completed_trades.get(day,{}).items())),
+                                  tuple(sorted(signal_counts.get(day,{}).items())),
+                                  tuple(sorted(positions_now.items()))))
     return ReplayOutput(tuple(results),tuple(fills),dataset.fingerprint,
                         _iso_hash(ordered,sorted(funding,key=lambda x:(x.at,x.funding_id))),
                         dataset.report["provenance"],dataset.provenance.synthetic)
