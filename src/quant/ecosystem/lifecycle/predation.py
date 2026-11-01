@@ -229,7 +229,9 @@ def select_predators(
     if len({p.strategy_id for p in population}) != len(population):
         raise LifecycleError("duplicate strategy ID in population")
     rng = _rng(simulation_id, seed, day, hunter)
-    remaining = [p for p in population if huntable(p, config)]
+    # Canonical ordering prevents callers from changing weighted RNG draws.
+    remaining = sorted((p for p in population if huntable(p, config)),
+                       key=lambda p: p.strategy_id)
     updated = {p.strategy_id: p for p in population}
     events: list[PredationEvent] = []
     for attempt in range(min(config.attacks_per_day, len(remaining))):
