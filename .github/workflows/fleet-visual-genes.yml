@@ -1,0 +1,35 @@
+name: Fleet Plant Visual Genetics
+
+on:
+  pull_request:
+    paths:
+      - 'apps/fleet-desktop/src/lib/plantAppearance.ts'
+      - 'apps/fleet-desktop/src/lib/evolutionMeadow.ts'
+      - 'apps/fleet-desktop/src/components/EvolutionMeadow.tsx'
+      - 'apps/fleet-desktop/tests/plantAppearance.smoke.mjs'
+      - '.github/workflows/fleet-visual-genes.yml'
+  workflow_dispatch:
+
+jobs:
+  genetics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: apps/fleet-desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/fleet-desktop/package-lock.json
+      - run: npm ci
+      - name: Pure seeded visual genetics tests
+        run: node --experimental-strip-types tests/plantAppearance.smoke.mjs
+      - name: Existing genetic library smoke tests
+        run: node --experimental-strip-types tests/geneLibrary.smoke.mjs
+      - name: Typecheck and bundle visual meadow
+        run: npm run build
