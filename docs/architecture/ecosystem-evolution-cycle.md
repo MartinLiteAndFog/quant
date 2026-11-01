@@ -20,8 +20,11 @@
 Auf Branch `codex/ecosystem-evolution-cycle` mit Python 3.11 und `PYTHONPATH=src`:
 
 ```bash
-python -m unittest discover -s tests/ecosystem -p test_evolution_cycle.py -v
+PYTHONPATH=src python -m unittest discover -s tests/ecosystem -p test_evolution_cycle.py -v
+PYTHONPATH=src python scripts/ecosystem_evolution_demo.py --days 30 --seed 2026 --equity 100
 ```
+
+The demo emits a stable JSON report with live population, births, maximum generation, uncapitalized Hive candidates, reserve, groundwater depth and SHA-256 of the canonical checkpoint; all input gain/loss events are explicitly labeled synthetic.
 
 Die Tests simulieren 30 Tage mit gemeldeten synthetischen Ergebnis-/Chancen-Ereignissen, mehr als eine Generation, Kapitalbegrenzung und Parent-Budget-Umbuchung; prüfen Restart/Replay, Mutationen auf realen Genachsen, OOS-neutralen Hive, Rinde und Dormanz, keine freie Entitlement-Freigabe vor externem confirmed-flat, Safety-Hardcaps und VisualDNA-Neutralität. Ein fehlendes oder falsches Konto-, Wetter-, Seed-, Trade- oder Reconciliation-Ereignis schlägt fehl.
 
