@@ -17,9 +17,12 @@ The legacy Blaupunkt TradingView alert keeps its current address:
 
   https://blaupunkt-production.up.railway.app/webhook/tv-execute
 
-New family strategy alerts will use:
+ALL 12 family strategy IDs eventually share ONE URL:
 
   https://blaupunkt-production.up.railway.app/webhook/family
+
+Until the controlled migration, the existing Blaupunkt parent keeps its
+old /webhook/tv-execute alarm. No per-strategy URL or per-strategy token.
 
 Both paths are served from ONE ASGI process in the future app entrypoint:
 
@@ -46,11 +49,14 @@ Variables needed for an eventual STAGING exercise (not yet configured):
 - DATABASE_URL: connection to shared Postgres, kept secret in Railway.
 - FAMILY_ID=blaupunkt
 - FAMILY_ROUTER_ENABLED=1
-- FAMILY_ADMIN_TOKEN=<new random admin token, Railway secret>
+- FAMILY_ADMIN_TOKEN=<separate secret for admin registration API>
+- FAMILY_WEBHOOK_TOKEN=<ONE shared secret for ALL 12 TradingView alerts>
 
-Do not reuse the existing TradingView webhook token as an admin key.
-Do not copy credentials into a Pine file in GitHub. All endpoints reject
-missing or invalid admin authentication.
+Keep FAMILY_ADMIN_TOKEN and FAMILY_WEBHOOK_TOKEN separate. A strategy_id
+is a routing identifier, NOT authentication. Put the shared webhook token
+only into TradingView's private per-alert input/message and Railway env,
+never into versioned source control. The endpoint rejects invalid tokens,
+unknown strategy IDs and replayed/conflicting event IDs.
 
 ## 1. Bootstrap existing Blaupunkt parent
 
@@ -76,9 +82,9 @@ position is imported, and there is no new order.
     "configuration": {"imba_sensitivity": 18.2, "ttp_pct": 0.5}
   }
 
-Server returns the strategy_id and a unique token_once. Save the token
-immediately; its hash, not its plaintext, is stored. It cannot be retrieved
-later. No subaccount API keys are generated for this child/parent.
+Server returns the strategy_id. NO token is generated per strategy.
+All strategy IDs use the same FAMILY_WEBHOOK_TOKEN configured on Railway.
+No subaccount API keys are generated per strategy.
 
 For a daughter, add "parent_strategy_id":"blaupunkt" or the respective parent.
 Use the same "pool" as its direct parent.
@@ -96,7 +102,7 @@ adds strategy_id and event_id.
 
 In the strategy's Railway webhook inputs:
 - Strategy ID / Source = blaupunkt-parent-002
-- Token = token_once returned from registering THIS strategy
+- Token = the SAME FAMILY_WEBHOOK_TOKEN for every strategy
 - Symbol = SOL-USDT
 - Enable the chosen alert mechanism (strategy order fills or alert() calls)
   consistently with the existing TV strategy; do not enable duplicates.
@@ -115,7 +121,27 @@ The URL won't accept signals on production until the family router is
 mounted and explicitly enabled. For testing, point alerts to a standalone
 staging shadow service with its own domain.
 
-## 4. Inspect received alerts and budgets
+## 4. Bootstrap the 3x3 pilot and inspect budgets
+
+After the shadow API has been enabled, authenticate with
+X-Family-Admin-Token to:
+
+- GET /api/family/pilot-roster : preview 3 parents + 9 daughters
+- POST /api/family/bootstrap-pilot : register the legacy parent plus 11
+  new IDs, one time (no trading, no new webhook tokens)
+- POST /api/family/strategies : register later parents/daughters individually
+
+The immutable starter IDs are:
+- Parent 1 blaupunkt; daughters blaupunkt-d01/d02/d03
+- Parent 2 blaupunkt-p02; daughters blaupunkt-p02-d01/d02/d03
+- Parent 3 blaupunkt-p03; daughters blaupunkt-p03-d01/d02/d03
+
+All 11 newly created TradingView alerts share the exact same URL and
+FAMILY_WEBHOOK_TOKEN. Only strategy_id, event_id, action and side differ.
+The existing Blaupunkt parent's alarm remains on the legacy path until
+safe migration.
+
+## 5. Inspect received alerts and budgets
 
 Authorized read-only endpoints:
 - GET /api/family/strategies
@@ -134,7 +160,7 @@ receives 2% of its DIRECT parent's allocated budget; descendants are nested.
 Angel/Fishing bots remain outside this evolution-family 90% split and
 need an explicitly separate budget before sharing a funded account.
 
-## 5. Hard blockers to LIVE multi-bot execution
+## 6. Hard blockers to LIVE multi-bot execution
 
 - Current Blaupunkt executor reads one signed net position per symbol and
   can cancel ALL stops/orders. This is INCOMPATIBLE with child execution.
