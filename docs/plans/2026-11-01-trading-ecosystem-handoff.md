@@ -338,3 +338,47 @@ Nur sichtbare Tiles erhalten Render-Budget. Unsichtbare Tiles werden im Simulato
 - **Alle übrigen ECO-Tasks:** als GitHub-Issues spezifiziert, nicht dadurch als erledigt zu betrachten.
 
 Die PRs #40 und #41 sind absichtlich separat und zielen auf den bestehenden Entwicklungsbranch, nicht auf `main`. Vor Review/Merge sind die neuen Funktionen in PR #22 beziehungsweise Produktion **noch nicht enthalten**. Live-KuCoin, Railway, TradingView und bestehende Positionen wurden nicht verändert.
+
+## 19. Weitere implementierte Basismodule: Tages-Uhr, Pflanzenökologie und optische DNA (2026-11-01)
+
+**Status: Drei neue isolierte Draft-PRs; CI geprüft, nicht gemergt, nicht live.** Diese Sektion konkretisiert die vorherigen Kapitel und die Nutzer-Nachträge zu vererbbaren Blattformen, Verzweigung und Kakteen.
+
+### ECO-03 / Issue #25 — [Draft PR #42](https://github.com/MartinLiteAndFog/quant/pull/42)
+
+Branch `codex/ecosystem-daily-clock`, Modul `src/quant/ecosystem/sim_clock/clock.py`, Tests `tests/ecosystem/test_sim_clock.py`, Doku `docs/architecture/ecosystem-daily-clock.md`:
+- Reproduzierbare tägliche UTC-Ökologie-/Ereignis-Uhr, Phasen `execution → metrics → capital → ecology → breeding → lifecycle → snapshot`, individuelle eingehende Intraday-/Signal-Ereignisse mit Kausalitätsprüfung `occurred_at <= available_at`, unique event_id.
+- Exakte Decimal-NAV und 90/10-Schutzreserve, signierte **inkrementelle** PnL-/Fees-/Funding-Deltas getrennt von externen Cashflows. Keine mehrfach angerechnete unrealized/realized PnL; der Simulator erzeugt keine Handelsfills.
+- Pure, separat ge-seedete Reducer pro Tag und Phase; kanonische, serialisierbare Checkpoints, Pause/Resume und Replay. Duplikate/doppelte Tagesausführung führen zu Fehlermeldung, nicht zu weiterer Kapitalveränderung.
+- Eigener GitHub-Workflow **erfolgreich**. Integrationsadapter zu ECO-01/02/05/06/07 steht aus. Nicht als abgeschlossene 5-Jahres-Simulation ausgeben.
+
+### ECO-06 / Issue #28 — [Draft PR #43](https://github.com/MartinLiteAndFog/quant/pull/43)
+
+Branch `codex/ecosystem-daily-ecology`, Modul `src/quant/ecosystem/ecology/physiology.py`, Tests `tests/ecosystem/test_ecology.py`, Doku `docs/architecture/ecosystem-daily-ecology.md`:
+- Ein eigenständiger pure `ecology_day(previous_groundwater, day, global_nav, plant_inputs, observed_weather, config)`, tägliches Wurzel- und Blatt-/Verzweigungswachstum, gleichzeitiger hoher vertikaler und lateraler Wurzeltrieb, **Opportunitätskosten statt realem Geldverbrauch**.
+- **Funktionale Genome:** `root_growth`, `root_depth`, `root_spread`, `branching`, `leaf_count` (Integer, niemals unter 1), `leaf_size`, `bark_strength`, `dormancy`, `photosynthetic_rind` (bool), `rind_efficiency`, zusätzlich strukturell verpflichtende Finanz-/Sicherheitsfelder `reproduction_budget`, `protective_stop`, `max_leverage`, `max_margin_fraction`.
+- **Kaktus-Kernregel:** `leaf_count == 1` und `photosynthetic_rind == true` → die **grüne Stammoberfläche / grüne Sprossrinde übernimmt die Photosynthese**; keine sichtbare normale Blattkrone. `rind_efficiency` reguliert die effektive Lichtaufnahme. **Fraßschutz `bark_strength` ist getrennt** von Lichtaufnahme; ein gepanzerter Kaktus bekommt niemals automatisch gigantischen Hebel oder Kapitaleinsatzzugang.
+- **Verzweigungs-Trading-Effekt:** Mehr `branching` plus mehr `leaf_count` erhöht die Photosynthese-/Blattfläche und erlaubt bei genügend Sonne höhere eigene Kapitalnutzung sowie effektiven Hebel. Wurzeln konkurrieren um dieselbe Wachstumsintensität und begrenzen Kapitalnutzung. Dormanz reduziert Aktivität, ohne das Budget aus dem Ledger zu löschen.
+- Grundwasser-Tiefe `d(E)=d_min+(d_max-d_min)*exp(-k*max(E,0)/E_ref)`, `d_min>0`; je mehr Nettoequity, desto näher an der Erdoberfläche, niemals darüber. Getrennte glättende Anstiegs- und Fallgeschwindigkeiten, Hysterese beim Root-Zugang, evidenzabhängige Zulassung und optionaler maximaler Empfängeranteil; **kein** erzwungener Mindestanteil. Mindestens 10 ECO-06-Szenarientests mit eigenem CI-Workflow; nach letztem Commit erneuten CI-Status prüfen.
+- `intended_margin`, `effective_leverage`, `intended_notional` sind **nur unverbindliche Paper-Absichten**. Nicht als echtes verfügbares Brokerage-Kapital behandeln. ECO-05 muss freie Margin, Konto-, Instrument- und offene Orders-Limits später nachprüfen.
+- Sonne ist kausal bekanntes Wetter/Marktregime bis Tagesende; **kein** Future Leak. Tagesend-Sonnenwert darf im späteren Minute-/Signalhandel nicht für früher liegende Orders verwendet werden. Doppelwirkung auf Auslastung und Leverage ist bewusst experimentell und für ECO-12-Ablation vorgesehen.
+
+### ECO-15 / Issue #44 — [Draft PR #45](https://github.com/MartinLiteAndFog/quant/pull/45)
+
+Branch `codex/ecosystem-visual-dna`, Dateien `apps/fleet-desktop/src/lib/plantAppearance.ts`, `evolutionMeadow.ts`, `components/EvolutionMeadow.tsx`, `tests/plantAppearance.smoke.mjs` und `docs/architecture/ecosystem-visual-dna.md`:
+- Jede Pflanze bekommt bei der initialen Aussaat **zufällig, aber mit festem Seed reproduzierbar** eine `VisualDNA`; neue Generationen erben die Gene von Mutter/Vater über Crossover und begrenzte Mutation. Gleiche strategische Gene müssen nicht gleich aussehende Pflanzen erzeugen.
+- **Rein optische, finanziell neutrale DNA:** `hue`, `saturation`, `petalCount`, `petalRoundness`, `bloomTwist`, `stemCurve`, `ribbing`, `spineDensity`, `leafShape`. Sie bestimmen nur Zeichnung, Farbe, Blütenformen, Winkel und Muster; **keinen** Profit, Zugang zu Wasser, Fitness, Positionsgröße, Hebel oder Sicherheitsregeln.
+- **Funktionale Morphologie** für Blattmenge und Verzweigung wird separat gespeichert: `branching`, `leaf_count`, `leaf_size`, `photosynthetic_rind`, `rind_efficiency`, `bark_strength`; in der JS-Monatsdemo noch ausdrücklich **synthetischer Preview-Genotyp**, ECO-06 liefert später die kanonischen täglich berechneten Zustände. Erst ein geprüfter Adapter darf sie zusammenführen.
+- `grass`, `flower`, `shrub`, `cactus` dienen als **zufällig abtastbare genetische Startprofile**, nicht als zwingender oder fester Trading-Bot-Typ. Pflanzenklasse entsteht aus realer Funktion `classifyMorphotype`. Die einblättrige, photosynthetische Kaktus-Rinde bekommt eine grüne gerippte Stängelform mit optionalen Dornen, **statt einer normalen Blütenkrone**.
+- Sichtbare Nachkommen erhalten individuelle, vererbbare Farben, variierende Petal-Anzahl/Drehung, Blattform, Stammkrümmung und tatsächliche Verzweigung. Bestehendes TTP/Sensitivity-Sowing, Familienidentität und risk/safety-Tradinggene bleiben unberührt. 500 deterministische Visual-Gen-Rekombinationen und Frontend-Build; beide GitHub-Workflows beim letzten Check **grün**.
+- Die künftige Unreal-/3D-Darstellung kann dasselbe visual-genetic Snapshot-Feld konsumieren; VisualDNA wird nicht aus lokalen FPS- oder Renderzufallszahlen generiert.
+
+### Abhängigkeiten für weiterarbeitende Agenten
+
+1. **Zuerst Review/Merge ECO-01 Contracts** auf den Integrationsbranch; es existiert bereits ein Code-Branch `codex/ecosystem-contracts`, aber nicht alle PRs verwenden schon denselben Snapshot-Adapter. Adapter dürfen nicht nebenbei Live-Positionsmanagement einschalten.
+2. ECO-03 `sim_clock` ruft einen ECO-06-Ecology-Reducer **nach** causal execution, metrischem NAV-Mark-to-Market und ECO-05-Entitlement-Prüfung. Phasenreihenfolge fix; Simulation benötigt deterministische und Replay-kompatible Datenbank-/Snapshot-Speicherung.
+3. ECO-06-Output **ist keine Buchung**. ECO-05 legt fest, welche Margin pro realem Account tatsächlich verfügbar ist. Ein hoher Blattwert darf weder ungesicherte Margin noch exzessives Notional veranlassen; alle Hard-Caps bleiben global.
+4. ECO-15 ergänzt langfristig VisualDNA/FunctionalMorphology in ECO-01-StrategyGenome/Plant-Snapshot mit Migrations-/Schema-Version und RNG-Seed. Die heutigen TS-Demo-Gene dürfen nicht als neue, unabhängige zweite Handelsgenom-Wahrheit bestehen bleiben.
+5. ECO-11-Detail-UI-Agent und ECO-15 dürfen bei `EvolutionMeadow.tsx` **nicht ungeprüft gegeneinander überschreiben**. Nach Review von PR #45 auf dessen VisualDNA-Schnittstelle aufbauen. Genauso bleibt ECO-04 (`geneLibrary.ts`) in PR #38 der Eigentümer der Sicherheitsgene.
+6. **Nächste freie Pakete:** ECO-07 Fitness/Vitalität; ECO-08 Bienen/Hive; ECO-09 Fresser/Rinde; ECO-12 kontrollierte Out-of-sample-Versuche. Für die nächste Integrationsstufe ein gezieltes `ecosystem-daily-integration`-Ticket schaffen statt wahllos drei isolierte Module direkt nach `main` zu kopieren.
+
+**Unverändert:** alle PRs Draft, Entwicklungszweig unter PR #22; *keine* Live-Orders/Transfers, keine Anpassung von KuCoin/Railway/TradingView, keine automatische Produktionseinführung. Die Wiese bleibt pro Kachel ein zweidimensionaler strategischer Genraum. Ein unendlich komplexes optisches oder funktionales Genom darf den visualisierten 2D-Fine-Tuning-Raum nicht in eine rein verhaltensbasierte PCA-Karte umbiegen.
