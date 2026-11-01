@@ -15,7 +15,7 @@ class SharedTokenTests(unittest.TestCase):
         self.client = TestClient(app)
 
     def test_one_webhook_route_regardless_of_id(self):
-        routes = [r.path for r in app.routes]
+        routes = [getattr(r, 'path', None) for r in app.routes]
         self.assertEqual(routes.count("/webhook/family"), 1)
         self.assertEqual(len(BLAUPUNKT_PILOT_ROSTER), 12)
         self.assertEqual(
