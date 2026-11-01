@@ -289,3 +289,39 @@ Keine Tagesstufe darf Zufallszahlen aus unspezifizierter globaler Quelle verwend
 6. Keine separate Kategorien-Eigenkapitalrechnung, falls sie nicht durch tatsächliche Allokation/Transfer im kanonischen Ledger gedeckt ist.
 
 **Vorrangregel:** Dieser Abschnitt ersetzt die frühere Formulierung in §8 und Issue #33, wonach jede Wiese alle Strategien mit einem „Gen nicht vorhanden“-Bucket darstellen müsse. **Kategorien dürfen Populationen bewusst filtern**; das Gesamtsystem muss jedoch jede Strategie in mindestens einer Kategorie oder als sichtbaren Zuordnungsfehler erfassen. Er ersetzt ebenso ausdrücklich die zwischenzeitlich diskutierte Verhaltenskarte als Standard-Weltgeometrie.
+
+## 17. NEUE ENTSCHEIDUNG: aneinandergelegte Wiesen-Kacheln in Multi-Asset-Regionen
+
+Die einzelne 2D-Genparameterwiese aus §16 bleibt das **kleinste räumliche Optimierungsmodul**. Das ganze Spiel besteht jetzt aus einer mosaikartig arrangierten, zoombaren **Welt aus vielen Wiesen-Kacheln**. Jede Kachel hat ihre eigenen, fachlich sinnvollen zwei Strategiegene, eine Marktdaten-/Strategiemodulfamilie und eine stabile Orts-/Versions-ID. **Kein globales 2D-UMAP/PCA.** In einer Kachel sind nur Genom-kompatible Pflanzen sichtbar. Man kann von der Gesamtwelt auf eine Region oder eine einzelne Wiese hineinzoomen, einzelne Tiles markieren oder nebeneinander vergleichen.
+
+### Räumliche Hierarchie und Datenmodell
+
+- `World`: gemeinsamer Simulations-Tick, Konto-/Equity-Bilanz, Experiment-/RNG-Seed. Eine einzige Equity, **nicht** eine neue Equity pro Kachel.
+- `Region`: Assetklasse/Marktumfeld, z. B. `crypto`, `fx`, `commodities`, `indices`, später beliebig; Region besitzt Layout/Tile-IDs und explizite Markt-/Währungs-/Exchange-Informationen.
+- `AssetUniverse`: `asset_id`, `symbol`, `asset_class`, `quote_currency`, `instrument_type`, `data_source_id`, `data_available` (keine erfundenen Daten), `contract_spec_version`; bei Cross-Asset-PnL gesonderte FX-Bewertung und Kontoabgleich nötig.
+- `MeadowTile`: `tile_id`, `region_id`, `asset_id`, `strategy_module_family`, `axis_x_gene_id`, `axis_y_gene_id`, `axis_bounds`, `schema_version`, `tile_world_xy`, `home_owner_rules`. Zwei reale ausführbare/parametrisierbare Gene; keine 2 „geschenkten“ Darstellungsparameter, die im Trading nichts bewirken.
+- `StrategyPlacement`: global eindeutige `strategy_id`, genau eine `home_tile_id` für **Sowing, lokale Wurzeln, Fraß, exklusive Budgetzuweisung**, daneben null oder mehrere kompatible readonly `projection_tile_ids`. Wenn keine sinnvolle Achsenkategorie existiert, `unassigned` plus sichtbare Aufgabe „neue Kategorie erstellen“.
+- `WorldViewportState`: `world / region / tile / underground`, Kamera/Kachelauswahl, Detailgrad/LOD. UI-Zustand verursacht **keine** Mutationen, kein RNG-Drift, keine Kapitaltransfers.
+- `MyceliumKnowledgeEdge`: gerichtete, versionierte Wissenskante zwischen verschiedenen Tiles/Regions mit Quelle, empirischem/experimentellem Score, Stichprobe, Validierungslevel, Gen-/Modul-Kompatibilität; *kein* Kapitalbeutel und **kein** separat lebender Pilz.
+
+### Rendering und Zoom
+
+**Welt-Zoom:** gekachelte Weltübersicht mit Assetklasse, Vegetationsdichte, risikoadjustierter Performance, Kapitalzuteilung und dynamischen Vegetations-/Wasserindikatoren. **Regions-Zoom:** mehrere Kacheln samt aggregierten Myzel-Verbindungen und Kapital-/Wissensflüssen. **Tile-Zoom:** volle 2D-Parameterwiese, einzelne Pflanzen, Bienen, Fresser, Wurzeln/Grundwasserschnitt, tatsächliche Achsgenwerte und Genom-Details. **Unterwelt-Zoom:** aggregierte Paper-Forschungscluster, kein individueller Pilz für jedes ehemalige Genom.
+
+Nur sichtbare Tiles erhalten Render-Budget. Unsichtbare Tiles werden im Simulator **identisch** weiterberechnet; ihre Strategie-/Paper-Daten werden **nicht** durch Rendering gerastert. LOD/Cluster statt Millionen sichtbarer individueller Pflanzen. Das ganze Spiel muss auch mit einer günstigeren 2D/2.5D-Vorschau funktionieren, bevor eine aufwendige Game-Engine hinzukommt.
+
+**Unreal Engine 5**: Option für spätere attraktive 3D-Landschaft als **read-only Renderer**, der simulierte State-Snapshots/Events über eine versionierte Schnittstelle konsumiert. Simulation, deterministische Papierausführung, Buchführung und evolutionäre Forschung dürfen **nicht an Unreal gekoppelt** sein. Entscheidung zwischen React/WebGL/Three.js und Unreal erst nach technischem Prototyp und CPU/GPU/RAM-Benchmarks auf dem tatsächlichen MacBook Pro.
+
+### Evolution, Myzel und Multi-Asset-Kapital
+
+- Lokale Bienen kreuzen/säen innerhalb einer Home-Kachel und fine-tunen dabei genau deren zwei Achs-Gene. Bienen/Hive können kompatible Genome zwischen Tiles übertragen, aber Kind-ID, genotypisches Modulpaket und neuer Tile-Home-Status müssen explizit validiert werden.
+- Das „Myzel“ verbindet **aggregierte Forschungsinformationen** über Parametergruppen und Regionsgrenzen. Transfer von Gene-Insights aus SOL nach BTC/Öl/FX ist **nur Hypothese**, nicht automatisch wahre oder profitable Strategie; Cross-Asset Backtest/OOS notwendig.
+- Globales NAV/Grundwasser und 90/10-Reserveprinzip gelten **über alle Wiesen und echten zugeordneten Accounts gemeinsam**. Regionale Wasserstände dürfen die globale Equity aus *nur* einer Quelle ableiten oder explizite, tatsächlich gedeckte Subbudgets anzeigen. Kontoübergreifendes verfügbares Kapital ohne realen Transfer nicht als handelbar ausweisen.
+- Markt-/Assetklassen-Tests benötigen je Asset eigene Zeitreihen, Gebühren, Funding/Finanzierung, Kontraktkonvention und ggf. FX-Konversion; vorliegende SOL-Daten dürfen nicht als Öl-/Forex-Daten ausgegeben werden.
+- Für Statistiken und Kapitalrechnung `strategy_id` global deduplizieren. Kachelstatistiken unterscheiden Heimat-Population von readonly projizierten Vergleichsexemplaren.
+
+### Agentenauftrag / Ticket
+
+**[ECO-14 / Issue #39](https://github.com/MartinLiteAndFog/quant/issues/39)** beschreibt die selbstständig umsetzbare Tile-/Region-/Myzel-Schicht inklusive Codeeigentum, Prompt, Tests und optionaler Unreal-Bridge. Sie ist als getrenntes Paket neben [ECO-11 / #33](https://github.com/MartinLiteAndFog/quant/issues/33) geplant: #39 verantwortet Welt-/Regionskarte, Tile-Registrierung, Kompatibilitäts-/Deduplikationslogik und Datenadapter; #33 den Detail-Pflanzenrenderer und Wurzel-/Tier-Effekte. Nicht beide Agenten gleichzeitig dieselben UI-Dateien ändern.
+
+**Demo-Assets (nur synthetisch bis echte Daten vorhanden):** SOL-IMBA Sensitivity×TTP, SOL-RSI Periode×Einstiegsschwelle, BTC-Trend Trendlänge×Exit, WTI-Mean-Reversion RSI×Exit, FX-Breakout Fenster×Stop, optional Nasdaq. Die Asset-Kacheln sind keine Aussage, dass Historie oder Strategiemodul implementiert sind.
