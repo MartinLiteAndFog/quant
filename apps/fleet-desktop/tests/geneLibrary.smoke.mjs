@@ -32,9 +32,9 @@ const pruned = breedGenomes(left,right,lib,"pruner",()=>0.01);
 assert.ok("sensitivity" in pruned && "ttp" in pruned);
 assert.ok(!("stop_loss_pct" in pruned));
 // Value growth is bounded per MONTH and smoothly logarithmic in the view.
-assert.equal(growBiomass(1,0.36),1.36);
-assert.equal(growBiomass(1,1.6),1.36);
-assert.equal(growBiomass(1,-0.2),0.8);
+assert.ok(Math.abs(growBiomass(1,0.36)-1.36)<1e-12);
+assert.ok(Math.abs(growBiomass(1,1.6)-1.36)<1e-12);
+assert.ok(Math.abs(growBiomass(1,-0.2)-0.8)<1e-12);
 assert.ok(growBiomass(growBiomass(1,-0.2),-0.2)>0);
 assert.ok(visualPlantHeight(1e9)<40);
 assert.ok(visualPlantHeight(2)>visualPlantHeight(1));
