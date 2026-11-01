@@ -1,0 +1,34 @@
+name: Ecosystem Tile World - Typecheck and Pure Navigation Tests
+
+on:
+  pull_request:
+    paths:
+      - 'apps/fleet-desktop/src/lib/tileWorld*.ts'
+      - 'apps/fleet-desktop/src/components/TileWorldOverview.tsx'
+      - 'apps/fleet-desktop/src/App.tsx'
+      - 'apps/fleet-desktop/tests/tileWorld.smoke.mjs'
+      - '.github/workflows/ecosystem-tile-world.yml'
+  workflow_dispatch:
+
+jobs:
+  tile-world:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: apps/fleet-desktop
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: apps/fleet-desktop/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Test real gene-axis coordinates, world deduplication and research-only mycelium
+        run: node --experimental-strip-types tests/tileWorld.smoke.mjs
+      - name: Typecheck and bundle tile world
+        run: npm run build
