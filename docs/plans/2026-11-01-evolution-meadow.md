@@ -19,7 +19,16 @@ Every strategy is represented by a flower rooted at one parameter pair:
 As a user rotates the 3D projection, clusters of profitable and unsuccessful
 parameter regions become visible. Selecting a plant shows its strategy ID,
 parent lineage, sensitivity, TTP, net return, drawdown, trade count, score,
-and how many seeds its rating would permit.
+and how many seeds its rating would permit. The demo highlights up to five
+estimated fitness-cluster centroids on the ground, grouped from nearby
+credible/high-score strategies using normalized Euclidean distances.
+
+**Projection caveat:** this 2D ground plane is meaningful only when the
+remaining strategy inputs, symbol, timeframe, leverage conventions and data
+feed are the same (or explicitly filtered). Otherwise an apparent thriving
+cluster may be caused by hidden third/fourth input differences, not TTP or
+sensitivity. The live view must allow filtering or faceting by the full
+immutable strategy configuration.
 
 ## Mathematics
 
