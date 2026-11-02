@@ -1,7 +1,8 @@
 /**
  * TradingView Strategy Builder references imported as candidate *seed varieties*.
- * They are not executable strategy formulas: "Elliott Wave Detector Pro" and its
- * MTF RSI filter are external opaque inputs. Historical trades can be audited,
+ * They are not executable strategy formulas: EW v3.2 Pine is now supplied and
+ * partially signal-verified, but MTF RSI chart semantics and the Tradingade
+ * Strategy Builder order state are not independently parity-verified. Historical trades can be audited,
  * never promoted into causal fitness or live orders.
  *
  * No webhook payloads, credentials or raw XLSX files belong in this module.
@@ -27,7 +28,7 @@ export type TvReferenceSeed = Readonly<{
   slippageTicks: number;
   expectedClosedTrades: number;
   expectedOpenTrades: 0 | 1;
-  signalFormulaStatus: "external_source_missing";
+  signalFormulaStatus: "pine_source_found_partial_signal_parity";
   executionMode: "reference_only_no_live_orders";
   // The builder's HH/LL Lookback=20 is attached to INACTIVE exit modes;
   // it must not be mistaken for the EW entry lookback.
@@ -39,7 +40,7 @@ const common = {
   chartType: "Renko", chartTimeframe: "5 minutes",
   entrySource: "Elliott Wave Detector Pro", longRsiThreshold: 55,
   shortRsiThreshold: 75, orderSizePercent: 90,
-  signalFormulaStatus: "external_source_missing",
+  signalFormulaStatus: "pine_source_found_partial_signal_parity",
   executionMode: "reference_only_no_live_orders",
   entryLookbackBars: null, ewPivotLength: null,
 } as const;
@@ -74,7 +75,9 @@ export type TvReferenceTrade = Readonly<{
 }>;
 
 export type TvSourceManifest = Readonly<{
-  schemaVersion: 1;
+  schemaVersion: 2;
+  sourceTimeZone: "Europe/Berlin";
+  timeSemantics: "excel_wall_time_europe_berlin_normalized_to_utc";
   claim: "tradingview_trade_reference_only_not_signal_parity";
   secretsExcluded: true;
   seeds: readonly Readonly<{
@@ -103,7 +106,8 @@ export type TvReferenceAudit = Readonly<{
 export function auditTradingViewReferenceManifest(source: unknown): TvReferenceAudit {
   if (!source || typeof source !== "object") throw new RangeError("Reference manifest must be an object.");
   const data = source as TvSourceManifest;
-  if (data.schemaVersion !== 1 || data.claim !== "tradingview_trade_reference_only_not_signal_parity"
+  if (data.schemaVersion !== 2 || data.sourceTimeZone !== "Europe/Berlin"
+    || data.timeSemantics !== "excel_wall_time_europe_berlin_normalized_to_utc" || data.claim !== "tradingview_trade_reference_only_not_signal_parity"
     || data.secretsExcluded !== true || !Array.isArray(data.seeds)
     || data.seeds.length !== TRADINGVIEW_REFERENCE_SEEDS.length) {
     throw new RangeError("Reference manifest schema/size/claim mismatch.");
