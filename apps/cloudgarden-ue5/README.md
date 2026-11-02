@@ -86,3 +86,22 @@ may have evolution on and financial mode off; another can request virtual paper
 capital. The fixture requests 60.00 USDT virtual paper budget, none booked or
 funded. Live trading is hard-rejected pending trusted external authorization.
 The reference physics is analytic and is NOT Unreal Chaos.
+
+## Synthetic event journal and per-tile mode request previews
+
+The source-plan-verified, SHA256-chained research timeline and the guarded
+capital-mode preview can be generated without Unreal or price data:
+
+    python3 apps/cloudgarden-ue5/scripts/tile_research_journal.py > tile-research-journal.json
+    python3 apps/cloudgarden-ue5/scripts/preview_tile_mode.py > tile-mode-preview.json
+    python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_tile_journal.py' -v
+
+A synthetic journal contains 4 unfunded tile mode declarations, 6 seed
+releases, 16 terminal reference landings, and 16 next-day hypothetical child
+patches or unassigned results. The hash chain is NOT a signature, nor is this
+a Chaos result or canonical accepted event. Mode preview uses old-config hash
+compare-and-swap and preserves evolution when paper mode is switched off; no
+account/ledger/exchange writes occur. Actual approvals and persisted receipts
+must come from a future trusted backend.
+
+Full protocol: ../../docs/plans/2026-11-02-cloudgarden-ue5-research-journal-and-mode-preview.md

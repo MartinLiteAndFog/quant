@@ -13,7 +13,8 @@
     "Actual MCP transport/tool binding must be built and approved locally",
     "Never expose arbitrary script/console execution via MCP",
     "No order/account/market/ledger tools are exposed",
-    "All eligible tiles may independently drop seeds in RESEARCH; Unreal may not authorize canonical births or live money."
+    "All eligible tiles may independently drop seeds in RESEARCH; Unreal may not authorize canonical births or live money.",
+    "Seed journal SHA256 chain detects changes against trusted plan but cannot authenticate a UE client or authorize a real event."
   ],
   "tools": [
     {
@@ -132,6 +133,30 @@
         "sourceRevision"
       ],
       "result": "pending_or_rejected_no_venue_order"
+    },
+    {
+      "name": "ue5.preview_tile_mode_transition",
+      "action": "preview_cas_guarded_capital_mode_and_evolution_setting_without_approval",
+      "sideEffects": "none",
+      "args": [
+        "tileId",
+        "capitalMode",
+        "paperBudget",
+        "paperFeed",
+        "evolutionEnabled",
+        "expectedActivationDigest"
+      ],
+      "result": "unappliedModeChangeRequest"
+    },
+    {
+      "name": "ue5.validate_tile_research_journal",
+      "action": "check_hash_chain_vs_approved_reference_plan_no_ecology_commit",
+      "sideEffects": "none",
+      "args": [
+        "journalJson",
+        "independentlyTrustedPlanDigest"
+      ],
+      "result": "syntheticReplayProofOrError"
     }
   ]
 }

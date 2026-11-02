@@ -7,6 +7,7 @@ on:
       - 'docs/plans/2026-11-02-cloudgarden-ue5-gene-physics-bridge.md'
       - 'docs/plans/2026-11-02-cloudgarden-ue5-multi-parameter-tiles.md'
       - 'docs/plans/2026-11-02-cloudgarden-ue5-tile-experiments-and-capital.md'
+      - 'docs/plans/2026-11-02-cloudgarden-ue5-research-journal-and-mode-preview.md'
       - '.github/workflows/cloudgarden-ue5-preflight.yml'
   workflow_dispatch:
 permissions:
@@ -41,3 +42,13 @@ jobs:
           python3 -c 'import json; x=json.load(open("/tmp/tile_experiments.json")); assert x["totalIndependentReleases"] == 6 and x["totalSimulatedSeedOutcomes"] == 16 and x["requestedPaperBudgetTotalUsdt"] == "60.00" and not x["liveAccountOrOrderWrites"]'
       - name: Test independent tile seed and off-paper-live mode gates
         run: python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_tile_experiments.py' -v
+      - name: Build hash-chained research journal and compare with source plan
+        run: |
+          python3 apps/cloudgarden-ue5/scripts/tile_research_journal.py > /tmp/tile_research_journal.json
+          python3 -c 'import json; j=json.load(open("/tmp/tile_research_journal.json")); assert j["eventCount"] == 42 and j["authority"] == "synthetic_untrusted_reference_not_canonical"'
+      - name: Preview tile mode change without capital or trading writes
+        run: |
+          python3 apps/cloudgarden-ue5/scripts/preview_tile_mode.py > /tmp/tile_mode_preview.json
+          python3 -c 'import json; p=json.load(open("/tmp/tile_mode_preview.json")); assert p["requestedPaperPoolAfterUsdt"] == "35.00" and not p["accepted"] and not p["cashBooked"] and p["venueOrders"] == 0'
+      - name: Verify causal journal, idempotency and requested-mode transition safety
+        run: python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_tile_journal.py' -v

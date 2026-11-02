@@ -144,3 +144,23 @@ In Unreal Chaos, every tile can have its own seed emitter and scene transform;
 record terminal settled receipt ID, tile ID, canonical plant ID and experiment
 ID. Inverse-map each impact point only onto that tile's TWO defined gene axes.
 No direct order/API calls or automatic canonical offspring creation.
+
+## Next stage: event journal + mode-request preview
+
+Before implementing persistent gameplay events, run:
+
+    python3 apps/cloudgarden-ue5/scripts/tile_research_journal.py > /tmp/journal.json
+    python3 apps/cloudgarden-ue5/scripts/preview_tile_mode.py > /tmp/mode_preview.json
+    python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_tile_journal.py' -v
+
+The journal is the semantic oracle for tile-scoped seed IDs, release→landing→
+next-day child candidate causality and repeated replay. It is hash-chained for
+change detection against a source plan, but NOT trusted by itself or signed.
+Real Chaos hits need a separately validated terminal-rest observation, persisted
+by an authorized ecology backend before they affect future source state.
+
+In Unreal add a per-tile event/seed inspection timeline and a mode-change
+PREVIEW (not a direct setting mutator). Preview must use CAS expected config
+hash, show budget/paper/evolution state, reject stale inputs and any live mode,
+and await future trusted backend approval. The preview is not accepted cash.
+See docs/plans/2026-11-02-cloudgarden-ue5-research-journal-and-mode-preview.md.
