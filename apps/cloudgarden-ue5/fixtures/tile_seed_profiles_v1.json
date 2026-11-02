@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_tile_seed_launch_profiles",
+  "authority": "synthetic_research_fixture_only",
+  "sceneRef": {
+    "seed": "ue5-visual-preview-v0",
+    "dayIndex": 7
+  },
+  "source": "proposed_ecology_genes_beyond_existing_Cloudgarden_trade_genome",
+  "rule": "No profile = no seed release; a profile is shared by one canonical plant across all eligible tiles, never inferred from strategy axes",
+  "profiles": [
+    {
+      "plantId": "plant-a",
+      "profileRevision": "synthetic-release-a-v1",
+      "heightM": 1.7,
+      "azimuthDeg": 35,
+      "elevationDeg": 25,
+      "speedMps": 2.2,
+      "spreadDeg": 6,
+      "seedCount": 3
+    },
+    {
+      "plantId": "plant-c",
+      "profileRevision": "synthetic-release-c-v1",
+      "heightM": 1.4,
+      "azimuthDeg": 45,
+      "elevationDeg": 30,
+      "speedMps": 1.8,
+      "spreadDeg": 8,
+      "seedCount": 2
+    }
+  ]
+}
