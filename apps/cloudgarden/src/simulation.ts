@@ -25,6 +25,13 @@ export type Genome = Readonly<{
   sun: number;
 }>;
 
+/** Synthetic signal parameters inherited by a plant; not market evidence. */
+export type TradingTraits = Readonly<{
+  lookbackBars: number;
+  entryThresholdBps: number;
+  exitThresholdBps: number;
+}>;
+
 export type Phenotype = "Grass" | "Bush" | "Cactus";
 export type PlantRole = "parent" | "seedling";
 export type PlantStatus = "active" | "archived";
@@ -41,6 +48,7 @@ export type GardenPlant = Readonly<{
   physiology: PlantPhysiology;
   x: number;
   genes: Genome;
+  tradingTraits: TradingTraits;
   phenotype: Phenotype;
   biomass: number;
   /** Momentary fit between this genome and today's synthetic environment. */
@@ -140,10 +148,16 @@ function appendEvents(history: readonly GardenEvent[], additions: readonly Garde
 }
 
 const PARENT_BLUEPRINTS: readonly Omit<GardenPlant, "phenotype" | "status" | "role" | "physiology" | "evidenceDays" | "allocationUsdt">[] = [
-  { id: "parent-01", name: "Cloud fern", x: 18, genes: { root: 0.42, leaf: 0.82, water: 0.58, sun: 0.74 }, biomass: 59, fitness: 73, vigor: 82, evidence: 76 },
-  { id: "parent-02", name: "Blue reed", x: 50, genes: { root: 0.84, leaf: 0.38, water: 0.78, sun: 0.46 }, biomass: 52, fitness: 68, vigor: 78, evidence: 74 },
-  { id: "parent-03", name: "Stone sage", x: 82, genes: { root: 0.76, leaf: 0.44, water: 0.82, sun: 0.68 }, biomass: 43, fitness: 77, vigor: 84, evidence: 79 },
+  { id: "parent-01", name: "Cloud fern", x: 18, genes: { root: 0.42, leaf: 0.82, water: 0.58, sun: 0.74 }, tradingTraits: { lookbackBars: 5, entryThresholdBps: 40, exitThresholdBps: 10 }, biomass: 59, fitness: 73, vigor: 82, evidence: 76 },
+  { id: "parent-02", name: "Blue reed", x: 50, genes: { root: 0.84, leaf: 0.38, water: 0.78, sun: 0.46 }, tradingTraits: { lookbackBars: 12, entryThresholdBps: 90, exitThresholdBps: 20 }, biomass: 52, fitness: 68, vigor: 78, evidence: 74 },
+  { id: "parent-03", name: "Stone sage", x: 82, genes: { root: 0.76, leaf: 0.44, water: 0.82, sun: 0.68 }, tradingTraits: { lookbackBars: 3, entryThresholdBps: 25, exitThresholdBps: 5 }, biomass: 43, fitness: 77, vigor: 84, evidence: 79 },
 ];
+
+const TRADING_TRAIT_LIMITS = {
+  lookbackBars: { min: 1, max: 120 },
+  entryThresholdBps: { min: 1, max: 3_000 },
+  exitThresholdBps: { min: 0, max: 3_000 },
+} as const;
 
 /** Classifies one of three Cloudgarden forms from the heritable root/leaf traits. */
 export function derivePhenotype(genes: Genome): Phenotype {
@@ -410,6 +424,52 @@ function randomGenome(seed: string, day: number, conceptionIndex: number): Genom
   return { root: value("root"), leaf: value("leaf"), water: value("water"), sun: value("sun") };
 }
 
+function hiveTradingTraits(seed: string, conceptionIndex: number): TradingTraits {
+  const lookbackBars = 1 + Math.floor(unit(seed, `hive-trading-${conceptionIndex}-lookback`) * 120);
+  const entryThresholdBps = 1 + Math.floor(unit(seed, `hive-trading-${conceptionIndex}-entry`) * 3_000);
+  const exitThresholdBps = Math.floor(unit(seed, `hive-trading-${conceptionIndex}-exit`) * (entryThresholdBps + 1));
+  return { lookbackBars, entryThresholdBps, exitThresholdBps };
+}
+
+function randomTradingTraits(seed: string, day: number, conceptionIndex: number): TradingTraits {
+  const lookbackBars = 1 + Math.floor(unit(seed, `random-trading-${day}-${conceptionIndex}-lookback`) * 120);
+  const entryThresholdBps = 1 + Math.floor(unit(seed, `random-trading-${day}-${conceptionIndex}-entry`) * 3_000);
+  const exitThresholdBps = Math.floor(unit(seed, `random-trading-${day}-${conceptionIndex}-exit`) * (entryThresholdBps + 1));
+  return { lookbackBars, entryThresholdBps, exitThresholdBps };
+}
+
+function inheritedTradingTraits(
+  seed: string,
+  day: number,
+  conceptionIndex: number,
+  mode: BeeMode,
+  mother: GardenPlant,
+  father: GardenPlant,
+): TradingTraits {
+  if (mode === "random") return randomTradingTraits(seed, day, conceptionIndex);
+
+  const hive = hiveTradingTraits(seed, conceptionIndex);
+  const local = {
+    lookbackBars: (mother.tradingTraits.lookbackBars + father.tradingTraits.lookbackBars) / 2,
+    entryThresholdBps: (mother.tradingTraits.entryThresholdBps + father.tradingTraits.entryThresholdBps) / 2,
+    exitThresholdBps: (mother.tradingTraits.exitThresholdBps + father.tradingTraits.exitThresholdBps) / 2,
+  };
+  const base = (trait: keyof TradingTraits): number => mode === "local"
+    ? local[trait]
+    : mode === "hive"
+      ? hive[trait]
+      : (local[trait] + hive[trait]) / 2;
+  const mutate = (trait: keyof TradingTraits, radius: number): number => {
+    const delta = (unit(seed, `trading-mutation-${day}-${conceptionIndex}-${trait}`) - 0.5) * 2 * radius;
+    return Math.round(base(trait) + delta);
+  };
+
+  const lookbackBars = clamp(mutate("lookbackBars", 6), TRADING_TRAIT_LIMITS.lookbackBars.min, TRADING_TRAIT_LIMITS.lookbackBars.max);
+  const entryThresholdBps = clamp(mutate("entryThresholdBps", Math.max(20, base("entryThresholdBps") * 0.25)), TRADING_TRAIT_LIMITS.entryThresholdBps.min, TRADING_TRAIT_LIMITS.entryThresholdBps.max);
+  const exitThresholdBps = clamp(mutate("exitThresholdBps", Math.max(10, base("exitThresholdBps") * 0.25)), TRADING_TRAIT_LIMITS.exitThresholdBps.min, Math.min(TRADING_TRAIT_LIMITS.exitThresholdBps.max, entryThresholdBps));
+  return { lookbackBars, entryThresholdBps, exitThresholdBps };
+}
+
 function makeConception(
   seed: string,
   day: number,
@@ -435,6 +495,7 @@ function makeConception(
         : (local + hive[trait]) / 2 + mutation / 2;
     return [trait, round4(clamp(value, 0.05, 0.95))];
   })) as unknown as Genome;
+  const tradingTraits = inheritedTradingTraits(seed, day, index, mode, mother, father);
   const id = `seedling-${String(index + 1).padStart(2, "0")}`;
   const plant: GardenPlant = {
     id,
@@ -444,6 +505,7 @@ function makeConception(
     physiology: "awake",
     x: round1(8 + unit(seed, `position-${index}`) * 84),
     genes,
+    tradingTraits,
     phenotype: derivePhenotype(genes),
     biomass: 8,
     fitness: 50,
@@ -603,6 +665,14 @@ export function advanceSimulationDays(world: SimulationWorld, count: number): Si
 
 /** Throws when the NAV, reserve, margin, entitlements, or plant population drift. */
 export function assertSimulationInvariants(world: SimulationWorld): void {
+  if (!world || typeof world.seed !== "string" || !world.seed.trim()
+    || !Number.isInteger(world.day) || world.day < 0
+    || !["mixed", "random", "local", "hive", "hybrid"].includes(world.conceptionPolicy)
+    || !world.climate || ![world.climate.water, world.climate.sunlight].every((value) => Number.isFinite(value) && value >= 0 && value <= 1)
+    || typeof world.climate.predatorPatrol !== "boolean"
+    || !Array.isArray(world.plants) || !Array.isArray(world.events)) {
+    throw new Error("World clock, policy, climate, and collections must match the versioned simulation contract.");
+  }
   const { capital } = world;
   if (world.events.length > MAX_EVENT_HISTORY) throw new Error("Event history exceeded its bounded retention window.");
   const balances = [capital.navUsdt, capital.allocationCeilingUsdt, capital.protectedReserveUsdt,
@@ -658,6 +728,18 @@ export function assertSimulationInvariants(world: SimulationWorld): void {
       throw new Error(`Plant ${plant.id} has an unknown physiology state.`);
     }
     if (plant.phenotype !== derivePhenotype(plant.genes)) throw new Error(`Plant ${plant.id} has a stale phenotype.`);
+    if (!plant.tradingTraits
+      || !Number.isInteger(plant.tradingTraits.lookbackBars)
+      || plant.tradingTraits.lookbackBars < TRADING_TRAIT_LIMITS.lookbackBars.min
+      || plant.tradingTraits.lookbackBars > TRADING_TRAIT_LIMITS.lookbackBars.max
+      || !Number.isInteger(plant.tradingTraits.entryThresholdBps)
+      || plant.tradingTraits.entryThresholdBps < TRADING_TRAIT_LIMITS.entryThresholdBps.min
+      || plant.tradingTraits.entryThresholdBps > TRADING_TRAIT_LIMITS.entryThresholdBps.max
+      || !Number.isInteger(plant.tradingTraits.exitThresholdBps)
+      || plant.tradingTraits.exitThresholdBps < TRADING_TRAIT_LIMITS.exitThresholdBps.min
+      || plant.tradingTraits.exitThresholdBps > plant.tradingTraits.entryThresholdBps) {
+      throw new Error(`Plant ${plant.id} has invalid trading traits.`);
+    }
     if (![plant.fitness, plant.vigor, plant.evidence].every((value) => Number.isFinite(value) && value >= 0 && value <= 100)) {
       throw new Error(`Plant ${plant.id} has an out-of-range fitness, vigor, or evidence value.`);
     }
