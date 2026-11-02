@@ -1,0 +1,598 @@
+# Trading-Ecosystem / Evolution Game — Umfassender Hand-off und Multi-Agent-Plan
+
+**Stand:** 2026-11-01 · **Status:** Produktkonzept + Architektur-Backlog, *kein* produktives Trading-Spiel · **Sprache:** Deutsch.
+**Repository:** [MartinLiteAndFog/quant](https://github.com/MartinLiteAndFog/quant) · **Integrationsbranch:** `feat/family-hedge-ledger-20261101` · **Draft-PR:** [#22](https://github.com/MartinLiteAndFog/quant/pull/22) · **Master-Tracker:** [#36](https://github.com/MartinLiteAndFog/quant/issues/36).
+**Wichtig:** Die Gespräche beschreiben viele **neue Regeln, nicht vorhandene Implementierungen**. Aktuell gibt es eine **synthetische Demo**. Nichts an diesen Konzepten autorisiert Live-Orders, Änderungen an Railway oder KuCoin, automatisch erstellte TradingView-Alarme oder Transfers.
+
+## 0. Die Idee in einem Absatz
+
+Wir bauen ein interaktives, beschleunigbares Evolutionsspiel im Stil von *The Bibites*, das über einem historischen (angestrebt: fünf Jahre SOL-Minuten) Markt läuft. **Oberirdische Pflanzen sind finanzierte Tradingstrategien**, deren individuelle Genome Strategiebausteine, Risikoverhalten und Physiologie definieren. **Unterirdisch** forschen sehr viele zusätzliche Genome in isoliertem Paper Trading; deren Daten werden aggregiert, nicht als Millionen Pilze gerendert. **Bienen** kombinieren und verbreiten Gene lokal oder über einen zentralen Bienenstock; **Fresser** entfernen schwache, angreifbare Pflanzen; **Wurzeln** steuern die Kapitalzugangspriorität; **Blätter** Kapitalnutzung und Hebel; **Sonne** das globale Risikoregime; **Rinde** begründet längere Schonung seltener/zyklischer Strategien. **Grundwasser ist die Equity sämtlicher zugeordneter Accounts**, nicht ein zweiter Geldtopf. Tägliche ökologische Aktualisierung, Minuten-/signalbasierte Tradingausführung, statistisch prüfbare Evolution, optional skalierte Parallel-Rechnungen und später eine schöne 3D-Welt. Das Ziel ist Forschung an robusten Strategien, **kein Versprechen selbststabilisierender Profitabilität**.
+
+## 1. Reale Basis, die bereits im Repo existiert (geprüft 2026-11-01)
+
+- [`apps/fleet-desktop/src/components/EvolutionMeadow.tsx`](../../apps/fleet-desktop/src/components/EvolutionMeadow.tsx): Fleet Cockpit (React/Tauri), rotierbare orthografische SVG-Simulationswiese, Auswahl/Filter, Bienen-Modi, Gen-Eingabe; derzeit keine echte 3D-Engine, kein realer Performancefeed.
+- [`apps/fleet-desktop/src/lib/evolutionMeadow.ts`](../../apps/fleet-desktop/src/lib/evolutionMeadow.ts): deterministische synthetische Strategie-/Profitlandschaft, drei Roots + neun Töchter, Mutation, Fitnesscluster, visualisierte Biomasse. X = IMBA sensitivity, Y = TTP %, Z / Stängel bisher Nettorendite/visuelle Höhe; andere Parameter sind im Genom verborgen. Browser-Wächter für ca. 450 sichtbare Pflanzen, keine Unterwelt-Millionengrenze.
+- [`apps/fleet-desktop/src/lib/geneLibrary.ts`](../../apps/fleet-desktop/src/lib/geneLibrary.ts): numerische und Bool-Gene; gespeicherte Bibliothek in Browser-`localStorage`; 5 bestehende Bienenarten `mixer`, `mosaic`, `explorer`, `collector`, `pruner`; 5/10%-Abwurf optionaler Gene. **Achtung:** `stop_loss_pct` ist derzeit *optional*, finanzielle/Sicherheits-Policies fehlen als geschützter Typ.
+- [`src/quant/execution/family_mutation_meadow.py`](../../src/quant/execution/family_mutation_meadow.py): rein deterministische 5–15 Kandidaten/Samen-Vorschläge für 2 Parameter; keine Orders, kein neues Pine-Signal.
+- [`src/quant/execution/family_monthly_evaluation.py`](../../src/quant/execution/family_monthly_evaluation.py): monatliche, vorläufige Scores und virtuelle Budgetvorschläge. **Noch nicht** tagesbasierte Ökologie oder multi-horizon Fitness.
+- [`src/quant/execution/family_ingress.py`](../../src/quant/execution/family_ingress.py): opt-in Shadow-Router, ein `/webhook/family` und **ein gemeinsamer `FAMILY_WEBHOOK_TOKEN`**, Identifikation pro `strategy_id`/`event_id`. Keine Live-Ausführung.
+- [`src/quant/execution/family_durable_ledger.py`](../../src/quant/execution/family_durable_ledger.py), [`family_order_planner.py`](../../src/quant/execution/family_order_planner.py), [`family_hedge_preflight.py`](../../src/quant/execution/family_hedge_preflight.py): bestätigte virtuelle Fills, reine Orderplanung und lesender Hedge-Mode-Preflight als Vorarbeiten; **kein** produktiver multi-bot-sicherer Single-Writer.
+- [`docs/plans/2026-11-01-evolution-meadow.md`](2026-11-01-evolution-meadow.md): früheres Design und die bestehenden Demo-Regeln. **Dieses neue Dokument überschreibt nur das konzeptionelle Zielbild, nicht automatisch den funktionierenden Code.**
+- [`apps/fleet-desktop/package.json`](../../apps/fleet-desktop/package.json): `npm run build` = TypeScript-Check + Vite-Build; GitHub Actions für Evolution Meadow, Family-Ledger und PostgreSQL-Integration existieren in PR #22.
+
+**Bewusst abweichender Altbestand:** Biomasse bislang pro Monat max +36% / −25%; neue Vorgabe ist **täglicher** Ecologyschritt. Alte Root-Finanzierung: 3 Familien teilen 90% Equity, 10% Reserve, initiale Töchter erhalten 2% des *Familienbudgets*, nicht 2% der Gesamtequity. Diese Pilotregel **bis zu einem ausdrücklich freigegebenen Cutover beibehalten**. Gen-Bibliothek führt Schemas, keine ausführbaren beliebigen Strategiebausteine.
+
+## 2. Fachliche Grundregeln und explizit revidierte Ideen
+
+### Fest vereinbart / Zielvorgaben
+
+1. Täglicher Spieltick für Biomasse, Wurzeln, Blätter, Rinde/Vitalität, Geburt, Jagd und Grundwasserschwankung. Trades laufen auf ihrer echten Minuten-/Signalzeit, nicht nur einmal am Tag.
+2. Pflanzen haben komplette Genome mit vielen sichtbaren und verborgenen Genen. Die 2 Bodenachsen können später beliebige Gene zeigen; fehlende Werte dürfen Pflanzen nicht heimlich unsichtbar machen.
+3. Pflanzen entstehen als *klein kapitalisierte Samen/Keimlinge* (in der Simulation) und wachsen beziehungsweise schrumpfen langsam. Sie verschwinden nicht nach ein bis zwei Verlustmonaten.
+4. Nachkomme entnimmt sein Startbudget von der Mutter-/Familien-Zuteilung (Pilot zurzeit 2% des Familienbudgets; im Evolutionsspiel auch bounded Reproduktionsquote z.B. 8%, 10%, 15%). Keine Geldschöpfung.
+5. Weggefressene Pflanzen verschwinden grafisch. Ihre Historie/Genome bleiben im **unsichtbaren Research-Archiv** und dürfen später erneut papergetestet werden. **Keine sichtbaren Pilze**, kein zweites virtuelles Leben als dauerhafte Individualfigur.
+6. Bienen können lokal bestäuben, zentral im Hive Genome sammeln und neu kombinieren oder beides; fünf bestehende Bienenarten sind ein Startpunkt, kein hartes Naturgesetz. Mittelung, Gen-Neuzugang und zufälliges Abwerfen optionaler Gene erlaubt.
+7. Fresser haben eine einstellbare obere Jagd-Vitalitätsgrenze (Start: unter 70%; 70–80% Schonzone; über 80% geschützt). Gewichtet-zufällige, schwächsten- und altersorientierte Fresser möglich. Bark/Alter/Evidenz/seltene Opportunitäten modulieren Jagdbarkeit; harte Risikogrenzen nie.
+8. Genetische Struktur darf komplex sein. **Keine obligatorische Komplexitätsstrafe**; optional später Slider, Default exakt 0.
+9. Sicherheits- und finanzrelevante Gene/Policies (Risk Caps, verpflichtender Schutz-Stop, Budgetkonsistenz, Reproduktion) dürfen **nie entfernt oder deaktiviert** werden; Werte allenfalls innerhalb autorisierter Grenzen mutieren.
+10. Wurzelwachstum seitlich und nach unten genetisch getrennt; hoher Wert in beiden Richtungen möglich, aber mit Wachstums-/Kapitalnutzungs-Trade-off und zeitlichem Aufbau.
+11. Grundwasser repräsentiert globales Equity/NAV, **kein zusätzliches Kapital**. Maximal 90% als verteilbare Budgets, 10% Reserve. Der Spiegel nähert sich mit wachsender Equity asymptotisch der Erdoberfläche und erreicht sie niemals; tägliche Glättung/Hysterese einstellbar.
+12. Blätter/Blattfläche steuern persönliche Kapitalauslastung und persönliche Leverage (unter Limits), Sonne den globalen Risiko-/Leverage-Multiplikator, Verschattung später Portfolio-Korrelation/Signalüberlappung.
+13. Fitness, gegenwärtige Vitalität und statistische Evidenz sind *drei getrennte Zustände*. Der ehemalige Champion soll Kapital verlieren, wenn sein Edge verschwindet; Kaktus/Fishing-Stratege darf bei wirklich ausbleibender Gelegenheit lange ruhen.
+14. Die Evolution soll nicht nur bessere Strategien, sondern bessere Suchverfahren (Bienen/Genkombination/Selektoren) entwickeln. Nur OOS-Evidenz darf erfolgreichen „Honig“ erzeugen.
+15. Nicht automatisch Produktions-Railway/KuCoin/TradingView verändern. Ein eigenes Shadow-/Paper-Spiel ist erstes Ziel.
+
+### Ausdrücklich verworfen beziehungsweise ersetzt
+
+- **Individuell dargestellte Pilze für verstorbene Pflanzen**: verworfen, unüberschaubare visuelle Populationszahl. „Myzel“ allenfalls als aggregierte Forschungsdatenbank/Netzwerkmetapher.
+- **Separater Komposthaufen/Extra-Kapitalpool**: ersetzt durch **Equity = Grundwasser**; abgestorbene Pflanzen setzen nach sicherem Positionsabschluss *bereits vorhandenes* Kapital frei, nicht neues.
+- **Zweiter 75/25-Wasserpool zusätzlich zur 90/10-Regel**: verworfen durch die einfachere neue Analogie: 90% gesamte Equity zuteilbar, 10% Reserve. 90% nicht automatisch in offenen Trades.
+- **Wurzelwachstum als echter Kapitalverbrauch/Kosten**: nur Opportunitätskosten / vorübergehend geringere Tradingkapitalnutzung, kein ausgebuchtes Equity.
+- **Zwangsläufiges Aussterben nach 1–2 schlechten Monaten**: verworfen; Fresser, Biomasse, Evidenz, Dormanz und Rinde regulieren.
+- **Pflanzenklasse als fest verdrahteter Handelsalgorithmus**: vermeiden. Gras/Blume/Busch/Kaktus/Orchidee als Phänotyp aus Genom, Komplexität, Zeit, Wurzel-/Blattverhältnis.
+
+### Noch bewusst experimentelle, NICHT endgültige Zahlen
+
+- Jagdlimit 70% Vitalität; Schutzband 70–80%; Schonfrist; Wirksamkeit von Rinde.
+- Start-Mutationswahrscheinlichkeit optionaler Gene 5–10%; 5–15 Samen beim bisherigen Meadow-Vorschlag.
+- Reproduktionsbudget der neuen simulierten Gene 8/10/15%; erste Pilot-Töchter **fix 2% Familienbudget**.
+- 90/10 Grundwasser-Equity. Ursprung ist die alte Sicherheitsreserve, nun zentrale Bilanzregel.
+- Pegel-Anstieg/Fall, Hysterese, 2 bis 80% Zugangsanteil, Sonne-/Blatt-Hebelkurven, Fitnessgewichte, Biomasse-Grenzen.
+- „Monatliche Ernte/Blütenfall“ als visuelles Profit-Ereignis, obwohl darunter täglicher Tick.
+- Ohne Messung keine konkrete Millionenstrategien/Minute-/FPS-Leistung versprechen.
+
+## 3. Zwei Ebenen — Oberwelt und Unterwelt
+
+**Oberwelt (sichtbar):** 3 Anfangseltern + 9 manuell konfigurierte Töchter als heutige Fleet-Pilotgruppe; später unterschiedlich viele echte oder simulierte finanzierte Pflanzen. Jede Pflanze hat stabile ID, Stammbaum, Genome-Version, Strategie-Code-Version, Budgetberechtigung, PnL/Fees/Funding, Biomasse, Blattfläche, Wurzeltiefe, Wurzelbreite, Rinde, Lebensphase, Vitalität und Fitnessevidenz. Oberwelt zeigt nur lebende beziehungsweise nicht archivierte Pflanzen. Kapitalisierte Pflanzen benötigen sinnvolle Mindestordergröße; ein zu kleiner Keimling darf als virtuelles Budget existieren, aber keine zu kleine Venue-Order erzwingen.
+
+**Unterwelt (nicht pro Genome als Pilz gerendert):** Millionen mögliche Genome/Seeds, Genbibliothek, Paper-Trades, komplette historische Versuchsergebnisse, Cache/Kompression, Archiv der gefressenen Pflanzen, Hive-Wissenspool, Validierungs-Pipeline. UI als Schnitt durch Boden mit Wurzelgeflecht, Cluster/Heatmap, Rankings, Datenbank-/Forschungslayer; Kandidaten nur bei Auswahl einzeln öffnen.
+
+**Grenzübergang:** `proposed -> screened -> backtested -> out_of_sample_verified -> paper_forward -> eligible_for_sowing -> capitalized -> dormant -> archived`. Die letzte Stufe kann erneut zu `proposed`/Test werden; ein einzelner guter Monat reicht nicht automatisch. Hintergrundleistungen niemals durch künftig erst bekannte Daten belohnen.
+
+## 4. Kapitalmodell — exakt ein Bilanzkreis
+
+### Definitionsgleichungen
+
+- `E_t = sum(unique account NAV / cashflow-corrected equity)`: eindeutige, nach Währung und Zeit reconciled Equity. Ohne Cross-Account-FX/Transferdaten keine „einfach zusammengerechneten“ Phantomwerte.
+- `R_t = 0.10 * E_t`: nicht handelbare Reserve im Design (bei negativem NAV fail closed).
+- `D_t = 0.90 * E_t`: höchstens budgetierbarer Betrag.
+- `sum_i entitlement_i(t) <= D_t`: Summe aller Budgetansprüche inkl. Eltern, Kinder und Bonus. **Keine zweite Zuteilung nur deshalb, weil ein Tiefwurzler Grundwasser berührt.**
+- `used_margin_i <= realizable_margin_i <= entitlement_i`; freie verfügbare Margin, offene Positionen und geplante Orders dürfen nur **einmal** berücksichtigt werden.
+- `notional_exposure_i = margin_used_i * effective_leverage_i`, unter globalen Limits und exchange-spezifischen Minima.
+- Neue Samen erhalten Budget **durch Umbuchung** aus Mutter-/Familien-Entitlements; Geburt erhöht nicht die Equity.
+- Fresser dürfen Budget erst nach bestätigt geschlossenem Positionszustand/Orders-Reconciliation neu freigeben. Keine automatische Liquidation allein wegen neuer Pegel-/Gen-Entscheidung.
+
+**Beispiel:** `E=100 USDT`, `R=10`, `D=90`. Drei Roots könnten im heutigen Pilot je `30` Familienbudget führen; Tochter mit 2% davon erhält `0.6 USDT` internes Budget (ggf. zu wenig für eine reale Order). 20 evolutionäre Kinder in einer Simulation teilen sich Entitlements innerhalb derselben `90` statt zusätzlich zu existieren. Ein Kaktus mit Budgetberechtigung 20 USDT nutzt vielleicht nur 2 USDT Margin; die verbleibenden 18 sind **nicht automatisch separat frei**, solange sie als exklusive Entitlement reserviert sind. Der Kapital-Allocator muss die Rechte für neue Orders und die tatsächliche Margin sauber unterscheiden und darf nicht gleichzeitig denselben Betrag mehreren garantiert zusagen.
+
+**Vorherige Frage „wie vermeiden wir totes Kapital?“**: Zuteilung kann täglich *unbenutzte künftige Orders-Budgets* an geeignete Pflanzen umpriorisieren, ohne offene Positionen zu schließen. Die 90% sind ein **Budgetlimit**, keine Pflicht, jederzeit 90% Exposure zu haben. Wenn keine sicheren Handelsgelegenheiten bestehen oder Min-Lots nicht erreicht werden, bleibt Liquidität liegen. Höhere Nutzungsquote darf kein Risikoerzwingen sein.
+
+### Grundwasserstand
+
+Vorschlag, **nur beispielhafte Parametrisierung**:
+`d_target(E) = d_min + (d_max-d_min) * exp(-k * max(E,0)/E_ref)`, mit `d_min > 0` und `d_max > d_min`. `d` ist die Tiefe *unter* Erdoberfläche: steigendes NAV -> kleineres `d` -> Wasser steigt, aber nie bis zum Boden. `k, E_ref, d_min, d_max` per Config.
+`d_t = d_(t-1) + alpha_up/down * (d_target - d_(t-1))`; `alpha_up`/ `alpha_down` täglich separat, plus Hysterese in Zugangsstatus (kleine Pegelwechsel führen nicht zu täglichen Flip-Flops). Alle Rechenwerte sind eigene Spielkoordinaten, nicht wirkliche Meter.
+**Wichtig:** Pegelhöhe ist nur Zugangs-/Prioritätsregel; wirkliche `D_t`-Budgetmenge ist separat bilanziert. Hoher Pegel kann nie die 10%-Reserve überschreiben. „Mindestens 2 / höchstens 80% Pflanzen erreichen Wasser“ als optionales, zu testendes Regelwerk, *keine* automatische Kapitalberechtigung statistisch unzureichender Pflanzen.
+
+### Wurzelaufnahme und Wurzelkosten
+
+- `root_growth`, `root_depth`, `root_spread` eigenständige, versionierte Gene; tiefe **und** breite Wurzeln möglich.
+- Effektive physische Wurzelgröße entsteht nur schrittweise aus Biomasse, Zeit, Investitions-/Wachstumsenergie und Genen; ein neuer Keimling ist nicht sofort Tiefwurzler trotz starken Genwerts.
+- **Opportunitätskosten**: hohe Wachstumsinvestition senkt die für *eigene kurzfristige Trades* aktiv nutzbare Kapitalquote; Eigenkapital wird dadurch nicht vernichtet, sondern der Allokator darf unbenutzte Kapazität verteilt halten. Laterale Wurzeln konkurrieren um durch Fraß **freigegebene** lokale Ansprüche; tiefe Wurzeln erhalten Zugang/Priorität zum allgemeinen Grundwasser-Budget.
+- Pflanzen, die nahe beieinander liegen, teilen lokale freigewordene Mittel proportional zu `root_weight_i / sum(root_weight)`; Kausalität: Koordinaten sind genetischer Parameterraum, Nähe ist eine **Modellentscheidung**, nicht reale Marktgeografie.
+- Auszahlungen/Budgets unterliegen Fitness-/Evidenz-Gates und Sicherheitslimits. Gene sind kein Recht, Geld zu erzwingen.
+
+## 5. Photosynthese = Exposure / Leverage
+
+- `sun_t`: globaler, ausschließlich aus zum Zeitpunkt t **bekannten** Marktdaten abgeleiteter Risiko-Multiplikator (Volatilität, beobachtbares Regime, Stress, Korrelationen), oder reiner Game-Parameter für Experimente.
+- `leaf_area_i`: genetisch beeinflusste und mit Biomasse gewachsene Blattfläche; steuert Kapitaleinsatz/Nutzungsquote `U_i in [0,1]` und gegebenenfalls persönlichen Leverage-Modifier.
+- `L_i = clip(L_global(t) * leaf_modifier_i, allowed_risk_bound_i, venue_limit)`; kein Blattgen darf `L_global` für alle anderen Bots selbst erhöhen.
+- `Exposure_i = actually_allocated_capital_i * utilization_i * leverage_i`; eventuelle doppelte Wirkung der Blattfläche auf U und L ist **expliziter Versuchsparameter**, nicht unbemerkt doppelte Hebelung.
+- `shade_i` aus Strategie-Signalüberlappung / realer zeitabhängiger Renditekorrelation (nicht nur Bildschirmnähe); optional später selektive Reduktion zusammenfallender Exposures.
+- Kaktus = wenige Blätter, tiefe Wurzeln, geringe gewöhnliche Margin-Nutzung, kapitalsparender Schlaf, seltenes großes Signal; Gras = hohe Blattnutzung, schnelle Bewertung, flach; großer Baum = langfristig beide Systeme gewachsen.
+- **Globale Hard-Caps** (max Position/Leverage/Margin/Drawdown, venue constraints) sind nicht genetisch ausschaltbar.
+
+## 6. Genbibliothek / Vererbung / Varianten
+
+**Genarten:** (a) `immutable_safety_policy` ohne Abschaltung; (b) `required_bounded_financial` z.B. reproduction_budget oder allokations-/Risikopolicy, immer vorhanden und nur kontrolliert mutierbar; (c) `optional_strategy_gene` z.B. RSI-Perioden, Sensitivität, TTP, zusätzliche Filter, exit-bezogene Tuningparameter. Pflichtgene fehlen nie. **`stop_loss_pct` in alter Demo ist zu bereinigen**: Sicherheits-Stop-Pflicht von optionalem Stop-Tuning trennen. Komplexitäts-Malus Default = 0; optional Slider.
+
+**Strategiegenom** ist Mischung aus Parameterwerten und versionierten, ausführbaren oder interpretierbaren **Strategiemodulen**. User kann neue Module hinzufügen, aber beliebiger Python-/Pine-Quelltext darf nicht unkontrolliert in Executor oder App ausgeführt werden. Kennung, Version, Inputs, erlaubter Datenzugriff, Risikovertrag und Tests pro Modul. Bestehende TradingView-Signale sind zunächst Ground Truth für Live-Pilot; Parität einer eigenen Strategie-Engine separat testen.
+
+**Bienen heute vorhanden:** Mixer (numerischer Mittelwert), Mosaic (pro Gen ein Elternteil), Explorer (größere Mutation), Collector (fehlende Gene aufnehmen), Pruner (5/10% optionale Gene löschen). Neue Forschung vergleicht lokale Pollination (Samen an Pflanzenstandort), zentralen Hive (Wissen sammeln, neue Kandidaten im Stock), hybrid (beides) und Random-only ohne Bienen als Kontrollgruppe. Eine Biene bekommt eigene mutierbare Suchparameter (keine unendliche Typentabelle nötig) und Honig als validierten OOS-Nutzen ihrer späteren Kinder. Stammbaum Mutter/Vater/Biene/Genom-/Codeversion festhalten; kein Loops-Replay ohne Seed.
+
+## 7. Vitalität, Fitness, Glaubwürdigkeit, Rinde und Fresser
+
+Es braucht **drei getrennte Skalen**:
+- **Langfristige Fitness**: netto und risikobereinigt (Profit/TWR, Sharpe, Drawdown, Tail Loss, Kapitaleffizienz), über mehrere Marktregime, mit OOS-Evidenz.
+- **Aktuelle Vitalität**: EWMA der jüngeren Gelegenheit-abhängigen Performance, aktueller Drawdown, Wasser-/Tradingaktivität, Erholung seit Peak, gegen eigene Historie gemessener Edge-Drift, Market-Regime-Passung. **Kein Trade ist nicht automatisch schlecht**.
+- **Credibility/Uncertainty**: effektive Anzahl *unabhängiger* Trades, Messdauer, Datenqualität, Autokorrelation, Kostenklarheit, Konfidenz/Fehlerbänder; nicht eine willkürliche positive Rendite. Viele Backtests implizieren Multiple-Comparison-Bias.
+
+Weitere separat auswertbare Größen: Ulcer Index / Time Under Water, CVaR/Expected Shortfall, vol-regime conditional return, trade opportunity utilization, turnover, correlation & marginal portfolio utility. Eher nicht alles linear in einen 0–100-Score mischen; intern Komponenten normalisiert und Scoreformel versioniert, Gewichte als Experiment.
+
+**Rinde `bark_strength`**: genetischer Modifikator der Jagdgefährdung und des Evaluationshorizonts, wirksam nur in Relation zu glaubwürdig belegter langfristiger Robustheit. **Kann nie** globale Drawdown-/Loss-Stops umgehen. **Dormanz** schützt vor falsch gemessener Inaktivität: gute Signale fehlten -> okay; passende Signale gab es und Strategie versagte -> Vitalitätsverlust.
+
+**Fresser:** schwächstenorientiert, probabilistisch-zufällig **nur unter einer Jagdschwelle** und alters-/erholungsorientiert. Ausgangspunkt: >80% Vitalität sicher geschützt, 70–80 Schonzone, <70% grundsätzlich Kandidat; Mindestalter/-Evidenz, konfigurierbare Hysterese und Bark-Schutz. Fressen heißt nicht „alte Position sofort killen“: Lebenszyklus/Zuteilungsstop, sichere Bestandsbehandlung, bestätigte freie Budgets, dann Visual entfernen. Archiv enthält Gene und Berichte, nicht Millionen sichtbare Pilze. Auch ungewöhnliche hochprofitable, selten handelnde Büsche/Kakteen müssen durch lange Horizonte angemessen bewertet werden.
+
+## 8. Wachstum, Aussehen, Visualisierung
+
+Biomasse täglich aus realisiertem/unrealisiertem, korrekt netto markiertem PnL, geglätteter Vitalität und Growth-Allocation; nicht jeden Tag +36% von Monatsdemo übernehmen. Negative Monate -> langsames Schrumpfen, niemals direkt verschwinden. **Logarithmische visuelle Skalierung** verhindert, dass ein seltener Superstar die Szene sprengt. Nach monatlicher Gewinnmitnahme/Ernte kann eine Blüte sichtbar fallen; realisierte Gewinne fließen nur einmal in die Bilanz, nicht als zweites Cash.
+
+**Phänotyp:** 2 aktive Strategieparameter: Gras; mehr Gene: Blüten-/Busch-/Orchideen-Anmutung; tiefe Wurzeln + wenig Blätter + Rinde: Kaktus; komplexe alte Pflanze: Baum. Kein festes Gesetz: Genotyp und Biomasse/Alter/Wurzeln bestimmen Darstellung; Komplexität selbst zunächst **ohne Fitnessstrafe**. Farben: Familie und Vitalität; Größe: Biomasse, Flower/Blossom: Fitness/Verlässlichkeit, Höhe kann Profit zeigen; getrennte Kanäle nötig, damit „hoher Profit“ nicht 3× sichtbar kodiert wird.
+
+3D-Grundfläche mit dynamisch wählbaren Genachsen, Profit-/Fitness-Höhenskalierung, korrekte kategoriale/fehlende Werte. Bei Achsenwechsel **nicht** alle Pflanzen ohne betreffendes Gen ausblenden; Filter/Fächer/Bucket. Zeig Wurzel-Schnitt, Pegel, Schatten, Bienenflüge und Fresser. LOD/Instancing und Cluster-Berechnung: 1000 lebende Pflanzen darstellbar, Millionen Forschungskandidaten nur aggregiert. Grafik 30/60 FPS ist eigene Aufgabe, nicht gekoppelt an millionenfache Paper-Mikroticks.
+
+## 9. Zeit, Marktdaten, Statistik und Compute
+
+**Kausalität:** Spiel-Evolution täglich, Trades realistisch mit Candle-/Tick-/Signal-Timing und kein Future-Leak. Fünf Kalenderjahre SOL 1m ≈ 2.63 Mio Minuten-Bars *bei ununterbrochener Verfügbarkeit*; genaue Quelle, Handelssymbol, Funding, Kontraktkonvention, fehlende Bars, Delistings, Zeitzone sind offen und müssen dokumentiert werden. Nicht so tun, als sei ein angefragter 5-Jahres-Datensatz bereits vorhanden.
+
+**Pipeline:** historische Preisquelle -> QA/normalisierte Bars -> validierte Strategie-Ausführung -> Ausführungsmodell (Zeitpunkt, reale Marktpreise, Slippage, Spread, Gebühren/Funding) -> täglicher NAV+Opportunity-Snapshot -> Ökologie/Selektion/Reproduktion -> Event-Log -> UI/Analyse.
+
+**Skalierung:** Millionen *vorgeschlagene* Genome sind einfacher als Millionen vollständig auf 2.63 Mio Bars backgetestete Varianten. Mehrstufiger Filter, deduplizierte Konfigurationen, Caches, Batch/Parallel CPU, deterministisches Seed, echte RAM/Throughput-Benchmarks auf MacBook Pro. Rust optional bei Messvorteil; nicht als unbegründeter Rebuild-Zwang. Keine Prognosen zur Hardwareleistung ohne Mac-/RAM-Angaben und Benchmark.
+
+**Experimente:** vier identisch finanzierte/zeitgleich getestete Welten: A random-only, B lokal, C Hive, D hybrid. Über viele Seeds replizieren; gleiche Compute-/Marktdaten-Budgets; purged/walk-forward und finales echtes OOS. Score-Ablation für Wurzel-/Blatt-/Wetter-/Jäger-/Bark-Mechanismen und Komplexitätskosten-Slider (default null). Statistik/Mehrfachtests dokumentieren; eine attraktive Simulationswiese ist kein Beweis von Alpha.
+
+## 10. Sicherheits- und Produktionsgrenze
+
+- Dieses Projekt ist **nicht** die Freigabe, die existierende 3×3 Blaupunkt-Familie live umzubauen. Produktive Legacy-Route bleibt `/webhook/tv-execute` für `blaupunkt`; andere 11 Pilot-Profile brauchen manuell konfigurierte TradingView Alerts für den gemeinsamen zukünftigen `/webhook/family`; Familienrouter derzeit Shadow.
+- Initiale IDs im [Pilot roster](../../src/quant/execution/family_pilot_roster.py): `blaupunkt` + `d01..d03`, `blaupunkt-p02` + Töchter, `blaupunkt-p03` + Töchter (12 gesamt). Shared webhook-token, individuelle strategy_id/event_id. `FAMILY_ADMIN_TOKEN` separat; keine Secrets in Issues/Docs.
+- Kritische Live-Gates: KuCoin Hedge Mode tatsächlich und lesend verifizieren; ein einziger autoritativer, hedge-aware Order-Writer, virtual-position Attribution, per-Bot protective SL/TP (reduce-only), Absturz-Reconciliation, idempotente Fills, Funding/Fees und Cashflow-TWR; altes Cancel-All-Verhalten ersetzen; Mengen-Minimum für SOLUSDTM beachten (im bestehenden Setup 0.1 als Stückelungs-/Mindestgrenze prüfen); keine Autoflatten bei Gate-Wechsel oder Budget-Neuberechnung.
+- Zuteilungen dürfen nur zukünftige Entries und nachweislich freie Margin beeinflussen. Keine automatischen echten Konto-Transfers, Änderung des Position Mode oder Deployment ohne explizite Betreiberfreigabe.
+- Globaler Kontostopp und Risikocaps haben immer Priorität vor evolutionär mutierten Leverage-, Blatt- oder Bark-Werten.
+
+## 11. Software-Architektur und Multi-Agent-Schnittstellen
+
+**Empfohlene isolierte Paketstruktur (neue Ordner, keine implizite Existenzbehauptung):**
+
+```text
+src/quant/ecosystem/
+  market_data/   # historische Daten und paper fills
+  sim_clock/     # Tages-Engine, RNG, Snapshot, Replay
+  capital/       # GroundwaterAccounting; Budgets, Reserve, NAV
+  ecology/       # Wachstum, Wurzeln, Blätter, Wasser, Sonne
+  metrics/       # Fitness/Vitalität/Evidenz/Opportunity
+  breeding/      # Bienen, Hive, Genvererbung und lineage
+  lifecycle/     # Fraß, Bark, Dormanz, Archiv
+  search/        # Candidate Queue, Screening, Compute
+  experiments/   # A/B/C/D, Walk-forward, Reports
+  adapters/      # read-only Shadow API Brücke
+apps/fleet-desktop/src/lib/ecosystemContracts.ts
+apps/fleet-desktop/src/components/EvolutionEcosystem*.tsx
+benchmarks/ecosystem/
+tests/ecosystem/
+docs/architecture/
+docs/experiments/
+```
+
+**Einen stabilen Vertrag zuerst abstimmen:** `StrategyGenome`, `GenePolicy`, `MarketSnapshot`, `TradeFill`, `DailyPlantState`, `GroundwaterState`, `AccountNAV`, `CapitalEntitlement`, `BeeAction`, `PredationEvent`, `MetricWindow`, `ResearchCandidate`, `SimulationEvent`, `SimulationSnapshot`. Adapter schützen Python/TS-Namensgebung und Versionen. Events auditierbar, replaybar, deterministic. Kein Agent schreibt in fremden Paketordner, bevor Schnittstelle abgesprochen wurde.
+
+**Reihenfolge des Tages (Vorschlag, später vertraglich fixieren):**
+1. Tageskerzen/Signale zeitlich korrekt paper-ausführen und Fills/PnL/Funding erfassen.
+2. Marktwert/NAV + Opportunity + Risk + historische Metrikfenster aktualisieren.
+3. Reserve 10%, Budgets, Grundwassersoll/-hysterese, nachweislich freie Margin und Entitlements abstimmen.
+4. Biomasse, Wurzeln, Blätter, Dormanz, Sonnen-/Schatten-Effekte täglich wachsen lassen.
+5. Bestäubung, Hive, Mutationen, Keimlinge inklusive *umbuchungsfinanzierter* kleiner Budgets.
+6. Predation/Archiv/Lifecycle und nur sicher freigewordene Mittel verteilen.
+7. Audit-Event-Log + statischen Snapshot persistieren; UI liest ihn, führt aber keine Orders aus.
+Keine Tagesstufe darf Zufallszahlen aus unspezifizierter globaler Quelle verwenden; kein Double Spend zwischen Schritt 3 und 6.
+
+## 12. GitHub-Arbeitspakete für eigenständig arbeitende Agenten
+
+**Zentrales Epic: [#36](https://github.com/MartinLiteAndFog/quant/issues/36)**. Jeder folgende Issue enthält den ausführlichen selbständigen **Agenten-Prompt**, Dateibesitz, Abhängigkeiten und Akzeptanztests. Hier steht eine ebenfalls direkt verwendbare Kurzfassung:
+
+| Paket | GitHub | Unabhängiger Arbeitsauftrag (kurzer Agenten-Prompt) | Welle |
+|---|---|---|---|
+| ECO-01 – Datenverträge | [#23](https://github.com/MartinLiteAndFog/quant/issues/23) | „Lege versionierte Typen, Tages-Eventreihenfolge und Contract-Tests an; trenne NAV, 90/10-Reserve, Budgets, Margin und Exposure. Keine Live-Writes.“ | A/P0 |
+| ECO-02 – SOL Data & Fills | [#24](https://github.com/MartinLiteAndFog/quant/issues/24) | „Normalisiere fünf Jahre SOL-Minuten/OHLCV mit Provenienz/Gaps und baue Kosten-, Funding-, Slippage- und zeitkorrektes Paper-Fill-Modell mit Fixtures. Keine erfundene TV-Parität.“ | A/P0 |
+| ECO-03 – Tages-Engine | [#25](https://github.com/MartinLiteAndFog/quant/issues/25) | „Baue pure Tages-Tick-Engine, Event-Log, Seed-Replay, Pause/Resume und getrennte intraday Signale; implementiere deduplizierte snapshots und Tests.“ | B/P0 |
+| ECO-04 – geschützte Gene | [#26](https://github.com/MartinLiteAndFog/quant/issues/26) | „Migriere geneLibrary auf protected finanzielle/Risiko-Policies plus optionale Strategie-Module; Stop-Loss Pflichtpolicy von SL-Tuning unterscheiden; Gene-Dropout nur optional, Genkosten Default 0.“ | A/P0 |
+| ECO-05 – Equity/Grundwasser | [#27](https://github.com/MartinLiteAndFog/quant/issues/27) | „Implementiere konservierendes Decimal-Groundwater-Ledger, 90/10-Schutz, Familien-/Kinderansprüche, freies vs reserviertes Kapital, reale Transfer-Gates und Kapitaltests.“ | B/P0 |
+| ECO-06 – Pflanzenökologie | [#28](https://github.com/MartinLiteAndFog/quant/issues/28) | „Implementiere tägliche Biomasse, Wurzel-Tiefe/Breite, Wasser-Asymptote, Trägheit/Hysterese, Sonnen-/Blatt-Risiko und Schatten, inklusive Kaktus-/Gras-Fixtures.“ | B/P1 |
+| ECO-07 – Metriken | [#29](https://github.com/MartinLiteAndFog/quant/issues/29) | „Berechne Fitness, aktuelle Vitalität, Credibility, Sharpe, DD, Recovery, CVaR, Edge-Drift, Opportunity-normalisierte Inaktivität und Diversifikation mit OOS-/kleine-N-Schutz.“ | A/P0 |
+| ECO-08 – Bienen/Hive | [#30](https://github.com/MartinLiteAndFog/quant/issues/30) | „Führe lokale, zentrale und hybride Bestäubung mit fünf Bienenalgorithmen, Mutation, geschützten Genen und nachvollziehbarer Lineage zusammen; evaluiere Nachwuchs später OOS.“ | B/P1 |
+| ECO-09 – Fresser/Archiv | [#31](https://github.com/MartinLiteAndFog/quant/issues/31) | „Baue Lebenszyklus, Mindestbeobachtung, bark-durch-Evidenz, Vitalitätsschutz 70/80 und gewichtete Zufallsjäger; archivieren statt Pilze rendern; Restkapital sicher freigeben.“ | B/P1 |
+| ECO-10 – Compute | [#32](https://github.com/MartinLiteAndFog/quant/issues/32) | „Baue paralleles Screening, Deduplikation, Daten-Splits und reproduzierbare Mac-Benchmarks; messen vor Rust-Rewrite; nicht Millionen Vollbacktests versprechen.“ | A→B/P1 |
+| ECO-11 – 3D-Cockpit | [#33](https://github.com/MartinLiteAndFog/quant/issues/33) | „Baue Ober-/Unterwelt-UI mit Phänotypen, Wurzeln, Pegel, Bienen, Fressern, LOD, editierbaren Achsen und fehlenden-Gen-Buckets; nutze klar markierte Sim-Fixtures.“ | C/P1 |
+| ECO-12 – Statistik | [#34](https://github.com/MartinLiteAndFog/quant/issues/34) | „Vergleiche Random-only, lokal, Hive und hybrid mit gleichem Budget/Compute, vielen Seeds, Walk-forward/OOS, risk net PnL und Ablation der Ecosystem-Slider.“ | C/P2 |
+| ECO-13 – Shadow Bridge | [#35](https://github.com/MartinLiteAndFog/quant/issues/35) | „Entwirf read-only validierte ResearchCandidate→Strategy Registry→TV-Alert→Family Shadow Brücke, gegen Tests verifizierte Go-live-Gates; keine Venue-Writes.“ | C/P2 |
+
+### Standard-Prompt, den jeder Agent vor seinem Paket erhalten soll
+
+> Arbeite im Repo `MartinLiteAndFog/quant`, ab Branch `feat/family-hedge-ledger-20261101`. Lies vollständig `docs/plans/2026-11-01-trading-ecosystem-handoff.md` und dein eigenes GitHub-Issue, einschließlich Abhängigkeiten und Dateibesitz. Erstelle einen eigenen Branch und fokussierten Draft-PR zurück auf den Integrationsbranch. Implementiere **nur dein Paket**, liefere Versionierung, dokumentierte Annahmen, Determinismus/Seed-Fixtures und Tests; markiere nicht entschiedene Parameter als konfigurierbar. Prüfe den realen Code vor Änderungen, erfinde keine vorhandenen APIs. Nimm keine Änderungen an Live-KuCoin, TradingView, Railway, Secrets, Positionen, Orders, Auto-Transfers oder `main` vor. Konfliktende Schnittstellen vorher abstimmen. Schreibe im PR, welche Akzeptanzkriterien erfüllt sind und welche ungelöst bleiben.
+
+### Abhängigkeiten und parallele Zusammenarbeit
+
+- **Welle A (parallel nach schnellem ECO-01-Contract-Entwurf):** #23, #24, #26, #29, #32-Gerüst. #23 sollte als erstes integriert werden; andere nutzen zunächst Mocks/Fixtures.
+- **Welle B:** #25 auf #23, #27 auf #23, #28 auf #23+#27, #30 auf #23+#26+#27, #31 auf #23+#29. Separate Paketpfade minimieren Konflikte.
+- **Welle C:** #33 darf sofort mit UI-Mocks anfangen, verbindet aber erst nach #28; #34 nach Daten/Metriken/Bienen/Search; #35 als letztes und ausschließlich read-only.
+- **PR-Regel:** Ein Issue = ein Verantwortlicher = ein Branch/PR. Keine parallelen Umbauten derselben Dateien ohne Abstimmung. Kernverträge nur durch ECO-01 oder gezielte Review. Status/Links ins Master-Issue #36.
+- **Tests:** kleine pure Tests bei jedem Agenten + bestehende Family Tests/PG-Integration/TS Build nicht brechen; neue Verhaltensregeln über Property-Tests, damit Equity, Pflichtgene, Stammbaum und Determinismus invariant bleiben.
+
+## 13. Messbare Definition of Done für einen ersten spielbaren Prototyp
+
+1. Historische SOL-Daten mit Datenqualitätsbericht oder klar gekennzeichnete synthetische Demo-Daten.
+2. Reproduzierbare Simulation über mindestens 1 Woche bis mehrere Monate (später 5 Jahre) mit täglichen Pflanzen-Updates und korrekter Intraday-Paper-Execution.
+3. 100-USDT-Testwelt mit maximal 90 USDT Gesamtbudget, 10 USDT Reserve, drei Eltern, 20 Kinder; Kapital bleibt bei Geburt, Fraß, Profit und Verlust konsistent.
+4. Drei reproduzierbare Phänotypen (Gras, Busch, Kaktus) durch Gene, nicht durch Sonderregeln, inklusive Rinde/Dormanz und Blatt-/Wurzel-Trade-off.
+5. Fresser fressen niemals geschützte Vitale; fehlende Trades allein töten seltene Strategien nicht; archivierte Strategien verschwinden visuell.
+6. Lokal/Hive/Hybrid unterscheidbar und in einem kontrollierten Experiment gegenüber rein zufälliger Mutation testbar.
+7. Fleet UI zeigt Oberwelt und Forschungs-Unterwelt aggregiert; Achsenwechsel verliert keine Pflanzen; Performancekennzahlen klar „synthetisch“ oder „empirisch“ markiert.
+8. Keine Strategie erhält echtes Kapital, bis später explizit genehmigte KuCoin-Hedge-/Orderwriter-/Ledger-Gates nachweisbar passiert sind.
+
+## 14. Entscheidungen, die der Nutzer später per Regler testen kann
+
+- Globaler 90/10-Reserveschutz (live zunächst hard-coded; Simulation darf Parameterexperimente ausführen, Safety-Floor getrennt).
+- `groundwater_scale`, `groundwater_min_depth`, `water_rise_speed`, `water_fall_speed`, `hysteresis`, eventuell 2–80%-Zugangsquote.
+- `root_growth`, `root_depth`, `root_spread`, Blatt-/Wurzel-Wachstumstradeoff, `leaf_area`, globale Sun-/Risk-Multiplier, Exposure-Caps und Verschattungskurve.
+- `predator_vitality_ceiling` (Start 70%), 70–80% Schonzone, Bark-Wirkung, Lebensdauer/Evidence-Gates, Jagdhunger/Zufallsgewicht.
+- `vitality_half_life_days`, multi-horizon Fitness, rare-opportunity mode, Confidence-Floor, Benchmark-/OOS-Window.
+- `reproduction_budget` in bounded GenePolicy, Samenanzahl, Bee-Breed, local/hive/hybrid, Gene-Add-/Drop-Rate.
+- `complexity_penalty_weight=0` als Standard; optional erhöhen und testen.
+- Grafik: Pflanzenklassifizierung, Biomasse-Log-Skala, Bodenschnitt, Render-Limit/Cluster, 2 Achsengene.
+
+## 15. Offene Fragen und Risiken (nicht als beschlossen ausgeben)
+
+1. Datenquelle und Echtheit: Gibt es den vollständigen fünfjährigen SOL Futures Datensatz? Kommen 1m-Exchange-Bars inklusive funding/mark? Strategien mit Pine/Renko brauchen semantische Signalparität.
+2. Realer MacBook-Pro-Chip/RAM und Benchmark-Ziel noch nicht bekannt. Millionenkandidaten ≠ millionenfache Vollbacktests.
+3. Braucht das Spiel eine native Rust-Engine? Erst nach Messung entscheiden; die aktuelle Python-/TS-Basis existiert bereits.
+4. Formel der Vitalität, Fitnessgewichte, OOS-Konfidenz und Bark-Evidenz muss empirisch kalibriert werden; 70/80% sind vorläufige UI-Werte.
+5. Pegelkurve, Trägheit, Hysterese und zu- bzw. abnehmender Zugang sind Parametertests, keine bewiesene Marktwirkung.
+6. Welche Gene werden real executable Strategy Modules, welche nur Phänotyp-/Metastrategie-Gene? **Keine direkte Arbitrary-Code-Ausführung.**
+7. Exakte Mehrkonto-Nettoequity/Transfers ist im Simulation-Portfolio möglich, in realen Subaccounts ohne Freigabe nicht.
+8. „Niedrige Kapitalnutzung“ versus „hoher Kapitalzugang“ muss über **nicht-exklusive Entitlements** und real-time freie Margin geregelt werden; sonst werden Mittel implizit doppelt reserviert.
+9. Die Wiese könnte auf fünf Jahre SOL overfitten: deshalb historische Split-Grenzen, Multiple Tests, echte Kosten und niemals einen einzigen erfolgreichen Lauf als Beweis präsentieren.
+10. Der Architektur-Backlog ist unabhängig von Freigabe und Migration des bestehenden Blaupunkt Live-Bots.
+
+**Nächster sauberer Start:** [#23 Contracts](https://github.com/MartinLiteAndFog/quant/issues/23), [#24 Marktdaten](https://github.com/MartinLiteAndFog/quant/issues/24), [#26 geschützte Gene](https://github.com/MartinLiteAndFog/quant/issues/26) und [#29 Metriken](https://github.com/MartinLiteAndFog/quant/issues/29) parallel beginnen; #27 Kapitalbuch anschließend mit #28 Ökologie zusammenbringen; #33 UI kann mit Fixtures parallel starten.
+
+## 16. NEUE ENTSCHEIDUNG: Kategorisierte zweidimensionale *Gen-Parameter-Wiesen* (ersetzt universelle Verhaltenskarte)
+
+**Entscheidung des Nutzers:** Die Standard-Landschaft darf **keine** PCA/UMAP-/Verhaltensähnlichkeitskarte sein. Die Position der Pflanzen muss durch **zwei echte genetische, strategisch relevante, mutierbare Parameter** bestimmt sein, weil die räumliche Aussaat gerade diese Parameter fine-tunen soll. Mehrdimensionale Genome sind erlaubt, aber die sichtbare Wiese bleibt pro Kategorie zweidimensional.
+
+### Karten-/Kategorieprinzip
+
+- Eine **Kategorie** (auch Wiese/Map/Parameterraum) definiert `category_id`, `strategy_module_family` bzw. Kompatibilitätsregel, zwei konkrete Gen-Parameter `axis_x_gene_id` und `axis_y_gene_id`, Wertebereiche, Schritte und stabile Versionskennung. Beispiel: IMBA-Sensitivität × TTP-Abstand; RSI-Periode × RSI-Entry-Grenze; Trend-Following-Stärke × Zeithorizont (nur falls beides tatsächlich Strategieparameter sind, nicht nachträglich erfundene Behavioral-Metriken); SL-Tuning × Exit-Trailing-Parameter.
+- Ein Organismus ist **nur auf der Kategorie-Wiese sichtbar, deren beide Achsengene er tatsächlich trägt** und deren Strategie-/Modulfamilie dazu passt. Ein Bot, der weder Sensitivität noch TTP besitzt, erscheint ausdrücklich **nicht** auf der IMBA×TTP-Wiese – das ist gewollt, nicht ein Visualisierungsfehler.
+- **Jede Strategie muss mindestens einer Kategorie zugewiesen werden**. Fehlt ein passendes zweidimensionales Achsenpaar, wird ein neues relevantes, tatsächlich ausführbares Parameterpaar als Kategorie angelegt bzw. die Strategiedefinition um ein fachlich sinnvolles zweites *echtes* Tuning-Gen erweitert; bis dahin ist die Strategie **unzugeordnet** und als Daten-/Konfigurationsfehler sichtbar, nicht lautlos aus der Gesamtpopulation verschwunden. Keine Erfindung von Parametern oder zwingende Änderung einer Strategie allein aus Darstellungsgründen.
+- Ein Organismus kann **mehrere kompatible Kategorieansichten** besitzen, aber es gibt pro Organismus **eine kanonische Heimat-Kategorie** für Aussaat, Wurzeln, lokale Nachbarschaft und Predation. Weitere Ansichten sind Visualisierungsprojektionen **derselben eindeutigen strategy_id**, keine vervielfältigten Bots, Budgets, Equity oder Nachkommen. Die Entscheidung der Heimatkategorie ist versioniert und bei Aussaat festgelegt, änderbar nur durch explizite Migration.
+- Kategorie-Switching im Fleet Cockpit wählt Wiese und Filter; die andere Pflanzenpopulation entwickelt sich **im Hintergrund weiter**, auch wenn gerade nicht gerendert. Die globale Equity/Grundwasserbuchhaltung und Sicherheitsreserve bleiben *über alle Kategorien hinweg* dieselbe, ohne pro Kategorie Kopien.
+- Bienen, die lokal Samen streuen, mutieren bevorzugt die **beiden Achsengene ihrer Heimatwiese**. Übrige Gene können dabei ebenfalls (separat konfigurierbar) mutieren, aber die kindliche Position `(x,y)` ist das wirkliche Ergebnis der Achsgenänderung. Kein bloß dekoratives Samenflugdiagramm. Genewechsel, die das Kind für eine andere Wiese qualifizieren, brauchen explizites Kategorie-Transfer-/Neuzuordnungsereignis; kein unbemerktes Verschwinden. Hive-/Fernflug-Bienen dürfen kategorienübergreifend Gene sammeln, aber erzeugen nur bei gültiger Genom-/Strategiemodulkombination handelbare Kandidaten.
+- Statistische Parameterflächen sind nur **unter transparenten Bedingungen interpretierbar**: Nebenparameter, Strategiemodul, Datensplit und Ausführungsmodell können Fitness-Cluster verfälschen. UI muss Filter, Genom-Details, Facets und Vergleich gleicher Nebenparameter anbieten und ggf. **„heterogene Nebenparameter“** anzeigen.
+- Karten sollen einzeln anzeigbare Populationszahlen, Fitness-Cluster, Forschungs- und Kapitalstatistik haben; alle Karten zusammen zeigen exakt die deduplizierte Gesamtpopulation.
+- Ein optionaler späterer **Node-/High-D-Graph** ist denkbar als **separates Forschungswerkzeug**, ersetzt aber nicht die normale schöne 2D-Wiese und ihre mutierbaren strategischen Achsen.
+
+### UI- und Forschungs-Akzeptanztests
+
+1. Strategie `A` besitzt Sensitivität+TTP und erscheint auf der IMBA-Wiese. Strategie `B` besitzt nur RSI+SL-Tuning und erscheint ausschließlich auf einer dazu passenden Wiese; das Umschalten zwischen beiden ist möglich.
+2. `A` kann mehrere passende Karten haben, aber bei Aggregation und Kapitalbuchhaltung genau **einmal** erscheinen. Eigentümliche lokale Wurzeln/Seed-Koordinaten bleiben unverändert, wenn lediglich die Ansicht gewechselt wird.
+3. Eine neue Strategie mit noch keinem definierten Achsenpaar erzeugt einen **klar ausgewiesenen unzugeordneten Status** und einen Workflow „Kategorie erstellen“, statt ungesehen zu verschwinden.
+4. Bienenmutationen verändern reale `axis_x_gene`/`axis_y_gene`-Werte der Nachkommen; deren sichtbare Position folgt deterministisch diesen mutierten Genen.
+5. Wechseln des Filters beendet keine Simulation, löscht keine Pflanzen und verändert keine globale Equity. Unterschiedlich große Wiesen sind ausdrücklich gewollt.
+6. Keine separate Kategorien-Eigenkapitalrechnung, falls sie nicht durch tatsächliche Allokation/Transfer im kanonischen Ledger gedeckt ist.
+
+**Vorrangregel:** Dieser Abschnitt ersetzt die frühere Formulierung in §8 und Issue #33, wonach jede Wiese alle Strategien mit einem „Gen nicht vorhanden“-Bucket darstellen müsse. **Kategorien dürfen Populationen bewusst filtern**; das Gesamtsystem muss jedoch jede Strategie in mindestens einer Kategorie oder als sichtbaren Zuordnungsfehler erfassen. Er ersetzt ebenso ausdrücklich die zwischenzeitlich diskutierte Verhaltenskarte als Standard-Weltgeometrie.
+
+## 17. NEUE ENTSCHEIDUNG: aneinandergelegte Wiesen-Kacheln in Multi-Asset-Regionen
+
+Die einzelne 2D-Genparameterwiese aus §16 bleibt das **kleinste räumliche Optimierungsmodul**. Das ganze Spiel besteht jetzt aus einer mosaikartig arrangierten, zoombaren **Welt aus vielen Wiesen-Kacheln**. Jede Kachel hat ihre eigenen, fachlich sinnvollen zwei Strategiegene, eine Marktdaten-/Strategiemodulfamilie und eine stabile Orts-/Versions-ID. **Kein globales 2D-UMAP/PCA.** In einer Kachel sind nur Genom-kompatible Pflanzen sichtbar. Man kann von der Gesamtwelt auf eine Region oder eine einzelne Wiese hineinzoomen, einzelne Tiles markieren oder nebeneinander vergleichen.
+
+### Räumliche Hierarchie und Datenmodell
+
+- `World`: gemeinsamer Simulations-Tick, Konto-/Equity-Bilanz, Experiment-/RNG-Seed. Eine einzige Equity, **nicht** eine neue Equity pro Kachel.
+- `Region`: Assetklasse/Marktumfeld, z. B. `crypto`, `fx`, `commodities`, `indices`, später beliebig; Region besitzt Layout/Tile-IDs und explizite Markt-/Währungs-/Exchange-Informationen.
+- `AssetUniverse`: `asset_id`, `symbol`, `asset_class`, `quote_currency`, `instrument_type`, `data_source_id`, `data_available` (keine erfundenen Daten), `contract_spec_version`; bei Cross-Asset-PnL gesonderte FX-Bewertung und Kontoabgleich nötig.
+- `MeadowTile`: `tile_id`, `region_id`, `asset_id`, `strategy_module_family`, `axis_x_gene_id`, `axis_y_gene_id`, `axis_bounds`, `schema_version`, `tile_world_xy`, `home_owner_rules`. Zwei reale ausführbare/parametrisierbare Gene; keine 2 „geschenkten“ Darstellungsparameter, die im Trading nichts bewirken.
+- `StrategyPlacement`: global eindeutige `strategy_id`, genau eine `home_tile_id` für **Sowing, lokale Wurzeln, Fraß, exklusive Budgetzuweisung**, daneben null oder mehrere kompatible readonly `projection_tile_ids`. Wenn keine sinnvolle Achsenkategorie existiert, `unassigned` plus sichtbare Aufgabe „neue Kategorie erstellen“.
+- `WorldViewportState`: `world / region / tile / underground`, Kamera/Kachelauswahl, Detailgrad/LOD. UI-Zustand verursacht **keine** Mutationen, kein RNG-Drift, keine Kapitaltransfers.
+- `MyceliumKnowledgeEdge`: gerichtete, versionierte Wissenskante zwischen verschiedenen Tiles/Regions mit Quelle, empirischem/experimentellem Score, Stichprobe, Validierungslevel, Gen-/Modul-Kompatibilität; *kein* Kapitalbeutel und **kein** separat lebender Pilz.
+
+### Rendering und Zoom
+
+**Welt-Zoom:** gekachelte Weltübersicht mit Assetklasse, Vegetationsdichte, risikoadjustierter Performance, Kapitalzuteilung und dynamischen Vegetations-/Wasserindikatoren. **Regions-Zoom:** mehrere Kacheln samt aggregierten Myzel-Verbindungen und Kapital-/Wissensflüssen. **Tile-Zoom:** volle 2D-Parameterwiese, einzelne Pflanzen, Bienen, Fresser, Wurzeln/Grundwasserschnitt, tatsächliche Achsgenwerte und Genom-Details. **Unterwelt-Zoom:** aggregierte Paper-Forschungscluster, kein individueller Pilz für jedes ehemalige Genom.
+
+Nur sichtbare Tiles erhalten Render-Budget. Unsichtbare Tiles werden im Simulator **identisch** weiterberechnet; ihre Strategie-/Paper-Daten werden **nicht** durch Rendering gerastert. LOD/Cluster statt Millionen sichtbarer individueller Pflanzen. Das ganze Spiel muss auch mit einer günstigeren 2D/2.5D-Vorschau funktionieren, bevor eine aufwendige Game-Engine hinzukommt.
+
+**Unreal Engine 5**: Option für spätere attraktive 3D-Landschaft als **read-only Renderer**, der simulierte State-Snapshots/Events über eine versionierte Schnittstelle konsumiert. Simulation, deterministische Papierausführung, Buchführung und evolutionäre Forschung dürfen **nicht an Unreal gekoppelt** sein. Entscheidung zwischen React/WebGL/Three.js und Unreal erst nach technischem Prototyp und CPU/GPU/RAM-Benchmarks auf dem tatsächlichen MacBook Pro.
+
+### Evolution, Myzel und Multi-Asset-Kapital
+
+- Lokale Bienen kreuzen/säen innerhalb einer Home-Kachel und fine-tunen dabei genau deren zwei Achs-Gene. Bienen/Hive können kompatible Genome zwischen Tiles übertragen, aber Kind-ID, genotypisches Modulpaket und neuer Tile-Home-Status müssen explizit validiert werden.
+- Das „Myzel“ verbindet **aggregierte Forschungsinformationen** über Parametergruppen und Regionsgrenzen. Transfer von Gene-Insights aus SOL nach BTC/Öl/FX ist **nur Hypothese**, nicht automatisch wahre oder profitable Strategie; Cross-Asset Backtest/OOS notwendig.
+- Globales NAV/Grundwasser und 90/10-Reserveprinzip gelten **über alle Wiesen und echten zugeordneten Accounts gemeinsam**. Regionale Wasserstände dürfen die globale Equity aus *nur* einer Quelle ableiten oder explizite, tatsächlich gedeckte Subbudgets anzeigen. Kontoübergreifendes verfügbares Kapital ohne realen Transfer nicht als handelbar ausweisen.
+- Markt-/Assetklassen-Tests benötigen je Asset eigene Zeitreihen, Gebühren, Funding/Finanzierung, Kontraktkonvention und ggf. FX-Konversion; vorliegende SOL-Daten dürfen nicht als Öl-/Forex-Daten ausgegeben werden.
+- Für Statistiken und Kapitalrechnung `strategy_id` global deduplizieren. Kachelstatistiken unterscheiden Heimat-Population von readonly projizierten Vergleichsexemplaren.
+
+### Agentenauftrag / Ticket
+
+**[ECO-14 / Issue #39](https://github.com/MartinLiteAndFog/quant/issues/39)** beschreibt die selbstständig umsetzbare Tile-/Region-/Myzel-Schicht inklusive Codeeigentum, Prompt, Tests und optionaler Unreal-Bridge. Sie ist als getrenntes Paket neben [ECO-11 / #33](https://github.com/MartinLiteAndFog/quant/issues/33) geplant: #39 verantwortet Welt-/Regionskarte, Tile-Registrierung, Kompatibilitäts-/Deduplikationslogik und Datenadapter; #33 den Detail-Pflanzenrenderer und Wurzel-/Tier-Effekte. Nicht beide Agenten gleichzeitig dieselben UI-Dateien ändern.
+
+**Demo-Assets (nur synthetisch bis echte Daten vorhanden):** SOL-IMBA Sensitivity×TTP, SOL-RSI Periode×Einstiegsschwelle, BTC-Trend Trendlänge×Exit, WTI-Mean-Reversion RSI×Exit, FX-Breakout Fenster×Stop, optional Nasdaq. Die Asset-Kacheln sind keine Aussage, dass Historie oder Strategiemodul implementiert sind.
+
+## 18. Tatsächlich auf Git vorhandener Implementierungsstand (2026-11-01)
+
+**Wichtig: Draft-PR ≠ gemergt ≠ produktiv.** Aktueller Stand auf getrennten Entwicklungsbranches:
+
+- **#23 / ECO-01 Data Contracts:** Branch `codex/ecosystem-contracts` enthält bereits `src/quant/ecosystem/contracts.py`, `apps/fleet-desktop/src/lib/ecosystemContracts.ts` und Contract-Dokumentation. Zum Kontrollzeitpunkt noch kein eigener verifizierter PR/Merge; andere ECO-Agenten sollen die Wire-Interfaces abstimmen.
+- **#24 / ECO-02 Market Data:** [Draft PR #37](https://github.com/MartinLiteAndFog/quant/pull/37) enthält read-only OHLCV-Import, Datenqualität und kostenorientierte Paper-Fills; historische fünf Jahre SOL **noch nicht** nachgewiesen/importiert, PR ungemergt.
+- **#26 / ECO-04 Protected Genes:** [Draft PR #38](https://github.com/MartinLiteAndFog/quant/pull/38) enthält geschützte Gene/Strategiemodul-Descriptors, Tests; noch kein produktiver Interpreter, PR ungemergt.
+- **#27 / ECO-05 Groundwater:** [Draft PR #40](https://github.com/MartinLiteAndFog/quant/pull/40) auf `codex/ecosystem-groundwater-capital`: eigenständiger Decimal-Paper-Allokator für 90/10-Reserve, konfigurierbare Gewichte und Caps, nicht-exklusive Kapazitätsplanung, Child-Budget-Split, globales Distress-Freeze; 10 Standardbibliotheks-Unit-Tests, eigener grüner GitHub CI-Lauf. Python-Paket-Konflikt mit #23 durch Entfernen des doppelten Root-`__init__.py` vermieden. **Kein** Cross-Account-Transfer und keine echte Exchange-Reconciliation.
+- **#39 / ECO-14 Tile World:** [Draft PR #41](https://github.com/MartinLiteAndFog/quant/pull/41) auf `codex/ecosystem-tile-world`: 6 **synthetische** Parameter-Kacheln in 4 Regionen, React/Fleet-Kachelwelt-Button, Welt-/Kachel-Fokus, einmalige Home-Population trotz Sekundärprojektionen, aggregierte Myzelvorschläge, Docs, Node-Smoke/TypeScript/Vite; eigene Tile-CI und bestehende Fleet-CI **grün**. **Noch keine** Unreal-5-Implementierung, live Daten oder echte Multi-Asset-Positionen.
+- **Alle übrigen ECO-Tasks:** als GitHub-Issues spezifiziert, nicht dadurch als erledigt zu betrachten.
+
+Die PRs #40 und #41 sind absichtlich separat und zielen auf den bestehenden Entwicklungsbranch, nicht auf `main`. Vor Review/Merge sind die neuen Funktionen in PR #22 beziehungsweise Produktion **noch nicht enthalten**. Live-KuCoin, Railway, TradingView und bestehende Positionen wurden nicht verändert.
+
+## 19. Weitere implementierte Basismodule: Tages-Uhr, Pflanzenökologie und optische DNA (2026-11-01)
+
+**Status: Drei neue isolierte Draft-PRs; CI geprüft, nicht gemergt, nicht live.** Diese Sektion konkretisiert die vorherigen Kapitel und die Nutzer-Nachträge zu vererbbaren Blattformen, Verzweigung und Kakteen.
+
+### ECO-03 / Issue #25 — [Draft PR #42](https://github.com/MartinLiteAndFog/quant/pull/42)
+
+Branch `codex/ecosystem-daily-clock`, Modul `src/quant/ecosystem/sim_clock/clock.py`, Tests `tests/ecosystem/test_sim_clock.py`, Doku `docs/architecture/ecosystem-daily-clock.md`:
+- Reproduzierbare tägliche UTC-Ökologie-/Ereignis-Uhr, Phasen `execution → metrics → capital → ecology → breeding → lifecycle → snapshot`, individuelle eingehende Intraday-/Signal-Ereignisse mit Kausalitätsprüfung `occurred_at <= available_at`, unique event_id.
+- Exakte Decimal-NAV und 90/10-Schutzreserve, signierte **inkrementelle** PnL-/Fees-/Funding-Deltas getrennt von externen Cashflows. Keine mehrfach angerechnete unrealized/realized PnL; der Simulator erzeugt keine Handelsfills.
+- Pure, separat ge-seedete Reducer pro Tag und Phase; kanonische, serialisierbare Checkpoints, Pause/Resume und Replay. Duplikate/doppelte Tagesausführung führen zu Fehlermeldung, nicht zu weiterer Kapitalveränderung.
+- Eigener GitHub-Workflow **erfolgreich**. Integrationsadapter zu ECO-01/02/05/06/07 steht aus. Nicht als abgeschlossene 5-Jahres-Simulation ausgeben.
+
+### ECO-06 / Issue #28 — [Draft PR #43](https://github.com/MartinLiteAndFog/quant/pull/43)
+
+Branch `codex/ecosystem-daily-ecology`, Modul `src/quant/ecosystem/ecology/physiology.py`, Tests `tests/ecosystem/test_ecology.py`, Doku `docs/architecture/ecosystem-daily-ecology.md`:
+- Ein eigenständiger pure `ecology_day(previous_groundwater, day, global_nav, plant_inputs, observed_weather, config)`, tägliches Wurzel- und Blatt-/Verzweigungswachstum, gleichzeitiger hoher vertikaler und lateraler Wurzeltrieb, **Opportunitätskosten statt realem Geldverbrauch**.
+- **Funktionale Genome:** `root_growth`, `root_depth`, `root_spread`, `branching`, `leaf_count` (Integer, niemals unter 1), `leaf_size`, `bark_strength`, `dormancy`, `photosynthetic_rind` (bool), `rind_efficiency`, zusätzlich strukturell verpflichtende Finanz-/Sicherheitsfelder `reproduction_budget`, `protective_stop`, `max_leverage`, `max_margin_fraction`.
+- **Kaktus-Kernregel:** `leaf_count == 1` und `photosynthetic_rind == true` → die **grüne Stammoberfläche / grüne Sprossrinde übernimmt die Photosynthese**; keine sichtbare normale Blattkrone. `rind_efficiency` reguliert die effektive Lichtaufnahme. **Fraßschutz `bark_strength` ist getrennt** von Lichtaufnahme; ein gepanzerter Kaktus bekommt niemals automatisch gigantischen Hebel oder Kapitaleinsatzzugang.
+- **Verzweigungs-Trading-Effekt:** Mehr `branching` plus mehr `leaf_count` erhöht die Photosynthese-/Blattfläche und erlaubt bei genügend Sonne höhere eigene Kapitalnutzung sowie effektiven Hebel. Wurzeln konkurrieren um dieselbe Wachstumsintensität und begrenzen Kapitalnutzung. Dormanz reduziert Aktivität, ohne das Budget aus dem Ledger zu löschen.
+- Grundwasser-Tiefe `d(E)=d_min+(d_max-d_min)*exp(-k*max(E,0)/E_ref)`, `d_min>0`; je mehr Nettoequity, desto näher an der Erdoberfläche, niemals darüber. Getrennte glättende Anstiegs- und Fallgeschwindigkeiten, Hysterese beim Root-Zugang, evidenzabhängige Zulassung und optionaler maximaler Empfängeranteil; **kein** erzwungener Mindestanteil. Mindestens 10 ECO-06-Szenarientests mit eigenem CI-Workflow; nach letztem Commit erneuten CI-Status prüfen.
+- `intended_margin`, `effective_leverage`, `intended_notional` sind **nur unverbindliche Paper-Absichten**. Nicht als echtes verfügbares Brokerage-Kapital behandeln. ECO-05 muss freie Margin, Konto-, Instrument- und offene Orders-Limits später nachprüfen.
+- Sonne ist kausal bekanntes Wetter/Marktregime bis Tagesende; **kein** Future Leak. Tagesend-Sonnenwert darf im späteren Minute-/Signalhandel nicht für früher liegende Orders verwendet werden. Doppelwirkung auf Auslastung und Leverage ist bewusst experimentell und für ECO-12-Ablation vorgesehen.
+
+### ECO-15 / Issue #44 — [Draft PR #45](https://github.com/MartinLiteAndFog/quant/pull/45)
+
+Branch `codex/ecosystem-visual-dna`, Dateien `apps/fleet-desktop/src/lib/plantAppearance.ts`, `evolutionMeadow.ts`, `components/EvolutionMeadow.tsx`, `tests/plantAppearance.smoke.mjs` und `docs/architecture/ecosystem-visual-dna.md`:
+- Jede Pflanze bekommt bei der initialen Aussaat **zufällig, aber mit festem Seed reproduzierbar** eine `VisualDNA`; neue Generationen erben die Gene von Mutter/Vater über Crossover und begrenzte Mutation. Gleiche strategische Gene müssen nicht gleich aussehende Pflanzen erzeugen.
+- **Rein optische, finanziell neutrale DNA:** `hue`, `saturation`, `petalCount`, `petalRoundness`, `bloomTwist`, `stemCurve`, `ribbing`, `spineDensity`, `leafShape`. Sie bestimmen nur Zeichnung, Farbe, Blütenformen, Winkel und Muster; **keinen** Profit, Zugang zu Wasser, Fitness, Positionsgröße, Hebel oder Sicherheitsregeln.
+- **Funktionale Morphologie** für Blattmenge und Verzweigung wird separat gespeichert: `branching`, `leaf_count`, `leaf_size`, `photosynthetic_rind`, `rind_efficiency`, `bark_strength`; in der JS-Monatsdemo noch ausdrücklich **synthetischer Preview-Genotyp**, ECO-06 liefert später die kanonischen täglich berechneten Zustände. Erst ein geprüfter Adapter darf sie zusammenführen.
+- `grass`, `flower`, `shrub`, `cactus` dienen als **zufällig abtastbare genetische Startprofile**, nicht als zwingender oder fester Trading-Bot-Typ. Pflanzenklasse entsteht aus realer Funktion `classifyMorphotype`. Die einblättrige, photosynthetische Kaktus-Rinde bekommt eine grüne gerippte Stängelform mit optionalen Dornen, **statt einer normalen Blütenkrone**.
+- Sichtbare Nachkommen erhalten individuelle, vererbbare Farben, variierende Petal-Anzahl/Drehung, Blattform, Stammkrümmung und tatsächliche Verzweigung. Bestehendes TTP/Sensitivity-Sowing, Familienidentität und risk/safety-Tradinggene bleiben unberührt. 500 deterministische Visual-Gen-Rekombinationen und Frontend-Build; beide GitHub-Workflows beim letzten Check **grün**.
+- Die künftige Unreal-/3D-Darstellung kann dasselbe visual-genetic Snapshot-Feld konsumieren; VisualDNA wird nicht aus lokalen FPS- oder Renderzufallszahlen generiert.
+
+### Abhängigkeiten für weiterarbeitende Agenten
+
+1. **Zuerst Review/Merge ECO-01 Contracts** auf den Integrationsbranch; es existiert bereits ein Code-Branch `codex/ecosystem-contracts`, aber nicht alle PRs verwenden schon denselben Snapshot-Adapter. Adapter dürfen nicht nebenbei Live-Positionsmanagement einschalten.
+2. ECO-03 `sim_clock` ruft einen ECO-06-Ecology-Reducer **nach** causal execution, metrischem NAV-Mark-to-Market und ECO-05-Entitlement-Prüfung. Phasenreihenfolge fix; Simulation benötigt deterministische und Replay-kompatible Datenbank-/Snapshot-Speicherung.
+3. ECO-06-Output **ist keine Buchung**. ECO-05 legt fest, welche Margin pro realem Account tatsächlich verfügbar ist. Ein hoher Blattwert darf weder ungesicherte Margin noch exzessives Notional veranlassen; alle Hard-Caps bleiben global.
+4. ECO-15 ergänzt langfristig VisualDNA/FunctionalMorphology in ECO-01-StrategyGenome/Plant-Snapshot mit Migrations-/Schema-Version und RNG-Seed. Die heutigen TS-Demo-Gene dürfen nicht als neue, unabhängige zweite Handelsgenom-Wahrheit bestehen bleiben.
+5. ECO-11-Detail-UI-Agent und ECO-15 dürfen bei `EvolutionMeadow.tsx` **nicht ungeprüft gegeneinander überschreiben**. Nach Review von PR #45 auf dessen VisualDNA-Schnittstelle aufbauen. Genauso bleibt ECO-04 (`geneLibrary.ts`) in PR #38 der Eigentümer der Sicherheitsgene.
+6. **Nächste freie Pakete:** ECO-07 Fitness/Vitalität; ECO-08 Bienen/Hive; ECO-09 Fresser/Rinde; ECO-12 kontrollierte Out-of-sample-Versuche. Für die nächste Integrationsstufe ein gezieltes `ecosystem-daily-integration`-Ticket schaffen statt wahllos drei isolierte Module direkt nach `main` zu kopieren.
+
+**Unverändert:** alle PRs Draft, Entwicklungszweig unter PR #22; *keine* Live-Orders/Transfers, keine Anpassung von KuCoin/Railway/TradingView, keine automatische Produktionseinführung. Die Wiese bleibt pro Kachel ein zweidimensionaler strategischer Genraum. Ein unendlich komplexes optisches oder funktionales Genom darf den visualisierten 2D-Fine-Tuning-Raum nicht in eine rein verhaltensbasierte PCA-Karte umbiegen.
+
+### Konkreter nächster Integrationsauftrag: [ECO-16 / Issue #46](https://github.com/MartinLiteAndFog/quant/issues/46)
+
+Nachdem Contracts, Paper-Fills, Kapitalplan, Tages-Uhr, Pflanzenökologie und VisualDNA jeweils eigene Module/PRs besitzen, müssen sie **in einem echten simulatorischen Tagesablauf zusammengeführt** werden. ECO-16 beschreibt dazu einen vollständigen Agenten-Prompt und 30–365-Tage-End-to-End-Tests, für eine synthetische Welt mit 3 Eltern/20 Nachkommen: Tages-Events und Cashflow, globaler Reserve-/Equity-Ledger, Wurzel-/Blatt-/Rinden-Wachstum, Seed-Recap und optische Gene; reproduzierbarer Checkpoint/Replay, **kein** Live-Executor. Das ist der nächste entscheidende Meilenstein vor 5-Jahres-SOL-Replays und Unreal-/3D-Ambitionen.
+
+**Qualitäts- und Merge-Status:** [PR #42](https://github.com/MartinLiteAndFog/quant/pull/42) Tages-Uhr, [PR #43](https://github.com/MartinLiteAndFog/quant/pull/43) Pflanzenökologie und [PR #45](https://github.com/MartinLiteAndFog/quant/pull/45) optische DNA besitzen zum aktuellen Check jeweils **grüne eigene GitHub-CI** (bei #45 zusätzlich bestehender Fleet-Workflow). Sie sind **Drafts**, nicht automatisch Teil des Integrationsbranches oder der Produktion.
+
+## 20. Ausführbare tägliche Paper-Welt: ECO-16 / Draft PR #47 (2026-11-01)
+
+**[PR #47](https://github.com/MartinLiteAndFog/quant/pull/47)**, Branch `codex/ecosystem-endtoend-paper`, **CI erfolgreich** (Daily Clock und 30-Tage-Integration samt 365-Tage-Synthetic-Report). Das ist ein weiterer Forschungs-Draft, **nicht gemergt, nicht deployed**. Es integriert die bereits vorhandenen, sonst in eigenen PRs isolierten Module:
+- Clock aus [#42](https://github.com/MartinLiteAndFog/quant/pull/42), Capital aus [#40](https://github.com/MartinLiteAndFog/quant/pull/40) und Ecology aus [#43](https://github.com/MartinLiteAndFog/quant/pull/43). Die beiden letztgenannten Quellmodule wurden zur **CI-validierbaren Vorschau** unverändert in den ECO-16-Branch gespiegelt: vor einem Merge der Einzel-PRs die Doppeldateien entfernen/rebasen. Nicht beide Implementierungskopien getrennt weiterentwickeln.
+- Neues Modul `src/quant/ecosystem/integration/research_world.py`: Ein einziger synthetischer USDT-Paper-Account, drei Eltern und 20 Kinder als **explizites Anfangsportfolio**; Geburt/Seed-Funding zieht kleine Einmalanteile vom Mutterbudget ab, schafft kein weiteres Geld. Danach `step_world` täglich mit ausschließlich vom Aufrufer bereitgestellten, kausal datierten inkrementellen PnL-/Fee-/Funding-/Cashflow-Ereignissen. Reihenfolge: Kapitalbudget und free-margin-Grenzen → Pflanzenwachstum, Wurzel-/Blatt-Morphologie, Grundwasserpegel und maximal **unverbindliche** Margin-/Leverage-Intents. Keine autoerzeugten Trading-Trades.
+- Reproduzierbarkeit: `SimulationState`-Snapshot hält Pflanzen-/Wasser-/Budgetzustand plus identitätsgebundenem Genom-/Config-Hash; Clock hat Seed, eindeutige Events, eigene RNG-Schichten, JSON-Checkpoint und Replay. Registrierung/Parameterwechsel mitten im Replay ohne Versionierung schlägt fehl.
+- Tests `tests/ecosystem/test_research_world.py`, Workflow `ecosystem-paper-integration.yml`, CLI `scripts/ecosystem_paper_demo.py`. Testet 30 tägliche Schritte inklusive Neustart auf Tag 12, gleiche Checkpoint-Bytes, 90/10-NAV-Erhaltung, einzigartiges Seed-Budget, free-margin-Beschränkung, grünen einblättrigen Kaktus mit tiefem Wurzelwachstum, externe Einzahlungen ohne fälschliches Bot-Alpha, negative Equity ohne Zwangs-Flat, Lookahead-/unknown-event-/genome-change-Rejection. 365-Tage-Demo ist ebenfalls grün.
+- Reproduktion lokal: `PYTHONPATH=src python -m unittest discover -s tests/ecosystem -p test_research_world.py -v`; `PYTHONPATH=src python scripts/ecosystem_paper_demo.py --days 365 --equity 100 --seed 2026`.
+- **Explizite Nicht-Funktionen:** 5 Jahre echte SOL-Marktdaten sind hier **nicht** integriert. Die CLI hat bewusst nur SYNTHETISCHE Profit-/Verlustereignisse statt tatsächlicher Strategie-Signale oder Backtestfills. Kein korrelierter Marktpreis, kein Portfolio-Realismus über mehrere Assets/Konten, kein echtes Automated Trading, kein Cross-Account-Transfer. Keine dynamisch laufende Bienen-/Fresser-/Archiv-Population; das Startportfolio enthält bereits 20 finanzierte Keimlinge. ECO-01-Pydantic-SimulationSnapshot und ECO-15-Frontend-VisualDNA noch nicht verbunden; Anschluss in separatem Adapter-PR erst nach deren Review.
+- **Nächste hochprioritäre Arbeit:** ECO-01 und ECO-02 als klare Schnittstellen reviewen/integrieren; echtes kausales Marktdaten-/Pine-Signal-Feed an ECO-16 hängen, `metrics`/Credibility (ECO-07) bilden; VisualDNA-Snapshot über ECO-01 dem Tile-/Pflanzenrenderer anbieten. ECO-08/09 danach echte Selektion und weitere Mutationen, niemals aus künftigen Trades hergeleitet.
+
+**Vorsichtsmaßnahme:** Die 90-%-Zuteilungsobergrenze ist ein Berechtigungs- und Budgetlimit, nicht die Verpflichtung, dass zu jedem Zeitpunkt 90 % in Positionen sind. Die simulierte Margin-Intent ist stets durch überprüfte freie Margin zu kappen. Der Demo-End-of-day-Sonnenwert darf nicht verwendet werden, um frühere Intraday-Signale retroaktiv höher zu hebeln.
+
+## 21. ECO-07: Fitness vs. Vitalität vs. Glaubwürdigkeit — eigenständiger Metric Engine Draft PR #48
+
+**[PR #48](https://github.com/MartinLiteAndFog/quant/pull/48)**, Branch `codex/ecosystem-vitality-metrics`, **eigener GitHub-CI-Lauf erfolgreich**; aber weiterhin **Draft, nicht in den Haupt-Integrationsbranch gemergt und ausdrücklich nicht live**.
+
+Die Version `quant.ecosystem.metrics.vitality` (`src/quant/ecosystem/metrics/vitality.py`) nimmt chronologisch sortierte, kausal bekannte `NetDay(day, net_return, trades, eligible_opportunities, expected_signals, known_at)`-Tagesbeobachtungen. `net_return` bedeutet **cashflow-bereinigte Netto-TWR** (inkl. Gebühren/Funding/Mark-to-Market) und muss aus ECO-02/03 verifizierbar angeliefert werden; das Modul erzeugt selbst keine Signale/Trades.
+
+**Drei getrennte Zustandsgrößen**:
+1. `lifetime_fitness`: experimentelle normalisierte 0–100 Kombination aus Profit (Startgewicht 55%), Sharpe (25%), Drawdown (20%), inklusive Tail-/CVaR-Risiko und Evidenz-Schrumpfung. Gewichte sind konfigurierbare Hypothesen, keine objektiv „richtige“ R-Faktor-Kennzahl. Nicht mit reinen Trading-Gene-Komplexitätskosten verwechseln: deren Malus bleibt 0.
+2. `current_vitality`: jüngere Performance wird nach **tatsächlichen ex-ante Gelegenheiten** statt bloß verstreichen­den Monaten exponentiell geglättet, um Monate ohne Signal vom Versagen trotz Signalen zu unterscheiden. Aktueller Drawdown und `performance_drift` gegenüber alter Erwartung senken Vitalität. Ein alter Champion kann damit schlechte aktuelle Vitalität haben, obwohl er noch hohe Lifetime-Fitness besitzt. Auch bei Dormanz werden **laufende Mark-to-Market-Verluste** erfasst.
+3. `credibility`: konservativ effektive Stichprobengröße `<= min(Anzahl aktiver Handelstage, ausgeführte Trades)`, positive serielle Abhängigkeit reduziert die effektive Zahl; unbekannte OOS-Validierung/data quality mindern Konfidenz. `lower_confidence_bound` ist eine illustrative normale Schranke bei ausreichender Stichprobe, keine Korrektur für Millionen getestete Genome.
+
+Zusätzliche Reports: `sharpe`, `max_drawdown`, `current_drawdown`, `underwater_days`, `ulcer_index`, `expected_shortfall_loss` (unterste 5%-Tagesschwanz), `opportunity_capture`, Tage seit letzter Gelegenheit, optional `portfolio_correlation` und Beobachtungslücken. `bark_evidence` ist eine **aus langfristigen Ergebnissen abgeleitete robuste Evidenz für möglichen Fraßschutz**, nicht das `bark_strength`-Gen. Fresser dürfen diesen Wert später in ECO-09 nutzen, aber nicht globale Safety-/Loss-/Margin-Regeln umgehen.
+
+**Test- und Code-Artefakte**: `tests/ecosystem/test_vitality.py`, Workflow `ecosystem-vitality.yml`, `docs/architecture/ecosystem-vitality.md`. Prüft: **zwei Jahre guter Bot, sechs Monate veraltet**, zehn Monate ganz ruhender Kaktus ohne künstlichen Vitalitätsverfall, verlustreiche Mark-to-Market-Schritte während Dormanz, acht vs. achthundert Trades, Positive-Autocorrelation, OOS-Evidenz, zyklischen aber profitablen Busch, Portfolio-Korrelation und Zeit-/Datenlücken. `PYTHONPATH=src python -m unittest discover -s tests/ecosystem -p test_vitality.py -v`.
+
+**Wichtige Einschränkungen:**
+- `NetDay` muss die tatsächlichen, korrekten Netto-Return-Daten liefern. Der synthetische 365-Tage-Lauf aus #47 liefert noch keine belastbare ECO-02-Echtzeit-/Backtest-Validierung; Gewinnzahlen dort bleiben Demonstrationswerte.
+- Die momentanen Scoreformeln sind **explizit experimentell**; sie müssen anhand Walk-forward, unabhängiger Testperioden und kontrollierter Ablation aus ECO-12 kalibriert werden. Kleine-N-Schranken sind keine multipeltestbereinigten p-Werte, oos_verified wird außerhalb verifiziert.
+- Die Erfassung von `eligible_opportunities` darf weder nachträglich aus profitablen Trades noch vom Bot selbst zur Vermeidung schlechter Vitalität umdefiniert werden. Sie muss unabhängig, zeitlich kausal und versioniert sein. Fehlende Wochenenden/Handelspausen in Nicht-Krypto-Märkten brauchen eigene Asset-Handelskalender.
+- ECO-07 läuft **noch nicht** automatisch in ECO-16; nach Code-Review und Merge ist der separate, versionierte `metrics -> capital weight / predation eligibility`-Adapter anzuschließen. Kein direkter Eingriff in Produktions-Positionen.
+
+**Nächste sinnvolle Arbeitspakete:** ECO-08 (Bienen/Vererbung) und ECO-09 (Fresser/Rinde) können mit diesen klar getrennten Metric-Dimensionen arbeiten. Parallel benötigt ECO-16 die Wire-Adapter von ECO-01 und reale, nicht synthetische SOL-Daten. Go-Live nur nach eigenständigen Venue-/Hedge-Risk-Gates und expliziter Freigabe.
+
+## 22. ECO-08 Bienen, ECO-09 Fresser – Genetik und Selektion als sichere Paper-Module (2026-11-01)
+
+**Beide Pakete wurden separat auf eigenständigen Branches implementiert und durch GitHub Actions erfolgreich getestet.** Die PRs sind **Drafts**, kein Merge oder Live-Deployment.
+
+### ECO-08 / [Draft PR #50](https://github.com/MartinLiteAndFog/quant/pull/50) – Genetische Bienen
+
+Implementierung: `src/quant/ecosystem/breeding/bees.py`, Tests `tests/ecosystem/test_bees.py`, Dokumentation `docs/architecture/ecosystem-bees.md`, Workflow `ecosystem-bees.yml` (CI erfolgreich).
+
+- Die **fünf vorhandenen Bienenarten** aus Fleet erhalten äquivalente Python-Recherche-Mechanik: `mixer` (numerische Mittelwerte), `mosaic` (Gene pro Elternteil), `explorer` (höhere Mutation), `collector` (optionale Gene aufnehmen), `pruner` (optionales Pruning 10%). Bienen-Suchparameter `search_radius`, `mutation_strength`, `optional_gene_drop_rate`, `optional_gene_add_rate` und `hive_share_probability` können begrenzt mutieren.
+- **Echte 2D-Aussaat statt Illustration:** Eine Kachel hat genau zwei verpflichtende numerische Achs-Gene. Der Mutter-/Vater-Crossover erzeugt neue echte Genwerte; `normalized_x/y` des Kindes werden **aus genau diesen Genwerten** berechnet. Eingehende Elternpositionen, die nicht mit ihren Achs-Genwerten übereinstimmen, werden verworfen. Fremdartige Genmodule dürfen sich nicht ungeprüft zu einer vermeintlich handelbaren Strategie kreuzen.
+- **Sicherheit:** Unveränderliches `protective_stop=True` und verpflichtende, kontrolliert mutierbare `max_leverage`, `max_margin_fraction`, `reproduction_budget` sowie die zwei Achs-Gene können nicht wegfallen. Nur optionale Gene können hinzugefügt (nur aus validiertem Katalog) oder mit 5–10% Rate abgeworfen werden. Schaltgene werden typisiert geprüft; numerische Werte an Bounds/Schrittweiten gebunden. Kein beliebiger Python-/Pine-Code als Strategiegen.
+- **Drei Evolutionsexperimente:** `local` liefert einen Kind-Vorschlag in der Home-Kachel (nur Eltern in Suchradius), `central` einen **unfinanzierten ResearchCandidate** aus einem Hive, `hybrid` beide (Hive-Anteil kontrollierbar). Alle Seed-IDs, Genome-IDs und Eltern/Bienen-Lineages sind stabil nach Seed/Datum/Quelle.
+- **ECO-05-kompatible Grundregel für Kapital:** Alle Vorschläge sind zunächst **unfinanziert**, ohne Orders. Die optionale `fund_local_seeds`-Funktion verschiebt nach expliziter Zulassung exakte Decimal-Entitlement-Beträge vom Mutterbudget aufs lokale Kind, bis zur genetischen Reproduktionsgrenze und ohne gebundene Margin abzuziehen. Die Summe der Entitlements bleibt exakt erhalten. Hive-Forschung bekommt **kein** Kapital. Cross-Account-Sicherheit und eventlog-basierte Idempotenz bedürfen des ECO-05/ECO-03-Integrationsadapters; daraus ist **kein** Live-Recht ableitbar.
+- **Honig:** `bee_honey` bewertet eine Biene ausschließlich anhand ausdrücklich als unabhängig Out-of-sample-verifiziert markierter Nachkommen; es erzeugt weder neues Geld noch Profitbehauptungen auf Trainingsdaten. Eine echte ECO-12-Mehrfachtestkorrektur bleibt erforderlich.
+
+### ECO-09 / [Draft PR #49](https://github.com/MartinLiteAndFog/quant/pull/49) – evidenzabhängige Rinde, Fresser und Lebenszyklus
+
+Implementierung: `src/quant/ecosystem/lifecycle/predation.py`, Tests `tests/ecosystem/test_predation.py`, Dokumentation `docs/architecture/ecosystem-predation.md`, Workflow `ecosystem-predation.yml` (CI erfolgreich).
+
+- **Drei Jägertypen:** `weakest`, `weighted_random`, `age`; alle nur unter konfigurierbarer **70%-Vitalitätsschwelle**, 70–80% Schonzone und >80% Schutz. Tages-/Simulationsseed macht Zufallsauswahl reproduzierbar. Kein spontaner Fraß einer exzellenten Pflanze.
+- **Rinde ohne Unsterblichkeit:** Verringerung der Attackenwahrscheinlichkeit proportional zu `bark_strength * bark_evidence * credibility`, mit konfigurierbarer Schutzobergrenze. Ein genetisch stark gepanzerter, aber nie belegter Bot kann sich nicht durch bloße Rinde dauerhaft vor Selektion drücken. Der Wert `bark_evidence` kommt später aus ECO-07, ist **nicht** zusätzlich erzeugter Profit.
+- **Zeit statt Scheinsicherheit:** Jungpflanzen erhalten zuerst geschützte Tage und eine begrenzte Evidenz-Schonfrist. Ein Kaktus kann in Dormanz über Hunderte Tage geschützt bleiben, wenn **wirklich keine Marktgelegenheiten** auftraten und keine laufenden Mark-to-Market-Verluste entstehen. Chance verschwendet / weiter laufender Verlust / extrem lange Dormanz beendet diese spezifische Schonung. ECO-07 misst die Opportunity-Lage kausal und unabhängig von den Ausreden des Bots.
+- **Fressen ist zweistufig:** Jagd erzeugt lediglich `closing_requested` mit `reusable_entitlement=0`. Keine echte Order, keine automatische Position-Glättung und kein verfügbares Geld während offener Trades. Das Pflanzenarchiv `ArchiveRecord` entsteht erst nach extern bestätigten `positions_flat`, `orders_cancelled`, `fills_reconciled`, `free_margin_confirmed` und nachweislich `used_margin=reserved_margin=0`. Dann wird der **vorherige Budgetanspruch** als mögliches neues Allokatorinput ausgewiesen; Equity steigt dadurch **nicht**. Die Pflanze verschwindet aus der Oberwelt, Genomversion und Handelsdaten bleiben nur als Archivverweis in der Unterwelt (keine sichtbaren individuellen Pilze).
+- Alle drei Jägertypen und der bestätigte Fraß-/Archivpfad sind durch deterministische Unit-Tests abgedeckt. Die Module ändern weder echten Orderwriter noch Railway/KuCoin.
+
+### Kritischer noch fehlender Verbindungsbaustein: [ECO-17 / Issue #51](https://github.com/MartinLiteAndFog/quant/issues/51)
+
+Das Gesamtsystem läuft **noch nicht mit eigener geborener/gefressener Population**. #51 enthält den autonom verwendbaren Prompt, um ECO-16 (tägliche Paperwelt), ECO-07 (Netto-Returns/Vitalität/Evidenz), ECO-08 (Bienen/Kindfunding), ECO-09 (Fresser/Closing/Archiv) und ECO-01-Contract-/Tile-Adapter phasenrichtig und deterministisch zu verbinden:
+
+`Paper-Fills / Netto-TWR → Fitness/Vitalität/Evidenz → 90/10-Capital → Root-/Leaf-Ökologie → Bienen-Gene/Seeds → Fresser/Archiv → Snapshot/Replay`.
+
+**Abnahme:** mindestens zwei synthetische Generationen, eindeutig finanziert statt doppelt gebucht, sichere Archivreconciliation, Kaktus übersteht typische Durststrecke, alter Champion kann schrumpfen/gefressen werden, gleiche Inputs/Seeds erzeugen byte-identische Ergebnisse, Forschungs-Hive schafft niemals Geld. Erst nach diesem Integrationsmeilenstein ist echte selbstständige Evolution überhaupt als funktionierend zu bezeichnen.
+
+**Alle PRs #37–#50 bleiben gesonderte, noch nicht gemergte Forschungsänderungen**, bis Code-Review, gemeinsame Wire-Contracts und bewusste Integration erfolgt sind. Die Nutzerfreigabe für diese Paperforschung ist keine Freigabe für reale KuCoin-Orders, Auto-Transfers, TradingView-Autosignale, Venue-Hedge-Switch oder Live-Deployment.
+
+## 23. ECO-17: dynamische, reproduzierbare Paper-Evolution umgesetzt (2026-11-01)
+
+**Implementierung:** [Draft PR #52](https://github.com/MartinLiteAndFog/quant/pull/52) auf `codex/ecosystem-evolution-cycle`, als **Stack-PR auf ECO-16 / `codex/ecosystem-endtoend-paper` [#47](https://github.com/MartinLiteAndFog/quant/pull/47)**. Die GitHub-Workflows `Ecosystem Autonomous Paper Evolution CI` und `Ecosystem Daily End-to-End Paper Integration` sind **grün**, inklusive 30-Tage-Demolauf. **Nicht gemergt, nicht deployed, keine Live-Trades.**
+
+Neu: `src/quant/ecosystem/integration/evolution_cycle.py`, `tests/ecosystem/test_evolution_cycle.py`, `scripts/ecosystem_evolution_demo.py`, `docs/architecture/ecosystem-evolution-cycle.md`, `.github/workflows/ecosystem-evolution-cycle.yml`.
+
+### Jetzt tatsächlich miteinander verbunden
+
+- **Genau 3 Mutterpflanzen + 20 vorfinanzierte Keimlinge** als initiale synthetische ECO-16-Population. Ein Papierkonto in USDT, **eine** SOL-IMBA-Wiese mit echten Sensitivity-/TTP-Genachsen; keine weiteren Assetklassen oder historische Backtest-Trades impliziert.
+- **ECO-03 Tages-Uhr** mit Ereignis-/Day-ID und kanonischem JSON-Snapshot: `Netto-PnL/Fees/Funding → ECO-07 Metrics → ECO-05 Capital → ECO-06 Ecology → ECO-08 Breeding → ECO-09 Lifecycle → Snapshot`. Jede Phase sieht nur bis zu diesem Tagesende bekannte Inputdaten. Externe Einzahlungen/Entnahmen verändern NAV, nicht die strategische Rendite. Tatsächliche Signale/Trades und Marktgelegenheiten müssen **extern und kausal** zugeliefert werden.
+- **Dynamische Population:** ECO-08-Bienen erzeugen neue X/Y-Strategieparameter durch Kreuzung/Mutation; sichtbare lokale Kinder erhalten genau aus dem bestehenden Eltern-Entitlement eine kleine Decimal-Budgetumbuchung, eindeutige ID, Heimatkachel, Mutter/Vater/Bienen-Lineage und Generation. Ohne gültige Reife-/Credibility-Evidenz keine Saat. Eltern-Intents werden nach ihrer Kapitalabgabe erneut begrenzt. Hive-Kinder sind ausschließlich **unfinanzierte Research-Kandidaten**. Im 30-Tage-Test wachsen mindestens zwei Generationen; Seed/Datum/Genome bilden reproduzierbare Sowing-Events. Erst an Folgetagen sind Kinder Teil der Ergebnishistorie.
+- **Kapital und Kaktus:** Das gesamte laufende und `closing`-reservierte Entitlement-Budget bleibt **max. 90% globales positives NAV**, 10% ist unangetastete Reserve. Konto-free-margin ist zusätzlicher harter Einstiegscap; `used_margin`/reservierte Orders stammen extern. ECO-06-Wurzeln, Blätter, einblättrige photosynthetische Kaktus-Rinde, Sonne und Grundwasserpegel verändern **nur** die simulierten Intents unter geschützten `max_leverage`- und `max_margin_fraction`-Tradinggen-Grenzen. Ein optischer `visual_dna_ref` bleibt finanziell neutral; vollständiger TS-VisualDNA-Adapter aus ECO-15 fehlt noch.
+- **ECO-07 Fitness/Vitalität/Credibility** aus externen synthetischen täglicher Nettorendite und `trades/opportunities` mit getrenntem Langzeit-/Aktuell-/Reliability-Score. Dies ist **keine echte unabhängige Out-of-sample-Validierung**; die niedrigen Demo-Breeding-Schwellen sind nur für Mechaniktests vorgesehen.
+- **ECO-09 sichere Jagd:** Schwache Pflanzen können in `closing_requested` wechseln, das ist **keine** Handels-Order. Alle bisherigen Kapital-Claims bleiben als **Escrow** zugeordnet; sie dürfen erst nach *extern* bestätigter Flat-/Order-Cancel-/Fill-/Free-Margin-Reconciliation (mit bereits am Vortag begonnenem Closing und null locked Margin) entfernt und künftig neu allokiert werden. Archiv enthält unveränderliche Genom- und Verlaufshinweise, aber keine sichtbaren einzelnen „Totenpilze“. Keine Geldschöpfung und kein automatisches Flatten.
+- **Replay:** 30-Tage-Checkpoints sind über Neustart nach Tag 12 byte-identisch. Tests prüfen mehrfache Generationen, echte Achsmutationen, Kapitalerhaltung, free-margin-/Leverage-Hardcaps, Dormanz-Kaktus, unfinanzierte Hive-Kandidaten, optische Neutralität, Stopp bei zukünftigen Daten, offene Margin nicht archivierbar und negativen NAV ohne fingierten Positionsschluss.
+
+### Laufender Test / reproduzierbarer Report
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests/ecosystem -p test_evolution_cycle.py -v
+PYTHONPATH=src python scripts/ecosystem_evolution_demo.py --days 30 --seed 2026 --equity 100
+```
+
+Der CLI-Report enthält Equity, Reserve, Budget, Anzahl lebender/archivierter Pflanzen, Generationen, Research-Hive und Grundwasser sowie einen Snapshot-Hash. **Alle Ergebnisse sind synthetische Fixtures, keine bestätigten Trading-Strategiegewinne.**
+
+### Zusätzlicher gefundener und behobener Kapitalfehler
+
+Beim Test mit mehr als 23 Kapitalnehmern wurde ein **Decimal-Rundungsüberhang** aus der pro-rata-Gewichtung entdeckt. Die Zuteilung wurde fail-closed so geändert, dass keine individuell gerundete Aktie mehr als den verbleibenden Rest ausgeben kann; nur nachweisbar mikroskopische Restdifferenzen werden konservativ gekürzt, ein substantielles Overspend bleibt ein Hard-Fail. Derselbe Fix wurde direkt in [ECO-05 Draft PR #40](https://github.com/MartinLiteAndFog/quant/pull/40) übernommen, samt neuem 31-Pflanzen-×-35-Tage-Regressions-Test. **Auch dessen CI ist grün.**
+
+### Agenten- und Merge-Anweisungen
+
+1. #52 ist **stacked auf #47**, seine vorübergehend identisch kopierten Python-Abhängigkeiten von [ECO-07 #48](https://github.com/MartinLiteAndFog/quant/pull/48), [ECO-08 #50](https://github.com/MartinLiteAndFog/quant/pull/50) und [ECO-09 #49](https://github.com/MartinLiteAndFog/quant/pull/49) vor Merge deduplizieren und rebasen. ECO-05-Fix in #40 berücksichtigen. **Nicht mehrere getrennte Versionen zur dauerhaften Wahrheit machen.**
+2. **Als Nächstes echte kausale SOL-Historie anschließen:** [ECO-02 #37](https://github.com/MartinLiteAndFog/quant/pull/37), danach Gebühren/Slippage/Funding/echte Fills und sauber cashflow-adjustiertes Netto-TWR an ECO-07 übergeben. Strategie-Signal-/Preisdaten ausschließlich zum tatsächlich bekannten Zeitpunkt; OOS und Walk-forward abtrennen. Keine Data-Mining-Bestätigung anhand der synthetischen Demo beanspruchen.
+3. **Read-only UI-/Tile-/VisualDNA-Adapter** über ECO-01-Contracts (#23), ECO-14-Tiles [#41](https://github.com/MartinLiteAndFog/quant/pull/41) und ECO-15 [#45](https://github.com/MartinLiteAndFog/quant/pull/45) erst nach freigegebenem Schema bauen. Es gibt noch keine echte Multi-Asset-Welt, keine unabhängigen FX-/Öl-Daten und keine Unreal-5-App.
+4. Live-3×3-Blaupunkt, Kraken/KuCoin, Railway, TradingView, SL-Hedge-Logik, Kontoüberträge und Produktiv-Executor bleiben **unangetastet**. Ein Simulations-`closing_requested` darf **nie** als reale Schließungsanweisung interpretiert werden.
+
+## 24. ECO-18: OHLCV- und Handels-Signal-Replay an die Evolutionssimulation angebunden (2026-11-01)
+
+**Umgesetzt in [Draft PR #53](https://github.com/MartinLiteAndFog/quant/pull/53)**, Entwicklungsbranch `codex/ecosystem-market-replay-bridge`, als **Stack auf ECO-17 / PR #52**; ECO-02-Module aus [Draft PR #37](https://github.com/MartinLiteAndFog/quant/pull/37) wurden vorübergehend unverändert auf diesen Branch kopiert. Sowohl der neue Workflow `Ecosystem Causal OHLCV Paper Replay` als auch die vorherige `Ecosystem Daily End-to-End Paper Integration` sind **grün**. **PR #53 ist nicht gemergt oder deployed. Es wurden keinerlei echten Börsenorders oder Kontoänderungen ausgelöst.**
+
+### Neu implementierte Dateien / API
+
+- `src/quant/ecosystem/integration/market_replay.py`: `TargetSignal` mit eindeutiger ID, Strategie-ID, numerischem **signierten Zielbestand**, `signal_at`, `available_at`, `received_at`; optional `FundingTick` mit eigenem Settlement-Zeitpunkt, Known-at und echtem externen Funding-Satz; `ReplayConfig` für Kosten-/Daten-/Mengenlimits.
+- `replay_market(dataset, signals, funding=(), config=())`: Rechnet auf einer normalisierten und mit Quellen-Fingerprint versehenen ECO-02-OHLCV-Reihe tatsächlich kausale **Paper-Fills und Marktwert-/Pnl-Deltas** aus; erfindet keine Strategie-Kaufsignale. Ergebnis `ReplayOutput` enthält tägliche `IntradayEvent`-Listen für die ECO-03-Clock, genaue `PaperFill`-Belege, Nettoergebnisse, Tagesendbestände und Anzahl **abgeschlossener logischer** (nicht bloß einzelner Teil-)Trades, inkl. Original-Provenienz.
+- `apply_replay_to_evolution(initial_evolution_state, replay, weather_by_day, opportunities_by_day, free_margin_by_day, config)`: Neue read-only Brücke von tatsächlich vorher festgelegten Signalen/Preis-Ausführungen zu ECO-17. **Marktwetter, ex-ante-Handelsgelegenheiten und verfügbare Margin müssen explizit kausal vorliegen**. Die Bridge darf sie weder aus vergangenen Gewinnern noch aus Bienen-DNA erfinden. Bei fehlenden Angaben wird abgebrochen.
+- `scripts/ecosystem_market_replay.py`: Offline-CLI zum Lesen **eigener** `--bars OHLCV.csv`, `--signals targets.csv`, `--provenance source.json` und optional `--funding settlements.csv`. Ausgabe ausschließlich in ein lokales gewähltes Verzeichnis: `manifest.json`, `paper_events.jsonl`, `paper_fills.jsonl`, `daily_positions.jsonl`. Die Dateien tragen Dataset-/Signal-Fingerprint, `source_data_synthetic`, `verified_oos=false`, `capital_risk_cleared=false`, `live_orders_sent=0`.
+- `tests/ecosystem/test_market_replay.py`, `docs/architecture/ecosystem-market-replay.md` und `.github/workflows/ecosystem-market-replay.yml`, inkl. tatsächlichem CLI-CSV-Test mit synthetischem Mini-Input.
+
+### Deterministische, konservative Marktmechanik
+
+1. **Kausalität:** Signale erst handeln, wenn sie entstanden **und** nachweisbar verfügbar/empfangen sind; erster möglicher Fill ist das **erste Kerzen-Open streng nach der Empfangs-/Verfügbarkeitszeit**. Nicht auf der noch nicht abgeschlossenen Signal-/Renko-Bar füllen. Fills nach Timeout, doppelten IDs, widersprüchlichen Same-Open-Zielwechseln oder außerhalb vorhandener Kursdaten werden verworfen.
+2. **Keine doppelte PnL:** Signiertes Delta vom alten zum neuen Zielbestand, Preis des ersten zulässigen Opens ± Halbspead plus adverser Slippage, Gebühren separat. `fill-pnl` ist `alter Bestand × Kontraktmultiplikator × (fair Open − vorheriger Referenzpreis) − bestandsändernde Menge × Multiplikator × (Fillpreis − fair Open)`; die bereits im Fill eingepreiste Slippage **nicht noch einmal abziehen**. Tägliches unrealized/realized MTM wird inkrementell fortgeschrieben. Es wird niemals sowohl der kumulierte Gesamt-Drawdown als auch der realisierte Anteil erneut gutgeschrieben.
+3. **Tagesend-Mark:** Nur der letzte tatsächlich **bereits geschlossene** UTC-Kerzen-Close darf verwendet werden; Beispiel 23:58-Open → 23:59-Close. Die 23:59-Kerze schließt am **nächsten Tag**. Wenn Marktwertinformation und nächster Open-Fill zeitgleich bekannt werden, wird **zuerst die alte Kerze bewertet und erst dann die neu eröffnete Position**. Ein Test beweist: Eine um 23:59 eröffnete Position erhält niemals den vorangegangenen +10-Candle-Gewinn.
+4. **Funding / Short:** Eigenständige, eindeutig datierte Funding-Zahlungen nur für ausgewiesene `linear_futures` und mit tatsächlich gelieferten Sätzen/Mark-Preisen; positive Funding-Rate belastet Long und begünstigt Short. Unbekanntes oder erst an einem **späteren Kalendertag bekanntes** Settlement wird bis zu einem eigenen Deferred-Event-Adapter abgelehnt. Spot-Shorts ohne spezifizierte Margin-/Borrow-Regeln ebenfalls abgelehnt.
+5. **Datenintegrität:** Keine OHLCV-Interpolation. Eine Lücke, während eine Position offen ist, blockiert den gesamten Replay; vollständige 24h-UTC-Tage sind Default. `--allow-partial-days` ist **nur** zur expliziten Fixture-/Pilot-Ausführung vorgesehen, nicht zur Erfindung vollwertiger Handelstage. Maximaler Zielbestand muss konfiguriert werden. Volumen-/Market-Impact-/Limit-/SL-/Liquidation-Realismus bleibt ausstehend; der Replay ist **noch kein** vollständig venue-konformer Backtest.
+6. **Kapitallimits strikt getrennt:** Externe Zielbestände sind noch **nicht durch ECO-17-Intents vor dem Füllen risikocleared**. Der Adapter kann zwar den aus bereits festgelegten Signalen ermittelten Portfolio-Netto-Cashflow an ECO-17 reichen, aber die visuelle Pflanze steuert die historischen Fills noch nicht als vollwertiger live-fähiger Allocator. Eigenständiger `capital_risk_cleared=false`-Marker im CLI-Metadatensatz kennzeichnet diese Grenze.
+
+### Lokal reproduzierbarer Dateiworkflow
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests/ecosystem -p test_market_replay.py -v
+PYTHONPATH=src python scripts/ecosystem_market_replay.py \
+  --bars /data/SOLUSDT_1m.csv \
+  --signals /data/target_signals.csv \
+  --provenance /data/solusdt_provenance.json \
+  --output /data/paper_ohlcv_replay
+```
+
+CSV-Signalschema: `signal_id,strategy_id,target_quantity,signal_at,available_at,received_at`. Markt-CSV: `timestamp,open,high,low,close,volume`. Provenienz enthält **Quelle, Lizenz, Symbol, Spot-vs-Futures, Kontraktmultiplikator, UTC-Open-Zeitbasis und Synthetic-Flag**. Der CLI-Aufruf ist nur ein Beispiel für später vom Anwender **tatsächlich gelieferte Dateien** und bedeutet nicht, dass `/data/SOLUSDT_1m.csv` in diesem Projekt bereits existiert.
+
+### Noch nicht erledigt / direkt nächster Agentenauftrag
+
+**[ECO-19 / Issue #54](https://github.com/MartinLiteAndFog/quant/issues/54)** wurde als eigenständiges, detailliert abnahmefähiges Paket erstellt. Es verlangt **tatsächlich verifizierbare historische SOL-1m-Daten** mit Quelle/Lizenz/Hash (idealerweise fünf Jahre, ca. 2,6 Mio. Bars), streaming-fähigen GZIP-Import, echte historische TradingView-/Pine-Signaläquivalenz der Strategie-Genome (insb. Renko 0,1 / Countertrend/TP2/IMBA), tatsächliche Gebühren/Funding/Slippage, unabhängig optimierte **Out-of-sample-/Walk-forward-Validierung** statt Millionen-Genome-In-Sample-Selektion und eindeutige Asset-/Venue-Kontrakte. Fehlen Daten oder Signalmodule, muss der Agent dies feststellen, statt Profit zu erfinden.
+
+**Akute Datenlage:** In ECO-02 [PR #37] wurden bisher nur synthetische OHLCV-Fixtures nachgewiesen. Beim aktuellen Dateibibliothek-Suchlauf zeigten sich frühere SOL-Trading-Reports und Trades-CSV, jedoch **kein eindeutig identifizierter, zugänglicher und importierter kompletter 5-Jahres-SOL-1m-Originaldatensatz**. Es wurde deshalb **kein tatsächlicher Backtest mit echter SOL-Historie behauptet**.
+
+**Abhängigkeiten vor einer Zusammenführung:** PR #53 ist auf #52 gestapelt, der auf #47 gestapelt ist; die aus #37 kopierten Marktmodule müssen nach deren Review sauber dedupliziert werden. Alte live Trade-/Signal-Module, Railway, Kraken/KuCoin, TradingView-Webhooks und deren Schutzstopps wurden **nicht** verändert.
+
+## 25. ECO-19a — Datenimport für echte SOL-Minutenhistorie vorbereitet (Draft PR #55)
+
+**Neuer isolierter, geprüfter Implementierungsstand:** [Draft PR #55](https://github.com/MartinLiteAndFog/quant/pull/55), Entwicklungsbranch `codex/ecosystem-sol-streaming-import` (Stack auf ECO-18 / PR #53). Beide GitHub-Actions-Workflows (Streaming OHLCV und ECO-18 Market Replay) sind **grün**. Keine reale Datenquelle wurde ungeprüft als echte Historie ausgegeben, kein Merge, kein Produktionsdeploy.
+
+Dateien: `src/quant/ecosystem/market_data/streaming.py`, `scripts/ecosystem_stream_ohlcv.py`, `tests/ecosystem/test_streaming_ohlcv.py`, `docs/architecture/ecosystem-streaming-ohlcv.md`, `.github/workflows/ecosystem-streaming-ohlcv.yml`.
+
+### Genau implementiert
+- **Bounded memory für echte Langzeitreihen:** Line-by-line-Streaming aus CSV oder `.csv.gz`, mit schrittweiser Speicherung in **SQLite mit UTC-Open-Timestamp-Primary-Key**, maximal 4096 gleichzeitig zu insertierende Candles. **Kein** Aufruf des alten `normalize()` auf mehrere Millionen Bars im RAM. `iter_candles(db,start,end)` liefert nur eine indexierte Zeitspanne; `read_window_as_dataset(max_bars=10080)` materialisiert nur kleine nachgewiesene Fenster kompatibel zu ECO-02. Volljähriger 5-Jahres-PnL-Streaming-Backtest ist **dadurch noch nicht** implementiert; ECO-18 benötigt dafür zusätzlich eine fortlaufende State-/Fills-Engine.
+- **Quellen/Zeit/Format:** Entweder `canonical` mit CSV-Header `timestamp,open,high,low,close,volume`, ISO-Zeitstempel **mit UTC-Zeitzonenumrechnung**, oder `binance_klines` als rein **technisches Headerless-12-Spalten-Format** mit Epoch-Millisekunden. Der Layoutname ist **keine** Behauptung zum tatsächlichen Anbieter oder Venue. Headerzeiten müssen ausdrücklich **Kerzen-Open** sein, nicht Close und nicht Trade-Zeit. Die genau gemeldeten Source-Intervalle müssen UTC-Tagesraster teilen.
+- **Integritätsprüfungen:** Ungültige/infinite/negative OHLCV, inkonsistente High/Low, nicht sortierte oder doppelte Kerzen, nicht-zeitlich-aligned-Bar-Opens, ungültige Close-Time bei 12-Spalten-Klines und abgeschnittene GZIP-Quelle führen zu **vollständigem Fail-Closed**. Datenlücken werden mit Anzahl und den ersten 64 Intervallen ausgewiesen, **nie interpoliert**; optionales `--reject-gaps` verweigert den Import. Explizite `--expected-start/--expected-end` erlauben das Erkennen fehlender Randdaten; nur beobachtete Grenzen ergeben ausdrücklich **keine** Behauptung über einen vollständigen längeren Datenzeitraum.
+- **Wiederholbarkeit:** Original-Source-Byte-SHA256 und separate kanonisch normalisierte Candle-SHA256 plus Persisted DataSet-Fingerprint. Source-Datei darf während Import/Hashing nicht verändert werden (Größe und mtime werden vorher/nachher geprüft). Eine Zieldatei wird **nie überschrieben**; Temp-SQLite wird nur nach vollständiger erfolgreicher Prüfung per Rename freigegeben; fehlerhafte Daten hinterlassen kein als gültig aussehendes Ziel.
+- **Pflicht-Provenienz:** Der CLI fordert ausdrücklich Source, License, genaues Symbol, Spot/Linear-Futures-Modell, Contract-Multiplier, Intervall, UTC-Open-Timestamp-Semantik und das Feld `synthetic` als **expliziten Boolean**. Fehlende Flagge darf nicht stillschweigend `synthetic=false` bedeuten. Der Importer prüft Syntax und Kohärenz, kann aber **nicht** juristisch bestätigen, dass die selbstdeklarierte Datenlizenz oder Kursherkunft korrekt ist. Manifest zeigt `tradingview_parity_verified=false`, `signal_engine_connected=false`, `oos_verified=false` und `live_orders_sent=0`.
+- Testbeleg: **40.000 synthetische Minutenkerzen** erfolgreich mit `tracemalloc`-Peak-Grenze, GZIP, Duplikate, Gaps, fehlende Randtakte, korrupte Daten, 12-Spalten-Layout, Datenhash-Repro, SQLite-Abfragen und CLI-Negativtest ohne `synthetic`. **Das ist keine gemessene Verarbeitung von fünf Jahren echter SOL-1m-Daten.**
+
+### Reproduktionsbefehl und nächster Schritt
+
+```bash
+PYTHONPATH=src python -m unittest discover -s tests/ecosystem -p test_streaming_ohlcv.py -v
+PYTHONPATH=src python scripts/ecosystem_stream_ohlcv.py \
+  --source /TATSAECHLICHE_DATEI/SOL_1m.csv.gz \
+  --layout canonical \
+  --provenance /TATSAECHLICHE_DATEI/marktherkunft.json \
+  --output /DATEN/sol_1m_index.sqlite
+```
+
+Die Pfade sind **Platzhalter**, nicht eine bereits gefundene SOL-Historie. Vor realem Import sind tatsächliches Venue-Instrument (z.B. Kraken SOLUSD.PM vs KuCoin SOL-USDT), Lizenz, Contract-Multiplier, Datenzeitraum und SHA256 zu identifizieren und Funding/Fees getrennt zu belegen. Die bestehenden realen Strategie-/Positions-CSV aus früheren Gesprächen sind **kein Ersatz für die exakten 1m-OHLCV-Kerzen**.
+
+## 26. ECO-19b — 5-Minuten-Renko/IMBA-Probanden und explizite TV-Paritätsdiagnostik (Draft PR #56)
+
+**Implementiert in [Draft PR #56](https://github.com/MartinLiteAndFog/quant/pull/56)**, Branch `codex/ecosystem-renko-5m-signal-audit` **gestapelt auf #55**. Sowohl die eigene `Ecosystem Renko 5m IMBA Research Signal Audit`-CI als auch ECO-18 Market-Replay-CI sind **grün**. Keine eigenmächtige neue Strategieformel.
+
+Dateien: `src/quant/ecosystem/market_data/renko_imba_audit.py`, `scripts/ecosystem_renko_imba_audit.py`, `tests/ecosystem/test_renko_imba_audit.py`, `docs/architecture/ecosystem-renko-imba-audit.md`, `.github/workflows/ecosystem-renko-imba-audit.yml`.
+
+### Exakte historische Grundlage aus dem echten Repository
+
+Die Reponotiz `docs/RENKO_TRADINGVIEW_PARITY.md` dokumentiert am **2026-10-07** für Kraken SOLUSD.PM:
+- Traditional Renko `box=0.1` dreht erst nach **zwei** Boxen, nicht einer; mehrere Bricks aus derselben 5m-Kerze tragen 1-ms-sequenzierte **Anzeigezeitstempel**.
+- Die TV-Chartquelle ist **5-Minuten-OHLC**, nicht direkt 1m. Im dokumentierten Zeitraum 2026-09-15 bis 2026-10-07 wurden **5.322 TV-Renko-Bricks / 99 IMBA-Flips (Lookback 50)** gegen **5.279 korrekt 5m-vorverarbeitete lokale Bricks / 105 Flips** beobachtet. Direkt aus 1m waren es sogar **7.859 Bricks / 144 Flips**.
+- TV-Wicks sind bei `high/low` für die IMBA-Schwellen wichtig. `src/quant/features/renko.py::renko_from_close()` ist explizit **Close-getrieben** und emittiert keine nachgewiesenen historischen TV-Wicks. Die bestehende `src/quant/strategies/imba.py::compute_imba_signals()` ist eine Sticky-Flip-Implementierung, aber keine externe TV-Paritätserklärung. Aus den Zahlen wird **keine Gleichheit** behauptet.
+
+### Neu geprüfte Pipeline
+
+1. `source_5min_bars(index,start,end)` aggregiert strikt **fünf vorhandene 1m-Open-Bars** je UTC-5m-Quelle; Hoch/Tief/Volumen bleiben korrekt, unvollständige Buckets oder Zeitlücken stoppen den Lauf. Jede Quelle ist erst zu `source_open+300 Sekunden` bekannt.
+2. `candidate_imba_signals(...box=0.1,lookback=50,trading_start=...)` nutzt **die bereits existierenden Renko- und IMBA-Implementierungen** mit explizitem Vorlauf. Weil TV-Wicks fehlen, werden für die Forschung nur Body-High/Low genutzt. Ein solcher Flip ist **unverifizierter Kandidat**, nicht echte TV-Alarmbestätigung. Legacy-IMBA verliert bei neueren Pandas-Versionen beim DataFrame-Bau die Zeitzone; der Adapter stellt die aus seiner eigenen bereits geprüften UTC-Quelle **bekannte** Zeitzone wieder her – ohne externe unbekannte Zeitstempel zu erraten.
+3. Die künstlichen **1-ms-Brick-Stempel** erhalten keine Handelbarkeit vor dem 5m-Barabschluss. Falls mehrere Renko-Flips aus derselben noch laufenden Quellkerze hervorgehen, wird nur die **letzte** am tatsächlichen Kerzenschluss bekannte Richtung als Forschungkandidat gewertet.
+4. `compare_confirmed_alerts(batch, reference)` akzeptiert **nur** extern gelieferte, auf den wirklichen 5m-Quellschluss normalisierte Referenz-Alarme mit ID/Side/Time. Bericht zeigt exakte Paarungen, fehlende/zusätzliche oder falsche Richtungen. Selbst bei 100% Übereinstimmung zu einer gelieferten Liste bleiben `full_TradingView_parity_established=false` und `safe_to_claim_oos_alpha=false`, solange Wick-/Venue-/Pine-Fidelity und unabhängige OOS-Evidenz nicht separat geprüft sind. Webhook-`received_at` ist **kein** belegter 5m-Quellschluss.
+5. Die CLI `scripts/ecosystem_renko_imba_audit.py` exportiert ausschließlich Kandidaten und Vergleichsdiagnostik – **keine** `TargetSignal`-Orders, keine PnL, keinen Bot-Trade, kein Geld. Die synthetischen Tests verifizieren Source-Zeitpunkt und Nicht-Lookahead, echte Legacy-IMBA-Funktionsaufrufe, Paritäts-Negativfälle, fehlende 1m/5m-Kerzen, CLI und das immer-falsche OOS-Verifizierungsflag.
+
+### Noch offene kritische Voraussetzungen
+
+- **Tatsächliche Originaldateien** mit demselben Venue-/5m-Feed plus TradingView-Kraken-5m-Renko-Export (incl. Wick-/High-/Low-Referenzen) und echten TradingView-Alert-Paaren. Ohne diese können nur **synthetische Tests** laufen.
+- **Parität der Strategie** erst herstellen und an unabhängiger Referenz testen; IMBA-Wick-Rekonstruktion und Renko-Anker-/Historienabhängigkeit dürfen nicht blind aus 5m-Schlusskursen als richtig ausgegeben werden.
+- **Laufende Backtest-Evaluation statt kurzer Fenster:** Der 1m-Importer ist streamingfähig, die derzeitige 5m-Kandidatenpipeline ist bewusst auf **1 Woche** limitiert. Für echte fünf Jahre müssen Renko-/IMBA-States über Fenstergrenzen aufrechterhalten werden. Die ECO-18-Paper-Fill-Engine braucht zusätzlich eine sequenzielle, account- und margin-cleared Quelle statt retrospektiv über sämtliche Zielsignale zu verfügen.
+- Erst **danach** pro Genom echte TargetSignale und realistische Paper-Orders generieren; Gebühren, Slippage, Funding, Futures-Kontraktgröße und echtes Venue-Risikomanagement inklusive TP2/Flip-Verhalten prüfen. Anschließend Walk-forward/OOS und Vergleich mit nicht evolutionären Baselines. **Keine** PnL-Zahl aus beiden neuen Drafts als Investmentergebnis bezeichnen.
+
+**Agenten-Prompt für nächste Übernahme:** „Baue auf ECO-19a [#55] und ECO-19b [#56] nach Review auf. Fordere zuerst den belegten Original-SOL-1m-Datensatz und echten TV-Export inkl. Wick/Alerts an. Reproduziere die dokumentierten 5m/0.1-Geometriedifferenzen, implementiere nur nach Quellenvergleich historisch echte Wicks und überprüfe Renko→IMBA-Flipzeiten/Seiten strikt. Dann erst entwickle einen persistenten, inkrementellen IMBA-/Flip-/TP2-Zielpositions- und Stop-Executor mit echten Marktpreisen, nicht mit Renko-Kerzenpreisen. Verwende die unveränderliche 90/10-Ledger-Grenze, kein Future-Leak, kein Blind-Hebel und einen zeitlich unabhängigen OOS-Fold. Änderungen nur als neue Draft-PR, keinerlei Live-Railway-/KuCoin-/Kraken-Befehle.“
+
+**Stack-Status:** #56 basiert auf #55 → #53 → #52 → #47. Wie zuvor: vor Merge auf den Integrationsbranch zuerst die jeweiligen Eltern-PRs überprüfen und identische Abhängigkeitskopien deduplizieren; bis dahin nur Forschungsbranches. Masterissue [ECO-19 #54](https://github.com/MartinLiteAndFog/quant/issues/54) bleibt offen, bis echte Originaldaten, Signalsource-Parität und unabhängig geprüfter Backtest nachgewiesen sind.

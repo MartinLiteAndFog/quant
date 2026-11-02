@@ -16,6 +16,7 @@ import {
   type ConnectionProbe,
 } from "./api";
 import { HeroChart } from "./components/HeroChart";
+import { EvolutionMeadow } from "./components/EvolutionMeadow";
 import { DrawerShell, type DrawerId } from "./components/DrawerShell";
 import { StatusRail } from "./components/StatusRail";
 import { ActivityDrawer } from "./components/drawers/ActivityDrawer";
@@ -109,6 +110,7 @@ export default function App() {
   );
   const [isolatedId, setIsolatedId] = useState<string | null>(null);
   const [showPortfolio, setShowPortfolio] = useState(true);
+  const [showEvolutionMeadow, setShowEvolutionMeadow] = useState(false);
   const [drawer, setDrawer] = useState<DrawerId>(null);
   const [chartMode, setChartMode] = useState<ChartMode>("account_abs");
   const [showMaxDd, setShowMaxDd] = useState(true);
@@ -416,6 +418,12 @@ export default function App() {
               </button>
             ))}
           </div>
+          <div className="chip-group" role="group" aria-label="Meadow visualization">
+            <button type="button" className="chip" data-active={showEvolutionMeadow}
+              onClick={() => { setShowEvolutionMeadow(v => !v); setDrawer(null); }}>
+              Evolution 🌱
+            </button>
+          </div>
           <div className="chip-group" role="group" aria-label="Panels">
             {PANEL_DRAWERS.map(([id, label]) => (
               <button
@@ -579,7 +587,7 @@ export default function App() {
 
           {/* Single full-bleed hero — drawers overlay this; they never replace it with a second chart */}
           <div className="relative min-h-0 flex-1 overflow-hidden border border-[var(--line)] bg-[var(--bg-chart)]">
-            <HeroChart
+            {showEvolutionMeadow ? <EvolutionMeadow /> : <HeroChart
               series={series}
               portfolio={portfolio}
               visibleIds={visibleIds}
@@ -589,8 +597,8 @@ export default function App() {
               showMaxDd={showMaxDd}
               showPortfolio={showPortfolio}
               clock={clock}
-            />
-            {booting && (
+            />}
+            {!showEvolutionMeadow && booting && (
               <div className="hero-empty">
                 <span className="spinner" aria-label="Loading" />
                 <p className="hint">Loading fleet data…</p>
