@@ -38,6 +38,22 @@ The first direct economic feedback is now wired into the playable historical SOL
 2. Revisit the game's anatomical caps and minimum size as explicit physical ecology rules, distinct from uncensored financial PnL. Any change must be versioned for reproducibility.
 3. Ensure dormancy, trading eligibility, mortality and reproduction refer to the same well-defined plant lifecycle before introducing more market regions.
 
+## G2a / inactivity genetics implemented on the next stacked game branch
+
+**Core change:** Adult descendants now actually enter the bee's breeding pool. There is no global strategy winner or statistical gate. Only plants with `status="active"`, a real funded allocation and `evidenceDays >= 7` are potential parents. The mother is visited deterministically in stable insertion/age order and the father is a distinct living plant chosen by the existing seeded PRNG. `local`/`hybrid` blend their actual genes and source modules; `hive`/`random` retain their existing mutation modes, but the physical ancestry of every child is now recorded in `parents`. Archiving is permanent for future reproduction but never deletes historic parent records.
+
+**New ecological gene:** `genes.patience` is seeded separately for each founder and inherited/mutated by all bee modes, clamped to **0.05–0.95**. It is a visual/ecological trait, **not** a TradingView/Pine strategy parameter, risk override, cash balance or statistical confidence coefficient. `plant.inactiveDays` persists the consecutive number of completed historical UTC days **without any actual paper fill**; fabricated/generated signals do not count as trades. With one or more fills, even if net PnL is 0, the streak resets to 0.
+
+**Very small vitality effect:** First **14 consecutive idle days** have zero inactivity penalty. From the fifteenth idle day forward, only `vigor` receives the extra daily multiplier
+`1 - 0.0003 × (1.2 - genes.patience)`.
+The inherited patience range means about **0.0075% to 0.0345%** extra daily vigor decay once the grace period expires. PnL, NAV, stop policies and plant allocation **never change** due to inactivity. Existing PnL-based growth still applies independently. No-trade body mass remains unchanged; no-trade vigor now loses a tiny amount after the grace period (this intentionally supersedes the G1a statement that *all* no-trade days leave vigor unchanged). Dormancy/cactus plants remain allowed to wait with high genetic patience.
+
+**Game-state version:** This changes the world mechanics, so the historical save becomes `schemaVersion=3`, `cloudgarden.historical.v3`. Existing v1/v2 browser records are left intact and are **not silently replayed under new rules**; the UI explains that the previous version is preserved. This version requires re-running from a chosen date, not writing over or migrating a v2 run with altered physiology.
+
+**Boundaries:** 20 one-time seed entitlements still cap the existing game; capital recycling after that is **G3**, not claimed as done here. The existing 80-day protection, environmental dormancy and synthetic predator/evidence tests are not redesigned in this PR. A genuinely market-driven survival/predation mechanism should be designed later as **an explicit ecology rule**, never introduced as an unverified significance/fitness gate.
+
+**Tests:** 14-day grace, exact tiny genotypic decay, execution resets, negative/malformed fill-count rejection, 28-day direct descendant-to-descendant breeding, altered parent-patience changes child, archived parents excluded but genealogy retained, version 3 save rejection of v1/v2, and real price-replay results correctly resetting inactivity. All use generated deterministic fixtures, with no private SOL file. GitHub CI must pass before integration.
+
 ## Practical game-development order (not scientific review)
 **G1 — Complete economic feedback and life-cycle contract.** Define simple, explicit deterministic links between each *plant's own* net trading outcome and its accessible resources/growth. Decide what performance/history a bee or predator observes. Keep market PnL separate from cosmetic climate and do not invent arbitrary statistical corrections. Record the exact rule and add no-trade, profit, loss and replay-determinism tests.
 

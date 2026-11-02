@@ -45,6 +45,11 @@ test("historical garden executes all parents on the same minute day, books real 
     assert.equal(grown.evidence, parent.evidence, "synthetic evidence does not become an empirical gate");
   }
   assert.equal(next.world.events.find((e) => e.type === "daily_tick")?.detail.marketDrivenBiomass, true);
+  for (const parent of session.world.plants) {
+    const executedToday = next.records[parent.id]?.fills ?? 0;
+    if (executedToday > 0) assert.equal(next.world.plants.find((p) => p.id === parent.id)?.inactiveDays, 0);
+    else assert.equal(next.world.plants.find((p) => p.id === parent.id)?.inactiveDays, 1);
+  }
   assert.equal(next.world.capital.paperReplayCount, 3);
   assert.ok(next.trades.every((fill) => fill.executedAt >= "2025-01-02T00:02:00.000Z" && fill.executedAt < "2025-01-03"));
   const events = next.world.events.filter((e) => e.type === "paper_replay");
@@ -74,8 +79,9 @@ test("seven historical days conceive an offspring with source genome and a singl
 
 test("historical snapshots reject changed source identity, altered NAV records or removed risk genes", () => {
   const session = createHistoricalSession(archive, "2025-01-02");
-  assert.equal(session.schemaVersion, 2, "new market growth rules must not silently reuse older save semantics");
+  assert.equal(session.schemaVersion, 3, "genetic inactivity/lineage rules require an independent save version");
   assert.throws(() => validateHistoricalSession({ ...session, schemaVersion: 1 }, archive));
+  assert.throws(() => validateHistoricalSession({ ...session, schemaVersion: 2 }, archive));
   assert.throws(() => validateHistoricalSession({ ...session, sourceSha256: "c".repeat(64) }, archive));
   assert.throws(() => validateHistoricalSession({ ...session, records: { "parent-01": { fills: 0, fees: 0, rejected: 0, opportunities: 0, netPnl: 1 } } }, archive));
   assert.throws(() => validateHistoricalSession({ ...session, genomes: {} }, archive));
