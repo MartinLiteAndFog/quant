@@ -22,6 +22,21 @@
 - Regression test: a separate experiment can return `not_comparable`, yet the identical historical day advances, books transactions and conserves accounting **unchanged**. It requires only synthetic fixture candles; no access to the user's private local dataset.
 - No change to climate, PnL arithmetic, predation thresholds, mutation, birth timing, live trading or research significance calculations.
 
+## G1a implemented on the stacked market-growth branch
+The first direct economic feedback is now wired into the playable historical SOL mode:
+- After each full paper-trading day has booked all plants to the conserved 90/10 ledger, each active plant receives only its **own** daily net PnL and its allocation measured **at the beginning of that day**.
+- The explicit purely mechanical growth rule is `factor = max(0, 1 + plant_booked_day_net_pnl / plant_start_allocation)`. The historical plant's `biomass` and `vigor` multiply by this factor. They use the existing game's anatomical bounds (biomass 5..100, vigor 0..100) and four-decimal internal rounding; **the PnL ledger itself is not clipped, censored or modified** by these visual/physiology limits.
+- No-trade/no-PnL day: factor exactly 1, neither trading-derived body mass nor vigor changes. Artificial sunshine, water and daily habitat-fit/evidence do not add or remove economic biomass/vigor in historical mode; they remain a separate, still synthetic environment/physiology layer.
+- Legacy synthetic demo mode retains its original climate-growth code path. The historical tick now logs `marketDrivenBiomass=true` as an audit flag; game rules and the entire 90/10 ledger remain deterministic. The selected plant's economic body mass and vigor are shown directly in the meadow.
+- These market-driven measurements **do not implement scientific significance**, they are not superiority ratings, and no central winner is chosen. Initial synthetic habitat evidence and the existing 80-day/5-day predator mechanism have **not** been replaced; so this is G1a, **not** completed ecological survival selection.
+- Tests added for isolated parent +10%/-5%/0% outcomes, unchanged no-trade days, rejection of corrupt/unowned outcomes, historical price-to-PnL-to-body linkage, and deterministic replay without a significance gate.
+- The historical data export still stays private. CI uses generated fixture candles. Keep this stacked draft unmerged until CI passes and Agent B's canonical adapter is reconciled.
+
+### What G1b still needs
+1. Connect physical resource competition and survival to real market-derived resource availability, without statistical ranking and without inventing new NAV or economically meaningless biomass bonuses.
+2. Revisit the game's anatomical caps and minimum size as explicit physical ecology rules, distinct from uncensored financial PnL. Any change must be versioned for reproducibility.
+3. Ensure dormancy, trading eligibility, mortality and reproduction refer to the same well-defined plant lifecycle before introducing more market regions.
+
 ## Practical game-development order (not scientific review)
 **G1 — Complete economic feedback and life-cycle contract.** Define simple, explicit deterministic links between each *plant's own* net trading outcome and its accessible resources/growth. Decide what performance/history a bee or predator observes. Keep market PnL separate from cosmetic climate and do not invent arbitrary statistical corrections. Record the exact rule and add no-trade, profit, loss and replay-determinism tests.
 
@@ -42,4 +57,4 @@
 - All actions remain paper-only, no writes to Kraken, KuCoin, Railway, live bots or `main`.
 - Do not merge overlapping A/B/C work until interfaces are reconciled. This PR intentionally modifies only the isolated historical UI, its regression test and this handoff.
 
-**Next recommended coding task:** G1; avoid prematurely implementing arbitrary PnL-to-ecology coefficients without an explicit mechanical rule and before reconciling Agent B's shared accounting contract.
+**Next recommended coding task:** G1b: physical survival/resource loop, then G2 population-wide parent eligibility. Maintain an explicit mechanical rule, preserve the shared NAV and reconcile Agent B's ABI before merge.
