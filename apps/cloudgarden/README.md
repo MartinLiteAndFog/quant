@@ -39,3 +39,7 @@ npm run build
 ```
 
 To verify actual exported data end-to-end, run `npm run verify:history -- 140` (or add the local server URL as a third command argument). The frozen integration run from 2026-01-01 through 2026-05-20 executed 28,078 fills, conceived all 20 funded offspring, and ended at **31.3791 paper USDT** after **45.9937 USDT** of modeled fees. This is a losing research variant; it is not a profitability result. Benchmark: cash/no trade. Verdict: `not_comparable` for market performance. The run establishes working data-to-signal-to-execution-to-ledger plumbing, not market viability.
+
+## Provenance and CI
+
+The frozen Parquet original is NOT in GitHub. Public CI checks generated data only. See [SOURCE_PROVENANCE_AUDIT.md](SOURCE_PROVENANCE_AUDIT.md) for independent source-byte checks, the opt-in private 140-day reference replay, licensing questions and explicit evidence boundaries. Neither CI nor matching reference metrics prove live parity or profitability.

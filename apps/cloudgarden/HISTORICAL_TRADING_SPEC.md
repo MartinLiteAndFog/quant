@@ -35,3 +35,7 @@ Source genomes are separate from habitat/physiology genes. Local offspring blend
 Tests cover source-module prefix causality, delayed pivots, inherited modules/compulsory stops, explicit historical opt-in, real-price fills, accounting under repeated fine fractional PnL, warmup/source mismatch rejection, day gaps, multi-day offspring, and restored accounting.
 
 The full HTTP integration check over the frozen archive ran 140 days (2026-01-01–2026-05-20), executed 28,078 fills, consumed all 20 seedling entitlements, and ended at NAV 31.3791 from 100 with 45.9937 modeled fees. This variant loses capital; it has not been optimized or promoted. Benchmark: cash/no trade. Verdict: **not_comparable** for empirical market performance because provenance, venue calibration, funding, full source parity and frozen OOS evaluation remain unresolved.
+
+## Independent reproduction boundary
+
+The reference figures above remain developer-reported unless verified on an authorized private runner. See [SOURCE_PROVENANCE_AUDIT.md](SOURCE_PROVENANCE_AUDIT.md). Passing the same 140-day integration outputs does not prove vendor identity, contract terms, source license, actual funding or strategy parity.

@@ -1,0 +1,49 @@
+name: Cloudgarden private frozen archive verification
+# Manual only. Source never enters a GitHub-hosted runner or any artifact.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  private-source-and-140-day-replay:
+    if: github.event_name == 'workflow_dispatch'
+    environment: cloudgarden-private-history
+    runs-on: [self-hosted, linux, x64, cloudgarden-private-history]
+    timeout-minutes: 120
+    defaults:
+      run:
+        working-directory: apps/cloudgarden
+    env:
+      SOL_PRIVATE_PARQUET: ${{ vars.SOL_PRIVATE_PARQUET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install pinned verification dependencies
+        run: |
+          npm ci
+          python -m pip install 'pyarrow==22.0.0'
+      - name: Original SHA and UTC audit, export, frozen replay
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$SOL_PRIVATE_PARQUET" || { echo 'Set SOL_PRIVATE_PARQUET on protected environment.'; exit 1; }
+          test -f "$SOL_PRIVATE_PARQUET" || { echo 'Private original not mounted on authorized runner.'; exit 1; }
+          TMP_DIR="$(mktemp -d "$RUNNER_TEMP/cloudgarden-a.XXXXXXXX")"
+          trap 'rm -rf "$TMP_DIR"' EXIT
+          python scripts/audit_sol_source.py --source "$SOL_PRIVATE_PARQUET" --report "$TMP_DIR/source-audit.json"
+          python scripts/export_sol_history.py --source "$SOL_PRIVATE_PARQUET" --output "$TMP_DIR/market"
+          CLOUDGARDEN_MARKET_DIR="$TMP_DIR/market" CLOUDGARDEN_RESULT_MANIFEST="$TMP_DIR/replay.json" npm run verify:history -- 140
+          {
+            echo '### Cloudgarden private verification: metadata only'
+            echo 'No raw archive or exported daily bars were uploaded.'
+            echo 'Venue, contract identity, license and funding remain unverified.'
+            echo '~~~json'
+            cat "$TMP_DIR/source-audit.json"
+            cat "$TMP_DIR/replay.json"
+            echo '~~~'
+          } >> "$GITHUB_STEP_SUMMARY"
