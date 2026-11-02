@@ -1,0 +1,31 @@
+name: ECO-12 Evidence Firewall and Experimental Reproducibility
+
+on:
+  pull_request:
+    paths:
+      - 'src/quant/ecosystem/experiments/**'
+      - 'tests/test_ecosystem_experiments.py'
+      - 'docs/experiments/eco-12-statistical-experiment-protocol.md'
+      - '.github/workflows/eco12-evidence-firewall.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guard-experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Reproducible synthetic and self-declared empirical safety tests
+        run: python -m unittest discover -s tests -p test_ecosystem_experiments.py -v
+      - name: No-data run abstains and never fabricates profit
+        run: |
+          python -m quant.ecosystem.experiments --json /tmp/eco12-empty.json --report /tmp/eco12-empty.md
+          python -c "import json; d=json.load(open('/tmp/eco12-empty.json')); assert all(v=='not_comparable' for v in d['verdicts'].values()); assert len(d['arms'])==0"

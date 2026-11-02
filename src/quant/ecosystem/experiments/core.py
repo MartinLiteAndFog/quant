@@ -14,11 +14,10 @@ import random
 import statistics
 import time
 from dataclasses import asdict, dataclass, field
-from statistics import NormalDist
 from typing import Dict, Iterable, List, Optional, Protocol, Sequence, Tuple
 
 
-PROTOCOL_VERSION = "eco12.v1"
+PROTOCOL_VERSION = "eco12.v1.1"
 ARMS = ("A_random", "B_local", "C_hive", "D_hybrid")
 
 
@@ -275,10 +274,10 @@ class ExperimentReport:
         return json.dumps(asdict(self), indent=2, sort_keys=True, allow_nan=False)
 
     def to_markdown(self) -> str:
-        rows = ["# ECO-12 experiment report", "", f"- Protocol: `{self.protocol_version}`", f"- Data: {self.dataset.get('source_label')} (`{self.dataset.get('source_kind')}`)", f"- Evaluator: `{self.evaluator_id}`", "", "## Verdicts", "", "| Comparison vs benchmark | Verdict | Paired mean final net TWR difference | 95% interval |", "|---|---|---:|---:|"]
+        rows = ["# ECO-12 experiment report", "", f"- Protocol: `{self.protocol_version}`", f"- Data: {self.dataset.get('source_label')} (`{self.dataset.get('source_kind')}`)", f"- Evaluator: `{self.evaluator_id}`", "", "**Evidence firewall:** all seeds reuse the same final market holdout. The displayed seeded spread is descriptive ONLY, never an independent-market confidence interval. No inferential 'beats'/'does_not_beat' verdict is permitted.", "", "## Verdicts (all not_comparable)", "", "| Comparison vs benchmark | Verdict | Paired mean final net TWR difference | Seed-spread band (descriptive only) |", "|---|---|---:|---:|"]
         for name, verdict in self.verdicts.items():
             comp = self.comparisons.get(name, {})
-            interval = comp.get("familywise_interval_95", comp.get("confidence_interval_95"))
+            interval = comp.get("seed_spread_95_descriptive")
             interval_text = "—" if interval is None else f"[{interval[0]:.4%}, {interval[1]:.4%}]"
             mean = comp.get("paired_mean_difference")
             mean_text = "—" if mean is None else f"{mean:.4%}"
@@ -380,24 +379,48 @@ def _metric_dict(metrics: Metrics) -> Dict[str, object]:
     return asdict(metrics)
 
 
-def _comparison(verdict_data_ok: bool, candidate: Sequence[float], benchmark: Sequence[float], config: ExperimentConfig) -> Dict[str, object]:
+
+def _comparison(candidate: Sequence[float], benchmark: Sequence[float]) -> Dict[str, object]:
+    """Descriptive *same-market* seeded variation, never inferential p-values.
+
+    Every candidate/benchmark seed sees the SAME final market time-series. Seed
+    replicates are algorithmic variation, NOT independent market episodes.
+    Neither confidence intervals nor Holm/Bonferroni p-values are justified
+    from this nesting, even if a caller labels the source 'empirical'.
+    """
+    common = {
+        "verdict": "not_comparable",
+        "statistical_unit": "one_shared_market_holdout",
+        "independent_market_holdouts": 1,
+        "inferential_interval_valid": False,
+        "p_value_two_sided": None,
+        "p_value_holm": None,
+        "confidence_interval_95": None,
+        "familywise_interval_95": None,
+        "reason": (
+            "All seeds reuse one final market holdout. Independent market "
+            "episodes and verified source/strategy/venue provenance are "
+            "required before an inferential A/B/C/D verdict."
+        ),
+    }
     if len(candidate) != len(benchmark) or not candidate:
-        return {"verdict": "not_comparable", "paired_mean_difference": None, "confidence_interval_95": None, "seeds": len(candidate)}
+        return {**common, "paired_mean_difference": None,
+                "seed_spread_95_descriptive": None,
+                "seeds": len(candidate)}
     differences = [candidate[i] - benchmark[i] for i in range(len(candidate))]
     mean = statistics.fmean(differences)
     if len(differences) > 1:
-        standard_error = statistics.stdev(differences) / math.sqrt(len(differences))
+        # Only a *descriptive* spread across random search seeds; 1.96 is not
+        # an inferential market-confidence threshold and must not be called one.
+        se = statistics.stdev(differences) / math.sqrt(len(differences))
+        interval = (mean - 1.96 * se, mean + 1.96 * se)
     else:
-        standard_error = float("inf")
-    interval = (mean - 1.96 * standard_error, mean + 1.96 * standard_error)
-    # Three predeclared challenger-vs-benchmark comparisons; Bonferroni critical
-    # value is conservative and keeps the displayed interval family-wise.
-    family_z = NormalDist().inv_cdf(1.0 - 0.05 / 6.0)
-    family_interval = (mean - family_z * standard_error, mean + family_z * standard_error)
-    return {"verdict": "not_comparable", "paired_mean_difference": mean,
-            "confidence_interval_95": interval, "familywise_interval_95": family_interval,
-            "p_value_two_sided": None, "p_value_holm": None, "seeds": len(differences)}
-
+        interval = None
+    return {
+        **common, "paired_mean_difference": mean,
+        "seed_spread_95_descriptive": interval,
+        "seeds": len(differences),
+    }
 
 def run_experiment(
     config: ExperimentConfig,
@@ -413,6 +436,8 @@ def run_experiment(
         "Groundwater inertia, hysteresis, and predator ceiling are recorded as ablation knobs but are not simulated by this evaluator.",
         "The synthetic strategy universe is a one-step momentum proxy and cannot support a profitability claim.",
         "Observed wall runtime is descriptive; deterministic compute fairness uses candidate evaluations, not elapsed time.",
+        "CRITICAL: All random seeds share ONE final market holdout. Seed replicas are not independent market periods; inferential intervals, p-values and positive/negative significance verdicts are disabled.",
+        "A user-supplied 'empirical' source label or external Evaluator ID is not independently verified source, venue, funding, signal parity or OOS evidence.",
     ]
     if not market.returns:
         return ExperimentReport(
@@ -468,40 +493,21 @@ def run_experiment(
     benchmark_returns = [r.final_metrics["net_twr"] for r in by_arm[config.benchmark_arm] if r.final_metrics]
     verdicts: Dict[str, str] = {}
     comparisons: Dict[str, Dict[str, object]] = {}
-    genuine = market.source_kind == "empirical" and evaluator.evaluator_id != SyntheticEvaluator.evaluator_id
-    raw_comparisons: Dict[str, Dict[str, object]] = {}
+    # A single historical market tail is shared by every random seed. It is
+    # pseudoreplication to use seed count as independent OOS market sample size.
+    # This version records only descriptive paired differences; a future
+    # verified multi-holdout market-aware evaluator must implement valid
+    # cluster/block inference and predeclared multiple-testing correction.
+    verdicts: Dict[str, str] = {}
+    comparisons: Dict[str, Dict[str, object]] = {}
     for arm in ARMS:
         if arm == config.benchmark_arm:
             continue
-        candidate_returns = [r.final_metrics["net_twr"] for r in by_arm[arm] if r.final_metrics]
-        comp = _comparison(genuine, candidate_returns, benchmark_returns, config)
-        differences = [candidate_returns[i] - benchmark_returns[i] for i in range(min(len(candidate_returns), len(benchmark_returns)))]
-        if len(differences) > 1:
-            se = statistics.stdev(differences) / math.sqrt(len(differences))
-            z_score = abs(statistics.fmean(differences)) / se if se else float("inf")
-            comp["p_value_two_sided"] = math.erfc(z_score / math.sqrt(2.0))
-        else:
-            comp["p_value_two_sided"] = 1.0
-        raw_comparisons[arm] = comp
-    # Holm step-down adjustment controls family-wise error for B/C/D vs A.
-    ordered = sorted(raw_comparisons, key=lambda name: float(raw_comparisons[name]["p_value_two_sided"]))
-    adjusted_so_far = 0.0
-    comparison_count = len(ordered)
-    for rank, arm in enumerate(ordered):
-        raw_p = float(raw_comparisons[arm]["p_value_two_sided"])
-        adjusted_so_far = max(adjusted_so_far, min(1.0, (comparison_count - rank) * raw_p))
-        comp = raw_comparisons[arm]
-        comp["p_value_holm"] = adjusted_so_far
-        interval = comp.get("familywise_interval_95")
-        verdict = "not_comparable"
-        if genuine and int(comp.get("seeds", 0)) >= config.minimum_seeds_for_verdict and interval:
-            lower, upper = interval
-            if adjusted_so_far <= 0.05 and float(comp["paired_mean_difference"]) > config.minimum_net_edge:
-                verdict = "beats"
-            elif upper <= config.minimum_net_edge:
-                verdict = "does_not_beat"
-        comp["verdict"] = verdict
-        verdicts[arm] = verdict
+        candidate_returns = [
+            r.final_metrics["net_twr"] for r in by_arm[arm] if r.final_metrics
+        ]
+        comp = _comparison(candidate_returns, benchmark_returns)
+        verdicts[arm] = "not_comparable"
         comparisons[arm] = comp
     return ExperimentReport(
         PROTOCOL_VERSION,
