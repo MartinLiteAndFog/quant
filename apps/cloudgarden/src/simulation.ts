@@ -844,6 +844,13 @@ export function assertSimulationInvariants(world: SimulationWorld): void {
       throw new Error(`Plant ${plant.id} has an unknown physiology state.`);
     }
     if (plant.phenotype !== derivePhenotype(plant.genes)) throw new Error(`Plant ${plant.id} has a stale phenotype.`);
+    if (plant.role === "parent" && plant.fundingSource !== undefined) {
+      throw new Error(`Founding parent ${plant.id} cannot claim a seed funding source.`);
+    }
+    if (plant.role === "seedling" && plant.fundingSource !== undefined
+      && !["seedbank", "recycled"].includes(plant.fundingSource)) {
+      throw new Error(`Plant ${plant.id} has an invalid seed funding source.`);
+    }
     if (plant.genes.patience !== undefined
       && (!Number.isFinite(plant.genes.patience) || plant.genes.patience < 0.05 || plant.genes.patience > 0.95)) {
       throw new Error(`Plant ${plant.id} has invalid patience genetics.`);
