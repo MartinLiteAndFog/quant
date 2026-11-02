@@ -1,6 +1,6 @@
 # Cloudgarden
 
-Cloudgarden is a standalone synthetic evolution game. It has its own React/Vite app under `apps/cloudgarden`; it does not start Fleet Cockpit, connect to an account or venue, fetch market data, or place orders.
+Cloudgarden is a standalone evolution and historical paper-trading game under `apps/cloudgarden`. The default **SOL Trading** view executes source-derived IMBA/EW candle strategies over the locally downloaded SOL minute archive. **Play** and the day/week/season buttons execute all financed plants, reconcile fills and costs, update the single NAV ledger, then advance ecology. The Meadow/Understory demo tabs retain the earlier synthetic fixtures. There is no account, exchange, or real-order connection.
 
 ## Play the garden
 
@@ -8,6 +8,12 @@ Cloudgarden is a standalone synthetic evolution game. It has its own React/Vite 
 npm install
 npm run dev
 ```
+
+The historical view needs a local data export before the first build. From the repository root, run `.venv/bin/python apps/cloudgarden/scripts/export_sol_history.py`. This reads the existing immutable SOL parquet archive into ignored `public/market/` day assets with SHA256 checksums. The verified local export contains 3,109,186 actual minute candles over 2020-08-11 through 2026-07-11, with 10 gaps / 1,424 missing minutes. The initial and final dates are partial days; playback requires complete days and stops at gaps. `npm run build` includes the exported data in the Desktop package. Raw archive assets stay local and are not committed.
+
+The three historical parent templates are IMBA Trend, IMBA Countertrend, and IMBA × EW. Their bounded heritable modules include channel lookback, confirmed pivot length, ATR movement threshold, EW retracement filter, impulse exit, and compulsory stop trigger. Local inheritance blends actual parents; Hive uses the central source library; Hybrid combines both. These are source-derived candle research variants, **not exact TradingView/Renko/MTF or Tradingade Strategy Builder replicas**. Downloaded Tradingade result workbooks do not contain full executable source. See `HISTORICAL_TRADING_SPEC.md` for source identity and execution assumptions.
+
+Historical worlds use a separate validated browser-local save. The UI shows the next UTC market date, NAV to four decimals, net PnL, fees, fills, rejected orders, inherited source genes and recent actual-price paper executions. Reload restores the same world; changing the start date and selecting **Start from this date** creates a new historical world. The historical price archive remains on disk; this is a local exported snapshot rather than a live database or market connection.
 
 The app starts at `http://127.0.0.1:5184`. Step one day, a week, or a 140-day season, or let the world advance automatically. The same world seed and actions produce the same climate, births, predation, and archive events.
 
@@ -23,7 +29,7 @@ Each plant carries heritable trading traits for lookback, entry, and exit thresh
 
 ## Scope and evidence
 
-All garden state and the built-in market week are generated fixtures. No historical SOL market source, venue/contract provenance, license, or quality-qualified dataset is connected. Costs and funding are configurable assumptions, not venue-calibrated values. The fixture cannot qualify or promote a strategy, and no account, exchange, order, Fleet API, or real capital is available to any plant.
+Ecology and the demo tabs are generated fixtures; the SOL Trading price series is historical. Archive venue, market type and license remain unverified. The historical engine models a 1x linear long/short paper position, uses assumed fees/spread/slippage, excludes unavailable funding, and flattens daily. Stop thresholds trigger from completed closes and do not guarantee the subsequent fill price. This is an explicitly labeled research variant rather than proven strategy parity or profitability. No account, exchange, order, Fleet API, promotion or real capital is available to any plant.
 
 ## Verify
 
@@ -31,3 +37,5 @@ All garden state and the built-in market week are generated fixtures. No histori
 npm test
 npm run build
 ```
+
+To verify actual exported data end-to-end, run `npm run verify:history -- 140` (or add the local server URL as a third command argument). The frozen integration run from 2026-01-01 through 2026-05-20 executed 28,078 fills, conceived all 20 funded offspring, and ended at **31.3791 paper USDT** after **45.9937 USDT** of modeled fees. This is a losing research variant; it is not a profitability result. Benchmark: cash/no trade. Verdict: `not_comparable` for market performance. The run establishes working data-to-signal-to-execution-to-ledger plumbing, not market viability.
