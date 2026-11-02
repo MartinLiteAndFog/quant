@@ -75,6 +75,49 @@
   @media(max-width:1150px){.dash{grid-template-columns:280px 1fr}.rightcol{grid-column:1 / -1;display:grid;grid-template-columns:1fr 1fr;gap:18px}.viewport{height:610px}}
   @media(max-width:750px){.top{padding:12px;gap:10px}.view-controls{margin-left:0}.dash{display:flex;flex-direction:column;padding:12px 12px 100px}.dash>*,.rightcol{width:100%}.rightcol{display:block}.rightcol>.panel{margin-bottom:14px}.viewport{height:390px}.tile-grid{inset:65px 14px 60px;gap:8px}.tile{padding:8px}.tile .tile-name{font-size:10px}.tile .tile-status{font-size:9px}.footerbar{padding:10px;gap:14px}.statfoot{font-size:9px}.statfoot b{font-size:13px}}
   :focus-visible{outline:2px solid var(--green);outline-offset:3px}
+
+  /* User-selected direction: ONE physical garden; four logical tile labels only. */
+  .viewport{background:linear-gradient(180deg,#6582809f 0%,#44675b9e 40%,#23493e 68%,#10251d 100%);isolation:isolate}
+  .viewport:before{opacity:0;background:none}
+  .garden-scene{position:absolute;inset:0;overflow:hidden;transition:transform .7s cubic-bezier(.18,.7,.24,1);transform-origin:50% 64%;background:
+    radial-gradient(ellipse at 63% 39%,#c4c9ac8a 0%,transparent 22%),
+    radial-gradient(ellipse at 41% 79%,#42795b 0%,transparent 45%),
+    linear-gradient(180deg,#8fae9f 0%,#6e958b 25%,#376a53 52%,#163626 100%)}
+  .garden-scene:before{content:"";position:absolute;inset:8% -10% 20%;background:radial-gradient(ellipse at 68% 74%,#1f4336 0%,transparent 43%),radial-gradient(ellipse at 24% 79%,#284e3b 0%,transparent 47%);filter:blur(10px);opacity:.95}
+  .garden-scene:after{content:"";position:absolute;bottom:-2%;left:-10%;width:120%;height:43%;opacity:.65;background:repeating-linear-gradient(110deg,transparent 0 16px,#9abf6c2a 18px 20px,transparent 22px 36px),linear-gradient(180deg,transparent,#152a1c)}
+  .garden-scene.is-focused{transform:scale(1.1) translateY(2%)}
+  .garden-plant{position:absolute;z-index:2;bottom:var(--plant-bottom);left:var(--plant-left);width:110px;height:170px;background:transparent;border:0;transform:translateX(-50%);transition:transform .4s,filter .4s}
+  .garden-plant:focus-visible,.garden-plant:hover{outline:0;filter:drop-shadow(0 0 18px #a5e7d8)}
+  .garden-plant.is-selected{transform:translateX(-50%) scale(1.17);filter:drop-shadow(0 0 18px #b5e5cf99)}
+  .garden-plant svg{width:100%;height:100%;overflow:visible;filter:drop-shadow(0 8px 4px #0a2e1b)}
+  .garden-plant .plant-tag{position:absolute;bottom:-20px;left:50%;transform:translateX(-50%);white-space:nowrap;font-size:11px;background:#102b22ad;color:#dcf7dc;padding:5px 10px;border-radius:13px;border:1px solid #a7dcc850}
+  .garden-plant.is-selected .plant-tag{color:#ddffea;border-color:#9fe4c7;background:#173a2fbb}
+  .tile-grid{display:flex;position:absolute;inset:auto 10px 52px;transform:none;gap:5px;z-index:4;flex-wrap:wrap;pointer-events:none}
+  .tile-grid .tile{pointer-events:auto;flex:0 1 auto;min-width:0;padding:5px 8px;border:none;border-bottom:1px solid #d2f6df2d;background:#102b2270;box-shadow:none;border-radius:3px}
+  .tile-grid .tile[aria-selected="true"]{box-shadow:none;border-color:#b9f0ca;color:#c8fad6}
+  .tile-grid .tile .tile-name{font-size:10px}
+  .tile-grid .tile .tile-status,.tile-grid .tile .bud,.tile-grid .tile .count{display:none}
+  .focus-inspector{position:fixed;z-index:8;bottom:68px;left:24px;right:24px;min-height:235px;display:grid;grid-template-columns:180px 240px minmax(180px,1fr) 220px;gap:15px;padding:17px 23px 19px;background:linear-gradient(125deg,#102a23e8,#15372edb 53%,#18372eb3);border-top:1px solid #aed5bf66;border-bottom:1px solid #aed5bf45;border-radius:14px;box-shadow:0 -17px 80px #061b1266;backdrop-filter:blur(19px);transition:opacity .2s,transform .24s}
+  .focus-inspector[hidden]{display:none!important}
+  .focus-inspector .miniature{height:185px;position:relative;border-radius:9px;overflow:hidden;background:radial-gradient(ellipse at 50% 85%,#5b936955,transparent 56%)}
+  .focus-inspector .miniature svg{height:170px;width:150px;display:block;margin:auto}
+  .focus-inspector .small-data{font-size:12px;line-height:1.7;color:#cce5d5}
+  .focus-inspector .small-data .big-id{font-size:20px;color:#edffed;letter-spacing:.05em}
+  .focus-inspector .small-data .kv{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid #ffffff1a;padding:2px 0}
+  .focus-inspector .small-data strong{font-variant-numeric:tabular-nums}
+  .focus-inspector .focus-chart-wrap{display:flex;flex-direction:column;gap:8px;padding:6px 12px 0;border-left:1px solid #ffffff29;border-right:1px solid #ffffff29}
+  .focus-inspector .focus-chart-wrap svg{width:100%;height:125px}
+  .focus-inspector .focus-chart-title{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#c4e7d2;font-weight:750}
+  .focus-inspector .gene-list{display:grid;grid-template-columns:1fr auto;row-gap:12px;gap:12px 8px;padding-top:11px;font-size:11px}
+  .focus-inspector .gene-list b{font-size:11px;font-variant-numeric:tabular-nums;text-align:right;color:#daf0dc}
+  .focus-dismiss{position:absolute;right:9px;top:8px;background:#173c2c;border:none;border-radius:3px;padding:4px 9px;font-size:13px}
+  .focus-inspector .source-note{margin-top:7px;color:#a2c1af}
+  .focus-inspector .mini-caption{font-size:9px;text-align:center;color:#b4cabd}
+  .focus-inspector .inspector-badge{font-size:10px;color:#afe8c5;margin-bottom:8px}
+  .world-click-note{position:absolute;top:76px;left:12px;color:#d0e3d1bb;font-size:11px;z-index:3;text-shadow:0 1px 9px #001c15}
+  @media(max-width:1150px){.focus-inspector{grid-template-columns:150px 170px minmax(130px,1fr);gap:11px}.focus-inspector .focus-genomes{display:none}.focus-inspector .miniature{height:165px}}
+  @media(max-width:750px){.focus-inspector{left:8px;right:8px;bottom:72px;grid-template-columns:105px minmax(90px,1fr);padding:10px;max-height:55vh;overflow:auto}.focus-inspector .focus-chart-wrap{grid-column:1/-1;border:none}.focus-inspector .miniature{height:145px}.focus-inspector .miniature svg{height:125px;width:100px}.focus-inspector .small-data .big-id{font-size:14px}.focus-inspector .focus-genomes{display:none}.tile-grid{display:none}.garden-plant{width:90px;height:140px}}
+
 </style>
 </head>
 <body>
@@ -131,6 +174,7 @@
           <span class="viewer-label" id="view-label">ATLAS · PARAMETERWIESEN</span>
           <span class="viewer-label">2D-PARAMETER-TILES / 3D-WELT</span>
         </div>
+        <div class="garden-scene" id="garden-scene"><div class="world-click-note">Pflanze wählen · HUD-Inspektor öffnen</div><div id="world-plants"></div></div>
         <div class="tile-grid" id="tile-grid"></div>
         <div class="viewport-bottom">
           <span>⌖ Auswahl: <b id="focus-tile">—</b></span>
@@ -164,6 +208,43 @@
       </article>
     </section>
   </main>
+  <section class="focus-inspector" id="plant-inspector" hidden aria-label="Ausgewählte Pflanze im HUD">
+    <button class="focus-dismiss" id="close-plant" aria-label="Pflanzeninspektor schließen">✕</button>
+    <div class="miniature">
+      <svg viewBox="0 0 170 190" aria-label="Visuelle Pflanzenkopie, keine neue Strategie" role="img">
+        <defs><linearGradient id="plantMiniLeaf" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#b3e5ac"/><stop offset="1" stop-color="#3d8768"/></linearGradient></defs>
+        <ellipse cx="85" cy="184" rx="50" ry="7" fill="#426e5044"/>
+        <path d="M85 181 Q79 120 85 35" stroke="#a7d8a9" stroke-width="4" fill="none"/>
+        <path d="M85 155 Q33 102 21 116 Q41 150 85 158 M85 131 Q135 80 149 96 Q137 129 85 135 M85 99 Q44 55 36 67 Q54 98 85 103 M85 75 Q122 37 139 48 Q126 80 85 79" stroke="#acd5ac" stroke-width="1" fill="url(#plantMiniLeaf)"/>
+        <path d="M86 65 Q60 42 73 15 Q95 35 86 65 M85 54 Q108 24 115 15 Q123 47 85 62" fill="#b9dec2" opacity=".84"/>
+        <circle cx="88" cy="20" r="11" fill="#f1edc6"/><circle cx="73" cy="25" r="6" fill="#f1edc6"/><circle cx="99" cy="33" r="5" fill="#f1edc6"/>
+      </svg>
+      <div class="mini-caption">Visuelles Duplikat · UE SceneCapture2D geplant</div>
+    </div>
+    <div class="small-data">
+      <div class="big-id" id="focus-name">—</div>
+      <div class="inspector-badge" id="focus-subtitle">Forschung · Lesemodus</div>
+      <div class="kv"><span>Indiv. Equity</span><strong id="focus-equity">—</strong></div>
+      <div class="kv"><span>Netto-PnL</span><strong id="focus-net">—</strong></div>
+      <div class="kv"><span>Histor. Höchststand</span><strong id="focus-high">—</strong></div>
+      <div class="kv"><span>Max. Drawdown</span><strong id="focus-dd">—</strong></div>
+      <div class="kv"><span>Trefferquote</span><strong id="focus-win">—</strong></div>
+      <div class="kv"><span>Alter / Gen.</span><strong id="focus-age">—</strong></div>
+    </div>
+    <div class="focus-chart-wrap">
+      <div class="focus-chart-title">Biomasseentwicklung der Strategie</div>
+      <svg viewBox="0 0 400 135" preserveAspectRatio="none" role="img" aria-label="Individuelle Equity-Kurve aus separater fiktiver Zeitreihe">
+        <path d="M0 126 H400 M0 80 H400 M0 34 H400" stroke="#c8f0d53b" stroke-width="1"/>
+        <path id="focus-chart-path" stroke="#9ce6c6" stroke-width="3" fill="none" d=""/>
+      </svg>
+      <div class="source-note" id="focus-chart-status">Keine individuelle Zeitreihe vorhanden</div>
+    </div>
+    <div class="focus-genomes">
+      <div class="focus-chart-title">Parameter der Pflanze</div>
+      <div class="gene-list" id="focus-genome"></div>
+      <div class="source-note">Kanonische Genwerte, keine editierbaren Handelsorders</div>
+    </div>
+  </section>
 </div>
 <footer class="footerbar">
   <div class="statfoot">Eindeutige Pflanzen<b id="foot-plants">—</b></div>
@@ -182,6 +263,7 @@
   const mock=JSON.parse(document.getElementById('data-mock').textContent);
   const empty=JSON.parse(document.getElementById('data-empty').textContent);
   let hud=mock, rankTab='winners', view='atlas', selectedTile='sol-imbase';
+  let selectedPlantId=null, inspectorOpen=false;
   let toastTimeout=null;
   const $=function(id){return document.getElementById(id);};
   const txt=function(id,value){$(id).textContent=value;};
@@ -242,6 +324,82 @@
       detail.append(left,right);wrap.append(head,detail);list.append(wrap);
     });
   }
+
+  function selectPlant(plantId) {
+    if (!hud.plantInspectors || !Object.prototype.hasOwnProperty.call(hud.plantInspectors,plantId)) return;
+    selectedPlantId=plantId;
+    inspectorOpen=true;
+    $('garden-scene').classList.add('is-focused');
+    renderWorldPlants();
+    renderPlantInspector();
+  }
+  function plantSVG() {
+    // Illustrative SVG in browser; actual UE must render the same source plant
+    // appearance in an isolated SceneCapture2D without physics or entity birth.
+    return '<svg viewBox="0 0 100 150" aria-hidden="true"><path d="M50 135 Q42 80 50 15" stroke="#c4e6b5" stroke-width="3" fill="none"/><path d="M48 113 Q8 70 8 90 Q26 122 49 117 M49 99 Q79 56 95 80 Q78 106 51 104 M49 73 Q19 40 17 55 Q30 75 49 77 M50 52 Q68 20 85 30 Q78 51 50 56" fill="#5db28b" stroke="#bee6aa" stroke-width="1"/><circle cx="52" cy="12" r="10" fill="#f3efd3"/><circle cx="38" cy="20" r="6" fill="#fbf5dd"/><circle cx="61" cy="25" r="5" fill="#f3efd3"/></svg>';
+  }
+  function renderWorldPlants() {
+    const area=$('world-plants');
+    area.replaceChildren();
+    const src=Object.values(hud.plantInspectors||{}).filter(function(p){return p.status==='active';});
+    const placement=[{x:43,y:17},{x:70,y:28},{x:25,y:30},{x:83,y:19}];
+    src.forEach(function(p,i){
+      const spot=placement[i%placement.length];
+      const button=document.createElement('button');
+      button.type='button';button.className='garden-plant';
+      button.style.setProperty('--plant-left',spot.x+'%');
+      button.style.setProperty('--plant-bottom',spot.y+'%');
+      if(selectedPlantId===p.plantId)button.classList.add('is-selected');
+      button.setAttribute('aria-label','Pflanze '+p.name+' auswählen');
+      button.innerHTML=plantSVG();
+      const tag=document.createElement('span');tag.className='plant-tag';
+      tag.textContent=p.name;button.append(tag);
+      button.addEventListener('click',function(){selectPlant(p.plantId);});
+      area.append(button);
+    });
+  }
+  function valueOrDash(value,unit) {return value===null||value===undefined?'—':String(value)+(unit?' '+unit:'');}
+  function drawPlantEquity(series){
+    const path=$('focus-chart-path');
+    if(!series || series.length<2){path.setAttribute('d','');return;}
+    const values=series.map(function(x){return Number(x.equityUsdt);});
+    const min=Math.min.apply(null,values),max=Math.max.apply(null,values),diff=Math.max(.001,max-min);
+    const start=series[0].dayIndex,end=series[series.length-1].dayIndex;
+    const dayspan=Math.max(1,end-start);
+    path.setAttribute('d',series.map(function(p){
+      const idx=series.indexOf(p),x=((p.dayIndex-start)/dayspan*395+2).toFixed(1);
+      const y=(120-(Number(p.equityUsdt)-min)/diff*105).toFixed(1);
+      return (idx?'L ':'M ')+x+' '+y;
+    }).join(' '));
+  }
+  function renderPlantInspector() {
+    const box=$('plant-inspector');
+    const p=hud.plantInspectors?.[selectedPlantId];
+    if(!inspectorOpen || !p){box.hidden=true;return;}
+    box.hidden=false;
+    txt('focus-name',p.name+' · '+p.plantId);
+    txt('focus-subtitle',(p.status==='active'?'Aktiv':'Archiviert')+' · Generation '+p.generation+
+      ' · '+p.tileInstanceIds.length+' Tile-Ansichten · DEMO');
+    const m=p.metrics;
+    txt('focus-equity',valueOrDash(m.individualEquityUsdt,'USDT'));
+    txt('focus-net',valueOrDash(m.netPnlUsdt,'USDT'));
+    txt('focus-high',valueOrDash(m.highWaterMarkUsdt,'USDT'));
+    txt('focus-dd',valueOrDash(m.maxDrawdownPct,'%'));
+    txt('focus-win',valueOrDash(m.winRatePct,'%'));
+    txt('focus-age',p.ageDays+' Tage · Gen. '+p.generation);
+    txt('focus-chart-status',p.financialSource==='fictional_per_plant_equity_only'?
+        'Fiktive Strategie-Equity · keine echten Trades':'Keine bestätigte individuelle Equity-Zeitreihe');
+    drawPlantEquity(p.equitySeries);
+    const g=$('focus-genome');g.replaceChildren();
+    const genes=p.genes.researchOptionalAxes||{};
+    Object.keys(genes).slice(0,6).forEach(function(key){
+      const k=document.createElement('span'),v=document.createElement('b');
+      k.textContent=key.replace('trade.','').replace('research.','');
+      v.textContent=String(genes[key]);
+      g.append(k,v);
+    });
+  }
+
   function renderTiles() {
     const grid=$('tile-grid'),control=$('tile-control');
     grid.replaceChildren();control.replaceChildren();
@@ -297,6 +455,7 @@
   }
   function render(){
     footer();putFinance();ranking();renderTiles();recent();
+    renderWorldPlants();renderPlantInspector();
     pressed('show-mock',hud===mock);pressed('show-missing',hud===empty);
     pressed('atlas',view==='atlas');pressed('explore',view==='explore');
     $('shell').classList.toggle('explore',view==='explore');
@@ -308,6 +467,12 @@
   $('explore').addEventListener('click',function(){view='explore';render();});
   $('show-mock').addEventListener('click',function(){hud=mock;render();});
   $('show-missing').addEventListener('click',function(){hud=empty;render();});
+  $('close-plant').addEventListener('click',function(){
+    inspectorOpen=false;$('garden-scene').classList.remove('is-focused');render();
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape' && inspectorOpen){inspectorOpen=false;$('garden-scene').classList.remove('is-focused');render();}
+  });
   render();
 })();
 </script>
