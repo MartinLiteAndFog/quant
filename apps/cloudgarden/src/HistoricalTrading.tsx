@@ -37,11 +37,11 @@ export function HistoricalTrading({ renderGarden }: { renderGarden: (controls: H
       let restored = createHistoricalSession(a, initialDate);
       try {
         const raw = localStorage.getItem(HISTORICAL_SAVE_KEY);
-        const oldWorld = localStorage.getItem("cloudgarden.historical.v1");
+        const oldWorld = localStorage.getItem("cloudgarden.historical.v2") ?? localStorage.getItem("cloudgarden.historical.v1");
         if (raw) restored = validateHistoricalSession(JSON.parse(raw), a);
-        setSaveStatus(raw ? "G1 historical world restored on this device"
-          : oldWorld ? "G1 world ready; previous historical save is preserved separately"
-            : "G1 historical world ready");
+        setSaveStatus(raw ? "G2 historical world restored on this device"
+          : oldWorld ? "G2 world ready; previous historical save is preserved separately"
+            : "G2 historical world ready");
       } catch {
         saveEnabled.current = false;
         setSaveStatus("Previous historical save is protected. Start a new world to replace it.");
