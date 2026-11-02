@@ -37,9 +37,11 @@ The old executor uses one signed net position. Never activate hedge fleet while 
    HEDGE_MULTI_BOT_ENABLED=1
    HEDGE_BOT_IDS=Blaupunkt,ElliotP1
    HEDGE_AUTO_REGISTER=1
+   HEDGE_AUTO_SET_POSITION_MODE=1
    HEDGE_SYMBOL=XBT-USDT
    HEDGE_BOT_CAPITAL_USAGE=0.90
    HEDGE_STATE_FILE=/data/blaupunkt-hedge.json
+   HEDGE_WEBHOOK_QUEUE_FILE=/data/blaupunkt-webhooks.sqlite3
    BOT_WEBHOOK_ALLOW_ANON=0
    TV_EXEC_DRY_RUN=1
    LIVE_TRADING_ENABLED=0
@@ -58,3 +60,9 @@ No migration of pre-existing XBTUSDTM exposure is attempted. Protect other runni
 `python -m pytest -q tests/test_blaupunkt_hedge.py`
 
 Current tests use a fake broker; they do **not** confirm real KuCoin hedge exchange behavior, API credentials, funding/margin effects, or network execution. CI workflow: `.github/workflows/blaupunkt-hedge.yml`.
+
+## Webhook acknowledgments / retry behavior
+
+The authenticated webhook returns `{"ok":true,"queued":true,"event_id":123}` immediately after its local SQLite commit. This means **received and persisted**, *not* an executed trade. A single worker processes signals in order and checks KuCoin before every order. See `GET /hedge/events?token=...` to distinguish `executed`, `rejected` (including insufficient funds), and `failed` outcomes. Signals older than 120 seconds are rejected and never traded late. An interrupted in-flight order is quarantined and **never replayed automatically** until reconciled.
+
+Do not expose the webhook token in public screenshots or logs. Never activate anonymous unauthenticated trading.
