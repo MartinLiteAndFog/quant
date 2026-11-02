@@ -1,5 +1,5 @@
 import { normalizeMarketData, runPaperReplay, type MarketBarInput, type MarketDataset, type PaperFill } from "./paperReplay.ts";
-import { advanceSimulationDay, assertSimulationInvariants, bookClosedPaperReplay, createSimulationWorld, type SimulationWorld } from "./simulation.ts";
+import { advanceSimulationDay, assertSimulationInvariants, bookClosedPaperReplay, createSimulationWorld, type SimulationWorld, type TradingDayOutcomes } from "./simulation.ts";
 import { generateSourceSignals, inheritSourceGenome, SOURCE_PARENT_GENOMES, validateSourceGenome, type SourceGenome } from "./sourceStrategies.ts";
 
 export type ArchiveDay = Readonly<{ date: string; barCount: number; gapCount: number; missingMinutes: number; file: string; sha256: string }>;
@@ -165,6 +165,9 @@ export function executeHistoricalDay(session: HistoricalSession, archive: SolArc
     })) throw new Error("Signal warmup must contain the exact same historical day and source as execution.");
   let booked = { ...session.world, day: session.world.day + 1 };
   const records = { ...session.records };
+  // Born from bookable trades, not from synthetic climate or a research verdict.
+  // The denominator is each plant's immutable start-of-day allocation.
+  const dayOutcomes: Record<string, { netPnlUsdt: number; startingAllocationUsdt: number }> = {};
   const trades = [...session.trades];
   let totalFills = 0;
   for (const plant of session.world.plants.filter((p) => p.status === "active")) {
@@ -191,6 +194,10 @@ export function executeHistoricalDay(session: HistoricalSession, archive: SolArc
     });
     const before = records[plant.id] ?? emptyRecord();
     // Mirror the single ledger's four-decimal booking precision in plant totals.
+    dayOutcomes[plant.id] = {
+      netPnlUsdt: rounded(booked.capital.navUsdt - navBefore),
+      startingAllocationUsdt: plant.allocationUsdt,
+    };
     records[plant.id] = { fills: before.fills + report.fills.length, netPnl: rounded(before.netPnl + booked.capital.navUsdt - navBefore),
       fees: rounded(before.fees + booked.capital.paperFeesUsdt - feesBefore), rejected: before.rejected + report.rejectedSignals.length,
       opportunities: before.opportunities + strategy.opportunities };
@@ -198,7 +205,7 @@ export function executeHistoricalDay(session: HistoricalSession, archive: SolArc
     trades.push(...report.fills.map((fill) => ({ ...fill, plantId: plant.id, plantName: plant.name, family: session.genomes[plant.id]!.family })));
   }
   // Intraday accounting precedes end-of-day growth and predation. Advance ecology exactly once.
-  const world = advanceSimulationDay({ ...booked, day: session.world.day });
+  const world = advanceSimulationDay({ ...booked, day: session.world.day }, dayOutcomes satisfies TradingDayOutcomes);
   const genomes = { ...session.genomes };
   for (const plant of world.plants) {
     if (genomes[plant.id]) continue;
