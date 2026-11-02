@@ -54,6 +54,6 @@ test("fail closed on duplicate numbers, fake PnL or an unclosed trade booked as 
   pnl.seeds[0]!.trades.closed[0]!.referenceNetPnlUsdt = 500;
   assert.throws(() => auditTradingViewReferenceManifest(pnl),/price\/PnL/);
   const open = syntheticManifest();
-  open.seeds[0]!.trades.open[0]!.referenceNetPnlUsdt = 42;
+  (open.seeds[0]!.trades.open[0]! as { referenceNetPnlUsdt?: number }).referenceNetPnlUsdt = 42;
   assert.throws(() => auditTradingViewReferenceManifest(open),/Open positions/);
 });
