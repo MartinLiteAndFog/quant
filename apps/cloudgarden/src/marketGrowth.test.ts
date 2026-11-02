@@ -7,6 +7,7 @@ import {
   assertSimulationInvariants,
   createSimulationWorld,
   type TradingDayOutcomes,
+  type SimulationWorld,
 } from "./simulation.ts";
 
 const round4 = (value: number) => Math.round(value * 10_000) / 10_000;
