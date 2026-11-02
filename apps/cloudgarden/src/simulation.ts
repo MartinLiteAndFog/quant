@@ -1,9 +1,7 @@
 /**
- * Pure, deterministic simulation rules for Cloudgarden.
- *
- * This is a synthetic garden model. Capital is a conserved accounting unit used
- * to teach allocation and margin; it is never connected to an exchange, market,
- * account, or order system.
+ * Pure deterministic ecology and capital accounting for Cloudgarden.
+ * Historical research can supply observed climate and actual paper account marks.
+ * This module never sends exchange orders or controls a live trading account.
  */
 
 export const STARTING_NAV_USDT = 100;
@@ -51,10 +49,11 @@ export type GardenPlant = Readonly<{
   tradingTraits: TradingTraits;
   phenotype: Phenotype;
   biomass: number;
+  growthBreakdown?: Readonly<{ rootAccess:number; leafCapture:number; waterResponse:number; sunResponse:number; rootLeafCost:number; netGrowth:number; vigorDelta:number }>;
   /** Momentary fit between this genome and today's synthetic environment. */
   fitness: number;
   vigor: number;
-  /** Simulated evidence quality, not financial or market evidence. */
+  /** Ecology score; the historical adapter may replace it with a frozen prior-day performance score. */
   evidence: number;
   evidenceDays: number;
   /** Original synthetic allocation; only active plants count as deployed. */
@@ -78,6 +77,9 @@ export type CapitalLedger = Readonly<{
   deployedCapitalUsdt: number;
   realizedPricePnlUsdt: number;
   paperFeesUsdt: number;
+  /** Open historical positions are marked separately from realized price PnL. */
+  paperUnrealizedPnlUsdt?: number;
+  externalDepositsUsdt?: number;
   paperFundingUsdt: number;
   paperReplayCount: number;
   seedlingEntitlements: readonly SeedEntitlement[];
@@ -89,6 +91,8 @@ export type ClosedPaperReplayBooking = Readonly<{
   datasetFingerprint: string;
   synthetic: boolean;
   historicalResearch?: boolean;
+  /** Settle already executed, flat historical research after a detected risk breach; never a promotion gate. */
+  riskSettlement?: boolean;
   marketSource?: string;
   endedFlat: boolean;
   riskBreach: boolean;
@@ -134,6 +138,10 @@ export type SimulationWorld = Readonly<{
   seed: string;
   day: number;
   conceptionPolicy: ConceptionPolicy;
+  evolutionPaused?: boolean;
+  dynamicEcology?: Readonly<{ maxLivingPlants: number; birthCount: number }>;
+  /** Frozen prior-day research ranking; no current-day returns enter conception selection. */
+  breedingCandidates?: readonly string[];
   climate: GardenClimate;
   plants: readonly GardenPlant[];
   capital: CapitalLedger;
@@ -175,7 +183,7 @@ export function visiblePopulation(world: SimulationWorld): readonly GardenPlant[
 
 export function createSimulationWorld(
   seed = "CLOUD-071",
-  options: { conceptionPolicy?: ConceptionPolicy } = {},
+  options: { conceptionPolicy?: ConceptionPolicy; dynamicEcology?: boolean; maxLivingPlants?: 50 | 200 } = {},
 ): SimulationWorld {
   if (!seed.trim()) throw new RangeError("A non-empty deterministic world seed is required.");
   const plants: GardenPlant[] = PARENT_BLUEPRINTS.map((plant) => ({
@@ -188,7 +196,7 @@ export function createSimulationWorld(
     evidenceDays: 0,
     allocationUsdt: PARENT_ALLOCATION_USDT,
   }));
-  const entitlements: SeedEntitlement[] = Array.from({ length: SEEDLING_ENTITLEMENTS }, (_, index) => ({
+  const entitlements: SeedEntitlement[] = Array.from({ length: options.dynamicEcology ? 0 : SEEDLING_ENTITLEMENTS }, (_, index) => ({
     id: index + 1,
     status: "available",
   }));
@@ -197,14 +205,15 @@ export function createSimulationWorld(
     seed,
     day: 0,
     conceptionPolicy: options.conceptionPolicy ?? "mixed",
+    ...(options.dynamicEcology ? { dynamicEcology: { maxLivingPlants: options.maxLivingPlants ?? 200, birthCount: 0 } } : {}),
     climate: { water: 0.55, sunlight: 0.68, predatorPatrol: false },
     plants,
     capital: {
       navUsdt: STARTING_NAV_USDT,
       allocationCeilingUsdt: round4(STARTING_NAV_USDT * MAX_ALLOCATION_RATE),
       protectedReserveUsdt: round4(STARTING_NAV_USDT * PROTECTED_RESERVE_RATE),
-      freeCapitalUsdt: 0,
-      reservedMarginUsdt: round4(SEEDLING_ENTITLEMENTS * SEEDLING_ALLOCATION_USDT),
+      freeCapitalUsdt: options.dynamicEcology ? 30 : 0,
+      reservedMarginUsdt: options.dynamicEcology ? 0 : round4(SEEDLING_ENTITLEMENTS * SEEDLING_ALLOCATION_USDT),
       deployedCapitalUsdt: round4(PARENT_COUNT * PARENT_ALLOCATION_USDT),
       realizedPricePnlUsdt: 0,
       paperFeesUsdt: 0,
@@ -248,7 +257,8 @@ export function bookClosedPaperReplay(
     && Math.abs(booking.endingCashUsdt - booking.startingCashUsdt) <= 0.0001;
   const permittedSource = booking.synthetic === true || (booking.synthetic === false
     && booking.historicalResearch === true && typeof booking.marketSource === "string" && booking.marketSource.trim().length > 0);
-  if (!permittedSource || !booking.endedFlat || booking.riskBreach
+  const historicalRiskSettlement = booking.synthetic === false && booking.historicalResearch === true && booking.riskSettlement === true;
+  if (!permittedSource || !booking.endedFlat || (booking.riskBreach && !historicalRiskSettlement)
     || !/^[0-9a-f]{64}$/.test(booking.datasetFingerprint)
     || !Number.isInteger(booking.days) || booking.days <= 0
     || !Number.isInteger(booking.startDay) || world.day !== booking.startDay + booking.days
@@ -265,7 +275,7 @@ export function bookClosedPaperReplay(
     || booking.feesUsdt < 0 || booking.maxMarginUsedUsdt < 0
     || booking.allocationLimitUsdt <= 0 || booking.allocationLimitUsdt > plant.allocationUsdt
     || booking.startingCashUsdt <= 0 || booking.startingCashUsdt > plant.allocationUsdt
-    || booking.maxMarginUsedUsdt > booking.allocationLimitUsdt + 0.0001
+    || (!historicalRiskSettlement && booking.maxMarginUsedUsdt > booking.allocationLimitUsdt + 0.0001)
     || Math.abs(booking.endingCashUsdt - (booking.startingCashUsdt + booking.netPnlUsdt)) > 0.0001) {
     throw new RangeError("Paper replay amounts must be finite and fees non-negative.");
   }
@@ -337,6 +347,7 @@ export function bookClosedPaperReplay(
         datasetFingerprint: booking.datasetFingerprint,
         synthetic: booking.synthetic,
         historicalResearch: !booking.synthetic && booking.historicalResearch === true,
+        riskSettlement: historicalRiskSettlement && booking.riskBreach,
         ...(booking.marketSource ? { marketSource: booking.marketSource } : {}),
       },
     }]),
@@ -356,6 +367,75 @@ function hash32(input: string): number {
 
 function unit(seed: string, label: string): number {
   return hash32(`${seed}|${label}`) / 0xffff_ffff;
+}
+
+/** Explicit external contribution, accounted separately from trading returns. */
+export function fundSimulationWorld(world: SimulationWorld, amountUsdt: number): SimulationWorld {
+  assertSimulationInvariants(world);
+  if (!Number.isFinite(amountUsdt) || amountUsdt <= 0 || amountUsdt > 1_000_000) throw new RangeError("Invalid external contribution.");
+  const navUsdt = round4(world.capital.navUsdt + amountUsdt);
+  const protectedReserveUsdt = round4(navUsdt * .1), allocationCeilingUsdt = round4(navUsdt - protectedReserveUsdt);
+  let free = round4(allocationCeilingUsdt - world.capital.reservedMarginUsdt - world.capital.deployedCapitalUsdt);
+  // Refill surviving allocations from actual contributed cash; no paper PnL is invented.
+  const plants = world.plants.map((plant) => {
+    if (plant.status !== "active") return plant;
+    const target = plant.role === "parent" ? PARENT_ALLOCATION_USDT : SEEDLING_ALLOCATION_USDT;
+    const add = Math.max(0, Math.min(free, target - plant.allocationUsdt));
+    free = round4(free - add);
+    return { ...plant, allocationUsdt: round4(plant.allocationUsdt + add) };
+  });
+  const deployedCapitalUsdt = round4(plants.filter((p) => p.status === "active").reduce((sum, p) => sum + p.allocationUsdt, 0));
+  const next = { ...world, plants, capital: { ...world.capital, navUsdt, protectedReserveUsdt, allocationCeilingUsdt,
+    freeCapitalUsdt: free, deployedCapitalUsdt, externalDepositsUsdt: round4((world.capital.externalDepositsUsdt ?? 0) + amountUsdt) } };
+  assertSimulationInvariants(next);
+  return next;
+}
+
+export type HistoricalMarkBooking = Readonly<{
+  datasetFingerprint: string; marketSource: string; fillCount: number; strategyId: string;
+  netEquityDeltaUsdt: number; realizedPnlUsdt: number; unrealizedDeltaUsdt: number; feesUsdt: number;
+}>;
+
+/** Book a sourced account mark while preserving open exposure and separating unrealized from realized PnL. */
+export function bookHistoricalMark(world: SimulationWorld, plantId: string, booking: HistoricalMarkBooking): SimulationWorld {
+  assertSimulationInvariants(world);
+  if (!world.plants.some((p) => p.id === plantId && p.status === "active")
+    || !/^[a-f0-9]{64}$/.test(booking.datasetFingerprint) || !booking.marketSource?.trim() || !booking.strategyId?.trim()
+    || !Number.isSafeInteger(booking.fillCount) || booking.fillCount < 0
+    || ![booking.netEquityDeltaUsdt, booking.realizedPnlUsdt, booking.unrealizedDeltaUsdt, booking.feesUsdt].every(Number.isFinite)
+    || booking.feesUsdt < 0 || Math.abs(booking.realizedPnlUsdt + booking.unrealizedDeltaUsdt - booking.feesUsdt - booking.netEquityDeltaUsdt) > .00001) {
+    throw new RangeError("Historical mark must reconcile sourced realized PnL, fees and actual open-position marks.");
+  }
+  const old = world.capital;
+  const navUsdt = round4(old.navUsdt + booking.netEquityDeltaUsdt);
+  const protectedReserveUsdt = round4(navUsdt * PROTECTED_RESERVE_RATE);
+  const allocationCeilingUsdt = round4(navUsdt - protectedReserveUsdt);
+  const available = round4(allocationCeilingUsdt - old.reservedMarginUsdt);
+  if (navUsdt <= 0 || available < 0) throw new RangeError("Historical mark breaches protected entitlement capital.");
+  let plants = world.plants;
+  if (available < old.deployedCapitalUsdt) {
+    const active = plants.filter((p) => p.status === "active");
+    let remaining = available;
+    const allocations = new Map<string, number>();
+    active.forEach((plant, index) => {
+      const amount = index === active.length - 1 ? remaining : Math.min(remaining, round4(plant.allocationUsdt * available / old.deployedCapitalUsdt));
+      allocations.set(plant.id, amount); remaining = round4(remaining - amount);
+    });
+    plants = plants.map((plant) => allocations.has(plant.id) ? { ...plant, allocationUsdt: allocations.get(plant.id)! } : plant);
+  }
+  const deployedCapitalUsdt = round4(plants.filter((p) => p.status === "active").reduce((sum, p) => sum + p.allocationUsdt, 0));
+  const next: SimulationWorld = { ...world, plants, capital: { ...old, navUsdt, protectedReserveUsdt, allocationCeilingUsdt,
+    deployedCapitalUsdt, freeCapitalUsdt: round4(available - deployedCapitalUsdt),
+    realizedPricePnlUsdt: round4(old.realizedPricePnlUsdt + booking.realizedPnlUsdt),
+    paperUnrealizedPnlUsdt: round4((old.paperUnrealizedPnlUsdt ?? 0) + booking.unrealizedDeltaUsdt),
+    paperFeesUsdt: round4(old.paperFeesUsdt + booking.feesUsdt), paperReplayCount: old.paperReplayCount + 1 },
+    events: appendEvents(world.events, [{ id: `${world.seed}:d${world.day}:mark:${old.paperReplayCount + 1}`, day: world.day,
+      type: "paper_replay", actor: "historical-mark-engine", subject: plantId,
+      detail: { synthetic: false, historicalResearch: true, markedAccount: true, strategyId: booking.strategyId,
+        fillCount: booking.fillCount, realizedPnl: booking.realizedPnlUsdt, unrealizedDelta: booking.unrealizedDeltaUsdt,
+        fees: booking.feesUsdt, source: booking.marketSource, datasetFingerprint: booking.datasetFingerprint } }]) };
+  assertSimulationInvariants(next);
+  return next;
 }
 
 function climateForDay(seed: string, day: number): GardenClimate {
@@ -415,6 +495,7 @@ function growPlant(plant: GardenPlant, plants: readonly GardenPlant[], climate: 
     ...plant,
     physiology,
     biomass: round1(clamp(plant.biomass + netGrowth, 5, 100)),
+    growthBreakdown: { rootAccess, leafCapture, waterResponse, sunResponse, rootLeafCost: rootLeafTradeoff, netGrowth, vigorDelta },
     fitness,
     vigor: round1(clamp(plant.vigor + vigorDelta, 0, 100)),
     evidence: round1(clamp(plant.evidence + evidenceDelta, 0, 100)),
@@ -484,12 +565,13 @@ function makeConception(
   index: number,
   plants: readonly GardenPlant[],
   mode: BeeMode,
+  candidateIds?: readonly string[],
 ): { plant: GardenPlant; entitlementId: number } | undefined {
   const entitlementId = index + 1;
   // Parent records remain a stable, auditable genetic source even if an
   // individual parent is later archived from the visible meadow.
-  const parents = plants.filter((plant) => plant.role === "parent");
-  if (parents.length < PARENT_COUNT) return undefined;
+  const parents = candidateIds?.length ? candidateIds.map((id) => plants.find((plant) => plant.id === id)).filter((p): p is GardenPlant => !!p && p.status === "active") : plants.filter((plant) => plant.role === "parent");
+  if (parents.length < 2) return undefined;
   const mother = parents[index % parents.length];
   const father = parents[(index + 1 + Math.floor(unit(seed, `mate-${index}`) * (parents.length - 1))) % parents.length];
   const hive = hiveGenome(seed, index);
@@ -528,15 +610,17 @@ function makeConception(
 }
 
 function allocateSeedling(world: SimulationWorld, plant: GardenPlant, entitlementId: number): SimulationWorld {
-  const slots = world.capital.seedlingEntitlements.map((slot) => slot.id === entitlementId
+  const slots = world.dynamicEcology ? [...world.capital.seedlingEntitlements, { id: entitlementId, status: "used" as const, plantId: plant.id }] : world.capital.seedlingEntitlements.map((slot) => slot.id === entitlementId
     ? { ...slot, status: "used" as const, plantId: plant.id }
     : slot);
   return {
     ...world,
     plants: [...world.plants, plant],
+    ...(world.dynamicEcology ? { dynamicEcology: { ...world.dynamicEcology, birthCount: world.dynamicEcology.birthCount + 1 } } : {}),
     capital: {
       ...world.capital,
-      reservedMarginUsdt: round4(world.capital.reservedMarginUsdt - SEEDLING_ALLOCATION_USDT),
+      reservedMarginUsdt: world.dynamicEcology ? 0 : round4(world.capital.reservedMarginUsdt - SEEDLING_ALLOCATION_USDT),
+      freeCapitalUsdt: world.dynamicEcology ? round4(world.capital.freeCapitalUsdt - SEEDLING_ALLOCATION_USDT) : world.capital.freeCapitalUsdt,
       deployedCapitalUsdt: round4(world.capital.deployedCapitalUsdt + SEEDLING_ALLOCATION_USDT),
       seedlingEntitlements: slots,
     },
@@ -557,10 +641,10 @@ function isPredationEligible(plant: GardenPlant): boolean {
     && plant.evidence < evidenceLimit;
 }
 
-function applyPredation(world: SimulationWorld, day: number): SimulationWorld {
+function applyPredation(world: SimulationWorld, day: number, protectedPlantIds: readonly string[] = []): SimulationWorld {
   if (!world.climate.predatorPatrol) return world;
   const target = world.plants
-    .filter(isPredationEligible)
+    .filter((plant) => !protectedPlantIds.includes(plant.id) && isPredationEligible(plant))
     .sort((left, right) => left.vigor - right.vigor || left.evidence - right.evidence || left.id.localeCompare(right.id))[0];
   if (!target) return world;
   const plants = world.plants.map((plant) => plant.id === target.id ? { ...plant, status: "archived" as const } : plant);
@@ -598,10 +682,12 @@ function applyPredation(world: SimulationWorld, day: number): SimulationWorld {
 }
 
 /** Advance exactly one deterministic synthetic day without mutating the input. */
-export function advanceSimulationDay(world: SimulationWorld): SimulationWorld {
+export function advanceSimulationDay(world: SimulationWorld, observedClimate?: GardenClimate, protectedPlantIds: readonly string[] = []): SimulationWorld {
   assertSimulationInvariants(world);
   const day = world.day + 1;
-  const climate = climateForDay(world.seed, day);
+  const climate = observedClimate ?? climateForDay(world.seed, day);
+  if (![climate.water, climate.sunlight].every((value) => Number.isFinite(value) && value >= 0 && value <= 1)
+    || typeof climate.predatorPatrol !== "boolean") throw new RangeError("Observed climate must be finite and bounded.");
   const plants = world.plants.map((plant) => growPlant(plant, world.plants, climate));
   const physiologyEvents: GardenEvent[] = plants.flatMap((plant, index) => {
     const before = world.plants[index];
@@ -631,16 +717,16 @@ export function advanceSimulationDay(world: SimulationWorld): SimulationWorld {
 
   // Every seventh day, one synthetic bee mode gets a conception opportunity.
   // The 20 entitlement slots are single-use; archived seedlings do not restore one.
-  if (day % 7 === 0) {
+  if (day % 7 === 0 && !next.evolutionPaused) {
     const used = next.capital.seedlingEntitlements.filter((slot) => slot.status === "used").length;
-    const available = next.capital.seedlingEntitlements.length - used;
-    const index = used;
+    const available = next.dynamicEcology ? next.dynamicEcology.maxLivingPlants - visiblePopulation(next).length : next.capital.seedlingEntitlements.length - used;
+    const index = next.dynamicEcology?.birthCount ?? used;
     const mode: BeeMode = next.conceptionPolicy === "mixed"
       ? (["local", "hive", "hybrid"] as const)[index % 3]
       : next.conceptionPolicy;
-    const fundingAvailable = next.capital.reservedMarginUsdt >= SEEDLING_ALLOCATION_USDT;
+    const fundingAvailable = (next.dynamicEcology ? next.capital.freeCapitalUsdt : next.capital.reservedMarginUsdt) >= SEEDLING_ALLOCATION_USDT;
     const conception = available > 0 && fundingAvailable
-      ? makeConception(next.seed, day, index, next.plants, mode)
+      ? makeConception(next.seed, day, index, next.plants, mode, next.dynamicEcology ? next.breedingCandidates : undefined)
       : undefined;
     if (conception) {
       next = allocateSeedling(next, conception.plant, conception.entitlementId);
@@ -657,7 +743,7 @@ export function advanceSimulationDay(world: SimulationWorld): SimulationWorld {
       };
     }
   }
-  next = applyPredation(next, day);
+  next = applyPredation(next, day, protectedPlantIds);
   assertSimulationInvariants(next);
   return next;
 }
@@ -685,7 +771,7 @@ export function assertSimulationInvariants(world: SimulationWorld): void {
   if (world.events.length > MAX_EVENT_HISTORY) throw new Error("Event history exceeded its bounded retention window.");
   const balances = [capital.navUsdt, capital.allocationCeilingUsdt, capital.protectedReserveUsdt,
     capital.freeCapitalUsdt, capital.reservedMarginUsdt, capital.deployedCapitalUsdt, capital.paperFeesUsdt];
-  const signedTotals = [capital.realizedPricePnlUsdt, capital.paperFundingUsdt];
+  const signedTotals = [capital.realizedPricePnlUsdt, capital.paperFundingUsdt, capital.paperUnrealizedPnlUsdt ?? 0];
   if ([...balances, ...signedTotals].some((value) => !Number.isFinite(value))
     || balances.some((value) => value < -0.0001)) {
     throw new Error("Capital ledger must contain finite values and non-negative balances.");
@@ -716,19 +802,27 @@ export function assertSimulationInvariants(world: SimulationWorld): void {
   if (Math.abs(deployedFromPlants - capital.deployedCapitalUsdt) > 0.0001) {
     throw new Error("Deployed capital must match active plant allocations exactly.");
   }
-  if (capital.seedlingEntitlements.length !== SEEDLING_ENTITLEMENTS) {
+  if (!world.dynamicEcology && capital.seedlingEntitlements.length !== SEEDLING_ENTITLEMENTS) {
     throw new Error("The seed bank must contain exactly 20 single-use entitlements.");
+  }
+  if (world.dynamicEcology && (!Number.isSafeInteger(world.dynamicEcology.birthCount) || world.dynamicEcology.birthCount < 0
+    || ![50, 200].includes(world.dynamicEcology.maxLivingPlants) || visiblePopulation(world).length > world.dynamicEcology.maxLivingPlants)) {
+    throw new Error("Dynamic ecology exceeds its bounded population contract.");
   }
   const usedSlots = capital.seedlingEntitlements.filter((slot) => slot.status === "used");
   const seedlings = world.plants.filter((plant) => plant.role === "seedling");
-  if (usedSlots.length !== seedlings.length || usedSlots.length > SEEDLING_ENTITLEMENTS) {
+  if (world.dynamicEcology && (world.dynamicEcology.birthCount < seedlings.length
+    || usedSlots.some((slot) => !Number.isSafeInteger(slot.id) || slot.id < 1 || slot.id > world.dynamicEcology!.birthCount))) {
+    throw new Error("Dynamic birth identifiers exceed their lifetime conception counter.");
+  }
+  if (usedSlots.length !== seedlings.length || (!world.dynamicEcology && usedSlots.length > SEEDLING_ENTITLEMENTS)) {
     throw new Error("Each seedling must consume exactly one unique entitlement.");
   }
   const fundedIds = new Set(usedSlots.map((slot) => slot.plantId));
   if (fundedIds.size !== usedSlots.length || seedlings.some((plant) => !fundedIds.has(plant.id))) {
     throw new Error("Entitlements cannot fund a plant more than once or leave seedlings unfunded.");
   }
-  if (Math.abs(capital.reservedMarginUsdt - (SEEDLING_ENTITLEMENTS - usedSlots.length) * SEEDLING_ALLOCATION_USDT) > 0.0001) {
+  if (Math.abs(capital.reservedMarginUsdt - (world.dynamicEcology ? 0 : (SEEDLING_ENTITLEMENTS - usedSlots.length) * SEEDLING_ALLOCATION_USDT)) > 0.0001) {
     throw new Error("Reserved margin must equal the unfunded seedling entitlement value.");
   }
   for (const plant of world.plants) {

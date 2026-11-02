@@ -1,0 +1,559 @@
+{
+  "schemaVersion": 1,
+  "genes": [
+    {
+      "id": "imba_channel",
+      "name": "IMBA-Signal",
+      "kind": "signal",
+      "category": "signal",
+      "description": "Abgeschlossene Renko-Proxy-Beobachtungen wechseln die Kanalrichtung.",
+      "parameters": {
+        "lookback": 172,
+        "upper": 0.236,
+        "lower": 0.786
+      },
+      "causality": {
+        "inputs": "Abgeschlossene 5-Minuten-Kerzen",
+        "lookback": "20–500 bestätigte Renko-Bars",
+        "confirmationLag": "0 abgeschlossene Kerzen",
+        "observableAt": "Erst am Schluss der letzten benötigten Bestätigungskerze",
+        "executionAt": "Frühestens am folgenden beobachteten Minuten-Open",
+        "retrospectivePlot": "Ein historischer Markierungspunkt ist niemals der Verfügbarkeitszeitpunkt.",
+        "verification": "tested",
+        "futureRequired": false
+      },
+      "source": "tradingview/sol_imba_strategy.pine",
+      "snippet": "Abgeschlossene Renko-Proxy-Beobachtungen wechseln die Kanalrichtung.",
+      "caveat": "Wirksam nur in ausdrücklich implementierten und getesteten Strategierezepten; keine TradingView-Paritätszusage.",
+      "license": "Lokale Quellregeln; Herkunft erhalten."
+    },
+    {
+      "id": "ew_pivots",
+      "name": "EW-Signal · bestätigter Swing",
+      "kind": "signal",
+      "category": "signal",
+      "description": "Ein Pivot wird erst nach seiner rechten Bestätigung verfügbar; niemals am historischen Pivot handeln.",
+      "parameters": {
+        "pivotLength": 13,
+        "atrLength": 14,
+        "minMoveAtr": 3
+      },
+      "causality": {
+        "inputs": "Abgeschlossene Hochs/Tiefs und ATR",
+        "lookback": "2 × Pivotlänge + ATR",
+        "confirmationLag": "pivotLength rechte Kerzen",
+        "observableAt": "Erst am Schluss der letzten benötigten Bestätigungskerze",
+        "executionAt": "Frühestens am folgenden beobachteten Minuten-Open",
+        "retrospectivePlot": "Ein historischer Markierungspunkt ist niemals der Verfügbarkeitszeitpunkt.",
+        "verification": "tested",
+        "futureRequired": false
+      },
+      "source": "EW_v3_2_MTF_AUDIT.pine · krakenEw.ts",
+      "snippet": "Ein Pivot wird erst nach seiner rechten Bestätigung verfügbar; niemals am historischen Pivot handeln.",
+      "caveat": "Wirksam nur in ausdrücklich implementierten und getesteten Strategierezepten; keine TradingView-Paritätszusage.",
+      "license": "MPL-2.0 · Elliott Wave Advanced Multi-Degree Analyzer v3.2 MTF Edition"
+    },
+    {
+      "id": "ew_confirmation",
+      "name": "EW-Bestätigung",
+      "kind": "confirmation",
+      "category": "confirmation",
+      "description": "Ein Einstieg ist nur erlaubt, wenn die bereits bestätigte EW-Richtung übereinstimmt.",
+      "parameters": {
+        "required": true
+      },
+      "causality": {
+        "inputs": "Verfügbares Einstiegssignal und bestätigter EW-Bias",
+        "lookback": "Letzter bestätigter Swing",
+        "confirmationLag": "Verzögerung des EW-Signals",
+        "observableAt": "Erst am Schluss der letzten benötigten Bestätigungskerze",
+        "executionAt": "Frühestens am folgenden beobachteten Minuten-Open",
+        "retrospectivePlot": "Ein historischer Markierungspunkt ist niemals der Verfügbarkeitszeitpunkt.",
+        "verification": "tested",
+        "futureRequired": false
+      },
+      "source": "tradingview/sol_imba_strategy.pine",
+      "snippet": "Ein Einstieg ist nur erlaubt, wenn die bereits bestätigte EW-Richtung übereinstimmt.",
+      "caveat": "Wirksam nur in ausdrücklich implementierten und getesteten Strategierezepten; keine TradingView-Paritätszusage.",
+      "license": "Lokale Quellregeln; Herkunft erhalten."
+    },
+    {
+      "id": "ttp",
+      "name": "Trailing Take Profit",
+      "kind": "exit",
+      "category": "exit",
+      "description": "Verfolge den günstigsten bereits abgeschlossenen Schlusskurs und löse bei Rücklauf aus.",
+      "parameters": {
+        "trailPct": 0.5
+      },
+      "causality": {
+        "inputs": "Position und abgeschlossene Schlusskurse",
+        "lookback": "Seit Einstieg",
+        "confirmationLag": "0 abgeschlossene Kerzen",
+        "observableAt": "Erst am Schluss der letzten benötigten Bestätigungskerze",
+        "executionAt": "Frühestens am folgenden beobachteten Minuten-Open",
+        "retrospectivePlot": "Ein historischer Markierungspunkt ist niemals der Verfügbarkeitszeitpunkt.",
+        "verification": "tested",
+        "futureRequired": false
+      },
+      "source": "tradingview/sol_imba_strategy.pine",
+      "snippet": "Verfolge den günstigsten bereits abgeschlossenen Schlusskurs und löse bei Rücklauf aus.",
+      "caveat": "Wirksam nur in ausdrücklich implementierten und getesteten Strategierezepten; keine TradingView-Paritätszusage.",
+      "license": "Lokale Quellregeln; Herkunft erhalten."
+    },
+    {
+      "id": "stop_loss",
+      "name": "Stop-Loss · verpflichtend",
+      "kind": "risk",
+      "category": "risk",
+      "description": "Ein Schutzstopp ist in jeder Strategie zwingend vorhanden und darf nicht durch Bedingungen abgeschaltet werden.",
+      "parameters": {
+        "maxDistancePct": 2.5,
+        "mandatory": true
+      },
+      "causality": {
+        "inputs": "Einstieg und bereits scharfgestellter Schutzstopp",
+        "lookback": "Aktuelle Position",
+        "confirmationLag": "0 abgeschlossene Kerzen",
+        "observableAt": "Erst am Schluss der letzten benötigten Bestätigungskerze",
+        "executionAt": "Frühestens am folgenden beobachteten Minuten-Open",
+        "retrospectivePlot": "Ein historischer Markierungspunkt ist niemals der Verfügbarkeitszeitpunkt.",
+        "verification": "tested",
+        "futureRequired": false
+      },
+      "source": "tradingview/sol_imba_strategy.pine",
+      "snippet": "Ein Schutzstopp ist in jeder Strategie zwingend vorhanden und darf nicht durch Bedingungen abgeschaltet werden.",
+      "caveat": "Wirksam nur in ausdrücklich implementierten und getesteten Strategierezepten; keine TradingView-Paritätszusage.",
+      "license": "Lokale Quellregeln; Herkunft erhalten."
+    },
+    {
+      "id": "partial_tp",
+      "name": "Teilgewinn",
+      "kind": "exit",
+      "category": "exit",
+      "description": "Reduziere die bestehende Position bei bestätigtem Gewinnziel.",
+      "parameters": {
+        "targetPct": 2.8,
+        "closePct": 50
+      },
+      "causality": {
+        "inputs": "Position und abgeschlossene OHLC-Kerze",
+        "lookback": "Seit Einstieg",
+        "confirmationLag": "0 abgeschlossene Kerzen",
+        "observableAt": "Erst am Schluss der letzten benötigten Bestätigungskerze",
+        "executionAt": "Frühestens am folgenden beobachteten Minuten-Open",
+        "retrospectivePlot": "Ein historischer Markierungspunkt ist niemals der Verfügbarkeitszeitpunkt.",
+        "verification": "tested",
+        "futureRequired": false
+      },
+      "source": "tradingview/sol_imba_strategy.pine",
+      "snippet": "Reduziere die bestehende Position bei bestätigtem Gewinnziel.",
+      "caveat": "Wirksam nur in ausdrücklich implementierten und getesteten Strategierezepten; keine TradingView-Paritätszusage.",
+      "license": "Lokale Quellregeln; Herkunft erhalten."
+    },
+    {
+      "id": "risk_cap",
+      "name": "Kapitalgrenze 1×",
+      "kind": "risk",
+      "category": "risk",
+      "description": "Begrenze Positionsnotional auf verfügbares Budget; notwendige Reduktionen sind eigene Ausführungen.",
+      "parameters": {
+        "maximumMultiple": 1
+      },
+      "causality": {
+        "inputs": "Vorab zugewiesenes Budget und beobachteter Open",
+        "lookback": "Vor Handelstag eingefrorenes Budget",
+        "confirmationLag": "0 abgeschlossene Kerzen",
+        "observableAt": "Erst am Schluss der letzten benötigten Bestätigungskerze",
+        "executionAt": "Frühestens am folgenden beobachteten Minuten-Open",
+        "retrospectivePlot": "Ein historischer Markierungspunkt ist niemals der Verfügbarkeitszeitpunkt.",
+        "verification": "tested",
+        "futureRequired": false
+      },
+      "source": "tradingview/sol_imba_strategy.pine",
+      "snippet": "Begrenze Positionsnotional auf verfügbares Budget; notwendige Reduktionen sind eigene Ausführungen.",
+      "caveat": "Wirksam nur in ausdrücklich implementierten und getesteten Strategierezepten; keine TradingView-Paritätszusage.",
+      "license": "Lokale Quellregeln; Herkunft erhalten."
+    },
+    {
+      "id": "and",
+      "name": "UND",
+      "kind": "function",
+      "category": "function",
+      "description": "Alle verfügbaren Eingänge müssen wahr sein.",
+      "parameters": {},
+      "causality": {
+        "inputs": "Nur bereits verfügbare Eingangswerte",
+        "lookback": "Kein Zukunftszugriff; Verfügbarkeit = spätester Eingang",
+        "confirmationLag": "Abhängig von Eingängen",
+        "observableAt": "Erst am Schluss der letzten benötigten Bestätigungskerze",
+        "executionAt": "Frühestens am folgenden beobachteten Minuten-Open",
+        "retrospectivePlot": "Ein historischer Markierungspunkt ist niemals der Verfügbarkeitszeitpunkt.",
+        "verification": "declarative",
+        "futureRequired": false
+      },
+      "source": "Cloudgarden · deklarativer Verknüpfungsentwurf",
+      "snippet": "Alle verfügbaren Eingänge müssen wahr sein.",
+      "caveat": "Als Verknüpfung dokumentiert und validiert; noch kein frei ausführbarer Strategiegraph.",
+      "license": "Lokale Quellregeln; Herkunft erhalten."
+    },
+    {
+      "id": "or",
+      "name": "ODER",
+      "kind": "function",
+      "category": "function",
+      "description": "Mindestens ein verfügbarer Eingang muss wahr sein.",
+      "parameters": {},
+      "causality": {
+        "inputs": "Nur bereits verfügbare Eingangswerte",
+        "lookback": "Kein Zukunftszugriff; Verfügbarkeit = spätester Eingang",
+        "confirmationLag": "Abhängig von Eingängen",
+        "observableAt": "Erst am Schluss der letzten benötigten Bestätigungskerze",
+        "executionAt": "Frühestens am folgenden beobachteten Minuten-Open",
+        "retrospectivePlot": "Ein historischer Markierungspunkt ist niemals der Verfügbarkeitszeitpunkt.",
+        "verification": "declarative",
+        "futureRequired": false
+      },
+      "source": "Cloudgarden · deklarativer Verknüpfungsentwurf",
+      "snippet": "Mindestens ein verfügbarer Eingang muss wahr sein.",
+      "caveat": "Als Verknüpfung dokumentiert und validiert; noch kein frei ausführbarer Strategiegraph.",
+      "license": "Lokale Quellregeln; Herkunft erhalten."
+    },
+    {
+      "id": "not",
+      "name": "NICHT",
+      "kind": "function",
+      "category": "function",
+      "description": "Negiere einen verfügbaren Eingang; ein fehlender Wert bleibt unbekannt.",
+      "parameters": {},
+      "causality": {
+        "inputs": "Nur bereits verfügbare Eingangswerte",
+        "lookback": "Kein Zukunftszugriff; Verfügbarkeit = spätester Eingang",
+        "confirmationLag": "Abhängig von Eingängen",
+        "observableAt": "Erst am Schluss der letzten benötigten Bestätigungskerze",
+        "executionAt": "Frühestens am folgenden beobachteten Minuten-Open",
+        "retrospectivePlot": "Ein historischer Markierungspunkt ist niemals der Verfügbarkeitszeitpunkt.",
+        "verification": "declarative",
+        "futureRequired": false
+      },
+      "source": "Cloudgarden · deklarativer Verknüpfungsentwurf",
+      "snippet": "Negiere einen verfügbaren Eingang; ein fehlender Wert bleibt unbekannt.",
+      "caveat": "Als Verknüpfung dokumentiert und validiert; noch kein frei ausführbarer Strategiegraph.",
+      "license": "Lokale Quellregeln; Herkunft erhalten."
+    },
+    {
+      "id": "threshold",
+      "name": "Nur ab Schwelle",
+      "kind": "function",
+      "category": "function",
+      "description": "Prüfe eine Schwelle ausschließlich gegen bereits beobachtete Werte.",
+      "parameters": {},
+      "causality": {
+        "inputs": "Nur bereits verfügbare Eingangswerte",
+        "lookback": "Kein Zukunftszugriff; Verfügbarkeit = spätester Eingang",
+        "confirmationLag": "Abhängig von Eingängen",
+        "observableAt": "Erst am Schluss der letzten benötigten Bestätigungskerze",
+        "executionAt": "Frühestens am folgenden beobachteten Minuten-Open",
+        "retrospectivePlot": "Ein historischer Markierungspunkt ist niemals der Verfügbarkeitszeitpunkt.",
+        "verification": "declarative",
+        "futureRequired": false
+      },
+      "source": "Cloudgarden · deklarativer Verknüpfungsentwurf",
+      "snippet": "Prüfe eine Schwelle ausschließlich gegen bereits beobachtete Werte.",
+      "caveat": "Als Verknüpfung dokumentiert und validiert; noch kein frei ausführbarer Strategiegraph.",
+      "license": "Lokale Quellregeln; Herkunft erhalten."
+    },
+    {
+      "id": "cooldown",
+      "name": "Wartezeit",
+      "kind": "function",
+      "category": "function",
+      "description": "Erlaube eine Entscheidung erst nach einer vorab festgelegten vergangenen Wartezeit.",
+      "parameters": {},
+      "causality": {
+        "inputs": "Nur bereits verfügbare Eingangswerte",
+        "lookback": "Kein Zukunftszugriff; Verfügbarkeit = spätester Eingang",
+        "confirmationLag": "Abhängig von Eingängen",
+        "observableAt": "Erst am Schluss der letzten benötigten Bestätigungskerze",
+        "executionAt": "Frühestens am folgenden beobachteten Minuten-Open",
+        "retrospectivePlot": "Ein historischer Markierungspunkt ist niemals der Verfügbarkeitszeitpunkt.",
+        "verification": "declarative",
+        "futureRequired": false
+      },
+      "source": "Cloudgarden · deklarativer Verknüpfungsentwurf",
+      "snippet": "Erlaube eine Entscheidung erst nach einer vorab festgelegten vergangenen Wartezeit.",
+      "caveat": "Als Verknüpfung dokumentiert und validiert; noch kein frei ausführbarer Strategiegraph.",
+      "license": "Lokale Quellregeln; Herkunft erhalten."
+    }
+  ],
+  "recipes": [
+    {
+      "id": "kraken_legacy",
+      "name": "Kraken Legacy · TTP",
+      "execution": "compiled_profile",
+      "nodes": [
+        {
+          "id": "entry",
+          "geneId": "imba_channel",
+          "inputs": []
+        },
+        {
+          "id": "ttp",
+          "geneId": "ttp",
+          "inputs": [
+            "entry"
+          ]
+        },
+        {
+          "id": "stop",
+          "geneId": "stop_loss",
+          "inputs": []
+        },
+        {
+          "id": "cap",
+          "geneId": "risk_cap",
+          "inputs": []
+        },
+        {
+          "id": "partial",
+          "geneId": "partial_tp",
+          "inputs": [
+            "entry"
+          ]
+        }
+      ],
+      "entryNode": "entry",
+      "stopNode": "stop"
+    },
+    {
+      "id": "countervariante",
+      "name": "Countervariante · TTP",
+      "execution": "compiled_profile",
+      "nodes": [
+        {
+          "id": "entry",
+          "geneId": "imba_channel",
+          "inputs": []
+        },
+        {
+          "id": "ttp",
+          "geneId": "ttp",
+          "inputs": [
+            "entry"
+          ]
+        },
+        {
+          "id": "stop",
+          "geneId": "stop_loss",
+          "inputs": []
+        },
+        {
+          "id": "cap",
+          "geneId": "risk_cap",
+          "inputs": []
+        },
+        {
+          "id": "partial",
+          "geneId": "partial_tp",
+          "inputs": [
+            "entry"
+          ]
+        }
+      ],
+      "entryNode": "entry",
+      "stopNode": "stop"
+    },
+    {
+      "id": "kraken_17_2_close",
+      "name": "Kraken 17.2 · enger TTP · SL schließt",
+      "execution": "compiled_profile",
+      "nodes": [
+        {
+          "id": "entry",
+          "geneId": "imba_channel",
+          "inputs": []
+        },
+        {
+          "id": "ttp",
+          "geneId": "ttp",
+          "inputs": [
+            "entry"
+          ]
+        },
+        {
+          "id": "stop",
+          "geneId": "stop_loss",
+          "inputs": []
+        },
+        {
+          "id": "cap",
+          "geneId": "risk_cap",
+          "inputs": []
+        },
+        {
+          "id": "partial",
+          "geneId": "partial_tp",
+          "inputs": [
+            "entry"
+          ]
+        }
+      ],
+      "entryNode": "entry",
+      "stopNode": "stop"
+    },
+    {
+      "id": "kraken_17_2_reverse",
+      "name": "Kraken 17.2 · enger TTP · SL dreht",
+      "execution": "compiled_profile",
+      "nodes": [
+        {
+          "id": "entry",
+          "geneId": "imba_channel",
+          "inputs": []
+        },
+        {
+          "id": "ttp",
+          "geneId": "ttp",
+          "inputs": [
+            "entry"
+          ]
+        },
+        {
+          "id": "stop",
+          "geneId": "stop_loss",
+          "inputs": []
+        },
+        {
+          "id": "cap",
+          "geneId": "risk_cap",
+          "inputs": []
+        },
+        {
+          "id": "partial",
+          "geneId": "partial_tp",
+          "inputs": [
+            "entry"
+          ]
+        }
+      ],
+      "entryNode": "entry",
+      "stopNode": "stop"
+    },
+    {
+      "id": "imbatp",
+      "name": "Pure ImbaTP · TP1 / TP2",
+      "execution": "compiled_profile",
+      "nodes": [
+        {
+          "id": "entry",
+          "geneId": "imba_channel",
+          "inputs": []
+        },
+        {
+          "id": "ttp",
+          "geneId": "ttp",
+          "inputs": [
+            "entry"
+          ]
+        },
+        {
+          "id": "stop",
+          "geneId": "stop_loss",
+          "inputs": []
+        },
+        {
+          "id": "cap",
+          "geneId": "risk_cap",
+          "inputs": []
+        },
+        {
+          "id": "partial",
+          "geneId": "partial_tp",
+          "inputs": [
+            "entry"
+          ]
+        }
+      ],
+      "entryNode": "entry",
+      "stopNode": "stop"
+    },
+    {
+      "id": "ew_ttp",
+      "name": "EW-Einstieg + TTP + Schutzstopp",
+      "execution": "design_only",
+      "nodes": [
+        {
+          "id": "entry",
+          "geneId": "ew_pivots",
+          "inputs": []
+        },
+        {
+          "id": "ttp",
+          "geneId": "ttp",
+          "inputs": [
+            "entry"
+          ]
+        },
+        {
+          "id": "stop",
+          "geneId": "stop_loss",
+          "inputs": []
+        },
+        {
+          "id": "cap",
+          "geneId": "risk_cap",
+          "inputs": []
+        }
+      ],
+      "entryNode": "entry",
+      "stopNode": "stop"
+    },
+    {
+      "id": "imba_ew_confirmation",
+      "name": "IMBA + EW-Bestätigung + TTP + Schutzstopp",
+      "execution": "design_only",
+      "nodes": [
+        {
+          "id": "imba",
+          "geneId": "imba_channel",
+          "inputs": []
+        },
+        {
+          "id": "ew",
+          "geneId": "ew_pivots",
+          "inputs": []
+        },
+        {
+          "id": "confirmation",
+          "geneId": "ew_confirmation",
+          "inputs": [
+            "imba",
+            "ew"
+          ]
+        },
+        {
+          "id": "entry",
+          "geneId": "and",
+          "inputs": [
+            "imba",
+            "confirmation"
+          ]
+        },
+        {
+          "id": "ttp",
+          "geneId": "ttp",
+          "inputs": [
+            "entry"
+          ]
+        },
+        {
+          "id": "stop",
+          "geneId": "stop_loss",
+          "inputs": []
+        }
+      ],
+      "entryNode": "entry",
+      "stopNode": "stop"
+    }
+  ]
+}

@@ -520,3 +520,68 @@ test("world invariants reject malformed persisted clocks and conception policies
   assert.throws(() => assertSimulationInvariants({ ...world, day: 1.5 }), /versioned simulation contract/);
   assert.throws(() => assertSimulationInvariants({ ...world, conceptionPolicy: "unsupported" as SimulationWorld["conceptionPolicy"] }), /versioned simulation contract/);
 });
+
+test("only explicitly sourced flat historical risk settlement can preserve already executed losses", () => {
+  const world = { ...createSimulationWorld("risk-settlement"), day: 1 };
+  const booking: ClosedPaperReplayBooking = { startDay: 0, days: 1, datasetFingerprint: "e".repeat(64), synthetic: false,
+    historicalResearch: true, riskSettlement: true, marketSource: "verified local bytes; research risk event", endedFlat: true, riskBreach: true,
+    fillCount: 4, allocationLimitUsdt: 20, startingCashUsdt: 20, endingCashUsdt: 18.5, maxMarginUsedUsdt: 18,
+    realizedPricePnlUsdt: -1.4, feesUsdt: .1, fundingUsdt: 0, netPnlUsdt: -1.5 };
+  const settled = bookClosedPaperReplay(world, "parent-01", booking);
+  assert.equal(settled.capital.navUsdt, 98.5);
+  assert.equal(settled.capital.paperFeesUsdt, .1);
+  assert.equal(settled.events.at(-1)!.detail.riskSettlement, true);
+  assertSimulationInvariants(settled);
+  for (const invalid of [{ synthetic: true }, { historicalResearch: false }, { riskSettlement: false }, { endedFlat: false },
+    { endingCashUsdt: 18 }, { marketSource: "" }, { netPnlUsdt: -100 }]) {
+    assert.throws(() => bookClosedPaperReplay(world, "parent-01", { ...booking, ...invalid }));
+  }
+});
+
+test("externally observed climate is validated and drives daily ecology directly", () => {
+  const world = createSimulationWorld("market-ecology");
+  const observed = { water: .12, sunlight: .81, predatorPatrol: true };
+  const next = advanceSimulationDay(world, observed);
+  assert.deepEqual(next.climate, observed);
+  assert.notDeepEqual(next.plants, advanceSimulationDay(world).plants);
+  assert.throws(() => advanceSimulationDay(world, { ...observed, water: Number.NaN }));
+  assert.throws(() => advanceSimulationDay(world, { ...observed, sunlight: 1.1 }));
+});
+
+test("historical open marks preserve unrealized equity separately and settle it without double counting", async () => {
+  const { bookHistoricalMark } = await import("./simulation.ts");
+  let world = { ...createSimulationWorld("open-mark"), day: 1 };
+  const mark = { datasetFingerprint: "d".repeat(64), marketSource: "actual archive fixture", strategyId: "kraken-test", fillCount: 1,
+    netEquityDeltaUsdt: 1.9, realizedPnlUsdt: 0, unrealizedDeltaUsdt: 2, feesUsdt: .1 };
+  world = bookHistoricalMark(world, "parent-01", mark);
+  assert.equal(world.capital.navUsdt, 101.9);
+  assert.equal(world.capital.realizedPricePnlUsdt, 0);
+  assert.equal(world.capital.paperUnrealizedPnlUsdt, 2);
+  world = bookHistoricalMark(world, "parent-01", { ...mark, netEquityDeltaUsdt: -.1, realizedPnlUsdt: 2, unrealizedDeltaUsdt: -2 });
+  assert.equal(world.capital.navUsdt, 101.8);
+  assert.equal(world.capital.realizedPricePnlUsdt, 2);
+  assert.equal(world.capital.paperUnrealizedPnlUsdt, 0);
+  assert.equal(world.capital.paperFeesUsdt, .2);
+  assert.throws(() => bookHistoricalMark(world, "parent-01", { ...mark, netEquityDeltaUsdt: 99 }));
+  assertSimulationInvariants(world);
+});
+
+test("dynamic ecology conceives beyond twenty slots from actual free capital and respects the living safety cap", async () => {
+  const { fundSimulationWorld } = await import("./simulation.ts");
+  let world = createSimulationWorld("dynamic-births", { dynamicEcology: true });
+  assert.equal(world.capital.seedlingEntitlements.length, 0);
+  assert.equal(world.capital.reservedMarginUsdt, 0);
+  assert.equal(world.capital.freeCapitalUsdt, 30);
+  world = fundSimulationWorld(world, 1000);
+  for (let i = 0; i < 210; i += 1) world = advanceSimulationDay(world, { water: .7, sunlight: .7, predatorPatrol: false });
+  assert.equal(world.dynamicEcology!.birthCount, 30);
+  assert.equal(world.plants.length, 33);
+  assert.equal(world.capital.seedlingEntitlements.length, 30);
+  assert.equal(world.capital.externalDepositsUsdt, 1000);
+  assert.equal(world.capital.navUsdt, 1100);
+  assert.equal(world.capital.realizedPricePnlUsdt, 0);
+  for (let i = 210; i < 1500; i += 1) world = advanceSimulationDay(world, { water: .7, sunlight: .7, predatorPatrol: false });
+  assert.equal(world.plants.filter((p) => p.status === "active").length, 200);
+  assert.equal(world.dynamicEcology!.birthCount, 197);
+  assertSimulationInvariants(world);
+});

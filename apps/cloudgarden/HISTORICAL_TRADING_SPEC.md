@@ -1,37 +1,41 @@
-# Historical SOL trading and inherited source modules
+# Historical execution contract
 
-The default playable mode must execute funded plants when the user presses Play or advances days. A completed UTC day must update NAV from real archive prices, show fills and assumed costs, and retain one reconciled 90/10 ledger. Ecology-only steps remain explicitly named demo views.
+## Data and clocks
 
-## Source identity
+The runtime supports distinct `SOL-USDT` and `BTC-USDT` manifests and daily asset directories. Symbol identity, source SHA256, day byte checksums, observed row counts and UTC timestamp bounds are validated before execution. Neither rendering nor ecology may manufacture market candles. Partial days execute their observations; gaps reset indicators according to the engine's discontinuity policy while preserving account exposure and equity.
 
-- Immutable local input: `research/solusdt_robust_growth_v1/immutable/SOL-USDT_1m_20260711T092900Z.parquet`.
-- SHA256: `fa3e689ddbc42b35b89f66db4240521a330896e2d89fc2d2df8624bc749fda64`.
-- 3,109,186 actual minute OHLCV rows, 2020-08-11 06:00 UTC to 2026-07-11 09:29 UTC. Ten gaps / 1,424 missing minutes; no duplicates.
-- `scripts/export_sol_history.py` preserves source values as decimal strings without silently rounding and produces daily arrays plus SHA256 per file. The browser verifies exact bytes before normalization. Raw market assets are ignored by Git and copied into the local Desktop build.
-- Venue, source market type and license are unverified. These prices do not establish KuCoin/Binance futures parity. The model is a hypothetical linear long/short position; unavailable funding is excluded.
+SOL: 3,109,186 real minute rows, 2020-08-11–2026-07-11. BTC: 3,084,497 real minute rows, 2020-08-12–2026-06-24. Source location does not prove venue, instrument or license provenance. The normalized linear-futures account is an explicit model; unavailable exchange funding is excluded.
 
-## Strategy material
+A date's trading is completed before its observed volume/range/direction drives the ecological update. Newborn plants first trade on later observations. Sizing budgets and halt state are frozen from the pre-day information set for concurrent Kraken accounts; source-fixture accounts freeze each contiguous segment's information set. Prior results, not later same-day outcomes, determine selection and allocation weights.
 
-IMBA channel rules derive from `tradingview/imba_renko_signal.pine`, `tradingview/sol_imba_strategy.pine`, and the existing `src/quant/strategies/imba.py` port: rolling highs/lows, Fibonacci channel .236/.786, sticky direction. The countertrend parent is an inverted-channel research variant, not a reproduction of the full Pine CT/TF order manager.
+## Effective strategy
 
-EW material derives from `EW_v3_2_MTF_AUDIT.pine` and the existing `research/ew_mtf_parity_20261018/ew_replay.py` port. The MPL-2.0 source notice is preserved. Heritable donor modules include confirmed pivots, ATR minimum movement, .382–.786 W3-style retracement filter and six-pivot impulse exit. Pivots become usable only after their right-hand confirmation candles close. No historical HTF mapping with future dependencies is used.
+Initial compiled profiles are Kraken Legacy, Countervariante, Kraken 17.2 close, Kraken 17.2 reverse and Pure ImbaTP. A new world chooses three parent profiles. Sensitivity 17.2 with the source multiplier means 172 signal-Renko bars, not 17.2 candles. The latest templates retain 0.5% trailing distance, 2.8% partial TP, independent 3.15% CT TP1 and WAIT-stop differences. Original leverage and sizing remain provenance; execution caps notional at 1× and enforces a protective stop.
 
-Downloaded Tradingade Strategy Builder result workbooks contain settings/results rather than complete executable source. Neither exact Tradingade nor full EW/Renko/MTF parity is claimed. The existing parity research has unresolved causality and order-management gates; these modules are clearly labeled candle research variants.
+The source-derived engine aggregates completed five-minute observations into a Renko signal proxy. Renko prices never become execution prices. Decisions enqueue orders for subsequent observed minute opens; fees and adverse slippage are modeled. Protective stop/TP ambiguity resolves conservatively. A gap through an already armed stop fills at the observed worse open. Zero-volume observations do not provide executable liquidity.
 
-Source genomes are separate from habitat/physiology genes. Local offspring blend both local parents; Hive draws from the central source library; Hybrid combines both. Random offspring are independent of local parents. Every mode keeps a bounded compulsory stop trigger; arbitrary code is never executed.
+Positions, orders, ATR, confirmed EW pivots, Renko history and CT TTP/WAIT or TF state persist between dates. The historical legacy source-fixture branch remains daily/segment-flat and must not be confused with the persistent Kraken branch.
 
-## Daily causal execution
+## Atomic genes and availability
 
-1. Validate the historical session and archive identity. Load the requested actual UTC day plus the previous day's warmup, checking SHA256 and exact day equality between signal and execution inputs.
-2. Stop before a partial/gapped day; never fabricate missing prices or carry a signal across missing observations. Previous-day indicators are warmup only; orders originate within the requested day.
-3. Size a target from half the plant allocation and the known first session open. No future price participates in sizing. Long/short target exposure remains within the 1x allocation ceiling; oversized orders reject.
-4. A decision uses completed candles; execution uses the first observed open strictly later than availability. Apply spread/slippage in fill price and debit each fill's fee once. Default assumptions: fee 6 bps, full spread 2 bps, slippage 1 bp.
-5. Stops are completed-close triggers from the decision reference price, not guaranteed fill prices or exact TradingView stops. Reserve the last three bars for flat liquidation and require every plant to finish flat; this daily-flat variant differs from overnight trading.
-6. Book all intraday results into the same ledger before end-of-day ecology and predation. Advance ecology exactly once. Transactions are immutable; a failed day is not partially committed. Reserve and deployable balances use complementary rounding, preventing double rounding from creating equity.
-7. Conceptions use existing single-use entitlements. Offspring receive deterministic source genomes before their first next-day trade. Display per-plant booked PnL/fees/fills/rejections and up to 400 recent fills. Historical and legacy demo saves are separate; invalid historical saves are protected until explicit restart.
+The catalog separates 12 single-purpose genes from seven example recipes. Each atom records required observations, historical lookback, confirmation delay, availability and earliest execution. EW pivots require their right-hand confirmation candles; drawing a mark at an older pivot index never authorizes trading at that older time. Confirmed EW bias may filter an IMBA entry; confirmed impulses may trigger exits. Risk exits remain independent of entry filters.
 
-## Verification and evidence boundary
+Graph validation rejects unknown genes, cycles, missing entry nodes and any absent or conditionally gated compulsory stop-loss. Logical functions are typed documented composition designs, not arbitrary runtime code. Named compiled strategies are executable; custom snippets and unsupported compositions remain non-executable research text. Metadata documents a contract; actual prefix-invariance, confirmation and execution-time tests are required to substantiate it.
 
-Tests cover source-module prefix causality, delayed pivots, inherited modules/compulsory stops, explicit historical opt-in, real-price fills, accounting under repeated fine fractional PnL, warmup/source mismatch rejection, day gaps, multi-day offspring, and restored accounting.
+Children combine and mutate bounded actual execution fields and EW genes once at birth. The frozen effective profile is persisted with the plant. Parent ranking and evidence weighting use previously completed measured results after the observation gate. This evolutionary selection is not an independent performance evaluation.
 
-The full HTTP integration check over the frozen archive ran 140 days (2026-01-01–2026-05-20), executed 28,078 fills, consumed all 20 seedling entitlements, and ended at NAV 31.3791 from 100 with 45.9937 modeled fees. This variant loses capital; it has not been optimized or promoted. Benchmark: cash/no trade. Verdict: **not_comparable** for empirical market performance because provenance, venue calibration, funding, full source parity and frozen OOS evaluation remain unresolved.
+## Capital, population and repeat
+
+Each garden starts independently at 100 USDT, protects 10% of current NAV and keeps one conserved ledger. At subsequent simulated calendar-month transitions, 100 EUR enters at a fixed disclosed 1:1 simulation conversion; restored states cannot book the same contribution twice. External deposits, realized price PnL, unrealized marks and costs are separate fields. The invariant is NAV = initial capital + deposits + trading result, subject to explicit ledger precision.
+
+Dynamic births spend free capital; there is no fixed number of historical planting places. At most 200 plants are alive simultaneously. Predation cannot silently erase an open account. Recent histories, trades and retired-plant detail are bounded; cumulative counters preserve lifetime accounting. Legacy synthetic demos keep their original 20-slot rules.
+
+A declared exit-only window starts in the final 60 observed archive minutes. The boundary verifies no pending exposure, then repeats the dataset with accounts, population and genomes intact. It does not reset NAV to 100 or replace losses with artificial equity. A capital halt continues observations and may be released by the next real simulated contribution. Missing exit liquidity fails explicitly rather than fabricating settlement.
+
+## Native presentation and verification
+
+The Unreal target consumes locally generated immutable snapshots and writes local play/pause/step commands. Native actors/HUD must expose the same measured ledger and effective genes as the reference engine. A TypeScript build or native compilation alone does not prove selection, controls, readability or packaged offline behavior; inspect the native status matrix and actual runtime evidence.
+
+Required tests include source checksums, symbol isolation, whole-versus-split state equality, future-prefix invariance, cross-plant ordering invariance, pivot confirmation delay, bounded mutation, mandatory stops, contribution idempotence, population safety and long-run retention. Current daily-end drawdown metrics are not intraday drawdown and must be labeled accordingly.
+
+Benchmark: cash/no trade. Verdict: `not_comparable` for independent market performance until provenance, cost calibration, frozen holdout/forward evaluation and promotion gates are established. Replaying identical history repeatedly is training; it does not generate independent evidence or prove a profitable adaptive trading system.
