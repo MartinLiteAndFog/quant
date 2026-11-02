@@ -106,12 +106,16 @@ class MultiTileProjectionTests(unittest.TestCase):
         self.assertEqual(self.decision(result2, "plant-a", "sol-lookback-sensitivity")["reason"],
                          "invalid_axis_type")
 
-    def test_one_physics_home_tile_not_four_seed_emitters(self):
+    def test_each_eligible_tile_has_independent_research_seed_experiment(self):
         instances = self.build()["instances"]
-        self.assertEqual([i["instanceId"] for i in instances
-                          if i["physicsCandidateOnlyOnAuthorizedHomeTile"]],
-                         ["sol-imbase::plant-a", "sol-imbase::plant-c"])
-        self.assertTrue(all(i["role"] == "read_only_visual_projection" for i in instances))
+        self.assertEqual(len(instances), 6)
+        self.assertTrue(all(i["seedResearchAllowedSubjectToTilePolicy"] is True for i in instances))
+        self.assertEqual(len({i["experimentId"] for i in instances}), 6)
+        self.assertEqual(len([i for i in instances if i["plantId"] == "plant-a"]), 4)
+        self.assertTrue(all(i["physicsCandidateAuthority"] == "untrusted_tile_scoped_research_only"
+                            for i in instances))
+        self.assertTrue(all(i["capitalEntityCount"] == 0 for i in instances))
+        self.assertNotIn("physicsCandidateOnlyOnAuthorizedHomeTile", str(instances))
 
     def test_reject_untrusted_or_inconsistent_source(self):
         bad = deepcopy(self.genomes)

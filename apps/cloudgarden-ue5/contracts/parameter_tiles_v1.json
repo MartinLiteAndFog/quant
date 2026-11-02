@@ -67,7 +67,7 @@
         10
       ],
       "yawDeg": 0,
-      "physicsPolicy": "only_canonical_home_tile"
+      "physicsPolicy": "tile_scoped_research_candidate_only"
     },
     {
       "id": "sol-lookback-sensitivity",
@@ -87,7 +87,7 @@
         10
       ],
       "yawDeg": 0,
-      "physicsPolicy": "only_canonical_home_tile"
+      "physicsPolicy": "tile_scoped_research_candidate_only"
     },
     {
       "id": "sol-sensitivity-ttp",
@@ -107,7 +107,7 @@
         10
       ],
       "yawDeg": 0,
-      "physicsPolicy": "only_canonical_home_tile"
+      "physicsPolicy": "tile_scoped_research_candidate_only"
     },
     {
       "id": "sol-lookback-ttp",
@@ -127,7 +127,7 @@
         10
       ],
       "yawDeg": 0,
-      "physicsPolicy": "only_canonical_home_tile"
+      "physicsPolicy": "tile_scoped_research_candidate_only"
     }
   ],
   "rendering": {
@@ -138,7 +138,9 @@
     "excludeOutOfRange": true,
     "excludeArchived": true,
     "missingGenePolicy": "no_default_or_imputation",
-    "physicalSideEffects": "home_tile_only",
-    "units": "m"
+    "physicalSideEffects": "tile_scoped_candidate_only",
+    "units": "m",
+    "tileExperimentIdentity": "tileId::plantId::revision",
+    "reproductionPolicy": "distinct_tile_candidates_never_automatic_canonical_birth"
   }
 }

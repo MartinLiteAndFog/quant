@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Project ONE canonical plant into ZERO OR MORE two-gene Unreal meadow tiles.
+"""Project ONE canonical plant into ZERO OR MORE independent tile research views.
 
-Synthetic view-only reference. No Unreal Editor, runtime, trade or account API.
+Synthetic view and tile-scoped seed experiment reference. No Unreal Editor, order or account API.
 No genes are invented; incompatible/missing/archived plants are excluded PER tile.
 """
 from __future__ import annotations
@@ -46,8 +46,10 @@ def validate_catalog(catalog: dict, scene: dict) -> dict[str, dict]:
             or settings["excludeOutOfRange"] is not True
             or settings["excludeArchived"] is not True
             or settings["multipleInstancesOfOneCanonicalPlant"] is not True
-            or settings["physicalSideEffects"] != "home_tile_only"
+            or settings["physicalSideEffects"] != "tile_scoped_candidate_only"
             or settings["missingGenePolicy"] != "no_default_or_imputation"
+            or settings["tileExperimentIdentity"] != "tileId::plantId::revision"
+            or settings["reproductionPolicy"] != "distinct_tile_candidates_never_automatic_canonical_birth"
             or settings["units"] != "m"):
         raise ValueError("Unsafe tile display or physics policy")
     axes = catalog["axisDefinitions"]
@@ -90,7 +92,7 @@ def validate_catalog(catalog: dict, scene: dict) -> dict[str, dict]:
                 or not all(finite_number(v) for v in origin + size)
                 or any(v <= 0 for v in size)
                 or tile["yawDeg"] != 0
-                or tile["physicsPolicy"] != "only_canonical_home_tile"):
+                or tile["physicsPolicy"] != "tile_scoped_research_candidate_only"):
             raise ValueError("Invalid physical tile transform or policy")
         rects.append((tile_id, tile["assetRegion"], origin[0], origin[1],
                       origin[0] + size[0], origin[1] + size[1]))
@@ -176,19 +178,20 @@ def project_tiles(scene: dict, catalog: dict, source: dict) -> dict:
             origin, size = tile["originM"], tile["sizeM"]
             position = [origin[0] + u * size[0], origin[1] + v * size[1], origin[2]]
             instance_id = tile["id"] + "::" + plant["id"]
-            # A visually repeated plant is NOT another organism. The only physical
-            # candidate source is its canonical home tile, and even there an
-            # external owner must authorize each seed release before any event.
-            home = plant["tileId"]
+            # Every eligible tile is a separate RESEARCH SEED EXPERIMENT.
+            # Source identity (plantId) remains singular. A tile experiment must
+            # never create a canonical birth, funded account or trade automatically.
+            experiment_id = "experiment::" + tile["id"] + "::" + plant["id"] + "::" + p["revision"]
             instance = {
                 "instanceId": instance_id, "plantId": plant["id"], "tileId": tile["id"],
                 "canonicalPlantRevision": p["revision"],
                 "normalizedXY": [round(u, 8), round(v, 8)],
                 "worldPositionM": [round(value, 6) for value in position],
                 "geneValues": {x_id: x, y_id: y},
-                "role": "read_only_visual_projection",
-                "homeTileId": home,
-                "physicsCandidateOnlyOnAuthorizedHomeTile": home == tile["id"],
+                "role": "shared_canonical_plant_tile_experiment_projection",
+                "experimentId": experiment_id,
+                "seedResearchAllowedSubjectToTilePolicy": True,
+                "physicsCandidateAuthority": "untrusted_tile_scoped_research_only",
                 "capitalEntityCount": 0,
             }
             instances.append(instance)
