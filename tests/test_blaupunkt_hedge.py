@@ -222,3 +222,37 @@ def test_auto_switch_rejects_any_outstanding_position(fleet, monkeypatch):
     fleet.broker._req = wrapper
     with pytest.raises(RuntimeError, match="open positions"):
         fleet.ensure_hedge_mode()
+
+def test_durable_alert_queue_deduplicates_and_executes(tmp_path, monkeypatch, fleet):
+    from types import SimpleNamespace
+    from quant.execution import hedge_webhook_queue as q
+    from quant.execution.tv_signal_executor import TVSignal
+
+    monkeypatch.setenv("HEDGE_WEBHOOK_QUEUE_FILE", str(tmp_path / "alerts.sqlite3"))
+    monkeypatch.setattr(q, "fleet", lambda: fleet)
+    signal = TVSignal(action="flip", side="buy", symbol="XBT-USDT")
+    config = SimpleNamespace(tp1_close_pct=0.5, dry_run=False)
+    first = q.enqueue("Blaupunkt", signal, config)
+    duplicate = q.enqueue("Blaupunkt", signal, config)
+    assert first["queued"]
+    assert duplicate["duplicate"]
+    assert duplicate["event_id"] == first["event_id"]
+    assert q.status()["counts"] == {"queued": 1}
+    assert q._process_next()
+    assert q.status()["counts"] == {"executed": 1}
+    assert fleet.broker.positions["long"] == 45
+    assert q.status()["recent"][0]["result"]["bot"] == "Blaupunkt"
+
+
+def test_queue_does_not_replay_interrupted_order(tmp_path, monkeypatch):
+    from quant.execution import hedge_webhook_queue as q
+    monkeypatch.setenv("HEDGE_WEBHOOK_QUEUE_FILE", str(tmp_path / "alerts.sqlite3"))
+    with q._connect() as db:
+        db.execute(
+            """INSERT INTO hedge_alerts
+            (received_at,bot,action,side,symbol,tp1_pct,dry_run,status,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?)""",
+            (1.0, "Blaupunkt", "flip", "buy", "XBT-USDT", 0.5, 0, "interrupted", 1.0),
+        )
+    assert q._process_next() is False
+    assert q.status()["counts"] == {"interrupted": 1}
