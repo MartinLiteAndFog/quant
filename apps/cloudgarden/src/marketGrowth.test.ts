@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   advanceSimulationDay,
+  BASE_IDLE_VIGOR_DECAY,
+  INACTIVITY_GRACE_DAYS,
   assertSimulationInvariants,
   createSimulationWorld,
   type TradingDayOutcomes,
@@ -60,4 +62,75 @@ test("invalid market outcomes fail before any ecology tick or resource transfer"
   );
   assert.equal(JSON.stringify(start), before);
   assertSimulationInvariants(start);
+});
+
+test("14 idle days are free; from day 15 a tiny inherited patience-linked vigor decay starts", () => {
+  const original = createSimulationWorld("genetic-patience-g2");
+  const world = {
+    ...original,
+    plants: original.plants.map((p, index) => ({
+      ...p, genes: { ...p.genes, patience: index === 0 ? 0.05 : index === 1 ? 0.95 : 0.5 },
+    })),
+  };
+  let current = world;
+  for (let day = 1; day <= INACTIVITY_GRACE_DAYS; day += 1) {
+    current = advanceSimulationDay(current, {});
+    for (let i = 0; i < 3; i += 1) {
+      assert.equal(current.plants[i]!.vigor, world.plants[i]!.vigor);
+      assert.equal(current.plants[i]!.biomass, world.plants[i]!.biomass);
+      assert.equal(current.plants[i]!.inactiveDays, day);
+    }
+  }
+  const fifteenth = advanceSimulationDay(current, {});
+  const slow = fifteenth.plants[0]!;
+  const patient = fifteenth.plants[1]!;
+  const slowRate = BASE_IDLE_VIGOR_DECAY * (1.2 - 0.05);
+  const patientRate = BASE_IDLE_VIGOR_DECAY * (1.2 - 0.95);
+  assert.equal(slow.vigor, round4(world.plants[0]!.vigor * (1 - slowRate)));
+  assert.equal(patient.vigor, round4(world.plants[1]!.vigor * (1 - patientRate)));
+  assert.ok((world.plants[0]!.vigor - slow.vigor) / world.plants[0]!.vigor
+    > (world.plants[1]!.vigor - patient.vigor) / world.plants[1]!.vigor);
+  assert.equal(slow.inactiveDays, 15);
+  assert.equal(patient.inactiveDays, 15);
+  assert.equal(fifteenth.capital.navUsdt, 100, "opportunity cost is purely vitality, never invented NAV loss");
+  assertSimulationInvariants(fifteenth);
+});
+
+test("an executed paper order resets inactivity even when its net PnL is exactly zero", () => {
+  let world = createSimulationWorld("trade-breaks-inactivity");
+  for (let day = 0; day < 25; day += 1) world = advanceSimulationDay(world, {});
+  const before = world.plants[0]!;
+  const after = advanceSimulationDay(world, {
+    "parent-01": { netPnlUsdt: 0, startingAllocationUsdt: 20, executedFills: 1 },
+  });
+  assert.equal(after.plants[0]!.inactiveDays, 0);
+  assert.equal(after.plants[0]!.vigor, before.vigor);
+  assert.equal(after.plants[0]!.biomass, before.biomass);
+  assert.equal(after.plants[1]!.inactiveDays, 26);
+  assert.equal(after.capital.navUsdt, world.capital.navUsdt);
+  assertSimulationInvariants(after);
+});
+
+test("paper execution count—not signals, imagined profits or statistical badges—defines inactivity", () => {
+  let world = createSimulationWorld("fills-only");
+  for (let day = 0; day < 15; day += 1) {
+    world = advanceSimulationDay(world, {
+      "parent-01": { netPnlUsdt: 0, startingAllocationUsdt: 20, executedFills: 0 },
+    });
+  }
+  assert.equal(world.plants[0]!.inactiveDays, 15);
+  const bad = [
+    { netPnlUsdt: 0, startingAllocationUsdt: 20, executedFills: -1 },
+    { netPnlUsdt: 0, startingAllocationUsdt: 20, executedFills: 0.5 },
+    { netPnlUsdt: 0, startingAllocationUsdt: 20, executedFills: NaN },
+  ];
+  for (const o of bad) assert.throws(() => advanceSimulationDay(world, { "parent-01": o }), RangeError);
+  assert.throws(() => assertSimulationInvariants({
+    ...world, plants: world.plants.map((p,i)=>i === 0
+      ? {...p, genes:{...p.genes,patience:1.5}} : p),
+  }), /invalid patience genetics/);
+  assert.throws(() => assertSimulationInvariants({
+    ...world, plants: world.plants.map((p,i)=>i === 0
+      ? {...p,inactiveDays:-2} : p),
+  }), /invalid inactivity streak/);
 });
