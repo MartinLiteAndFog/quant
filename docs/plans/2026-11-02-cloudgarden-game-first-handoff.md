@@ -54,12 +54,30 @@ The inherited patience range means about **0.0075% to 0.0345%** extra daily vigo
 
 **Tests:** 14-day grace, exact tiny genotypic decay, execution resets, negative/malformed fill-count rejection, 28-day direct descendant-to-descendant breeding, altered parent-patience changes child, archived parents excluded but genealogy retained, version 3 save rejection of v1/v2, and real price-replay results correctly resetting inactivity. All use generated deterministic fixtures, with no private SOL file. GitHub CI must pass before integration.
 
+## G3a implemented — continued seed funding from conserved freed capital
+
+The original **20 one-use, pre-reserved seed entitlements remain exactly 20**, and each is consumed at most once. When all 20 have been used, the simulation does **not** mint replacement entitlements or new equity. An additional birth becomes possible at the normal seven-day bee opportunity **only if** previously freed unallocated spendable NAV is at least `SEEDLING_ALLOCATION_USDT=1.5`, for example after the confirmed-flat archival of a plant. The transaction is strictly:
+
+```text
+free deployable NAV      -= 1.5000
+deployed plant allocation += 1.5000
+NAV / protected reserve / seedbank reservations: unchanged
+```
+
+Every funded child retains a unique incrementing ID after `seedling-20`, its own 1.5-USDT allocation and actual genotype/lineage. Each birth is explicitly labeled `fundingSource="seedbank"` or `"recycled"`; the recycled event deliberately omits `entitlementId` to avoid claiming an original seedbank slot. Archive/release is the opposite transfer. An exhausted world with **zero free capital cannot breed**, even when bees visit living adults. Wealth cannot arise from pollen, fungal links, equity charts or the visual renderer.
+
+Invariant validation distinguishes the 20 one-time seedbank children from later recycled children, forbids recycled funding before the original seedbank is exhausted, and still checks **one** NAV, 90% allocation ceiling, 10% protected reserve, true active allocations and unique parent/plant IDs. Tests cover zero-free no-birth, real archived budget → child 21, subsequent recycled child 22, deterministic replay, no seeded/recycled ID double counting and forged source rejection.
+
+This changes the historical world physics and financial source traceability; historical saves are now **v4** under `cloudgarden.historical.v4`. All previous v1/v2/v3 local historical saves are left untouched and disclosed in the app. No automatic old-run replay under new rules.
+
+**Scope boundary:** The original 90/10 allocation ceiling and 1.5-USDT seed size remain fixed. This is a first conserved-capital recycling rule, **not** a complete capital-owner transfer model from Agent B, not a scientific fitness gate, not a venue collateral reconciliation and not a release of funds from an open trade. Historical paper trading already requires each daily position to be flat before the ecology tick. Long-term ecology / cross-market region budgets will require Agent B's canonical contract and separate tests; no live accounts have been contacted.
+
 ## Practical game-development order (not scientific review)
 **G1 — Complete economic feedback and life-cycle contract.** Define simple, explicit deterministic links between each *plant's own* net trading outcome and its accessible resources/growth. Decide what performance/history a bee or predator observes. Keep market PnL separate from cosmetic climate and do not invent arbitrary statistical corrections. Record the exact rule and add no-trade, profit, loss and replay-determinism tests.
 
 **G2 — Make reproduction actually evolutionary.** Current offspring are created every seven days with ancestry based on founder records. Move toward a mechanically funded process in which eligible living plants and their heritable strategy genomes can be parents. Archive must remove economic reproduction eligibility without erasing genealogy. No centralized winner.
 
-**G3 — Long-running resource loop.** The present 20 one-time entitlements cap births after 140 days; ensure depleted and reclaimed resources have explicit rules for continued generations, while preserving 90/10 accounting and preventing capital creation. Stress test 1,000+ days.
+**G3 — Long-running resource loop.** **G3a implemented:** After 20 one-time births, further children use only already freed capital, never renewed entitlements; the 90/10 account is conserved. **G3b pending:** 1,000+ day stress/restart tests, actual ecological resource limits and Agent B cross-market canonical capital ownership.
 
 **G4 — Visual feedback and controls.** Surface deterministic causes directly in the world: plant profit/loss, resource level, lineage, age, dormancy, mutation, predation and capital transfers. Preserve save/load and Play/Pause at identical state hashes. Keep synthetic demo and historical SOL views clearly distinct.
 

@@ -11,13 +11,13 @@ export type SolArchive = Readonly<{
 export type PlantTradingRecord = Readonly<{ fills: number; netPnl: number; fees: number; rejected: number; opportunities: number }>;
 export type HistoricalTrade = PaperFill & Readonly<{ plantId: string; plantName: string; family: string }>;
 export type HistoricalSession = Readonly<{
-  schemaVersion: 3; sourceSha256: string; startDate: string; nextDate: string; world: SimulationWorld;
+  schemaVersion: 4; sourceSha256: string; startDate: string; nextDate: string; world: SimulationWorld;
   genomes: Readonly<Record<string, SourceGenome>>;
   records: Readonly<Record<string, PlantTradingRecord>>;
   history: readonly Readonly<{ date: string; nav: number; fills: number; close: number }>[];
   trades: readonly HistoricalTrade[];
 }>;
-export const HISTORICAL_SAVE_KEY = "cloudgarden.historical.v3";
+export const HISTORICAL_SAVE_KEY = "cloudgarden.historical.v4";
 const DAY = 86_400_000;
 const emptyRecord = (): PlantTradingRecord => ({ fills: 0, netPnl: 0, fees: 0, rejected: 0, opportunities: 0 });
 const rounded = (n: number) => Math.round(n * 100_000_000) / 100_000_000;
@@ -57,14 +57,14 @@ export function createHistoricalSession(archive: SolArchive, startDate: string):
   }
   const world = createSimulationWorld(`SOL:${archive.sourceSha256.slice(0, 12)}:${startDate}`);
   const genomes = Object.fromEntries(world.plants.map((plant, i) => [plant.id, SOURCE_PARENT_GENOMES[i]!])) as Record<string, SourceGenome>;
-  return { schemaVersion: 3, sourceSha256: archive.sourceSha256, startDate, nextDate: startDate, world,
+  return { schemaVersion: 4, sourceSha256: archive.sourceSha256, startDate, nextDate: startDate, world,
     genomes, records: {}, history: [], trades: [] };
 }
 
 /** Validate snapshots before using saved accounting or inherited strategy modules. */
 export function validateHistoricalSession(value: unknown, archive: SolArchive): HistoricalSession {
   const s = value as HistoricalSession;
-  if (!s || s.schemaVersion !== 3 || s.sourceSha256 !== archive.sourceSha256 || !s.genomes || !s.records
+  if (!s || s.schemaVersion !== 4 || s.sourceSha256 !== archive.sourceSha256 || !s.genomes || !s.records
     || !Array.isArray(s.history) || !Array.isArray(s.trades) || s.trades.length > 400
     || !archive.days.some((d) => d.date === s.startDate)
     || s.nextDate !== nextUtcDate(s.startDate, s.world?.day)) throw new Error("Saved historical session is invalid.");

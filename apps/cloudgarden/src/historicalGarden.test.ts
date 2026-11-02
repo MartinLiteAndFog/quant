@@ -79,9 +79,10 @@ test("seven historical days conceive an offspring with source genome and a singl
 
 test("historical snapshots reject changed source identity, altered NAV records or removed risk genes", () => {
   const session = createHistoricalSession(archive, "2025-01-02");
-  assert.equal(session.schemaVersion, 3, "genetic inactivity/lineage rules require an independent save version");
+  assert.equal(session.schemaVersion, 4, "recycled birth accounting requires its own historical save version");
   assert.throws(() => validateHistoricalSession({ ...session, schemaVersion: 1 }, archive));
   assert.throws(() => validateHistoricalSession({ ...session, schemaVersion: 2 }, archive));
+  assert.throws(() => validateHistoricalSession({ ...session, schemaVersion: 3 }, archive));
   assert.throws(() => validateHistoricalSession({ ...session, sourceSha256: "c".repeat(64) }, archive));
   assert.throws(() => validateHistoricalSession({ ...session, records: { "parent-01": { fills: 0, fees: 0, rejected: 0, opportunities: 0, netPnl: 1 } } }, archive));
   assert.throws(() => validateHistoricalSession({ ...session, genomes: {} }, archive));
