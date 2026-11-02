@@ -15,7 +15,8 @@
       "max": 500,
       "unit": "candles",
       "sourceRef": "SourceGenome.channelLookback (Cloudgarden PR62)",
-      "sourceStatus": "existing_draft_source"
+      "sourceStatus": "existing_draft_source",
+      "step": 1
     },
     {
       "id": "trade.stop_loss_bps",
@@ -25,7 +26,8 @@
       "max": 500,
       "unit": "bps",
       "sourceRef": "SourceGenome.stopLossBps (Cloudgarden PR62)",
-      "sourceStatus": "existing_draft_source"
+      "sourceStatus": "existing_draft_source",
+      "step": 1
     },
     {
       "id": "research.sensitivity",
@@ -35,7 +37,8 @@
       "max": 25,
       "unit": "index",
       "sourceRef": "fleet-desktop geneLibrary.sensitivity",
-      "sourceStatus": "synthetic_demo_not_in_cloudgarden_source_genome"
+      "sourceStatus": "synthetic_demo_not_in_cloudgarden_source_genome",
+      "step": 0.1
     },
     {
       "id": "research.ttp_pct",
@@ -45,7 +48,8 @@
       "max": 1.65,
       "unit": "%",
       "sourceRef": "fleet-desktop geneLibrary.ttp",
-      "sourceStatus": "synthetic_demo_not_in_cloudgarden_source_genome"
+      "sourceStatus": "synthetic_demo_not_in_cloudgarden_source_genome",
+      "step": 0.05
     }
   ],
   "tiles": [
