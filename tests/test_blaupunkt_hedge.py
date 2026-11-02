@@ -76,6 +76,7 @@ def fleet(tmp_path, monkeypatch):
         "HEDGE_BOT_IDS": "Blaupunkt,ElliotP1",
         "HEDGE_SYMBOL": "XBT-USDT",
         "HEDGE_AUTO_REGISTER": "1",
+        "HEDGE_AUTO_SET_POSITION_MODE": "0",
         "HEDGE_BOT_CAPITAL_USAGE": "0.90",
         "HEDGE_MAX_LEVERAGE": "20",
         "KUCOIN_FUTURES_ORDER_LEVERAGE": "10",
