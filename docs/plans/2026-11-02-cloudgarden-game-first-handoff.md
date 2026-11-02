@@ -30,6 +30,7 @@ The first direct economic feedback is now wired into the playable historical SOL
 - Legacy synthetic demo mode retains its original climate-growth code path. The historical tick now logs `marketDrivenBiomass=true` as an audit flag; game rules and the entire 90/10 ledger remain deterministic. The selected plant's economic body mass and vigor are shown directly in the meadow.
 - These market-driven measurements **do not implement scientific significance**, they are not superiority ratings, and no central winner is chosen. Initial synthetic habitat evidence and the existing 80-day/5-day predator mechanism have **not** been replaced; so this is G1a, **not** completed ecological survival selection.
 - Tests added for isolated parent +10%/-5%/0% outcomes, unchanged no-trade days, rejection of corrupt/unowned outcomes, historical price-to-PnL-to-body linkage, and deterministic replay without a significance gate.
+- The historical save is now **schema v2** with the separate `cloudgarden.historical.v2` key. The old v1 save is left intact and is never silently replayed using changed rules. The game UI discloses the preserved older save when starting a new v2 world.
 - The historical data export still stays private. CI uses generated fixture candles. Keep this stacked draft unmerged until CI passes and Agent B's canonical adapter is reconciled.
 
 ### What G1b still needs
