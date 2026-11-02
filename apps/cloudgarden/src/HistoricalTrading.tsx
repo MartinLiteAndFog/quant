@@ -117,7 +117,7 @@ export function HistoricalTrading({ renderGarden }: { renderGarden: (controls: H
           <span>{archive.totalBars.toLocaleString()} actual minutes · {archive.firstDate} → {archive.lastDate}</span></div>
         {error && <p className="historical-error" role="alert">{error}</p>}
         <p className="historical-method">Source: local SOL-USDT archive · SHA {archive.sourceSha256.slice(0, 12)}… · {archive.missingMinutes.toLocaleString()} missing archive minutes, never filled.
-          Historical prices; modeled executions and assumed fees, spread and slippage. Venue/instrument unverified; funding unavailable and excluded. Positions flatten daily, exposure targets use 50% of each plant’s allocation, capped at 1×. Stop signals use completed closes and may fill beyond their trigger after a gap. Source-derived candle variants; full TradingView/Renko/HTF parity is unproven. Research verdict: <b>not_comparable</b>.</p>
+          Historical prices; modeled executions and assumed fees, spread and slippage. Venue/instrument unverified; funding unavailable and excluded. Positions flatten daily, exposure targets use 50% of each plant’s allocation, capped at 1×. Stop signals use completed closes and may fill beyond their trigger after a gap. Source-derived candle variants; full TradingView/Renko/HTF parity is unproven. Research statistics are separate from the game. No statistical verdict controls Play, plant growth, breeding or predation.</p>
       </section>
     </div>
     {renderGarden({ world: session.world, selected, selectedId: selected.id, playing, busy,
