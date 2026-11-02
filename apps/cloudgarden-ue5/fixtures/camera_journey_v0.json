@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 0,
+  "kind": "synthetic_camera_navigation_fixture_only",
+  "fixture": true,
+  "disclaimer": "Non-empirical view-only journey; not a running UE5 camera.",
+  "worldRef": {
+    "sceneSeed": "ue5-visual-preview-v0",
+    "dayIndex": 7,
+    "sourceStatus": "synthetic_visual_only"
+  },
+  "policy": {
+    "cameraProjection": "perspective_in_both_modes",
+    "noLevelReload": true,
+    "readOnly": true,
+    "allowCancel": true,
+    "allowReverse": true
+  },
+  "states": [
+    {
+      "id": "atlas_start",
+      "mode": "atlas",
+      "layer": "surface",
+      "selectedPlantId": "plant-a",
+      "focusId": "plant-a",
+      "dayIndex": 7,
+      "worldSeed": "ue5-visual-preview-v0",
+      "camera": {
+        "position": [
+          0,
+          0,
+          140
+        ],
+        "lookAt": [
+          0,
+          0,
+          0
+        ],
+        "fovDegrees": 30
+      }
+    },
+    {
+      "id": "explore_surface",
+      "mode": "explore",
+      "layer": "surface",
+      "selectedPlantId": "plant-a",
+      "focusId": "plant-a",
+      "dayIndex": 7,
+      "worldSeed": "ue5-visual-preview-v0",
+      "camera": {
+        "position": [
+          2,
+          -4,
+          2
+        ],
+        "lookAt": [
+          0,
+          0,
+          1
+        ],
+        "fovDegrees": 65
+      }
+    },
+    {
+      "id": "explore_underworld",
+      "mode": "explore",
+      "layer": "underworld",
+      "selectedPlantId": "plant-a",
+      "focusId": "plant-a",
+      "dayIndex": 7,
+      "worldSeed": "ue5-visual-preview-v0",
+      "camera": {
+        "position": [
+          2,
+          -4,
+          -3
+        ],
+        "lookAt": [
+          0,
+          0,
+          -2
+        ],
+        "fovDegrees": 65
+      }
+    },
+    {
+      "id": "atlas_return",
+      "mode": "atlas",
+      "layer": "surface",
+      "selectedPlantId": "plant-a",
+      "focusId": "plant-a",
+      "dayIndex": 7,
+      "worldSeed": "ue5-visual-preview-v0",
+      "camera": {
+        "position": [
+          0,
+          0,
+          140
+        ],
+        "lookAt": [
+          0,
+          0,
+          0
+        ],
+        "fovDegrees": 30
+      }
+    }
+  ],
+  "transitions": [
+    {
+      "from": "atlas_start",
+      "to": "explore_surface",
+      "sourceTicks": 0,
+      "bookings": 0,
+      "sceneReload": false,
+      "preserveSelection": true
+    },
+    {
+      "from": "explore_surface",
+      "to": "explore_underworld",
+      "sourceTicks": 0,
+      "bookings": 0,
+      "sceneReload": false,
+      "preserveSelection": true
+    },
+    {
+      "from": "explore_underworld",
+      "to": "atlas_return",
+      "sourceTicks": 0,
+      "bookings": 0,
+      "sceneReload": false,
+      "preserveSelection": true
+    }
+  ]
+}

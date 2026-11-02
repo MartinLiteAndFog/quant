@@ -10,7 +10,8 @@ Architecture / implementation decision record:
 Fixture:
 - fixtures/scene_demo_v0.json — fictional plants, two real-named *example*
   SourceGenome visual axes, simulated appearance and genealogy.
-- scripts/validate_fixture.py — stdlib validation, zero market data dependencies.
+- fixtures/camera_journey_v0.json — synthetic, same-world Atlas/Explore navigation path.
+- scripts/validate_fixture.py — stdlib validation including camera continuity, zero market data dependencies.
 
 Local fixture verification from repository root:
 
@@ -20,6 +21,9 @@ No competing ECO-01/Cloudgarden capital ledger or final exchange ABI is defined.
 Agent B owns the canonical source contract. UE5 will consume a read-only
 rendering projection after that contract is settled, not write to it.
 
-Initial recommendation: a top-down/oblique 3D strategy atlas with zoomable
-parameter meadows, interactive individual plants, and separate underworld view.
+**Decided 2026-11-02:** equal, seamless Atlas and Explore modes in ONE world.
+Zoomable strategy-gene meadows and immersive ground/underworld exploration use
+one perspective camera rig, one population, one selected plant, one research
+day and one authoritative ledger. No level loading or second simulation occurs
+when switching. See fixtures/camera_journey_v0.json for synthetic state checks.
 Do not port trading/PnL, strategy, risk or bot execution code into Unreal.

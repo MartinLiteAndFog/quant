@@ -6,7 +6,7 @@ Status: ARCHITECTURE PROPOSAL, research-only. No Unreal project has been compile
 
 Adopt **Unreal Engine 5 as the long-term interactive 3D visualization/client** for Cloudgarden, while retaining deterministic trading, research/evolution state and capital as one authoritative non-UE simulation. Do not migrate price analytics, risk gates, book accounting or order placement to Blueprints/C++.
 
-Initial camera: **zoomable oblique/isometric strategy atlas (god view)** with close-up inspection and orbit. Optional later first-person flythrough; do NOT build first-person locomotion first. Each meadow is a 2D parameter coordinate plane inside a beautiful 3D habitat. The two axes must be real strategy genes, not arbitrary decor. Market/asset regions are visual zones, not independent money pools.
+**USER DECISION (2026-11-02): Atlas and immersive Explore are equally important and seamlessly connected from the first UE5 vertical slice.** Both use the same continuous 3D world, same source population, selection, time and ledger; neither is optional or secondary. Meadows remain actual two-strategy-gene planes embedded in 3D, asset regions do not create capital.
 
 Read-only architecture:
 
@@ -53,6 +53,37 @@ The React prototype remains a useful fast research/test harness. Avoid a costly 
 - All times UTC, one authoritative day_index/event ordering. Render at arbitrary frame rate while simulation steps only when canonical snapshots arrive. Recover after reconnect from full snapshot, then ordered event IDs; do not replay old births twice.
 - Data-bound animation is one-way: an FPS drop must never alter trade count, NAV, observed fitness, mutation sequence or timing.
 
+## DECIDED: equal Atlas and Explore; seamless same-world navigation
+
+One persistent UE5 3D garden supports two first-class viewpoints:
+- **Atlas:** zoomable oblique/isometric-feeling strategy map with two real trading-gene axes, plant selection, family clusters, lineage, research controls, overview, and the ability to inspect individual organisms.
+- **Explore:** free eye-height and fly-through navigation in the very same vegetation and terrain, approach a plant, observe roots, bees, predators, visual DNA and the same research/evidence and lineage labels.
+- **Underworld:** a soil/roots/mycelium visualization layer accessible from either mode; not a second simulation or money pool.
+
+### Unified camera and interaction contract (planned, not implemented)
+
+- Use one camera director, one persistent world and one shared selection/day state; Atlas and Explore switch input profiles, not world instances or authoritative simulation runners.
+- Begin with a single **perspective** camera for both viewpoints. A distant oblique camera with narrower FOV provides an isometric *feel*; close-range uses a wider FOV. Smooth path/rotation/FOV changes avoid the visible snap associated with changing projection types.
+- Switch in both directions with ease-in/out interpolation along a collision-safe path; preserve selected plant ID, day index, family/tile axes, provenance notices and lineage. Use an elevated waypoint if a direct route would clip terrain. A user can interrupt/reverse the flight or select a new target; the latest request wins without duplicating events.
+- Remember each mode's last camera position and focus. On return to Atlas, restore its prior overview rather than resetting the meadow. On return to Explore, offer the last exploration pose or the selected plant's close-up pose.
+- Shared UMG research controls must expose every essential action (plant inspection, chronology, history, genealogy, evidence, day controls) from both views. Navigation/controls differ but research functionality must not.
+- The surface-to-underworld transition uses a visual cross-section/fading of soil while moving the camera through the same persistent world; it must never tick ecology or transfer budget.
+- No second ledger, future-sourced metrics, synthetic-to-empirical evidence promotion, or live trading connection is introduced by the camera. On selected-plant archiving, preserve the ID and show archive genealogy rather than resurrecting the plant.
+- LOD should independently optimize distant atlas clusters and close foliage/root movement. UE editor/packaged performance benchmarks are required before making framerate promises.
+
+### Synthetic camera-path preflight
+
+The new camera_journey_v0.json is a **visual contract fixture**, not a running Unreal camera controller. It references the existing synthetic plant-a scene and describes Atlas -> Explore (surface) -> Explore (underworld) -> Atlas. The Python test checks identical scene seed, day, selection and read-only accounting across each transition, and the absence of scene reload or additional simulation ticks. Its timing is illustrative, not a benchmark.
+
+### First UE5 prototype acceptance
+
+1. Pick plant-a in Atlas, enter Explore with a continuous flight and still inspect precisely the same plant, family, day, genome, genealogy and evidence.
+2. Walk/fly under the soil, return to Atlas directly, see the same unchanged garden and preserved last atlas focus.
+3. Toggle repeatedly during a transition, cancel, select another plant, process a birth/archive snapshot during flight: no camera teleport through terrain, duplicate birth, event replay or state fork.
+4. Both modes permit real tile-genome/evidence and time controls, not just scenic viewing.
+5. Benchmark 100, 1,000, 10,000 instances in Atlas AND ground-level/underworld movement, separately measuring frame time, camera-switch stalls, CPU/GPU and memory.
+6. Only an actual UE5 editor/packaged smoke test can verify cinematic continuity and performance; JSON/Python fixtures establish state invariants, not a rendered demo.
+
 ## Scene adapter contract — NOT the Agent B wire contract
 
 This view contract is provisional; integration must wait for Agent B's ECO-01/Cloudgarden reconciliation. The checked-in fixture apps/cloudgarden-ue5/fixtures/scene_demo_v0.json demonstrates **visual fields only**, schemaVersion 0 and synthetic_visual_fixture_only. It is NOT a validated live or empirical source and has no real cash booking. Names, IDs, family category, axis definition, genome value and visible appearance are illustrative, with camera- and level-relative units. Do NOT introduce a standalone "UE NAV" or serialized capital ledger.
@@ -69,8 +100,8 @@ Later read-only projection must reference the canonical source snapshot with:
 
 1. Create blank UE5 C++/Blueprint desktop project in a **separate directory** after choosing supported host machine and pinning UE5 version. Do not commit DerivedDataCache, Binaries, Intermediate, Saved, proprietary Marketplace assets or private OHLCV. No current UE editor run is claimed.
 2. Load the generated example JSON using a tiny read-only importer. Three starting plants and one illustrative child on a single named tile, with at least one missing-axis placement visible in "unassigned". Use simple primitives and placeholder materials, not expensive final foliage.
-3. Orthographic/oblique zoom, plant click to show real channelLookback vs stopLossBps axes, archived parent genealogy; sunshine, simple roots and cactus green rind. Demo label must persist in screenshots.
-4. Advance local *display-only* events from a short baked timeline. Birth, death, dormancy, pollination and animation do not change the fixture's trading results or create balances.
+3. Create both Atlas and immersive Explore in one persistent level with a smooth reversible camera move, focus on plant-a, and inspect genuine channelLookback vs stopLossBps axes, lineage, roots and green-rind cactus. Demo label persists in both modes.
+4. Enable the same underworld layer in Atlas and Explore; advance display-only events from a baked timeline. Birth, death and pollination animation do not change ledger or replay results.
 5. Benchmark 100, 1,000 and 10,000 visible instances and record editor FPS, packaged desktop FPS, frame time, VRAM/RAM and GPU class. Select PCG/ISM/Nanite/World Partition optimizations based on these measured values.
 6. After Agent B's ABI is stable, build one read-only adapter to actual published research snapshots and compare serialized plant IDs, axes, evidence labels, event counts and capital display 1:1 with canonical source output. Agent D will later decide **how empirical trading fitness affects reproduction** — not the renderer.
 
@@ -87,7 +118,7 @@ Later read-only projection must reference the canonical source snapshot with:
 
 ## Unresolved product decisions to discuss
 
-1. **View:** strategic isometric garden with free zoom (recommendation) vs immersive first-person exploration.
+1. **View — DECIDED:** equal strategic Atlas and immersive Explore with seamless reversible transitions in the same world.
 2. **Style:** high-quality stylized/semi-realistic botanical world vs photorealistic vegetation.
 3. **Platforms:** native desktop first (recommendation); browser/WebGPU access is not something to assume from an Unreal editor build.
 4. **When to migrate:** small proof-of-concept first, no unconditional full port.
