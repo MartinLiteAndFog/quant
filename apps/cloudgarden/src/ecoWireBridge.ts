@@ -41,7 +41,7 @@ export type CloudgardenWire = Readonly<{
   }>;
   capital_accounting: Readonly<{
     deployed_allocation: string; seed_reserved_allocation: string; free_allocation: string;
-    used_margin: string; reserved_order_margin: string; free_margin: string;
+    used_margin: string; reserved_order_margin: string; free_margin: string; rounding_holdback: string;
   }>;
   seed_entitlements: readonly Readonly<{ id: number; status: "available" | "used"; plant_id: string | null }>[];
   plants: readonly WirePlant[];
@@ -148,6 +148,10 @@ export function exportWorldWire(
   const fees = units5(exact4(world.capital.paperFeesUsdt));
   const funding = units5(exact4(world.capital.paperFundingUsdt));
   const net = nav - units5(exact4(STARTING_NAV_USDT));
+  const sourceFreeAllocation = units5(exact4(world.capital.freeCapitalUsdt));
+  const safeFreeAllocation = sourceFreeAllocation < distributable - entitlementSum ? sourceFreeAllocation : distributable - entitlementSum;
+  const roundingHoldback = sourceFreeAllocation - safeFreeAllocation;
+  requireCondition(roundingHoldback >= 0n && roundingHoldback <= 5n, "Unrepresentable Cloudgarden ledger rounding drift.");
   const freeMargin = format5(positive);
   const wire: CloudgardenWire = {
     schema_version: BRIDGE_VERSION, ecosystem_schema_version: "1.0",
@@ -168,7 +172,7 @@ export function exportWorldWire(
     capital_accounting: {
       deployed_allocation: exact4(world.capital.deployedCapitalUsdt),
       seed_reserved_allocation: exact4(world.capital.reservedMarginUsdt),
-      free_allocation: exact4(world.capital.freeCapitalUsdt),
+      free_allocation: format5(safeFreeAllocation), rounding_holdback: format5(roundingHoldback),
       used_margin: ZERO, reserved_order_margin: ZERO, free_margin: freeMargin,
     },
     seed_entitlements: world.capital.seedlingEntitlements.map((s) => ({
@@ -216,8 +220,8 @@ export function validateWire(input: unknown): CloudgardenWire {
   requireCondition(units5(water.reserve) === positive / 10n
     && units5(water.distributable) === positive - positive / 10n
     && water.depth > 0 && Number.isFinite(water.depth), "Exact ECO-01 90/10 reserve violated.");
-  requireCondition((nav < 0n) === (water.risk_breach && water.allocations_frozen)
-    || (nav >= 0n && water.risk_breach && water.allocations_frozen), "Negative NAV must freeze new allocations.");
+  requireCondition(water.risk_breach === water.allocations_frozen
+    && (nav >= 0n || (water.risk_breach && water.allocations_frozen)), "Negative NAV must freeze new allocations.");
   const entIds = new Set<string>();
   let amount = 0n, used = 0n, reserved = 0n;
   for (const e of water.entitlements) {
@@ -235,6 +239,7 @@ export function validateWire(input: unknown): CloudgardenWire {
   const cash = w.capital_accounting;
   requireCondition(units5(cash.deployed_allocation) >= 0n && units5(cash.seed_reserved_allocation) >= 0n
     && units5(cash.free_allocation) >= 0n
+    && units5(cash.rounding_holdback) >= 0n && units5(cash.rounding_holdback) <= 5n
     && amount === units5(cash.deployed_allocation) + units5(cash.seed_reserved_allocation)
     && amount + units5(cash.free_allocation) <= units5(water.distributable)
     && used === units5(cash.used_margin) && reserved === units5(cash.reserved_order_margin),
