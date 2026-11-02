@@ -82,10 +82,12 @@ def test_two_bots_long_and_short_independent(fleet):
     b = alert(fleet, "ElliotP1", "flip", "sell")
     assert a["qty"] == b["qty"] == 45
     assert fleet.broker.positions == {"long": 45, "short": 45}
-    assert fleet.status()["allocation_pct"] == 50
+    assert fleet.status()["allocation_pct"] == 45
     alert(fleet, "Blaupunkt", "exit")
     assert fleet.broker.positions == {"long": 0, "short": 45}
     assert fleet.status()["bots"][1]["side"] == "short"
+    assert fleet.status()["capital_pool_pct"] == 90
+    assert fleet.status()["reserve_pct"] == 10
 
 
 def test_flip_one_bot_does_not_flatten_other(fleet):
@@ -103,7 +105,7 @@ def test_auto_registration_changes_only_new_order_sizing(fleet):
     assert c["bot_count"] == 3
     assert c["qty"] == 30
     assert fleet.broker.positions == {"long": 45, "short": 30}
-    assert fleet.status()["allocation_pct"] == pytest.approx(100 / 3)
+    assert fleet.status()["allocation_pct"] == 30
 
 
 def test_tp1_scoped_to_owner_and_protection_replaced(fleet):
