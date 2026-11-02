@@ -4,7 +4,8 @@ import { TRADINGVIEW_REFERENCE_SEEDS, auditTradingViewReferenceManifest } from "
 
 function syntheticManifest() {
   return {
-    schemaVersion: 1, claim: "tradingview_trade_reference_only_not_signal_parity", secretsExcluded: true,
+    schemaVersion: 2, sourceTimeZone: "Europe/Berlin",
+    timeSemantics: "excel_wall_time_europe_berlin_normalized_to_utc", claim: "tradingview_trade_reference_only_not_signal_parity", secretsExcluded: true,
     seeds: TRADINGVIEW_REFERENCE_SEEDS.map(seed => ({
       id: seed.id, originalXlsxSha256: seed.originalXlsxSha256.padEnd(64, "0"),
       referenceTradeCount: seed.expectedClosedTrades, openPositionCount: seed.expectedOpenTrades,
@@ -31,7 +32,7 @@ test("all nine TradingView seed variants retain identity and stay non-executable
   assert.equal(TRADINGVIEW_REFERENCE_SEEDS.reduce((n,seed) => n + seed.expectedClosedTrades,0),1193);
   assert.equal(TRADINGVIEW_REFERENCE_SEEDS.reduce((n,seed) => n + seed.expectedOpenTrades,0),4);
   for (const seed of TRADINGVIEW_REFERENCE_SEEDS) {
-    assert.equal(seed.signalFormulaStatus,"external_source_missing");
+    assert.equal(seed.signalFormulaStatus,"pine_source_found_partial_signal_parity");
     assert.equal(seed.executionMode,"reference_only_no_live_orders");
     assert.equal(seed.entryLookbackBars,null);
   }
@@ -56,4 +57,11 @@ test("fail closed on duplicate numbers, fake PnL or an unclosed trade booked as 
   const open = syntheticManifest();
   (open.seeds[0]!.trades.open[0]! as { referenceNetPnlUsdt?: number }).referenceNetPnlUsdt = 42;
   assert.throws(() => auditTradingViewReferenceManifest(open),/Open positions/);
+});
+
+
+test("reject legacy manifest with misleading UTC labels", () => {
+  const legacy = syntheticManifest();
+  (legacy as { schemaVersion: number }).schemaVersion = 1;
+  assert.throws(() => auditTradingViewReferenceManifest(legacy), /schema\/size\/claim/);
 });
