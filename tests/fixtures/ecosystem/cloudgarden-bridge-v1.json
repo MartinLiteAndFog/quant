@@ -64,6 +64,7 @@
     "deployed_allocation": "20.0000",
     "seed_reserved_allocation": "1.5000",
     "free_allocation": "68.5000",
+    "rounding_holdback": "0.00000",
     "used_margin": "0.0000",
     "reserved_order_margin": "0.0000",
     "free_margin": "100.00000"
