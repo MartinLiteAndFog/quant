@@ -1,0 +1,24 @@
+name: Agent C offline Renko reference parity
+
+on:
+  pull_request:
+    paths:
+      - 'research/parity/**'
+      - '.github/workflows/research-renko-reference-audit.yml'
+  workflow_dispatch:
+
+jobs:
+  renko-reference:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile research comparator (no exchange dependencies)
+        run: python -m py_compile research/parity/renko_reference_audit.py research/parity/test_renko_reference_audit.py
+      - name: Synthetic snapshot and fail-closed mismatch tests
+        run: python -m unittest discover -s research/parity -p 'test_renko_reference_audit.py' -v
