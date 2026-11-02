@@ -1,5 +1,5 @@
 import { normalizeMarketData, runPaperReplay, type MarketBarInput, type MarketDataset, type PaperFill } from "./paperReplay.ts";
-import { advanceSimulationDay, assertSimulationInvariants, bookClosedPaperReplay, createSimulationWorld, type SimulationWorld } from "./simulation.ts";
+import { advanceSimulationDay, assertSimulationInvariants, bookClosedPaperReplay, createSimulationWorld, type SimulationWorld, type TradingDayOutcomes } from "./simulation.ts";
 import { generateSourceSignals, inheritSourceGenome, SOURCE_PARENT_GENOMES, validateSourceGenome, type SourceGenome } from "./sourceStrategies.ts";
 
 export type ArchiveDay = Readonly<{ date: string; barCount: number; gapCount: number; missingMinutes: number; file: string; sha256: string }>;
@@ -11,13 +11,13 @@ export type SolArchive = Readonly<{
 export type PlantTradingRecord = Readonly<{ fills: number; netPnl: number; fees: number; rejected: number; opportunities: number }>;
 export type HistoricalTrade = PaperFill & Readonly<{ plantId: string; plantName: string; family: string }>;
 export type HistoricalSession = Readonly<{
-  schemaVersion: 1; sourceSha256: string; startDate: string; nextDate: string; world: SimulationWorld;
+  schemaVersion: 2; sourceSha256: string; startDate: string; nextDate: string; world: SimulationWorld;
   genomes: Readonly<Record<string, SourceGenome>>;
   records: Readonly<Record<string, PlantTradingRecord>>;
   history: readonly Readonly<{ date: string; nav: number; fills: number; close: number }>[];
   trades: readonly HistoricalTrade[];
 }>;
-export const HISTORICAL_SAVE_KEY = "cloudgarden.historical.v1";
+export const HISTORICAL_SAVE_KEY = "cloudgarden.historical.v2";
 const DAY = 86_400_000;
 const emptyRecord = (): PlantTradingRecord => ({ fills: 0, netPnl: 0, fees: 0, rejected: 0, opportunities: 0 });
 const rounded = (n: number) => Math.round(n * 100_000_000) / 100_000_000;
@@ -57,14 +57,14 @@ export function createHistoricalSession(archive: SolArchive, startDate: string):
   }
   const world = createSimulationWorld(`SOL:${archive.sourceSha256.slice(0, 12)}:${startDate}`);
   const genomes = Object.fromEntries(world.plants.map((plant, i) => [plant.id, SOURCE_PARENT_GENOMES[i]!])) as Record<string, SourceGenome>;
-  return { schemaVersion: 1, sourceSha256: archive.sourceSha256, startDate, nextDate: startDate, world,
+  return { schemaVersion: 2, sourceSha256: archive.sourceSha256, startDate, nextDate: startDate, world,
     genomes, records: {}, history: [], trades: [] };
 }
 
 /** Validate snapshots before using saved accounting or inherited strategy modules. */
 export function validateHistoricalSession(value: unknown, archive: SolArchive): HistoricalSession {
   const s = value as HistoricalSession;
-  if (!s || s.schemaVersion !== 1 || s.sourceSha256 !== archive.sourceSha256 || !s.genomes || !s.records
+  if (!s || s.schemaVersion !== 2 || s.sourceSha256 !== archive.sourceSha256 || !s.genomes || !s.records
     || !Array.isArray(s.history) || !Array.isArray(s.trades) || s.trades.length > 400
     || !archive.days.some((d) => d.date === s.startDate)
     || s.nextDate !== nextUtcDate(s.startDate, s.world?.day)) throw new Error("Saved historical session is invalid.");
@@ -165,6 +165,9 @@ export function executeHistoricalDay(session: HistoricalSession, archive: SolArc
     })) throw new Error("Signal warmup must contain the exact same historical day and source as execution.");
   let booked = { ...session.world, day: session.world.day + 1 };
   const records = { ...session.records };
+  // Born from bookable trades, not from synthetic climate or a research verdict.
+  // The denominator is each plant's immutable start-of-day allocation.
+  const dayOutcomes: Record<string, { netPnlUsdt: number; startingAllocationUsdt: number }> = {};
   const trades = [...session.trades];
   let totalFills = 0;
   for (const plant of session.world.plants.filter((p) => p.status === "active")) {
@@ -191,6 +194,10 @@ export function executeHistoricalDay(session: HistoricalSession, archive: SolArc
     });
     const before = records[plant.id] ?? emptyRecord();
     // Mirror the single ledger's four-decimal booking precision in plant totals.
+    dayOutcomes[plant.id] = {
+      netPnlUsdt: rounded(booked.capital.navUsdt - navBefore),
+      startingAllocationUsdt: plant.allocationUsdt,
+    };
     records[plant.id] = { fills: before.fills + report.fills.length, netPnl: rounded(before.netPnl + booked.capital.navUsdt - navBefore),
       fees: rounded(before.fees + booked.capital.paperFeesUsdt - feesBefore), rejected: before.rejected + report.rejectedSignals.length,
       opportunities: before.opportunities + strategy.opportunities };
@@ -198,7 +205,7 @@ export function executeHistoricalDay(session: HistoricalSession, archive: SolArc
     trades.push(...report.fills.map((fill) => ({ ...fill, plantId: plant.id, plantName: plant.name, family: session.genomes[plant.id]!.family })));
   }
   // Intraday accounting precedes end-of-day growth and predation. Advance ecology exactly once.
-  const world = advanceSimulationDay({ ...booked, day: session.world.day });
+  const world = advanceSimulationDay({ ...booked, day: session.world.day }, dayOutcomes satisfies TradingDayOutcomes);
   const genomes = { ...session.genomes };
   for (const plant of world.plants) {
     if (genomes[plant.id]) continue;

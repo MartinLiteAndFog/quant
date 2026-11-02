@@ -348,10 +348,13 @@ function Meadow({
           <div className={`plant-portrait portrait-${selected.phenotype.toLowerCase()}`}><PlantArt plant={selected} /></div>
           <div className="specimen-stats">
             <Stat label="Daily habitat fit · synthetic" value={selected.fitness} />
-            <Stat label="Vigor" value={selected.vigor} />
+            <Stat label={historical ? "Trading-grown vigor" : "Vigor"} value={selected.vigor} />
             <Stat label="Synthetic evidence" value={selected.evidence} />
           </div>
-          <p className="metrics-legend">Habitat fit reflects today’s synthetic climate match. Vigor is the plant’s accumulated state; evidence counts only simulated observation.</p>
+          <p className="metrics-legend">{historical
+            ? "Body mass and vigor compound by this plant’s own net paper return. No-trade days leave them unchanged. Habitat fit and evidence remain synthetic game traits; legacy predator rules still apply."
+            : "Habitat fit reflects today’s synthetic climate match. Vigor is the plant’s accumulated state; evidence counts only simulated observation."}</p>
+          {historical && <div className="plant-allocation"><span>Trading-grown body mass</span><b>{selected.biomass.toFixed(2)} / 100</b></div>}
           <div className="plant-allocation"><span>Capital entitlement</span><b>{money(selected.allocationUsdt)}</b></div>
           <div className="plant-allocation"><span>Observed in this world</span><b>{selected.evidenceDays} days</b></div>
           <div className="genome-title"><span>Genome · heritable traits</span><small>protected policies fixed</small></div>
