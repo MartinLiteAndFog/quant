@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_hud_mock_finance",
+  "authority": "fictional_ui_test_only",
+  "sceneRef": {
+    "seed": "ue5-visual-preview-v0",
+    "dayIndex": 7
+  },
+  "allowBrokerUse": false,
+  "startingNavUsdt": "100.00",
+  "navUsdt": "108.90",
+  "realizedNetPnlUsdt": "8.90",
+  "navHistory": [
+    {
+      "dayIndex": 0,
+      "navUsdt": "100.00"
+    },
+    {
+      "dayIndex": 1,
+      "navUsdt": "104.00"
+    },
+    {
+      "dayIndex": 2,
+      "navUsdt": "101.00"
+    },
+    {
+      "dayIndex": 3,
+      "navUsdt": "109.00"
+    },
+    {
+      "dayIndex": 5,
+      "navUsdt": "105.00"
+    },
+    {
+      "dayIndex": 7,
+      "navUsdt": "108.90"
+    }
+  ],
+  "plantResults": [
+    {
+      "plantId": "plant-a",
+      "netPnlUsdt": "11.50",
+      "notionalBasisUsdt": "20.00",
+      "closedTrades": 13,
+      "winningTrades": 8
+    },
+    {
+      "plantId": "plant-b",
+      "netPnlUsdt": "-2.50",
+      "notionalBasisUsdt": "20.00",
+      "closedTrades": 8,
+      "winningTrades": 3
+    },
+    {
+      "plantId": "plant-c",
+      "netPnlUsdt": "-0.10",
+      "notionalBasisUsdt": "20.00",
+      "closedTrades": 1,
+      "winningTrades": 0
+    }
+  ]
+}
