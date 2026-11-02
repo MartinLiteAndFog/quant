@@ -7,6 +7,8 @@ Authoritative settlement, selection, and performance are out of scope.
 from __future__ import annotations
 import json
 import math
+import sys
+from contextlib import redirect_stdout
 from validate_gene_physics import load, check_params, check_seedfall
 
 
@@ -75,8 +77,9 @@ def project_genome_proposals(scene: dict, registry: dict, snapshot: dict,
 
 if __name__ == "__main__":
     scene = load("fixtures/scene_demo_v0.json")
-    result = project_genome_proposals(
-        scene,
+    with redirect_stdout(sys.stderr):
+        result = project_genome_proposals(
+            scene,
         load("contracts/parameter_registry_v1.json"),
         load("fixtures/parameter_snapshot_v1.json"),
         load("fixtures/seed_release_v1.json"),
@@ -84,5 +87,5 @@ if __name__ == "__main__":
         load("contracts/gene_meadow_inverse_mapping_v1.json"),
     )
     assert result == load("fixtures/offspring_proposals_v1.json"), "Golden offspring proposals differ"
-    print(f"PASS: {len(result['proposals'])} seedfall -> two-gene research candidates, no trading writes.")
+    print(f"PASS: {len(result['proposals'])} seedfall -> two-gene research candidates, no trading writes.", file=sys.stderr)
     print(json.dumps(result, indent=2, sort_keys=True))
