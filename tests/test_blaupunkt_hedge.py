@@ -14,6 +14,19 @@ class FakeBroker:
     def _req(self, method, path, body=None):
         if method == "GET" and "getPositionMode" in path:
             return {"positionMode": 1}
+        if method == "GET" and path == "/api/v1/positions":
+            return [
+                {"symbol": "XBTUSDTM", "currentQty": qty}
+                for qty in self.positions.values() if qty
+            ]
+        if method == "GET" and (
+            path.startswith("/api/v1/orders?status=active")
+            or path.startswith("/api/v1/stopOrders?status=active")
+        ):
+            return {"totalNum": 0, "items": []}
+        if method == "POST" and "switchPositionMode" in path:
+            assert body == {"positionMode": "1"}
+            return {"positionMode": 1}
         if method == "GET" and path.startswith("/api/v2/position?"):
             return [
                 {"symbol": "XBTUSDTM", "positionSide": side.upper(), "currentQty": qty}
@@ -155,7 +168,7 @@ def test_non_hedge_account_no_trade(fleet):
             return {"positionMode": 0}
         return original(method, path, body)
     fleet.broker._req = oneway
-    with pytest.raises(RuntimeError, match="Hedge Mode"):
+    with pytest.raises(RuntimeError, match="auto-switch disabled"):
         alert(fleet, "Blaupunkt", "flip", "buy")
     assert fleet.broker.positions == {"long": 0, "short": 0}
 
@@ -182,3 +195,30 @@ def test_more_than_ninety_percent_pool_forbidden(fleet, monkeypatch):
     with pytest.raises(RuntimeError, match="capital usage"):
         alert(fleet, "Blaupunkt", "flip", "buy")
     assert fleet.broker.positions == {"long": 0, "short": 0}
+
+def test_auto_switch_only_if_account_empty(fleet, monkeypatch):
+    monkeypatch.setenv("HEDGE_AUTO_SET_POSITION_MODE", "1")
+    mode = {"value": 0}
+    original = fleet.broker._req
+    def wrapper(method, path, body=None):
+        if "getPositionMode" in path:
+            return {"positionMode": mode["value"]}
+        if method == "POST" and "switchPositionMode" in path:
+            mode["value"] = 1
+        return original(method, path, body)
+    fleet.broker._req = wrapper
+    assert fleet.ensure_hedge_mode() == {"hedge_mode": True, "changed": True}
+    assert mode["value"] == 1
+
+
+def test_auto_switch_rejects_any_outstanding_position(fleet, monkeypatch):
+    monkeypatch.setenv("HEDGE_AUTO_SET_POSITION_MODE", "1")
+    fleet.broker.positions["long"] = 1
+    original = fleet.broker._req
+    def wrapper(method, path, body=None):
+        if "getPositionMode" in path:
+            return {"positionMode": 0}
+        return original(method, path, body)
+    fleet.broker._req = wrapper
+    with pytest.raises(RuntimeError, match="open positions"):
+        fleet.ensure_hedge_mode()
