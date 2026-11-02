@@ -822,6 +822,11 @@ export function assertSimulationInvariants(world: SimulationWorld): void {
   }
   const usedSlots = capital.seedlingEntitlements.filter((slot) => slot.status === "used");
   const seedlings = world.plants.filter((plant) => plant.role === "seedling");
+  // Reject malformed funding tags before evaluating bank-vs-recycled counts.
+  if (seedlings.some((plant) => plant.fundingSource !== undefined
+    && plant.fundingSource !== "seedbank" && plant.fundingSource !== "recycled")) {
+    throw new Error("A seedling has an invalid seed funding source.");
+  }
   // Every original seedbank child consumes its own unique entitlement.
   // Extra later generations must be marked as directly funded from existing
   // FREE deployable capital; they cannot recycle the original seed slots.
