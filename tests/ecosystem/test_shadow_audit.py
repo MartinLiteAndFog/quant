@@ -127,9 +127,8 @@ class ShadowGateTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError,"full candidate snapshot"):
             claimed(GATES[0],self.snap,snapshot_sha256="xyz")
         with self.assertRaisesRegex(AuditError,"duplicate"):
-            report=review_shadow_gates(self.snap,[claimed(GATES[0],self.snap),
-                                                   claimed(GATES[0],self.snap)],as_of=NOW)
-        self.assertEqual(report.cutover,"NO_GO") if False else None
+            review_shadow_gates(self.snap,[claimed(GATES[0],self.snap),
+                                           claimed(GATES[0],self.snap)],as_of=NOW)
 
     def test_failed_checks_refuse_to_be_overridden_by_other_green_flags(self):
         evidence=[claimed(g,self.snap) for g in GATES]
