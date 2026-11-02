@@ -1,0 +1,29 @@
+name: ECO-13 Read-only Shadow Safety Gate Checks
+
+on:
+  pull_request:
+    paths:
+      - 'src/quant/ecosystem/adapters/**'
+      - 'tests/ecosystem/test_shadow_audit.py'
+      - 'tests/ecosystem/test_shadow_bridge.py'
+      - '.github/workflows/eco13-shadow-audit.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  no-live-cutover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PYTHONPATH: src
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Snapshot-bound safety checklist remains NO_GO
+        run: python -m unittest discover -s tests/ecosystem -p test_shadow_audit.py -v
+      - name: Existing read-only Family Shadow integration never routes orders
+        run: python -m unittest discover -s tests/ecosystem -p test_shadow_bridge.py -v
