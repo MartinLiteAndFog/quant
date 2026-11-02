@@ -177,6 +177,90 @@ test("the three bee modes deterministically conceive funded local, hive, and hyb
   assertSimulationInvariants(world);
 });
 
+test("parents carry deterministic trading traits and each bee policy breeds bounded traits reproducibly", () => {
+  const policies = ["random", "local", "hive", "hybrid"] as const;
+  const parentDefaults = createSimulationWorld("trading-inheritance");
+  assert.deepEqual(parentDefaults.plants.map((plant) => plant.tradingTraits), [
+    { lookbackBars: 5, entryThresholdBps: 40, exitThresholdBps: 10 },
+    { lookbackBars: 12, entryThresholdBps: 90, exitThresholdBps: 20 },
+    { lookbackBars: 3, entryThresholdBps: 25, exitThresholdBps: 5 },
+  ]);
+
+  const childFor = (policy: (typeof policies)[number], seed = "trading-inheritance") => {
+    const world = advanceSimulationDays(createSimulationWorld(seed, { conceptionPolicy: policy }), 7);
+    return world.plants.find((plant) => plant.role === "seedling");
+  };
+  const children = policies.map((policy) => childFor(policy));
+  const repeated = policies.map((policy) => childFor(policy));
+  assert.deepEqual(children.map((plant) => plant?.tradingTraits), repeated.map((plant) => plant?.tradingTraits));
+  assert.equal(new Set(children.map((plant) => JSON.stringify(plant?.tradingTraits))).size, policies.length,
+    "the four policies should produce distinct strategy traits for this fixed fixture");
+
+  for (const child of children) {
+    assert.ok(child);
+    const { lookbackBars, entryThresholdBps, exitThresholdBps } = child.tradingTraits;
+    assert.ok(Number.isInteger(lookbackBars) && lookbackBars >= 1 && lookbackBars <= 120);
+    assert.ok(Number.isInteger(entryThresholdBps) && entryThresholdBps >= 1 && entryThresholdBps <= 3_000);
+    assert.ok(Number.isInteger(exitThresholdBps) && exitThresholdBps >= 0 && exitThresholdBps <= entryThresholdBps);
+  }
+
+  const local = childFor("local");
+  const hive = childFor("hive");
+  const hybrid = childFor("hybrid");
+  assert.ok(local && hive && hybrid);
+  for (const trait of ["lookbackBars", "entryThresholdBps"] as const) {
+    assert.ok(Math.abs(hybrid.tradingTraits[trait] - (local.tradingTraits[trait] + hive.tradingTraits[trait]) / 2) <= 1,
+      `hybrid ${trait} should combine local and hive inheritance`);
+  }
+  const parentLookbacks = parentDefaults.plants.map((plant) => plant.tradingTraits.lookbackBars);
+  assert.ok(local.tradingTraits.lookbackBars >= Math.min(...parentLookbacks) - 6);
+  assert.ok(local.tradingTraits.lookbackBars <= Math.max(...parentLookbacks) + 6);
+});
+
+test("hive and random trading traits do not depend on parent trading genomes", () => {
+  const seed = "independent-inheritance";
+  const original = createSimulationWorld(seed, { conceptionPolicy: "hive" });
+  const changedParents: SimulationWorld = {
+    ...original,
+    plants: original.plants.map((plant, index) => ({
+      ...plant,
+      tradingTraits: index === 0
+        ? { lookbackBars: 1, entryThresholdBps: 1, exitThresholdBps: 0 }
+        : { lookbackBars: 120, entryThresholdBps: 3_000, exitThresholdBps: 3_000 },
+    })),
+  };
+  const hiveChild = advanceSimulationDays(original, 7).plants.find((plant) => plant.role === "seedling");
+  const changedHiveChild = advanceSimulationDays(changedParents, 7).plants.find((plant) => plant.role === "seedling");
+  assert.deepEqual(hiveChild?.tradingTraits, changedHiveChild?.tradingTraits);
+
+  const randomOriginal = createSimulationWorld(seed, { conceptionPolicy: "random" });
+  const randomChanged = { ...changedParents, conceptionPolicy: "random" as const };
+  const randomChild = advanceSimulationDays(randomOriginal, 7).plants.find((plant) => plant.role === "seedling");
+  const changedRandomChild = advanceSimulationDays(randomChanged, 7).plants.find((plant) => plant.role === "seedling");
+  assert.deepEqual(randomChild?.tradingTraits, changedRandomChild?.tradingTraits);
+});
+
+test("world invariants reject malformed trading traits", () => {
+  const world = createSimulationWorld("invalid-trading-traits");
+  const parent = world.plants[0];
+  assert.ok(parent);
+  for (const tradingTraits of [
+    { ...parent.tradingTraits, lookbackBars: 0 },
+    { ...parent.tradingTraits, entryThresholdBps: 3_001 },
+    { ...parent.tradingTraits, exitThresholdBps: parent.tradingTraits.entryThresholdBps + 1 },
+    { ...parent.tradingTraits, lookbackBars: 2.5 },
+  ]) {
+    assert.throws(() => assertSimulationInvariants({
+      ...world,
+      plants: world.plants.map((plant) => plant.id === parent.id ? { ...plant, tradingTraits } : plant),
+    }), /invalid trading traits/);
+  }
+  assert.throws(() => assertSimulationInvariants({
+    ...world,
+    plants: world.plants.map((plant) => plant.id === parent.id ? { ...plant, tradingTraits: undefined } as unknown as GardenPlant : plant),
+  }), /invalid trading traits/);
+});
+
 test("all 20 funded seedlings can be conceived without restoring archived entitlements", () => {
   const world = advanceSimulationDays(createSimulationWorld(), 140);
   assert.equal(world.plants.filter((plant) => plant.role === "seedling").length, 20);
@@ -380,4 +464,11 @@ test("bulk advancement rejects invalid or unbounded time steps", () => {
   assert.throws(() => advanceSimulationDays(world, 1.5), RangeError);
   assert.throws(() => advanceSimulationDays(world, 366), RangeError);
   assert.throws(() => createSimulationWorld("  "), RangeError);
+});
+
+test("world invariants reject malformed persisted clocks and conception policies", () => {
+  const world = createSimulationWorld("SAVE-VALIDATION");
+  assert.throws(() => assertSimulationInvariants({ ...world, day: -1 }), /versioned simulation contract/);
+  assert.throws(() => assertSimulationInvariants({ ...world, day: 1.5 }), /versioned simulation contract/);
+  assert.throws(() => assertSimulationInvariants({ ...world, conceptionPolicy: "unsupported" as SimulationWorld["conceptionPolicy"] }), /versioned simulation contract/);
 });
