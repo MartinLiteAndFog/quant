@@ -89,6 +89,17 @@ class VitalityTileTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "untrusted"):
             self.run_projection(snapshot=snap)
 
+    def test_canonical_g2_readonly_export_contract_is_type_compatible(self):
+        # Transport authentication is a separate future task; this verifies
+        # only typed, identity-matched read-only consumption.
+        snap = deepcopy(self.snap)
+        snap["authority"] = "canonical_readonly_export"
+        output = self.run_projection(snapshot=snap)
+        self.assertEqual(output["declaredSourceAuthority"], "canonical_readonly_export")
+        self.assertEqual(output["authority"], "read_only_preview_no_transport_trust")
+        self.assertEqual(output["simulationTicksApplied"], 0)
+        self.assertEqual(output["renderInstanceCount"], 6)
+
     def test_archived_or_missing_gene_is_not_rendered(self):
         result = self.run_projection()
         self.assertFalse(any(x["plantId"] == "plant-b" for x in result["instances"]))
