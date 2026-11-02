@@ -1,5 +1,6 @@
 /**
- * Deterministic, synthetic-only intraday market-data and paper-execution slice.
+ * Deterministic intraday paper execution with synthetic defaults and an explicit
+ * historical-source research opt-in. Neither mode verifies a live venue.
  *
  * Semantics mirror ECO-02: UTC open-time candles, first open strictly after
  * feature availability and receipt, bounded latency, adverse half-spread plus
@@ -85,6 +86,9 @@ export const DEFAULT_PAPER_COSTS: PaperCosts = {
 export const PAPER_REPLAY_NOTICE =
   "Generated synthetic execution fixture only; not a strategy test, market evidence, or a profit claim.";
 
+export const HISTORICAL_PAPER_NOTICE =
+  "Historical-source research only, not_comparable: unverified venue and provenance; modeled 1x linear long/short exposure with assumed fees, spread and slippage. Actual venue funding is unknown; no profit or live-execution claim.";
+
 export type PaperFill = Readonly<{
   orderId: string;
   strategyId: string;
@@ -123,7 +127,7 @@ export type PaperReplayReport = Readonly<{
   schemaVersion: 1;
   benchmark: "cash_no_trade";
   benchmarkConclusion: "not_comparable";
-  claim: typeof PAPER_REPLAY_NOTICE;
+  claim: typeof PAPER_REPLAY_NOTICE | typeof HISTORICAL_PAPER_NOTICE;
   days: number;
   dataset: MarketDataset["report"];
   allocationLimit: string;
@@ -228,7 +232,7 @@ async function sha256(value: string): Promise<string> {
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-/** Normalize bars without filling gaps; empirical data remains non-runnable. */
+/** Normalize bars without filling gaps; historical data requires explicit research opt-in. */
 export async function normalizeMarketData(
   inputBars: readonly MarketBarInput[],
   provenance: MarketProvenance,
@@ -434,16 +438,51 @@ export type PaperReplayInput = Readonly<{
   allocationLimit: string;
   startingCash: string;
   costs?: PaperCosts;
+  /** Explicit research opt-in; does not verify archive provenance or enable live execution. */
+  historicalResearch?: boolean;
 }>;
 
-/** Run one isolated linear-futures position through validated synthetic bars. */
+/** Run one isolated modeled linear position; historical research is opt-in only. */
 export function runPaperReplay(input: PaperReplayInput): PaperReplayReport {
   const { dataset } = input;
-  if (!dataset.provenance.synthetic || !dataset.report.synthetic) {
+  const historicalResearch = input.historicalResearch === true && dataset.provenance.synthetic === false;
+  if ((!dataset.provenance.synthetic || !dataset.report.synthetic) && !historicalResearch) {
     throw new RangeError("Empirical replay is disabled until the provenance and data-quality gate is implemented.");
+  }
+  validateProvenance(dataset.provenance);
+  if (dataset.provenance.synthetic !== dataset.report.synthetic
+    || dataset.report.eligibility !== (dataset.provenance.synthetic ? "synthetic_demo_only" : "provenance_unverified")
+    || !/^[0-9a-f]{64}$/.test(dataset.fingerprint)
+    || dataset.report.fingerprint !== dataset.fingerprint
+    || dataset.report.barCount !== dataset.bars.length) {
+    throw new RangeError("Dataset provenance, report, and fingerprint must agree.");
   }
   if (dataset.bars.length === 0 || dataset.provenance.marketType !== "linear_futures") {
     throw new RangeError("Paper replay requires non-empty linear-futures bars.");
+  }
+  if (historicalResearch) {
+    const intervalMs = dataset.provenance.intervalSeconds * 1_000;
+    for (const [index, bar] of dataset.bars.entries()) {
+      const timestampMs = parseUtc(bar.timestamp, "Historical bar timestamp");
+      const open = parseFixed(bar.open, "Open");
+      const high = parseFixed(bar.high, "High");
+      const low = parseFixed(bar.low, "Low");
+      const close = parseFixed(bar.close, "Close");
+      const volume = parseFixed(bar.volume, "Volume");
+      if (bar.timestampMs !== timestampMs || timestampMs % intervalMs !== 0
+        || (index > 0 && timestampMs <= dataset.bars[index - 1]!.timestampMs)
+        || open <= 0n || high <= 0n || low <= 0n || close <= 0n || volume < 0n
+        || high < open || high < low || high < close || low > open || low > close) {
+        throw new RangeError("Historical bars must retain normalized UTC chronology and valid OHLCV.");
+      }
+    }
+    const first = dataset.bars[0]!;
+    const last = dataset.bars[dataset.bars.length - 1]!;
+    if (dataset.report.start !== first.timestamp
+      || dataset.report.endExclusive !== isoUtc(last.timestampMs + intervalMs)
+      || parseFixed(dataset.provenance.contractMultiplier, "Historical contract multiplier") !== SCALE) {
+      throw new RangeError("Historical research requires matching report dates and a 1x linear price model.");
+    }
   }
   const allocationLimit = parseFixed(input.allocationLimit, "Allocation limit");
   const startingCash = parseFixed(input.startingCash, "Starting cash");
@@ -659,7 +698,7 @@ export function runPaperReplay(input: PaperReplayInput): PaperReplayReport {
     schemaVersion: 1,
     benchmark: "cash_no_trade",
     benchmarkConclusion: "not_comparable",
-    claim: PAPER_REPLAY_NOTICE,
+    claim: historicalResearch ? HISTORICAL_PAPER_NOTICE : PAPER_REPLAY_NOTICE,
     days,
     dataset: dataset.report,
     allocationLimit: fixed(allocationLimit),
