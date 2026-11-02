@@ -23,10 +23,12 @@ evidence.
 
 ## Signal and execution semantics
 
-- Signals are externally supplied target quantities. The first generated stream
-  uses a versioned `TradingSignalGenome` separate from the ecological genome;
-  its close-to-close momentum threshold is a synthetic fixture, not strategy
-  alpha. No signal is inferred from future or current-bar close values.
+- Signals are externally supplied target quantities. Each plant inherits bounded
+  lookback, entry, and exit traits through its selected Random, Local, Hive, or
+  Hybrid conception mode. The first generated stream maps those traits into a
+  versioned `TradingSignalGenome` for one fixed Momentum v1 recipe; it is a
+  synthetic fixture, not strategy alpha. No signal is inferred from future or
+  current-bar close values.
 - Signal, availability, and receipt timestamps are distinct and timezone-aware.
 - A market order fills at the first observed bar open strictly after both
   availability and receipt. The delay is bounded from availability; missing or
