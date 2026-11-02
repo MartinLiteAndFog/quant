@@ -17,12 +17,17 @@ export const MIN_OBSERVATION_DAYS = 80;
 export const PREDATION_VIGOR_THRESHOLD = 70;
 export const PREDATION_EVIDENCE_THRESHOLD = 80;
 export const MAX_EVENT_HISTORY = 2_000;
+export const INACTIVITY_GRACE_DAYS = 14;
+/** Tiny fraction of vigor lost after grace, affected by heritable patience. */
+export const BASE_IDLE_VIGOR_DECAY = 0.0003;
 
 export type Genome = Readonly<{
   root: number;
   leaf: number;
   water: number;
   sun: number;
+  /** Ecology-only patience gene; not a trading signal or capital parameter. */
+  patience?: number;
 }>;
 
 /** Synthetic signal parameters inherited by a plant; not market evidence. */
@@ -36,6 +41,8 @@ export type TradingTraits = Readonly<{
 export type TradingDayOutcome = Readonly<{
   netPnlUsdt: number;
   startingAllocationUsdt: number;
+  /** Confirmed paper fills on the completed UTC day, not emitted signals. */
+  executedFills?: number;
 }>;
 export type TradingDayOutcomes = Readonly<Record<string, TradingDayOutcome>>;
 
@@ -64,6 +71,8 @@ export type GardenPlant = Readonly<{
   /** Simulated evidence quality, not financial or market evidence. */
   evidence: number;
   evidenceDays: number;
+  /** Consecutive historical days without a paper execution. */
+  inactiveDays?: number;
   /** Original synthetic allocation; only active plants count as deployed. */
   allocationUsdt: number;
   conceivedBy?: BeeMode;
@@ -187,7 +196,11 @@ export function createSimulationWorld(
   if (!seed.trim()) throw new RangeError("A non-empty deterministic world seed is required.");
   const plants: GardenPlant[] = PARENT_BLUEPRINTS.map((plant) => ({
     ...plant,
-    genes: { ...plant.genes },
+    genes: {
+      ...plant.genes,
+      patience: round4(0.2 + unit(seed, `founder-patience-${plant.id}`) * 0.6),
+    },
+    inactiveDays: 0,
     role: "parent",
     status: "active",
     physiology: "awake",
@@ -402,11 +415,20 @@ function growPlant(plant: GardenPlant, plants: readonly GardenPlant[], climate: 
     // A no-trade day has a factor of exactly one and leaves economic size unchanged.
     const outcome = tradingDayOutcomes[plant.id];
     const growthFactor = outcome ? Math.max(0, 1 + outcome.netPnlUsdt / outcome.startingAllocationUsdt) : 1;
+    const executedFills = outcome?.executedFills ?? (outcome && outcome.netPnlUsdt !== 0 ? 1 : 0);
+    const inactiveDays = executedFills > 0 ? 0 : (plant.inactiveDays ?? 0) + 1;
+    // Idleness has a tiny biological opportunity cost after two weeks,
+    // not a made-up trading loss. Genetically patient plants decay slower.
+    const patience = plant.genes.patience ?? 0.5;
+    const idleVigorFactor = inactiveDays > INACTIVITY_GRACE_DAYS
+      ? 1 - BASE_IDLE_VIGOR_DECAY * (1.2 - patience)
+      : 1;
     return {
       ...plant,
       physiology,
+      inactiveDays,
       biomass: round4(clamp(plant.biomass * growthFactor, 5, 100)),
-      vigor: round4(clamp(plant.vigor * growthFactor, 0, 100)),
+      vigor: round4(clamp(plant.vigor * growthFactor * idleVigorFactor, 0, 100)),
       evidenceDays: plant.evidenceDays + 1,
     };
   }
@@ -448,12 +470,12 @@ function growPlant(plant: GardenPlant, plants: readonly GardenPlant[], climate: 
 
 function hiveGenome(seed: string, conceptionIndex: number): Genome {
   const value = (trait: keyof Genome) => round4(0.2 + unit(seed, `hive-${conceptionIndex}-${trait}`) * 0.72);
-  return { root: value("root"), leaf: value("leaf"), water: value("water"), sun: value("sun") };
+  return { root: value("root"), leaf: value("leaf"), water: value("water"), sun: value("sun"), patience: value("patience") };
 }
 
 function randomGenome(seed: string, day: number, conceptionIndex: number): Genome {
   const value = (trait: keyof Genome) => round4(0.05 + unit(seed, `random-${day}-${conceptionIndex}-${trait}`) * 0.9);
-  return { root: value("root"), leaf: value("leaf"), water: value("water"), sun: value("sun") };
+  return { root: value("root"), leaf: value("leaf"), water: value("water"), sun: value("sun"), patience: value("patience") };
 }
 
 function hiveTradingTraits(seed: string, conceptionIndex: number): TradingTraits {
@@ -510,23 +532,26 @@ function makeConception(
   mode: BeeMode,
 ): { plant: GardenPlant; entitlementId: number } | undefined {
   const entitlementId = index + 1;
-  // Parent records remain a stable, auditable genetic source even if an
-  // individual parent is later archived from the visible meadow.
-  const parents = plants.filter((plant) => plant.role === "parent");
-  if (parents.length < PARENT_COUNT) return undefined;
-  const mother = parents[index % parents.length];
-  const father = parents[(index + 1 + Math.floor(unit(seed, `mate-${index}`) * (parents.length - 1))) % parents.length];
+  // Any funded living adult, including a seedling born earlier, may parent.
+  // Archived genomes stay in the immutable lineage but never mate again.
+  // Round-robin visits avoid centralized performance-based ranking.
+  const parents = plants.filter((plant) => plant.status === "active"
+    && plant.evidenceDays >= 7 && plant.allocationUsdt > 0);
+  if (parents.length < 2) return undefined;
+  const mother = parents[index % parents.length]!;
+  const father = parents[(index + 1 + Math.floor(unit(seed, `mate-${index}`) * (parents.length - 1))) % parents.length]!;
   const hive = hiveGenome(seed, index);
-  const genes = mode === "random" ? randomGenome(seed, day, index) : Object.fromEntries((Object.keys(mother.genes) as (keyof Genome)[]).map((trait) => {
-    const local = (mother.genes[trait] + father.genes[trait]) / 2;
+  const geneKeys = ["root", "leaf", "water", "sun", "patience"] as const;
+  const genes = mode === "random" ? randomGenome(seed, day, index) : Object.fromEntries(geneKeys.map((trait) => {
+    const local = ((mother.genes[trait] ?? 0.5) + (father.genes[trait] ?? 0.5)) / 2;
     const mutation = (unit(seed, `mutation-${day}-${trait}`) - 0.5) * 0.08;
     const value = mode === "local"
       ? local + mutation
       : mode === "hive"
-        ? hive[trait]
-        : (local + hive[trait]) / 2 + mutation / 2;
+        ? (hive[trait] ?? 0.5)
+        : (local + (hive[trait] ?? 0.5)) / 2 + mutation / 2;
     return [trait, round4(clamp(value, 0.05, 0.95))];
-  })) as unknown as Genome;
+  })) as Genome;
   const tradingTraits = inheritedTradingTraits(seed, day, index, mode, mother, father);
   const id = `seedling-${String(index + 1).padStart(2, "0")}`;
   const plant: GardenPlant = {
@@ -544,9 +569,10 @@ function makeConception(
     vigor: 60,
     evidence: 50,
     evidenceDays: 0,
+    inactiveDays: 0,
     allocationUsdt: SEEDLING_ALLOCATION_USDT,
     conceivedBy: mode,
-    ...(mode === "local" || mode === "hybrid" ? { parents: [mother.id, father.id] as const } : {}),
+    parents: [mother.id, father.id] as const,
   };
   return { plant, entitlementId };
 }
@@ -632,6 +658,8 @@ export function advanceSimulationDay(world: SimulationWorld, tradingDayOutcomes?
     for (const [plantId, outcome] of Object.entries(tradingDayOutcomes)) {
       if (!activeIds.has(plantId) || !outcome || !Number.isFinite(outcome.netPnlUsdt)
         || !Number.isFinite(outcome.startingAllocationUsdt) || outcome.startingAllocationUsdt <= 0
+        || (outcome.executedFills !== undefined
+          && (!Number.isInteger(outcome.executedFills) || outcome.executedFills < 0))
         || outcome.netPnlUsdt < -outcome.startingAllocationUsdt - 0.0001) {
         throw new RangeError("Invalid or unknown plant paper outcome for this historical day.");
       }
@@ -666,7 +694,7 @@ export function advanceSimulationDay(world: SimulationWorld, tradingDayOutcomes?
     }, ...physiologyEvents]),
   };
 
-  // Every seventh day, one synthetic bee mode gets a conception opportunity.
+  // Every seventh day bees visit living adults, including grown offspring.
   // The 20 entitlement slots are single-use; archived seedlings do not restore one.
   if (day % 7 === 0) {
     const used = next.capital.seedlingEntitlements.filter((slot) => slot.status === "used").length;
@@ -773,6 +801,19 @@ export function assertSimulationInvariants(world: SimulationWorld): void {
       throw new Error(`Plant ${plant.id} has an unknown physiology state.`);
     }
     if (plant.phenotype !== derivePhenotype(plant.genes)) throw new Error(`Plant ${plant.id} has a stale phenotype.`);
+    if (plant.genes.patience !== undefined
+      && (!Number.isFinite(plant.genes.patience) || plant.genes.patience < 0.05 || plant.genes.patience > 0.95)) {
+      throw new Error(`Plant ${plant.id} has invalid patience genetics.`);
+    }
+    if (plant.inactiveDays !== undefined && (!Number.isSafeInteger(plant.inactiveDays)
+      || plant.inactiveDays < 0 || plant.inactiveDays > world.day)) {
+      throw new Error(`Plant ${plant.id} has an invalid inactivity streak.`);
+    }
+    if (plant.parents !== undefined && (plant.parents.length !== 2
+      || plant.parents[0] === plant.parents[1]
+      || plant.parents.some((id) => !ids.has(id) || id === plant.id))) {
+      throw new Error(`Plant ${plant.id} has an invalid ancestral lineage.`);
+    }
     if (!plant.tradingTraits
       || !Number.isInteger(plant.tradingTraits.lookbackBars)
       || plant.tradingTraits.lookbackBars < TRADING_TRAIT_LIMITS.lookbackBars.min
