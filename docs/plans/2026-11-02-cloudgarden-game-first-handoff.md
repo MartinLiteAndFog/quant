@@ -64,7 +64,7 @@ deployed plant allocation += 1.5000
 NAV / protected reserve / seedbank reservations: unchanged
 ```
 
-Every funded child retains a unique incrementing ID after `seedling-20`, its own 1.5-USDT allocation and actual genotype/lineage. Each birth is explicitly labeled `fundingSource="seedbank"` or `"recycled"`; archive/release is the opposite transfer. An exhausted world with **zero free capital cannot breed**, even when bees visit living adults. Wealth cannot arise from pollen, fungal links, equity charts or the visual renderer.
+Every funded child retains a unique incrementing ID after `seedling-20`, its own 1.5-USDT allocation and actual genotype/lineage. Each birth is explicitly labeled `fundingSource="seedbank"` or `"recycled"`; the recycled event deliberately omits `entitlementId` to avoid claiming an original seedbank slot. Archive/release is the opposite transfer. An exhausted world with **zero free capital cannot breed**, even when bees visit living adults. Wealth cannot arise from pollen, fungal links, equity charts or the visual renderer.
 
 Invariant validation distinguishes the 20 one-time seedbank children from later recycled children, forbids recycled funding before the original seedbank is exhausted, and still checks **one** NAV, 90% allocation ceiling, 10% protected reserve, true active allocations and unique parent/plant IDs. Tests cover zero-free no-birth, real archived budget → child 21, subsequent recycled child 22, deterministic replay, no seeded/recycled ID double counting and forged source rejection.
 
