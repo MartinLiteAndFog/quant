@@ -88,6 +88,8 @@ export type ClosedPaperReplayBooking = Readonly<{
   days: number;
   datasetFingerprint: string;
   synthetic: boolean;
+  historicalResearch?: boolean;
+  marketSource?: string;
   endedFlat: boolean;
   riskBreach: boolean;
   fillCount: number;
@@ -223,7 +225,7 @@ export function setConceptionPolicy(world: SimulationWorld, conceptionPolicy: Co
   return next;
 }
 
-/** Book a completed, flat synthetic replay into the garden's single NAV ledger. */
+/** Book a completed, flat paper replay into the garden's single NAV ledger. */
 export function bookClosedPaperReplay(
   world: SimulationWorld,
   plantId: string,
@@ -244,7 +246,9 @@ export function bookClosedPaperReplay(
     && booking.netPnlUsdt === 0
     && booking.maxMarginUsedUsdt === 0
     && Math.abs(booking.endingCashUsdt - booking.startingCashUsdt) <= 0.0001;
-  if (!booking.synthetic || !booking.endedFlat || booking.riskBreach
+  const permittedSource = booking.synthetic === true || (booking.synthetic === false
+    && booking.historicalResearch === true && typeof booking.marketSource === "string" && booking.marketSource.trim().length > 0);
+  if (!permittedSource || !booking.endedFlat || booking.riskBreach
     || !/^[0-9a-f]{64}$/.test(booking.datasetFingerprint)
     || !Number.isInteger(booking.days) || booking.days <= 0
     || !Number.isInteger(booking.startDay) || world.day !== booking.startDay + booking.days
@@ -253,7 +257,7 @@ export function bookClosedPaperReplay(
     || (booking.signalStatus !== undefined && booking.signalStatus !== "trade" && booking.signalStatus !== "no_trade")
     || [booking.observations, booking.opportunities, booking.generatedSignals].some((count) =>
       count !== undefined && (!Number.isInteger(count) || count < 0))) {
-    throw new RangeError("Only a flat synthetic replay aligned to the garden clock can be booked.");
+    throw new RangeError("Only a flat synthetic replay or explicitly sourced historical research aligned to the garden clock can be booked.");
   }
   const amounts = [booking.realizedPricePnlUsdt, booking.feesUsdt, booking.fundingUsdt, booking.netPnlUsdt];
   const accountAmounts = [booking.allocationLimitUsdt, booking.startingCashUsdt, booking.endingCashUsdt, booking.maxMarginUsedUsdt];
@@ -273,7 +277,9 @@ export function bookClosedPaperReplay(
   const navUsdt = round4(capital.navUsdt + booking.netPnlUsdt);
   if (navUsdt <= 0) throw new RangeError("Paper replay would exhaust NAV; booking rejected.");
   const protectedReserveUsdt = round4(navUsdt * PROTECTED_RESERVE_RATE);
-  const allocationCeilingUsdt = round4(navUsdt * MAX_ALLOCATION_RATE);
+  // Round one split, then take its complement: rounding both percentages
+  // independently can create an extra 0.0001 USDT at half-unit boundaries.
+  const allocationCeilingUsdt = round4(navUsdt - protectedReserveUsdt);
   const availableForPlants = round4(allocationCeilingUsdt - capital.reservedMarginUsdt);
   if (availableForPlants < 0) throw new RangeError("Replay loss would breach reserved seed entitlements; booking rejected.");
   let deployedCapitalUsdt = capital.deployedCapitalUsdt;
@@ -307,7 +313,7 @@ export function bookClosedPaperReplay(
       id: `${world.seed}:d${world.day}:paper-replay:${capital.paperReplayCount + 1}`,
       day: world.day,
       type: "paper_replay",
-      actor: "synthetic-paper-engine",
+      actor: booking.synthetic ? "synthetic-paper-engine" : "historical-research-paper-engine",
       subject: plantId,
       detail: {
         days: booking.days,
@@ -329,7 +335,9 @@ export function bookClosedPaperReplay(
         fundingUsdt: round4(booking.fundingUsdt),
         netPnlUsdt: round4(booking.netPnlUsdt),
         datasetFingerprint: booking.datasetFingerprint,
-        synthetic: true,
+        synthetic: booking.synthetic,
+        historicalResearch: !booking.synthetic && booking.historicalResearch === true,
+        ...(booking.marketSource ? { marketSource: booking.marketSource } : {}),
       },
     }]),
   };
