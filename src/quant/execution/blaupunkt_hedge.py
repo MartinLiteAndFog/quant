@@ -89,9 +89,14 @@ class HedgeFleet:
         with _LOCK:
             s = self._read()
             n = len(s["bots"])
+            pool = float(os.getenv("HEDGE_BOT_CAPITAL_USAGE", "0.90"))
+            if not 0 < pool <= 0.90:
+                raise RuntimeError("invalid hedge capital usage (>90%)")
             return {
                 "enabled": True, "symbol": self.symbol, "bot_count": n,
-                "allocation_pct": (100.0 / n if n else 0.0),
+                "capital_pool_pct": round(pool * 100, 6),
+                "reserve_pct": round((1.0 - pool) * 100, 6),
+                "allocation_pct": round(pool * 100 / n, 6) if n else 0.0,
                 "pending_order": bool(s.get("pending")),
                 "bots": [{"id": b["name"], "side": b["side"], "qty": b["qty"],
                           "unprotected": b.get("unprotected", False)}
