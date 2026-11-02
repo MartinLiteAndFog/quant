@@ -202,6 +202,7 @@ class HedgeFleet:
             b["stop_price"] = None
             b["stop_fill"] = 0
             b["unprotected"] = False
+            b["entry_leverage"] = None
 
     def _poll_order(self, state: Dict[str, Any]) -> Dict[str, Any]:
         pending = state.get("pending")
@@ -293,6 +294,12 @@ class HedgeFleet:
         side = ("buy" if position_side == "long" else "sell") if direction > 0 else (
             "sell" if position_side == "long" else "buy")
         client_id = _oid(key, "open" if direction > 0 else "close")
+        if direction > 0:
+            # Record leverage with the virtual owner, so a later change to
+            # the service leverage cannot understate already allocated margin.
+            s["bots"][key]["entry_leverage"] = float(
+                os.getenv("KUCOIN_FUTURES_ORDER_LEVERAGE", "1")
+            )
         s["pending"] = {"bot": key, "side": position_side, "direction": direction,
                         "qty": qty, "booked": 0, "client_id": client_id,
                         "order_id": None}
@@ -316,7 +323,7 @@ class HedgeFleet:
         self._check_positions(s)
         return result["filled"]
 
-    def _price_and_qty(self, n: int) -> tuple[float, int]:
+    def _price_and_qty(self, n: int, state: Optional[Dict[str, Any]] = None) -> tuple[float, int]:
         balance = self.broker.get_account_balance("USDT")
         equity = float(balance.get("equity") or 0)
         available = float(balance.get("available") or 0)
@@ -338,7 +345,24 @@ class HedgeFleet:
         # new 10% haircut per bot, incorrectly starving the later bots.
         reserve_margin = equity * (1.0 - use)
         affordable_margin = max(0.0, available - reserve_margin)
-        qty = math.floor(min(per_bot_margin, affordable_margin) * leverage / (price * multiplier))
+        # KuCoin Hedge Mode can NET margin across opposing positions. That
+        # exchange optimization must NOT let virtual strategies jointly
+        # allocate more than the configured 90% trading pool.
+        allocated = 0.0
+        if state:
+            for other in state["bots"].values():
+                held = int(other.get("qty") or 0)
+                if held <= 0:
+                    continue
+                original_leverage = float(other.get("entry_leverage") or leverage)
+                if original_leverage <= 0:
+                    raise RuntimeError("invalid leverage in virtual position book")
+                allocated += held * price * multiplier / min(leverage, original_leverage)
+        virtual_remaining = max(0.0, equity * use - allocated)
+        qty = math.floor(
+            min(per_bot_margin, affordable_margin, virtual_remaining)
+            * leverage / (price * multiplier)
+        )
         max_contracts = int(os.getenv("LIVE_EXECUTOR_MAX_CONTRACTS", "0") or 0)
         max_margin = float(os.getenv("LIVE_EXECUTOR_MAX_MARGIN_USDT", "0") or 0)
         if max_margin > 0:
@@ -452,7 +476,7 @@ class HedgeFleet:
             if action in {"flip", "entry"}:
                 if b["qty"] != 0:
                     raise RuntimeError("bot is not flat; refusing new hedge leg")
-                price, qty = self._price_and_qty(n)
+                price, qty = self._price_and_qty(n, state=s)
                 if qty < 1:
                     return {**summary, "ok": False, "reason": "insufficient_allocated_margin"}
                 filled = self._send_market(s, key, desired, +1, qty)
