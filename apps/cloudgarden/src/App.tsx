@@ -16,6 +16,7 @@ import { type StrategySignalReport, type TradingSignalGenome } from "./strategyS
 import { type SyntheticReplayEvidence } from "./replayEvidence";
 import { type SyntheticReplayCycleResult } from "./replayCycle";
 import { readSyntheticReplayWorkerResult } from "./replayWorkerProtocol";
+import { CLOUDGARDEN_SAVE_SCHEMA_VERSION, loadCloudgardenSave, saveCloudgardenSave, type SavedExperimentInput, type SavedPaperReplayConfig } from "./saveGame";
 
 type View = "meadow" | "understory";
 type GeneAxis = "root" | "leaf" | "water" | "sun";
@@ -31,18 +32,46 @@ type PaperReplayRun = Readonly<{
 }>;
 
 function App() {
-  const [world, setWorld] = useState<SimulationWorld>(() => createSimulationWorld());
-  const [selectedId, setSelectedId] = useState("parent-01");
-  const [view, setView] = useState<View>("meadow");
+  const [loadedSave] = useState(() => readBrowserSave());
+  const [saveStatus, setSaveStatus] = useState(() => loadedSave.status === "restored"
+    ? "Garden restored from this device"
+    : loadedSave.status === "invalid" ? "Saved data is protected; reset the world to replace it"
+      : loadedSave.status === "unavailable" ? "Local saving is unavailable in this browser" : "Saving on this device");
+  const [saveEnabled, setSaveEnabled] = useState(loadedSave.status !== "invalid");
+  const [world, setWorld] = useState<SimulationWorld>(() => loadedSave.save?.world ?? createSimulationWorld());
+  const [selectedId, setSelectedId] = useState(() => loadedSave.save?.selectedId ?? "parent-01");
+  const [view, setView] = useState<View>(() => loadedSave.save?.view ?? "meadow");
   const [playing, setPlaying] = useState(false);
-  const [axisX, setAxisX] = useState<GeneAxis>("root");
-  const [axisY, setAxisY] = useState<GeneAxis>("leaf");
-  const [experiment, setExperiment] = useState<ExperimentReport | null>(null);
+  const [axisX, setAxisX] = useState<GeneAxis>(() => loadedSave.save?.axisX ?? "root");
+  const [axisY, setAxisY] = useState<GeneAxis>(() => loadedSave.save?.axisY ?? "leaf");
+  const [experimentInput, setExperimentInput] = useState<SavedExperimentInput | null>(() => loadedSave.save?.experimentInput ?? null);
+  const [experiment, setExperiment] = useState<ExperimentReport | null>(() => experimentInputFrom(loadedSave.save?.experimentInput ?? null));
   const [experimentBusy, setExperimentBusy] = useState(false);
-  const [paperReplay, setPaperReplay] = useState<PaperReplayRun | null>(null);
+  const [paperReplay, setPaperReplay] = useState<PaperReplayRun | null>(() => loadedSave.save?.paperReplay ?? null);
+  const [paperReplayConfig, setPaperReplayConfig] = useState<SavedPaperReplayConfig | null>(() => loadedSave.save?.paperReplayConfig ?? null);
   const [paperReplayBusy, setPaperReplayBusy] = useState(false);
   const [paperReplayError, setPaperReplayError] = useState<string | null>(null);
   const paperReplayLock = useRef(false);
+
+  useEffect(() => {
+    try {
+      if (typeof window === "undefined" || !saveEnabled) return;
+      saveCloudgardenSave(window.localStorage, {
+        schemaVersion: CLOUDGARDEN_SAVE_SCHEMA_VERSION,
+        world,
+        selectedId,
+        view,
+        axisX,
+        axisY,
+        experimentInput,
+        paperReplay,
+        paperReplayConfig,
+      });
+      setSaveStatus("Saved on this device");
+    } catch {
+      setSaveStatus("Could not save locally; progress remains in this tab");
+    }
+  }, [world, selectedId, view, axisX, axisY, experimentInput, paperReplay, paperReplayConfig, saveEnabled]);
 
   const population = visiblePopulation(world);
   const selected = world.plants.find((plant) => plant.id === selectedId) ?? population[0] ?? world.plants[0];
@@ -60,27 +89,33 @@ function App() {
   };
   const reset = () => {
     if (paperReplayLock.current) return;
+    setSaveEnabled(true);
     setPlaying(false);
     setWorld(createSimulationWorld());
     setSelectedId("parent-01");
     setExperiment(null);
+    setExperimentInput(null);
     setPaperReplay(null);
+    setPaperReplayConfig(null);
     setPaperReplayError(null);
   };
   const runExperiment = async () => {
     setExperimentBusy(true);
     try {
-      const report = await runControlledExperiment({ seeds: ["CLOUD-071", "CLOUD-113", "CLOUD-208", "CLOUD-319"], days: 140 });
+      const input = { seeds: ["CLOUD-071", "CLOUD-113", "CLOUD-208", "CLOUD-319"], days: 140 } as const;
+      const report = await runControlledExperiment(input);
       setExperiment(report);
+      setExperimentInput(input);
     } finally {
       setExperimentBusy(false);
     }
   };
-  const runPaperReplay = async (plantId: string, controls: StrategyControls, days: 7 | 30 | 90) => {
+  const runPaperReplay = async (plantId: string, days: 7 | 30 | 90) => {
     if (paperReplayLock.current) return;
     const sourceWorld = world;
     const plant = sourceWorld.plants.find((candidate) => candidate.id === plantId && candidate.status === "active");
     if (!plant) return;
+    const controls: StrategyControls = plant.tradingTraits;
     paperReplayLock.current = true;
     setPlaying(false);
     setPaperReplayBusy(true);
@@ -128,7 +163,7 @@ function App() {
               weekIndex: Math.floor(sourceWorld.day / 7),
               plantId: plant.id,
               allocationUsdt: plant.allocationUsdt,
-              controls,
+              tradingTraits: controls,
             },
           });
         } catch (error) {
@@ -167,6 +202,7 @@ function App() {
       });
       setWorld(booked);
       setPaperReplay({ execution: report, strategy, genome, evidence });
+      setPaperReplayConfig({ plantId: plant.id, days, tradingTraits: controls });
       setSelectedId(plant.id);
     } catch (error) {
       setPaperReplayError(error instanceof Error ? error.message : "The synthetic replay could not be reconciled.");
@@ -194,7 +230,7 @@ function App() {
             <button className={view === "meadow" ? "tab-active" : ""} onClick={() => setView("meadow")}>Meadow</button>
             <button className={view === "understory" ? "tab-active" : ""} onClick={() => setView("understory")}>Understory</button>
           </nav>
-          <div className="world-status"><span className="status-leaf" /> Synthetic world <span className="status-separator">·</span> no exchange connection</div>
+          <div className="world-status"><span className="status-leaf" /> Synthetic world <span className="status-separator">·</span> no exchange connection <span className="status-separator">·</span> <span aria-live="polite">{saveStatus}</span></div>
         </header>
 
         {view === "meadow" ? (
@@ -208,7 +244,7 @@ function App() {
         ) : (
           <Understory
             world={world} experiment={experiment} experimentBusy={experimentBusy} onRunExperiment={runExperiment}
-            paperReplay={paperReplay} paperReplayBusy={paperReplayBusy} paperReplayError={paperReplayError} onRunPaperReplay={runPaperReplay}
+            paperReplay={paperReplay} paperReplayConfig={paperReplayConfig} paperReplayBusy={paperReplayBusy} paperReplayError={paperReplayError} onRunPaperReplay={runPaperReplay}
             onReturn={() => setView("meadow")} onSelectPlant={(id) => { setSelectedId(id); setView("meadow"); }}
           />
         )}
@@ -379,10 +415,10 @@ function GeneField({ population, axisX, axisY, setAxisX, setAxisY, selectedId, o
   </section>;
 }
 
-function Understory({ world, experiment, experimentBusy, onRunExperiment, paperReplay, paperReplayBusy, paperReplayError, onRunPaperReplay, onReturn, onSelectPlant }: {
+function Understory({ world, experiment, experimentBusy, onRunExperiment, paperReplay, paperReplayConfig, paperReplayBusy, paperReplayError, onRunPaperReplay, onReturn, onSelectPlant }: {
   world: SimulationWorld; experiment: ExperimentReport | null; experimentBusy: boolean; onRunExperiment: () => void;
-  paperReplay: PaperReplayRun | null; paperReplayBusy: boolean; paperReplayError: string | null;
-  onRunPaperReplay: (plantId: string, controls: StrategyControls, days: 7 | 30 | 90) => void;
+  paperReplay: PaperReplayRun | null; paperReplayConfig: SavedPaperReplayConfig | null; paperReplayBusy: boolean; paperReplayError: string | null;
+  onRunPaperReplay: (plantId: string, days: 7 | 30 | 90) => void;
   onReturn: () => void; onSelectPlant: (id: string) => void;
 }) {
   const active = visiblePopulation(world);
@@ -418,26 +454,23 @@ function Understory({ world, experiment, experimentBusy, onRunExperiment, paperR
       </aside>
     </div>
 
-    <PaperReplayPanel plants={active} worldDay={world.day} navUsdt={world.capital.navUsdt} run={paperReplay} busy={paperReplayBusy} error={paperReplayError} onRun={onRunPaperReplay} />
+    <PaperReplayPanel plants={active} world={world} worldDay={world.day} navUsdt={world.capital.navUsdt} run={paperReplay} runConfig={paperReplayConfig} busy={paperReplayBusy} error={paperReplayError} onRun={onRunPaperReplay} />
     {experiment && <ExperimentResults report={experiment} />}
     <footer className="game-footer"><span>Synthetic outcomes are not trading evidence and cannot qualify a strategy.</span><span>{archived.length} plants archived · {money(world.capital.freeCapitalUsdt)} returned to free allocation</span></footer>
   </div>;
 }
 
-function PaperReplayPanel({ plants, worldDay, navUsdt, run, busy, error, onRun }: {
-  plants: readonly GardenPlant[]; worldDay: number; navUsdt: number; run: PaperReplayRun | null; busy: boolean; error: string | null;
-  onRun: (plantId: string, controls: StrategyControls, days: 7 | 30 | 90) => void;
+function PaperReplayPanel({ plants, world, worldDay, navUsdt, run, runConfig, busy, error, onRun }: {
+  plants: readonly GardenPlant[]; world: SimulationWorld; worldDay: number; navUsdt: number; run: PaperReplayRun | null; runConfig: SavedPaperReplayConfig | null; busy: boolean; error: string | null;
+  onRun: (plantId: string, days: 7 | 30 | 90) => void;
 }) {
-  const [plantId, setPlantId] = useState(plants.find((plant) => plant.role === "parent")?.id ?? plants[0]?.id ?? "");
-  const [days, setDays] = useState<7 | 30 | 90>(7);
-  const [lookbackBars, setLookbackBars] = useState(5);
-  const [entryThresholdBps, setEntryThresholdBps] = useState(40);
-  const [exitThresholdBps, setExitThresholdBps] = useState(10);
+  const [plantId, setPlantId] = useState(runConfig?.plantId ?? plants.find((plant) => plant.role === "parent")?.id ?? plants[0]?.id ?? "");
+  const [days, setDays] = useState<7 | 30 | 90>(runConfig?.days ?? 7);
   const selected = plants.find((plant) => plant.id === plantId) ?? plants[0];
   const report = run?.execution;
   return <section className="paper-replay-panel">
-    <div className="section-title"><div><span>SYNTHETIC INTRADAY PAPER REPLAY</span><h2>Give one plant a signal gene</h2></div><span className="record-count">{(days * 24 * 60).toLocaleString()} UTC minute bars</span></div>
-    <p className="paper-replay-intro">A separate versioned Trading Genome reads completed synthetic closes and emits causal target positions. It is not the habitat genome, strategy alpha, or market evidence.</p>
+    <div className="section-title"><div><span>SYNTHETIC INTRADAY PAPER REPLAY</span><h2>Test an inherited signal genome</h2></div><span className="record-count">{(report?.dataset.barCount ?? days * 24 * 60).toLocaleString()} UTC minute bars{report ? " · last run" : " · selected horizon"}</span></div>
+    <p className="paper-replay-intro">The selected plant’s inherited trading genes drive this causal replay over completed synthetic closes. The recipe is not alpha or market evidence.</p>
     <div className="paper-replay-controls">
       <label>Funded plant<select value={selected?.id ?? ""} onChange={(event) => setPlantId(event.target.value)} disabled={busy || plants.length === 0}>
         {plants.map((plant) => <option key={plant.id} value={plant.id}>{plant.name} · {money(plant.allocationUsdt)} available</option>)}
@@ -445,10 +478,12 @@ function PaperReplayPanel({ plants, worldDay, navUsdt, run, busy, error, onRun }
       <label>Replay horizon<select value={days} onChange={(event) => setDays(Number(event.target.value) as 7 | 30 | 90)} disabled={busy}>
         <option value={7}>7 days · one ecology week</option><option value={30}>30 days · one ecology month</option><option value={90}>90 days · three ecology months</option>
       </select></label>
-      <label>Lookback · bars<input type="number" min="1" max="120" value={lookbackBars} onChange={(event) => setLookbackBars(Math.max(1, Math.min(120, Number(event.target.value) || 1)))} disabled={busy} /></label>
-      <label>Entry · basis points<input type="number" min={Math.max(1, exitThresholdBps)} max="3000" step="5" value={entryThresholdBps} onChange={(event) => setEntryThresholdBps(Math.max(exitThresholdBps, Math.min(3000, Number(event.target.value) || 1)))} disabled={busy} /></label>
-      <label>Exit · basis points<input type="number" min="0" max={entryThresholdBps} step="5" value={exitThresholdBps} onChange={(event) => setExitThresholdBps(Math.max(0, Math.min(entryThresholdBps, Math.min(3000, Number(event.target.value) || 0))))} disabled={busy} /></label>
-      <button className="experiment-button" onClick={() => selected && onRun(selected.id, { lookbackBars, entryThresholdBps, exitThresholdBps }, days)} disabled={busy || !selected}>{busy ? "Generating and replaying…" : `Run ${days}-day strategy · garden day ${worldDay}`}<span>↗</span></button>
+      {selected && <div className="trading-genome-readout" aria-label="Inherited trading genome">
+        <span>Lookback <b>{selected.tradingTraits.lookbackBars} bars</b></span>
+        <span>Entry <b>{selected.tradingTraits.entryThresholdBps} bps</b></span>
+        <span>Exit <b>{selected.tradingTraits.exitThresholdBps} bps</b></span>
+      </div>}
+      <button className="experiment-button" onClick={() => selected && onRun(selected.id, days)} disabled={busy || !selected}>{busy ? "Generating and replaying…" : `Run ${days}-day genome · garden day ${worldDay}`}<span>↗</span></button>
     </div>
     {error && <p className="paper-replay-error" role="alert">Replay not booked: {error}</p>}
     {report && <>
@@ -459,7 +494,7 @@ function PaperReplayPanel({ plants, worldDay, navUsdt, run, busy, error, onRun }
         <LedgerMetric label="Peak margin" value={money(Number(report.maxMarginUsed))} detail={`plant limit ${money(Number(report.allocationLimit))}`} />
         <LedgerMetric label="Garden NAV now" value={money(navUsdt)} detail="same portfolio ledger" />
       </div>
-      <div className="paper-replay-accounting">{report.fills.length > 0 && <><span>Price PnL <b>{money(Number(report.realizedPricePnl))}</b></span><span>Fees <b>−{money(Number(report.fees))}</b></span><span>Funding <b>{money(Number(report.funding))}</b></span></>}<span>Last closed replay <b>{report.days} days · {report.dataset.barCount.toLocaleString()} UTC minute bars</b></span><span>Dataset <b>{report.dataset.fingerprint.slice(0, 12)}…</b></span></div>
+      <div className="paper-replay-accounting">{report.fills.length > 0 && <><span>Price PnL <b>{money(Number(report.realizedPricePnl))}</b></span><span>Fees <b>−{money(Number(report.fees))}</b></span><span>Funding <b>{money(Number(report.funding))}</b></span></>}<span>Last closed replay <b>{report.days} days · {report.dataset.barCount.toLocaleString()} UTC minute bars</b></span>{runConfig && <span>Run settings <b>{world.plants.find((plant) => plant.id === runConfig.plantId)?.name ?? "Archived plant"} · lookback {runConfig.tradingTraits.lookbackBars} · entry {runConfig.tradingTraits.entryThresholdBps} bps · exit {runConfig.tradingTraits.exitThresholdBps} bps</b></span>}<span>Dataset <b>{report.dataset.fingerprint.slice(0, 12)}…</b></span></div>
       {run && <div className="paper-replay-accounting"><span>Evidence <b>{run.evidence.claim}</b></span><span>Inference <b>{run.evidence.statisticalStatus} · independent N unavailable</b></span><span>Max daily drawdown <b>{run.evidence.maxDailyDrawdownUsdt === null ? "unavailable" : `${money(run.evidence.maxDailyDrawdownUsdt)} · ${((run.evidence.maxDailyDrawdownPct ?? 0) * 100).toFixed(2)}%`}</b></span><span>Cost / cash reconciliation <b>{Math.abs(run.evidence.netPnlResidualUsdt) < 0.0001 && Math.abs(run.evidence.cashResidualUsdt) < 0.0001 ? "passed" : "failed"}</b></span></div>}
       {run?.strategy.status === "no_trade" && <p className="paper-replay-error">No eligible pre-close observation crossed the strategy threshold. No trade occurred; no trading loss was invented.</p>}
       <p className="experiment-disclaimer">{report.claim} The signal recipe is versioned as synthetic Momentum v1 and is not alpha. Executable opportunities depend on this genome's synthetic entry threshold; they are not independent market opportunities. The {run?.evidence.dailyMarkCount ?? 0} daily marks provide descriptive drawdown only: no Sharpe, CVaR, confidence, OOS, fitness, or independent-sample claim is available. Benchmark: cash / no trade. Verdict: <b>not_comparable</b>. The garden clock advanced {report.days} days and the closed result was booked into the single 90/10 ledger. Habitat fit and vigor were not changed by this result.</p>
@@ -476,3 +511,22 @@ function ExperimentResults({ report }: { report: ExperimentReport }) {
 }
 
 export default App;
+
+function readBrowserSave() {
+  try {
+    return typeof window === "undefined"
+      ? { save: null, status: "unavailable" as const }
+      : loadCloudgardenSave(window.localStorage);
+  } catch {
+    return { save: null, status: "unavailable" as const };
+  }
+}
+
+function experimentInputFrom(input: SavedExperimentInput | null): ExperimentReport | null {
+  if (!input) return null;
+  try {
+    return runControlledExperiment(input);
+  } catch {
+    return null;
+  }
+}
