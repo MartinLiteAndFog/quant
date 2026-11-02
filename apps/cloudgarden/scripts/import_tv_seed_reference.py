@@ -12,6 +12,7 @@ import json
 import math
 import os
 import re
+from zoneinfo import ZoneInfo
 from collections import Counter, defaultdict
 from pathlib import Path
 from artifact_tool import Blob, SpreadsheetFile
@@ -19,11 +20,18 @@ from artifact_tool import Blob, SpreadsheetFile
 HERE = Path(os.environ.get('TV_SEED_SOURCE_DIR', Path.cwd()))
 XLSX = sorted(HERE.glob('Strategy_Builder*.xlsx'))
 UTC = dt.timezone.utc
+EXCEL_WALL_TZ = ZoneInfo("Europe/Berlin")
 
 
 def iso_excel(value):
     if isinstance(value, (float, int)) and math.isfinite(value):
-        return (dt.datetime(1899, 12, 30, tzinfo=UTC) + dt.timedelta(days=float(value))).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+        # TradingView XLSX dates were exported as Europe/Berlin wall clock (the
+        # previously invented Z produced a 2-hour September/October offset).
+        wall = dt.datetime(1899, 12, 30) + dt.timedelta(days=float(value))
+        aware = wall.replace(tzinfo=EXCEL_WALL_TZ)
+        if aware.astimezone(UTC).astimezone(EXCEL_WALL_TZ).replace(tzinfo=None) != wall:
+            raise ValueError("Excel wall time falls into an invalid DST gap")
+        return aware.astimezone(UTC).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
     if value == 'Open':
         return None
     raise ValueError(f'Unsupported Excel trade date: {value!r}')
@@ -157,7 +165,9 @@ def main():
     if not XLSX:raise ValueError('No XLSX files found')
     seeds=[parse_one(p) for p in XLSX]
     catalog={
-       'schemaVersion':1,
+       'schemaVersion':2,
+       'sourceTimeZone':'Europe/Berlin',
+       'timeSemantics':'excel_wall_time_europe_berlin_normalized_to_utc',
        'claim':'tradingview_trade_reference_only_not_signal_parity',
        'source':'User-supplied TradingView Strategy Builder Excel exports 2026-10-17/18',
        'venueDataNote':'BINANCE SOL 1m parquet/source is separate; no matching BTC 1m source provided',
