@@ -101,8 +101,7 @@ namespace
         if (Availability == TEXT("unavailable"))
         {
             Result = FText::FromString(TEXT("—"));
-            return Obj->HasField(TEXT("value"))
-                && Obj->TryGetField(TEXT("value"))->Type == EJson::Null;
+            return Obj->HasTypedField<EJson::Null>(TEXT("value"));
         }
         // This prepared starter intentionally accepts MOCK ONLY. The local
         // agent must add a separately authenticated real-ledger adapter.

@@ -257,6 +257,21 @@ def build_hud_snapshot(bootstrap: dict, fin: dict | None = None) -> dict:
             "capitalModeAction": "preview_only_requires_backend_acceptance",
             "liveModeClickAction": "blocked",
         },
+        "recentResearchEvents": [
+            {"type": e["type"], "tileId": e["tileId"], "plantId": e["plantId"],
+             "dayIndex": e["dayIndex"], "source": "synthetic_reference_only"}
+            for e in bootstrap["referenceEventJournal"]["events"]
+            if e["dayIndex"] <= bootstrap["sceneRef"]["dayIndex"]
+        ][-5:],
+        "risk": {
+            "source": "authoritative_risk_backend_missing",
+            "dailyLossLimitPct": None,
+            "totalLossLimitPct": None,
+            "usedRiskPct": None,
+            "aggregateExposureUsdt": None,
+            "killSwitchStatus": "unknown_not_connected",
+            "noGreenSafetyBadgeWithoutBackend": True,
+        },
         "alerts": [
             {"severity": "info", "code": "NOT_LIVE", "text": "Demo-Modus: keine Orders"},
             {"severity": "info", "code": "PAPER_UNFUNDED", "text": "Paper-Kapital ist angefragt, nicht gebucht"},
