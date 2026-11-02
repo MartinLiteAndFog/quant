@@ -84,7 +84,7 @@ test("a released genuine allocation can fund the twenty-first child exactly once
   assert.equal(first.capital.seedlingEntitlements.filter((s) => s.status === "used").length, SEEDLING_ENTITLEMENTS);
   const conception = first.events.find((e) => e.type === "conception" && e.subject === newChild.id);
   assert.equal(conception?.detail.fundingSource, "recycled");
-  assert.equal(conception?.detail.entitlementId, null);
+  assert.equal(conception?.detail.entitlementId, undefined, "recycled capital never claims a seedbank slot");
   assertSimulationInvariants(first);
   assert.deepEqual(advanceSimulationDays(reclaimed, 2), first);
 });
