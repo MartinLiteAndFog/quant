@@ -73,6 +73,52 @@ test("controlled experiments are reproducible and conserve each cohort's capital
   }
 });
 
+test("matched cohorts summarize inherited trading traits descriptively and repeatably", () => {
+  const input = { seeds: ["GENE-A", "GENE-B", "GENE-C"], days: 42 };
+  const report = runControlledExperiment(input);
+  assert.deepEqual(runControlledExperiment(input), report);
+
+  const roundMean = (values: number[]) => values.length
+    ? Math.round(values.reduce((sum, value) => sum + value, 0) / values.length * 10_000) / 10_000
+    : 0;
+  const fields = [
+    ["meanTradingLookbackBars", "lookbackBars"],
+    ["meanTradingEntryThresholdBps", "entryThresholdBps"],
+    ["meanTradingExitThresholdBps", "exitThresholdBps"],
+  ] as const;
+
+  for (const cohort of report.cohorts) {
+    for (const [outcomeIndex, outcome] of cohort.outcomes.entries()) {
+      const finalWorld = advanceSimulationDays(
+        createSimulationWorld(outcome.seed, { conceptionPolicy: cohort.mode }),
+        outcome.days,
+      );
+      const active = finalWorld.plants.filter((plant) => plant.status === "active");
+      for (const [outcomeField, traitField] of fields) {
+        const expected = roundMean(active.map((plant) => plant.tradingTraits[traitField]));
+        assert.equal(outcome[outcomeField], expected, `${cohort.mode}/${outcome.seed} ${traitField}`);
+      }
+      assert.equal(outcomeIndex, input.seeds.indexOf(outcome.seed));
+    }
+
+    for (const [cohortField, outcomeField] of fields.map(([cohortKey]) => [cohortKey, cohortKey] as const)) {
+      assert.equal(
+        cohort[cohortField],
+        roundMean(cohort.outcomes.map((outcome) => outcome[outcomeField])),
+        `${cohort.mode} equal-weight trial mean for ${cohortField}`,
+      );
+    }
+  }
+
+  for (const [cohortField] of fields) {
+    const policyMeans = report.cohorts.map((cohort) => cohort[cohortField]);
+    assert.ok(new Set(policyMeans).size > 1, `${cohortField} should reflect the distinct conception policies`);
+  }
+  assert.equal(report.benchmarkConclusion, "not_comparable");
+  assert.equal(report.claim, SYNTHETIC_ONLY_NOTICE);
+  assert.ok(report.interpretation.includes("do not compare against market evidence or trading performance"));
+});
+
 test("every fixed policy can use all twenty seedling slots without entitlement reuse", () => {
   for (const mode of CONTROLLED_COHORT_MODES) {
     const world = advanceSimulationDays(createSimulationWorld(`FULL-${mode}`, { conceptionPolicy: mode }), 140);
