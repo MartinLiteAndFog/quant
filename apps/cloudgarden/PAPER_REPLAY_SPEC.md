@@ -1,5 +1,7 @@
 # Cloudgarden paper replay v1
 
+This document describes the legacy synthetic demo pipeline. The default historical SOL trading mode is documented separately in `HISTORICAL_TRADING_SPEC.md` and uses an explicit historical-research opt-in, rather than disguising archive prices as synthetic data.
+
 ## Goal
 
 Add a reproducible, isolated intraday paper-execution vertical slice to the
