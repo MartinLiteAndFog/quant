@@ -51,3 +51,22 @@ The two generated JSON files above are dry-run outputs; targets are proposed
 Unreal fields, not writable UE assets until a local agent creates the matching
 Blueprints/Data Assets. They are not live API calls. See contracts/local_mcp_tools_v1.json
 for proposed restricted automation tool signatures (not an installed MCP server).
+
+## Pairwise parameter tiles and one plant in multiple world locations
+
+Four SOL example tiles are registered in contracts/parameter_tiles_v1.json:
+Lookback × Stop-Loss, Lookback × Sensitivity, Sensitivity × TTP, and Lookback × TTP.
+Optional per-plant genes reside in fixtures/tile_genomes_v1.json; historical
+Cloudgarden SourceGenome DOES NOT yet include approved Sensitivity/TTP fields.
+This is an explicitly synthetic research-sidecar demo, not historical evidence.
+
+    python3 apps/cloudgarden-ue5/scripts/project_parameter_tiles.py > ue-tiles.json
+    python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_parameter_tiles.py' -v
+
+The projections contain a yes/no reason for each (plant, tile) pair and a
+stable tileId::plantId visual instance ID. Same plantId across tiles means ONE
+canonical genome/lineage/account, not multiple strategies or capital allocations.
+Missing genes are not defaulted, out-of-range values are not clamped, and
+archived plants remain genealogy-only. Only the canonical home tile may emit
+*authorized* ecological physics candidates; other representations are view-only.
+See ../../docs/plans/2026-11-02-cloudgarden-ue5-multi-parameter-tiles.md.

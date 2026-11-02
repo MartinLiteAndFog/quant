@@ -98,3 +98,29 @@ Before enabling any editor automation, consume the generator outputs as JSON:
 - contracts/local_mcp_tools_v1.json specifies the planned local MCP tool names, allowlisted paths and side-effect classes. It is a design contract, not an implemented MCP server.
 
 The agent must implement and test each tool rather than assuming a native Unreal MCP. Neither JSON output contains private price data, account tokens or broker actions.
+
+## Additional mandatory task: multi-tile genomic projections
+
+Follow docs/plans/2026-11-02-cloudgarden-ue5-multi-parameter-tiles.md.
+Build TileCatalogDataAsset from contracts/parameter_tiles_v1.json and a read-only
+projection subsystem using scripts/project_parameter_tiles.py as semantic oracle.
+The same plant must appear four times in four compatible tile coordinate frames
+with ONE immutable plantId, ONE source genome and ONE inspector/selection.
+Use the fixture tile_genomes_v1.json as the temporary sparse gene source.
+A field absent from that plant means NO on every tile requiring that field.
+Do not automatically fill unlisted Sensitivity or TTP with display defaults:
+these are synthetic research fields and not approved SourceGenome trade genes.
+
+Implement render instance IDs as tileId::plantId and rebuild Unreal ISM index
+lookups after instancing changes. Clicking any representation selects the same
+plant, highlights every other eligible tile instance, and does not alter a bot,
+account or fitness. Atlas/Explore share this source map without cloning events.
+Only the canonical source home tile may request authorized physics outcomes;
+all other view duplicates must not spawn canonical seeds or consume capital.
+Before editor work, pass:
+
+    python3 apps/cloudgarden-ue5/scripts/project_parameter_tiles.py > /tmp/cloudgarden_tile_instances.json
+    python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_parameter_tiles.py' -v
+
+Report the actual UE asset paths, version and screenshots separately; the
+prepared JSON and Python tests do not constitute an installed Unreal project.
