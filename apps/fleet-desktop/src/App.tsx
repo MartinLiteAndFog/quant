@@ -17,6 +17,7 @@ import {
 } from "./api";
 import { HeroChart } from "./components/HeroChart";
 import { EvolutionMeadow } from "./components/EvolutionMeadow";
+import { EcosystemGameWorld } from "./components/EcosystemGameWorld";
 import { DrawerShell, type DrawerId } from "./components/DrawerShell";
 import { StatusRail } from "./components/StatusRail";
 import { ActivityDrawer } from "./components/drawers/ActivityDrawer";
@@ -111,6 +112,7 @@ export default function App() {
   const [isolatedId, setIsolatedId] = useState<string | null>(null);
   const [showPortfolio, setShowPortfolio] = useState(true);
   const [showEvolutionMeadow, setShowEvolutionMeadow] = useState(false);
+  const [showEcosystemWorld, setShowEcosystemWorld] = useState(false);
   const [drawer, setDrawer] = useState<DrawerId>(null);
   const [chartMode, setChartMode] = useState<ChartMode>("account_abs");
   const [showMaxDd, setShowMaxDd] = useState(true);
@@ -420,8 +422,12 @@ export default function App() {
           </div>
           <div className="chip-group" role="group" aria-label="Meadow visualization">
             <button type="button" className="chip" data-active={showEvolutionMeadow}
-              onClick={() => { setShowEvolutionMeadow(v => !v); setDrawer(null); }}>
+              onClick={() => { setShowEvolutionMeadow(v => !v); setShowEcosystemWorld(false); setDrawer(null); }}>
               Evolution 🌱
+            </button>
+            <button type="button" className="chip" data-active={showEcosystemWorld}
+              onClick={() => { setShowEcosystemWorld(v => !v); setShowEvolutionMeadow(false); setDrawer(null); }}>
+              Ecosystem 🌿
             </button>
           </div>
           <div className="chip-group" role="group" aria-label="Panels">
@@ -587,7 +593,7 @@ export default function App() {
 
           {/* Single full-bleed hero — drawers overlay this; they never replace it with a second chart */}
           <div className="relative min-h-0 flex-1 overflow-hidden border border-[var(--line)] bg-[var(--bg-chart)]">
-            {showEvolutionMeadow ? <EvolutionMeadow /> : <HeroChart
+            {showEcosystemWorld ? <EcosystemGameWorld /> : showEvolutionMeadow ? <EvolutionMeadow /> : <HeroChart
               series={series}
               portfolio={portfolio}
               visibleIds={visibleIds}
@@ -598,7 +604,7 @@ export default function App() {
               showPortfolio={showPortfolio}
               clock={clock}
             />}
-            {!showEvolutionMeadow && booting && (
+            {!showEvolutionMeadow && !showEcosystemWorld && booting && (
               <div className="hero-empty">
                 <span className="spinner" aria-label="Loading" />
                 <p className="hint">Loading fleet data…</p>
