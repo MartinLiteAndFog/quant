@@ -11,7 +11,7 @@ test("worker protocol accepts only the active, matching, reconciled run", async 
     weekIndex: 0,
     plantId: "plant-protocol",
     allocationUsdt: 20,
-    controls: { lookbackBars: 5, entryThresholdBps: 40, exitThresholdBps: 10 },
+    tradingTraits: { lookbackBars: 5, entryThresholdBps: 40, exitThresholdBps: 10 },
   });
   const response = { id: "active-run", result };
 
