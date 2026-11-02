@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   createSyntheticMarketRange,
+  HISTORICAL_PAPER_NOTICE,
   createSyntheticMarketWeek,
   normalizeMarketData,
   runPaperReplay,
@@ -266,6 +267,60 @@ test("replay fails closed on open positions and empirical provenance", async () 
   const unverified = await normalizeMarketData([bar(0), bar(1)], { ...provenance, synthetic: false });
   assert.equal(unverified.report.eligibility, "provenance_unverified");
   assert.throws(() => runPaperReplay({ dataset: unverified, signals: [], allocationLimit: "20", startingCash: "20" }), /provenance and data-quality gate/);
+});
+
+test("explicit historical research executes archive prices and books exact nonzero PnL in the same ledger", async () => {
+  const dataset = await normalizeMarketData(Array.from({ length: 5 }, (_, minute) => pricedBar(minute, 100 + minute)), {
+    ...provenance, synthetic: false, source: "test archive; modeled linear 1x, venue unverified", license: "research use unverified",
+  });
+  const report = runPaperReplay({
+    dataset, historicalResearch: true,
+    signals: [signal("historical-open", "0.1", 0), signal("historical-close", "0", 3)],
+    allocationLimit: "20", startingCash: "20",
+    costs: { feeBps: "6", spreadBps: "0", slippageBps: "0", maxDelaySeconds: 120 },
+  });
+  assert.equal(report.dataset.synthetic, false);
+  assert.equal(report.dataset.eligibility, "provenance_unverified");
+  assert.equal(report.claim, HISTORICAL_PAPER_NOTICE);
+  assert.equal(report.benchmarkConclusion, "not_comparable");
+  assert.deepEqual(report.fills.map((fill) => fill.price), ["101", "104"]);
+  assert.equal(report.realizedPricePnl, "0.3");
+  assert.equal(report.fees, "0.0123");
+  assert.equal(report.netPnl, "0.2877");
+  assert.equal(report.endingCash, "20.2877");
+  const world = createSimulationWorld("historical-ledger");
+  const booked = bookClosedPaperReplay(advanceSimulationDays(world, report.days), "parent-01", {
+    startDay: 0, days: report.days, datasetFingerprint: report.dataset.fingerprint,
+    synthetic: false, historicalResearch: true, marketSource: dataset.provenance.source,
+    endedFlat: report.endedFlat, riskBreach: report.riskBreach, fillCount: report.fills.length,
+    allocationLimitUsdt: Number(report.allocationLimit), startingCashUsdt: Number(report.startingCash),
+    endingCashUsdt: Number(report.endingCash), maxMarginUsedUsdt: Number(report.maxMarginUsed),
+    realizedPricePnlUsdt: Number(report.realizedPricePnl), feesUsdt: Number(report.fees),
+    fundingUsdt: Number(report.funding), netPnlUsdt: Number(report.netPnl),
+  });
+  assert.equal(booked.capital.navUsdt, 100.2877);
+  assert.equal(booked.capital.protectedReserveUsdt, 10.0288);
+  assert.equal(booked.capital.allocationCeilingUsdt, 90.2589);
+  assert.equal(booked.events.at(-1)?.detail.synthetic, false);
+  assert.equal(booked.events.at(-1)?.detail.marketSource, dataset.provenance.source);
+  assert.equal(booked.events.at(-1)?.detail.historicalResearch, true);
+});
+
+test("historical opt-in still rejects inconsistent provenance, malformed bars, missing metadata and oversized positions", async () => {
+  const dataset = await normalizeMarketData([pricedBar(0, 100), pricedBar(1, 101), pricedBar(2, 102)], {
+    ...provenance, synthetic: false, source: "historical research archive",
+  });
+  const input = { dataset, historicalResearch: true, signals: [], allocationLimit: "20", startingCash: "20" };
+  for (const corrupted of [
+    { ...dataset, provenance: { ...dataset.provenance, source: " " } },
+    { ...dataset, provenance: { ...dataset.provenance, license: " " } },
+    { ...dataset, report: { ...dataset.report, synthetic: true } },
+    { ...dataset, report: { ...dataset.report, fingerprint: "f".repeat(64) } },
+    { ...dataset, bars: dataset.bars.map((entry, index) => index === 1 ? { ...entry, high: "1" } : entry) },
+  ]) assert.throws(() => runPaperReplay({ ...input, dataset: corrupted }), RangeError);
+  const oversized = runPaperReplay({ ...input, signals: [signal("oversized-historical", "1", 0)] });
+  assert.deepEqual(oversized.rejectedSignals, [{ orderId: "oversized-historical", reason: "allocation_limit" }]);
+  assert.equal(oversized.fills.length, 0);
 });
 
 test("the replay exposes daily marks across the seven-day window and is not comparable", async () => {
