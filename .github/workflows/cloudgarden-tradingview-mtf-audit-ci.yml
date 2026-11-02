@@ -1,0 +1,20 @@
+name: Cloudgarden TradingView MTF audit (offline)
+
+on:
+  pull_request:
+    paths:
+      - 'apps/cloudgarden/scripts/verify_tv_renko_mtf_and_fills.py'
+      - 'apps/cloudgarden/scripts/test_verify_tv_renko_mtf_and_fills.py'
+      - 'apps/cloudgarden/TRADINGVIEW_MTF_RSI_AND_REAL_PRICE_AUDIT.md'
+      - '.github/workflows/cloudgarden-tradingview-mtf-audit-ci.yml'
+  workflow_dispatch:
+
+jobs:
+  offline-reference-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Synthetic no-market-data unit tests
+        run: python3 -m unittest discover -s apps/cloudgarden/scripts -p 'test_verify_tv_renko_mtf_and_fills.py' -v
+      - name: Compile and inspect offline scripts
+        run: python3 -m py_compile apps/cloudgarden/scripts/verify_tv_renko_mtf_and_fills.py apps/cloudgarden/scripts/test_verify_tv_renko_mtf_and_fills.py
