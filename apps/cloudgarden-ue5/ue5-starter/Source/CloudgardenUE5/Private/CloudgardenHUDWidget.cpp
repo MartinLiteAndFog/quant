@@ -18,7 +18,7 @@ namespace
         if (!Object.IsValid() || !Object->TryGetNumberField(Key, Number)
             || !FMath::IsFinite(Number) || Number < 0
             || Number > static_cast<double>(MAX_int32)
-            || FMath::FloorToDouble(Number) != Number)
+            || FMath::Floor(Number) != Number)
         {
             return false;
         }
