@@ -23,6 +23,7 @@ RUN apt-get update && apt-get install -y procps && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml .
 COPY src ./src
+COPY tests ./tests
 COPY scripts ./scripts
 RUN mkdir -p ./data/regimes
 COPY deploy/assets/pc_3axis_gate_latest.csv ./data/regimes/pc_3axis_gate_latest.csv
