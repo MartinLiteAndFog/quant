@@ -275,13 +275,20 @@ class HedgeFleet:
         price = (bid + ask) / 2 if bid > 0 and ask > 0 else 0
         multiplier = float(self.broker.get_contract_multiplier(self.symbol))
         leverage = float(os.getenv("KUCOIN_FUTURES_ORDER_LEVERAGE", "1"))
-        use = float(os.getenv("HEDGE_BOT_CAPITAL_USAGE", "1"))
-        if not (0 < use <= 1) or not (0 < leverage <= float(os.getenv("HEDGE_MAX_LEVERAGE", "20"))):
-            raise RuntimeError("invalid hedge capital usage or leverage")
+        # The shared trading pool is 90% of total equity, *then* divided
+        # equally between registered strategies. The other 10% is not
+        # distributable, regardless of N or current free margin.
+        use = float(os.getenv("HEDGE_BOT_CAPITAL_USAGE", "0.90"))
+        if not (0 < use <= 0.90) or not (0 < leverage <= float(os.getenv("HEDGE_MAX_LEVERAGE", "20"))):
+            raise RuntimeError("invalid hedge capital usage (>90%) or leverage")
         if not (equity > 0 and available > 0 and price > 0 and multiplier > 0):
             return price, 0
         per_bot_margin = equity * use / n
-        affordable_margin = available * float(os.getenv("HEDGE_FREE_MARGIN_BUFFER", "0.90"))
+        # Deduct the shared reserve ONCE from free balance. Multiplying
+        # remaining free margin by 0.90 on every entry would compound a
+        # new 10% haircut per bot, incorrectly starving the later bots.
+        reserve_margin = equity * (1.0 - use)
+        affordable_margin = max(0.0, available - reserve_margin)
         qty = math.floor(min(per_bot_margin, affordable_margin) * leverage / (price * multiplier))
         max_contracts = int(os.getenv("LIVE_EXECUTOR_MAX_CONTRACTS", "0") or 0)
         max_margin = float(os.getenv("LIVE_EXECUTOR_MAX_MARGIN_USDT", "0") or 0)
