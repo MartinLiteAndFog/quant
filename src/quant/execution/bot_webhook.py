@@ -291,7 +291,22 @@ def hedge_status(
         raise HTTPException(status_code=503, detail="hedge fleet requires authenticated webhook")
     _check_token(x_webhook_token or request.query_params.get("token"))
     from quant.execution.blaupunkt_hedge import fleet
-    return fleet().status()
+    executor = fleet()
+    result = executor.status()
+    try:
+        result["exchange_position_mode"] = executor._mode()
+    except Exception as exc:
+        result["exchange_position_mode_error"] = str(exc)
+    try:
+        bal = executor.broker.get_account_balance(currency="USDT")
+        result["account_equity_usdt"] = bal.get("equity")
+        result["free_margin_usdt"] = bal.get("available")
+        result["allocated_pool_usdt"] = round(
+            float(bal.get("equity") or 0) * result["capital_pool_pct"] / 100, 8
+        )
+    except Exception as exc:
+        result["account_balance_error"] = str(exc)
+    return result
 
 
 @app.get("/hedge/events")
