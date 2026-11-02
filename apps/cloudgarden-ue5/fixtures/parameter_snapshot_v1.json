@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_ue5_parameter_snapshot",
+  "authority": "synthetic_fixture_only",
+  "sceneRef": {
+    "seed": "ue5-visual-preview-v0",
+    "dayIndex": 7
+  },
+  "plantId": "plant-a",
+  "registryVersion": 1,
+  "values": {
+    "visual.hue_deg": 126,
+    "visual.saturation_ratio": 0.65,
+    "morph.branching_ratio": 0.62,
+    "morph.leaf_count": 22,
+    "morph.photosynthetic_rind": false,
+    "eco.seed_release_height_m": 1.7,
+    "eco.seed_azimuth_deg": 35,
+    "eco.seed_elevation_deg": 25,
+    "eco.seed_launch_speed_mps": 2.2,
+    "eco.seed_spread_deg": 6,
+    "eco.seed_count": 3,
+    "trade.channel_lookback": 50,
+    "trade.stop_loss_bps": 250
+  },
+  "expectedProjections": {
+    "BP_CloudPlant.HueDegrees": 126,
+    "BP_CloudPlant.Saturation": 0.65,
+    "PCG_CloudPlant.Branching": 0.62,
+    "PCG_CloudPlant.LeafCount": 22,
+    "BP_CloudPlant.PhotosyntheticRind": false,
+    "BP_SeedEmitter.ReleaseHeightCm": 170,
+    "BP_SeedEmitter.AzimuthDeg": 35,
+    "BP_SeedEmitter.ElevationDeg": 25,
+    "BP_SeedEmitter.LaunchSpeedCmps": 220,
+    "BP_SeedEmitter.YawSpreadDeg": 6,
+    "BP_SeedEmitter.SeedCount": 3,
+    "WBP_PlantInspector.ChannelLookback": 50,
+    "WBP_PlantInspector.StopLossBps": 250
+  },
+  "notes": "Scene preview inputs only. New ECO genes do not exist in the canonical genome yet; trade genes never receive UE writes."
+}
