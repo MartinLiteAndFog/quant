@@ -36,3 +36,19 @@ make a live feed appear.
 - Use stable UMG bindings only on snapshot/mode/selection changes; avoid tick-time
   JSON parsing. Show DE/EN-localized placeholders for unavailable metrics.
 - UMG implementation spec lives in docs/plans/2026-11-02-cloudgarden-ue5-hud.md.
+
+## Selection and 3D miniature
+
+Two additional files are part of this starter module:
+- Public/CloudgardenPlantFocusWidget.h
+- Private/CloudgardenPlantFocusWidget.cpp
+
+UCloudgardenPlantFocusWidget.ImportSyntheticHUDJson takes the same HUD JSON
+used by the global panel, then FocusPlantById(canonicalId) selects a single
+read-only plant and requests a 0.65s world camera focus via Blueprint event.
+Closing the drawer requests camera restoration without clearing the canonical
+selection. Create WBP_PlantFocusDrawer and an isolated preview stage with
+SceneCapture2D -> RT_CloudgardenPlantFocus, then pass the render target using
+SetPlantPreviewRenderTarget. The preview mesh must be cosmetic with NO trading,
+seed release, collision or simulation authority, and must not spawn a canonical
+Plant actor. A missing historical individual equity source produces no plot.

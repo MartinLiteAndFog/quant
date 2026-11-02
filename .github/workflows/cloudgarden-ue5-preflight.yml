@@ -9,6 +9,7 @@ on:
       - 'docs/plans/2026-11-02-cloudgarden-ue5-tile-experiments-and-capital.md'
       - 'docs/plans/2026-11-02-cloudgarden-ue5-research-journal-and-mode-preview.md'
       - 'docs/plans/2026-11-02-cloudgarden-ue5-hud.md'
+      - 'docs/plans/2026-11-02-cloudgarden-hud-plant-focus.md'
       - '.github/workflows/cloudgarden-ue5-preflight.yml'
   workflow_dispatch:
 permissions:
@@ -72,3 +73,11 @@ jobs:
           python3 -c 'from pathlib import Path; s=Path("/tmp/cloudgarden-hud-preview.html").read_text(); assert "__HUD_MOCK_JSON__" not in s and "id=\"rank-losers\"" in s and "id=\"explore\"" in s'
       - name: Verify HUD browser interactions and escaped source data
         run: python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_hud_preview.py' -v
+      - name: Validate plant-focus miniature, equity histories and source identity
+        run: python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_plant_focus.py' -v
+      - name: Check selected plant browser interaction script syntax
+        run: |
+          python3 apps/cloudgarden-ue5/scripts/export_hud_preview.py > /tmp/selected_plant_hud.html
+          python3 -c 'import re; s=open("/tmp/selected_plant_hud.html").read(); scripts=re.findall(r"<script>(.*?)</script>",s,re.S); assert len(scripts)==1; open("/tmp/cloudgarden_hud_browser.js","w").write(scripts[0])'
+          node --check /tmp/cloudgarden_hud_browser.js
+          python3 -c 'from pathlib import Path; s=Path("/tmp/selected_plant_hud.html").read_text(); assert "id=\"plant-inspector\"" in s and "function selectPlant(plantId)" in s and "id=\"garden-scene\"" in s'

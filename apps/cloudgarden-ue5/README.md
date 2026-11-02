@@ -145,3 +145,24 @@ NAV 108.90, +8.90% and its rankings are marked MOCK/DEMO, not empirical trades.
 Future local Unreal agent must create actual UMG Blueprint assets and compile
 C++ starter on pinned UE version. No orders/risk controls/real-paper bookings
 are provided in the HUD starter.
+
+## Selected plant HUD drawer — user-chosen close-up meadow direction
+
+Design and implementation: ../../docs/plans/2026-11-02-cloudgarden-hud-plant-focus.md
+
+We now use ONE physical 3D garden, not separate floating island worlds.
+When a plant is clicked, the main camera eases toward it a little and a
+translucent lower HUD drawer opens with a visually enlarged copy of that
+plant (a mere mesh/capture, NEVER another canonical organism or bot),
+individual equity development, high water mark, PnL, drawdown, win rate,
+age/generation and the trading/research gene summary.
+
+The reference code computes validated per-plant synthetic histories in
+scripts/build_plant_inspector.py; the standalone HTML preview accepts clicks
+on the garden's plants. In Unreal the new C++ UMG starter
+UCloudgardenPlantFocusWidget should be tied to a cosmetic preview
+SceneCaptureComponent2D/RenderTarget and a smoothed main-camera director.
+
+All financial data in the screenshot/mock are fictional; without per-plant
+source data, the chart/high-water mark stay unavailable. Multiple tile copies
+of one plant always open ONE canonical-source inspector, never duplicate NAV.

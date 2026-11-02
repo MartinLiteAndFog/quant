@@ -43,6 +43,19 @@ class HUDPreviewTests(unittest.TestCase):
         self.assertEqual(json.loads(s)["payload"],
                          "</script><img src=x onerror=evil()>")
 
+    def test_single_garden_and_clickable_source_plant_focus_hud(self):
+        html = render_preview()
+        for marker in ('id="garden-scene"', 'id="world-plants"',
+                       'id="plant-inspector"', 'id="focus-chart-path"',
+                       'id="focus-high"', 'id="focus-genome"',
+                       'function selectPlant(plantId)', 'function renderPlantInspector()',
+                       "button.addEventListener('click'", 'renderWorldPlants()',
+                       "e.key==='Escape'", 'Visuelle Pflanzenkopie'):
+            self.assertIn(marker, html)
+        self.assertIn("plantInspectors", html)
+        self.assertIn("is-focused", html)
+        self.assertIn("fiktive", html.lower())
+
     def test_empty_finance_is_visible_as_missing(self):
         html = render_preview()
         self.assertIn("Keine bestätigten Finanzdaten verfügbar", html)

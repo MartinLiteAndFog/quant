@@ -210,3 +210,27 @@ ApplySnapshotJson is READ ONLY and rejects unsupported live or funded claims.
 Capital tile button MUST use a pending backend request preview, not a direct
 client-side investment mutation. Never derive a portfolio valuation from 6
 visual instances, synthetic seed score or requested paper budget.
+
+## Next local Unreal implementation: click-to-inspect plant and soft focus
+
+The user selected the FIRST of the two realistic single-garden HUD concepts:
+one close-up meadow, organic scientific overlays, NO fantasy archipelago.
+Read docs/plans/2026-11-02-cloudgarden-hud-plant-focus.md.
+
+Take the new C++ starter:
+- ue5-starter/Source/CloudgardenUE5/Public/CloudgardenPlantFocusWidget.h
+- ue5-starter/Source/CloudgardenUE5/Private/CloudgardenPlantFocusWidget.cpp
+
+Create WBP_PlantFocusDrawer with an offscreen cosmetic RenderTarget stage
+(RT_CloudgardenPlantFocus, scene capture preview of the SAME source phenotype,
+without collision/physics/reproduction/ticks). Clicking any in-world plant
+or tile representation resolves the canonical source ID, fills the drawer
+and animates the MAIN camera softly (0.65 second blend, ~12% dolly).
+Draw individual chronological strategy equity and historical peak to its right,
+plus source traits/genes and age. Missing evidence -> "—", never a global
+portfolio NAV substituted into a plant. Restoring Atlas/Explore retains
+the selected ID; Escape closes the drawer and returns camera framing.
+
+Important: C++ module has not been compiled on local UE5; its Blueprint and
+capture stage remain to build/test by the local agent. The Python/browser
+preflight is NOT a production engine simulation.
