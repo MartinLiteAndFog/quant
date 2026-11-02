@@ -294,6 +294,20 @@ def hedge_status(
     return fleet().status()
 
 
+@app.get("/hedge/events")
+def hedge_events(
+    request: Request,
+    x_webhook_token: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    if not _hedge_enabled():
+        raise HTTPException(status_code=404, detail="hedge mode not enabled")
+    if not _expected_token() or _truthy(os.getenv("BOT_WEBHOOK_ALLOW_ANON")):
+        raise HTTPException(status_code=503, detail="hedge monitoring needs authentication")
+    _check_token(x_webhook_token or request.query_params.get("token"))
+    from quant.execution.hedge_webhook_queue import status
+    return status()
+
+
 @app.post("/webhook/tv-execute")
 async def tv_execute(
     request: Request,
