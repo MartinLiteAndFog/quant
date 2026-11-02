@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import contextmanager
 import sqlite3
 import threading
 import time
@@ -31,7 +32,8 @@ def _db_path() -> Path:
     return Path(os.getenv("HEDGE_WEBHOOK_QUEUE_FILE", "/data/blaupunkt-webhooks.sqlite3"))
 
 
-def _connect() -> sqlite3.Connection:
+@contextmanager
+def _connect():
     path = _db_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     db = sqlite3.connect(str(path), timeout=2.0)
@@ -54,7 +56,11 @@ def _connect() -> sqlite3.Connection:
         )
     """)
     db.commit()
-    return db
+    try:
+        with db:
+            yield db
+    finally:
+        db.close()
 
 
 def enqueue(bot: str, signal: TVSignal, config: TVExecConfig) -> Dict[str, Any]:
