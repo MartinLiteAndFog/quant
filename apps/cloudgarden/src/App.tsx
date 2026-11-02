@@ -352,9 +352,14 @@ function Meadow({
             <Stat label="Synthetic evidence" value={selected.evidence} />
           </div>
           <p className="metrics-legend">{historical
-            ? "Body mass and vigor compound by this plant’s own net paper return. No-trade days leave them unchanged. Habitat fit and evidence remain synthetic game traits; legacy predator rules still apply."
+            ? "Body mass grows with this plant’s net paper return. After 14 idle trading days, an inherited patience gene causes a tiny extra daily vigor loss (no fabricated PnL). Habitat fit/evidence and the legacy predators remain synthetic game traits."
             : "Habitat fit reflects today’s synthetic climate match. Vigor is the plant’s accumulated state; evidence counts only simulated observation."}</p>
-          {historical && <div className="plant-allocation"><span>Trading-grown body mass</span><b>{selected.biomass.toFixed(2)} / 100</b></div>}
+          {historical && <>
+            <div className="plant-allocation"><span>Trading-grown body mass</span><b>{selected.biomass.toFixed(2)} / 100</b></div>
+            <div className="plant-allocation"><span>Consecutive inactive days</span><b>{selected.inactiveDays ?? 0} · decay after day 14</b></div>
+            <div className="plant-allocation"><span>Inherited patience</span><b>{((selected.genes.patience ?? 0.5) * 100).toFixed(1)}%</b></div>
+            <div className="plant-allocation"><span>Parents</span><b>{selected.parents?.join(" × ") ?? "Founding plant"}</b></div>
+          </>}
           <div className="plant-allocation"><span>Capital entitlement</span><b>{money(selected.allocationUsdt)}</b></div>
           <div className="plant-allocation"><span>Observed in this world</span><b>{selected.evidenceDays} days</b></div>
           <div className="genome-title"><span>Genome · heritable traits</span><small>protected policies fixed</small></div>
