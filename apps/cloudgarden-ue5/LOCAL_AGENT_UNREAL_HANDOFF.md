@@ -115,8 +115,12 @@ Implement render instance IDs as tileId::plantId and rebuild Unreal ISM index
 lookups after instancing changes. Clicking any representation selects the same
 plant, highlights every other eligible tile instance, and does not alter a bot,
 account or fitness. Atlas/Explore share this source map without cloning events.
-Only the canonical source home tile may request authorized physics outcomes;
-all other view duplicates must not spawn canonical seeds or consume capital.
+New decision: EVERY eligible tile appearance can run an independently keyed
+seed physics RESEARCH experiment, even when the same plant appears four times.
+This does not multiply source trading strategies, account funds or canonical
+births: every release is tile/plant/scene/revision/seed keyed and requires owner
+approval before acceptance. Per-tile capital off/paper/live-request switches
+are independent of evolution. Live is rejected pending trusted OMS/risk gate.
 Before editor work, pass:
 
     python3 apps/cloudgarden-ue5/scripts/project_parameter_tiles.py > /tmp/cloudgarden_tile_instances.json
@@ -124,3 +128,19 @@ Before editor work, pass:
 
 Report the actual UE asset paths, version and screenshots separately; the
 prepared JSON and Python tests do not constitute an installed Unreal project.
+
+## Mandatory local build: tile experiments and financial mode controls
+
+Read docs/plans/2026-11-02-cloudgarden-ue5-tile-experiments-and-capital.md
+and contracts/tile_research_activation_v1.json. Use synthetic profiles from
+fixtures/tile_seed_profiles_v1.json. The per-tile plan oracle is
+scripts/plan_tile_experiments.py with tests/test_tile_experiments.py.
+Expected fixture: 4 canonical source plants, 6 tile instances, 6 separately
+keyed releases, 16 synthetic seed landings and 60.00 USDT of virtual paper
+budget requested (NO cash booked). Render two independent switches per tile:
+evolution on/off and capital off/paper (future live request locked). Only an
+independent trusted backend may approve future per-tile paper/live funding.
+In Unreal Chaos, every tile can have its own seed emitter and scene transform;
+record terminal settled receipt ID, tile ID, canonical plant ID and experiment
+ID. Inverse-map each impact point only onto that tile's TWO defined gene axes.
+No direct order/API calls or automatic canonical offspring creation.

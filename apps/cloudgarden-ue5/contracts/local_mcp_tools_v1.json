@@ -12,7 +12,8 @@
     "Remote Control API Beta; Python Editor scripting experimental/editor-only",
     "Actual MCP transport/tool binding must be built and approved locally",
     "Never expose arbitrary script/console execution via MCP",
-    "No order/account/market/ledger tools are exposed"
+    "No order/account/market/ledger tools are exposed",
+    "All eligible tiles may independently drop seeds in RESEARCH; Unreal may not authorize canonical births or live money."
   ],
   "tools": [
     {
@@ -57,6 +58,9 @@
       "action": "create_synthetic_test_release_in_editor",
       "sideEffects": "temporary_editor_scene_only",
       "args": [
+        "tileId",
+        "experimentId",
+        "releaseEventId",
         "releaseJson",
         "sceneRevision"
       ],
@@ -67,6 +71,8 @@
       "action": "run_chaos_preview_and_capture_terminal_contacts",
       "sideEffects": "temporary_editor_scene_only",
       "args": [
+        "tileId",
+        "experimentId",
         "releaseEventId",
         "physicsConfigDigest"
       ],
@@ -102,6 +108,30 @@
         "testPreset"
       ],
       "result": "testRunMetadata"
+    },
+    {
+      "name": "ue5.preview_tile_experiments",
+      "action": "validate_and_plan_independent_tile_seed_research_and_virtual_paper_modes",
+      "sideEffects": "none",
+      "args": [
+        "tileCatalogJson",
+        "tileActivationJson",
+        "seedProfilesJson",
+        "sceneRevision"
+      ],
+      "result": "tileScopedPlan"
+    },
+    {
+      "name": "ue5.request_tile_capital_mode",
+      "action": "send_non_executable_mode_change_request_to_trusted_research_backend",
+      "sideEffects": "requires_explicit_backend_review_not_an_order",
+      "args": [
+        "tileId",
+        "newMode",
+        "requestedPaperBudget",
+        "sourceRevision"
+      ],
+      "result": "pending_or_rejected_no_venue_order"
     }
   ]
 }

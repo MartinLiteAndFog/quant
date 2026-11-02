@@ -67,6 +67,22 @@ The projections contain a yes/no reason for each (plant, tile) pair and a
 stable tileId::plantId visual instance ID. Same plantId across tiles means ONE
 canonical genome/lineage/account, not multiple strategies or capital allocations.
 Missing genes are not defaulted, out-of-range values are not clamped, and
-archived plants remain genealogy-only. Only the canonical home tile may emit
-*authorized* ecological physics candidates; other representations are view-only.
+archived plants remain genealogy-only. **Updated decision:** every eligible tile representation may run independently
+keyed seed experiments with its own research offspring candidates. Plant genome
+and account remain singular. Evolution and financial mode are separate per tile,
+and no source cash/strategy trade is changed by a visual representation.
 See ../../docs/plans/2026-11-02-cloudgarden-ue5-multi-parameter-tiles.md.
+
+## Independent per-tile ecology and paper-capital modes
+
+See contracts/tile_research_activation_v1.json, fixtures/tile_seed_profiles_v1.json,
+and docs/plans/2026-11-02-cloudgarden-ue5-tile-experiments-and-capital.md.
+
+    python3 apps/cloudgarden-ue5/scripts/plan_tile_experiments.py > tile-experiments.json
+    python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_tile_experiments.py' -v
+
+Every compatible tile may emit separate synthetic seed experiments. One tile
+may have evolution on and financial mode off; another can request virtual paper
+capital. The fixture requests 60.00 USDT virtual paper budget, none booked or
+funded. Live trading is hard-rejected pending trusted external authorization.
+The reference physics is analytic and is NOT Unreal Chaos.

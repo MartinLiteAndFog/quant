@@ -6,6 +6,7 @@ on:
       - 'docs/plans/2026-11-02-cloudgarden-unreal5-agent-f.md'
       - 'docs/plans/2026-11-02-cloudgarden-ue5-gene-physics-bridge.md'
       - 'docs/plans/2026-11-02-cloudgarden-ue5-multi-parameter-tiles.md'
+      - 'docs/plans/2026-11-02-cloudgarden-ue5-tile-experiments-and-capital.md'
       - '.github/workflows/cloudgarden-ue5-preflight.yml'
   workflow_dispatch:
 permissions:
@@ -34,3 +35,9 @@ jobs:
           python3 -c 'import json; x=json.load(open("/tmp/ue-tiles.json")); assert x["canonicalPlantCount"] == 4 and x["renderInstanceCount"] == 6'
       - name: Test per-tile gene membership, identity, and physics isolation
         run: python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_parameter_tiles.py' -v
+      - name: Plan independent tile seed research and paper capital mode requests
+        run: |
+          python3 apps/cloudgarden-ue5/scripts/plan_tile_experiments.py > /tmp/tile_experiments.json
+          python3 -c 'import json; x=json.load(open("/tmp/tile_experiments.json")); assert x["totalIndependentReleases"] == 6 and x["totalSimulatedSeedOutcomes"] == 16 and x["requestedPaperBudgetTotalUsdt"] == "60.00" and not x["liveAccountOrOrderWrites"]'
+      - name: Test independent tile seed and off-paper-live mode gates
+        run: python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_tile_experiments.py' -v

@@ -42,11 +42,11 @@ There are therefore **6 view instances and still only 4 source plant records**. 
 
 ## One physical event source
 
-Different tile representations of a plant are analytical projections, not four separately living individuals. Hence only the canonical home tile (source plant tileId) can ever be a source for **authorized** ecological seed-release candidates. All other tile copies have zero game/economic side effects; clicks and camera collision are visual interaction only. Even home-tile releases require external explicit release authority, deduplication and future-day ecology acceptance. Never let a visual clone emit a canonical birth or exchange order.
+Different tile representations share one canonical source organism. By explicit product decision, **each eligible tile representation may spawn its own independent tile-scoped seed RESEARCH experiment** with unique (tileId, plantId, genomeRevision, sourceDay, batch) identity. Outcomes can propose distinct child genes per tile, but do not automatically create canonical births, real exchange orders or extra capital accounts. See docs/plans/2026-11-02-cloudgarden-ue5-tile-experiments-and-capital.md.
 
-If we later want distinct physics-based mutation experiments on each tile, issue **separately named research experiments** (plantId, tileId, experimentId, sourceRevision), each producing untrusted candidates that require explicit adoption. The canonical organism must not reproduce once per tile by accident.
+Each tile's physics-based mutation experiment is separately named by (plantId, tileId, experimentId, sourceRevision). The source plant is shared; experimental children remain untrusted until accepted, irrespective of the number of tiles. The canonical organism must not reproduce once per tile by accident.
 
-A seed landing on a registered tile can eventually be inverse-mapped to that tile's pair of candidate child gene values. The existing reference seed inverse example still targets sol-imbase; generalizing its source-owned mutation policy to every tile requires approval of the source schema and ecology ownership. Tile placement itself is already generalized.
+A seed landing on a registered tile is now inverse-mapped to that tile's pair of candidate child gene values by scripts/plan_tile_experiments.py for all registered tiles. Only unapproved offspring *axis patches* result; inheritance of other genes, births and financial adoption remain separate owner decisions. The legacy propose_offspring_genes.py example remains single-tile.
 
 ## Files and use
 
@@ -71,7 +71,7 @@ Build one TileCatalogDataAsset and one CloudgardenTileProjectionSubsystem. Store
 - Render coordinates from numeric genes as normalized U,V within that tile. Convert meters to Unreal centimeters once at import; current draft only supports yaw=0. Reject unsupported rotations rather than silently moving organisms.
 - Any plant ID chosen in Atlas or immersive Explore highlights each instance and opens one inspector. One snapshot update changes all projections at once.
 - Clone instance materials/meshes may differ by LOD but must share exact plant identity and evidence status.
-- Collision bodies can support selection/obstacle detection; only home-tile **approved seed emitters** can produce ecology candidate receipts.
+- Collision bodies can support selection/obstacle detection; each eligible tile may use an approved research seed emitter, identified by tile-specific event IDs, producing ecology *candidate* receipts.
 
 ### Acceptance
 
