@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cloudgarden · UE5 HUD Konzept</title>
+<style>
+  :root{color-scheme:dark;--bg:#08120f;--panel:rgba(8,26,22,.90);--panel2:rgba(12,33,29,.84);--line:#345147;--fg:#e2efdd;--muted:#93b1a2;--green:#a6ef94;--red:#f0a59d;--gold:#e1d094;--cyan:#8dcbdb}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(ellipse at 60% 28%,#235046 0%,#112822 38%,#071511 85%);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:var(--fg);min-height:100vh;overflow-x:hidden}
+  button{font:inherit;color:inherit;cursor:pointer}
+  .shell{position:relative;min-height:100vh;max-width:1800px;margin:auto}
+  .top{min-height:66px;display:flex;gap:20px;align-items:center;padding:12px 25px;background:rgba(4,15,13,.91);border-bottom:1px solid #476658;flex-wrap:wrap}
+  .brand{font-weight:800;font-size:16px;letter-spacing:.15em;color:#d0f0d3}
+  .brand small{font-size:10px;letter-spacing:.22em;color:#a4b7a0;display:block;margin-top:3px}
+  .pill{font-size:11px;padding:6px 10px;display:inline-flex;align-items:center;border:1px solid #6d6954;border-radius:5px;color:var(--gold);background:rgba(52,46,25,.48);letter-spacing:.08em}
+  .view-controls{display:flex;gap:2px;padding:3px;border:1px solid var(--line);border-radius:7px;margin-left:auto;background:#142a24}
+  .view-controls button,.seg button{background:transparent;border:0;border-radius:4px;padding:8px 13px;font-size:12px;font-weight:700}
+  button[aria-pressed="true"]{background:#36614b;color:#fff}
+  .top-meta{font-size:12px;color:var(--muted);white-space:nowrap}
+  .dash{display:grid;grid-template-columns:minmax(290px,320px) minmax(400px,1fr) minmax(300px,335px);gap:18px;padding:20px 22px 100px;min-height:calc(100vh - 66px);align-items:start}
+  .panel{border:1px solid rgba(130,171,144,.36);border-radius:10px;background:var(--panel);box-shadow:0 16px 60px rgba(0,0,0,.25);backdrop-filter:blur(14px);overflow:hidden}
+  .pad{padding:17px 18px}
+  .label{font-size:10px;text-transform:uppercase;letter-spacing:.16em;color:var(--muted);font-weight:800}
+  .bigval{font-size:clamp(27px,3vw,42px);font-weight:750;letter-spacing:-.04em;margin:5px 0}
+  .source-note{font-size:10px;color:var(--muted);line-height:1.5}
+  .profit{color:var(--green)}.loss{color:var(--red)}.warning{color:var(--gold)}
+  .micro{font-size:11px;color:var(--muted)}
+  .kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+  .kpi{background:rgba(255,255,255,.035);border:1px solid rgba(142,185,159,.18);border-radius:7px;padding:10px}
+  .kpi b{display:block;margin-top:6px;font-size:18px;font-variant-numeric:tabular-nums}
+  .sep{height:1px;background:var(--line);opacity:.75}
+  .metric-row{display:flex;justify-content:space-between;gap:8px;padding:10px 0;font-size:12px}
+  .metric-row strong{font-variant-numeric:tabular-nums}
+  #sparkline{width:100%;height:77px;margin-top:7px;opacity:.85}
+  .viewport{height:clamp(460px,62vh,700px);position:relative;overflow:hidden;border:1px solid #416a55;border-radius:11px;background:
+    radial-gradient(ellipse at 65% 42%,rgba(109,173,90,.24),transparent 34%),
+    linear-gradient(135deg,#203f35 0%,#122d23 52%,#0e1c1b 100%);box-shadow:inset 0 0 120px #020c0966}
+  .viewport:before{content:"";position:absolute;inset:-40%;opacity:.15;transform:perspective(450px) rotateX(61deg) rotateZ(-14deg);background-image:linear-gradient(#90b99a 1px,transparent 1px),linear-gradient(90deg,#90b99a 1px,transparent 1px);background-size:66px 66px;pointer-events:none}
+  .viewport-top{position:absolute;top:17px;left:17px;right:17px;display:flex;justify-content:space-between;gap:8px;align-items:start;z-index:2}
+  .viewer-label{font-size:11px;color:#cee9d7;background:#0a211bba;border:1px solid #50715e;border-radius:5px;padding:7px 11px}
+  .tile-grid{position:absolute;inset:75px 24px 75px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:15px;transform:perspective(800px) rotateX(13deg)}
+  .tile{border:1px solid #649179a8;position:relative;padding:12px;border-radius:8px;background:radial-gradient(circle at 30% 40%,#406e4355,#1a3b2d60 68%);text-align:left;transition:.2s;overflow:hidden}
+  .tile:hover,.tile[aria-selected="true"]{border-color:var(--green);box-shadow:0 0 0 1px #b6ef9a66,0 0 28px #b6ef9a28;background-color:#40604b30}
+  .tile .tile-name{font-size:12px;font-weight:700;display:block;position:relative;z-index:1;max-width:90%}
+  .tile .tile-status{font-size:10px;color:#b4cdb9;display:block;margin-top:5px;position:relative;z-index:1}
+  .tile .bud{position:absolute;top:49%;left:47%;font-size:30px;opacity:.55;filter:drop-shadow(0 2px 3px #000)}
+  .tile .count{position:absolute;right:8px;bottom:8px;padding:3px 6px;background:#0a1d16;border-radius:4px;color:#b3dfbf;font-size:11px}
+  .viewport-bottom{position:absolute;bottom:14px;left:17px;right:17px;display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:11px;color:#b5d4c2;z-index:2}
+  .viewport-bottom span{background:#081a17bd;padding:7px 10px;border:1px solid #4e745d;border-radius:5px}
+  .section-header{padding:15px 17px 10px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .section-header h2{margin:0;font-size:14px;letter-spacing:.035em}
+  .seg{display:flex;gap:2px;background:#081711;border:1px solid var(--line);padding:3px;border-radius:6px}
+  .seg button{font-size:11px;padding:6px 9px}
+  .rank{padding:8px 16px 14px;min-height:210px}
+  .rank-row{border:1px solid #3d5549;background:#1a2e26a0;padding:10px 11px;margin-bottom:8px;border-radius:7px}
+  .rank-head{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px}
+  .rank-head b{font-size:13px}
+  .rank-sub{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:5px}
+  .empty{display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:13px;min-height:120px;line-height:1.6}
+  .tile-control{padding:10px 15px 15px}
+  .control-row{display:grid;grid-template-columns:1fr auto;gap:7px;padding:9px 0;border-top:1px solid #36534875}
+  .control-row b{font-size:12px}
+  .control-row small{font-size:11px;color:var(--muted);display:block;margin-top:4px}
+  .small-button{border:1px solid #567a62;background:#1c392f;border-radius:5px;padding:6px 8px;font-size:11px;color:#c6e6d1}
+  .footerbar{position:fixed;z-index:5;bottom:0;left:0;right:0;background:#061310f5;border-top:1px solid #53745d;min-height:62px;padding:10px max(22px,calc((100vw - 1780px)/2));display:flex;gap:25px;align-items:center;flex-wrap:wrap;backdrop-filter:blur(9px)}
+  .statfoot{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+  .statfoot b{display:block;color:var(--fg);font-size:16px;letter-spacing:normal;margin-top:3px}
+  .toast{position:fixed;right:20px;bottom:77px;max-width:330px;padding:12px 16px;border-radius:8px;background:#172f26;border:1px solid var(--gold);color:#e5ddb0;font-size:12px;z-index:7;opacity:0;pointer-events:none;transition:.2s}
+  .toast.visible{opacity:1}
+  .explore .tile-grid{transform:perspective(700px) rotateX(42deg) scale(1.2);inset:160px 55px 50px;filter:blur(1px)}
+  .explore .viewport{background:radial-gradient(ellipse at 52% 73%,#416445 0%,#17372b 30%,#0c1e1b 83%)}
+  .explore .secondary-details{display:none}
+  .hint{font-size:10px;color:var(--muted);line-height:1.55}
+  @media(max-width:1150px){.dash{grid-template-columns:280px 1fr}.rightcol{grid-column:1 / -1;display:grid;grid-template-columns:1fr 1fr;gap:18px}.viewport{height:610px}}
+  @media(max-width:750px){.top{padding:12px;gap:10px}.view-controls{margin-left:0}.dash{display:flex;flex-direction:column;padding:12px 12px 100px}.dash>*,.rightcol{width:100%}.rightcol{display:block}.rightcol>.panel{margin-bottom:14px}.viewport{height:390px}.tile-grid{inset:65px 14px 60px;gap:8px}.tile{padding:8px}.tile .tile-name{font-size:10px}.tile .tile-status{font-size:9px}.footerbar{padding:10px;gap:14px}.statfoot{font-size:9px}.statfoot b{font-size:13px}}
+  :focus-visible{outline:2px solid var(--green);outline-offset:3px}
+</style>
+</head>
+<body>
+<div class="shell" id="shell">
+  <header class="top">
+    <div class="brand">✳ CLOUDGARDEN <small>STRATEGY ECOSYSTEM / HUD STUDY</small></div>
+    <span class="pill" id="source-banner">DEMO · KEIN LIVE-HANDEL</span>
+    <div class="view-controls" role="group" aria-label="Kameraansicht">
+      <button id="atlas" aria-pressed="true">⌖ Atlas</button>
+      <button id="explore" aria-pressed="false">◉ Explore</button>
+    </div>
+    <div class="top-meta" id="clock">TAG — · SOL · PROJEKTION</div>
+  </header>
+  <main class="dash">
+    <section class="leftcol">
+      <article class="panel">
+        <div class="pad">
+          <div class="label">Gesamtbiomasse · Portfolio-NAV</div>
+          <div class="bigval" id="nav">—</div>
+          <div class="micro" id="finance-state">Keine geprüften Finanzdaten</div>
+          <svg id="sparkline" viewBox="0 0 270 77" preserveAspectRatio="none" role="img" aria-label="Portfolio-NAV Verlauf"><path id="sparkline-path" d="" stroke="#b6e99d" stroke-width="2" fill="none"/><path d="M 0 66 L 270 66" stroke="#6b9982" opacity=".4" fill="none"/></svg>
+          <div class="kpis">
+            <div class="kpi"><div class="label">Wachstum</div><b id="growth">—</b></div>
+            <div class="kpi"><div class="label">Netto-PnL</div><b id="pnl">—</b></div>
+            <div class="kpi"><div class="label">Max. Drawdown</div><b id="drawdown">—</b></div>
+            <div class="kpi"><div class="label">Trefferquote</div><b id="winrate">—</b></div>
+          </div>
+        </div>
+        <div class="sep"></div>
+        <div class="pad secondary-details">
+          <div class="label">Risikostatus</div>
+          <div class="metric-row"><span>Aggregierte Exposure</span><strong class="warning">— nicht verbunden</strong></div>
+          <div class="metric-row"><span>Daily-Loss-Limit</span><strong class="warning">—</strong></div>
+          <div class="metric-row"><span>Kill-Switch</span><strong class="warning">Unbekannt</strong></div>
+          <div class="source-note">Keine grüne Risikoanzeige ohne bestätigte Daten aus dem Risk-/OMS-Backend.</div>
+        </div>
+      </article>
+      <article class="panel secondary-details" style="margin-top:16px">
+        <div class="pad">
+          <div class="label">Datenansicht</div>
+          <div class="metric-row"><span>Finanzdaten</span><strong id="mock-status">Fiktive Demo</strong></div>
+          <div class="seg" role="group" aria-label="Finanzdaten anzeigen">
+            <button id="show-mock" aria-pressed="true">Fiktives Beispiel</button>
+            <button id="show-missing" aria-pressed="false">Ohne Quelle</button>
+          </div>
+          <p class="hint">„Portfolio-Biomasse“ ist der NAV aus einem Finanz-Ledger. Die visuell mehrfach dargestellten Pflanzen erhöhen den NAV nicht.</p>
+        </div>
+      </article>
+    </section>
+
+    <section class="centercol">
+      <div class="viewport" aria-label="Stilisierte Kartenplatzhalteransicht, kein Unreal-Render">
+        <div class="viewport-top">
+          <span class="viewer-label" id="view-label">ATLAS · PARAMETERWIESEN</span>
+          <span class="viewer-label">2D-PARAMETER-TILES / 3D-WELT</span>
+        </div>
+        <div class="tile-grid" id="tile-grid"></div>
+        <div class="viewport-bottom">
+          <span>⌖ Auswahl: <b id="focus-tile">—</b></span>
+          <span>LAYOUT-VORSCHAU · KEIN UE-RENDER</span>
+        </div>
+      </div>
+      <article class="panel secondary-details" style="margin-top:16px">
+        <div class="pad">
+          <div class="label">Ereignisse · synthetische Forschung</div>
+          <div id="event-stream" class="hint" style="margin-top:8px"></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="rightcol">
+      <article class="panel">
+        <div class="section-header">
+          <h2>Rangliste</h2>
+          <div class="seg" role="group" aria-label="Top-5-Umschalter">
+            <button id="rank-winners" aria-pressed="true">↑ Top 5</button>
+            <button id="rank-losers" aria-pressed="false">↓ Bottom 5</button>
+          </div>
+        </div>
+        <div class="source-note" style="padding:0 17px 4px">Netto-PnL pro eindeutiger Pflanze, nicht pro Tile-Kopie.</div>
+        <div class="rank" id="ranking"></div>
+      </article>
+      <article class="panel" style="margin-top:16px">
+        <div class="section-header"><h2>Parameterregionen</h2><span class="label">Evolution / Kapital</span></div>
+        <div class="tile-control" id="tile-control"></div>
+        <div class="pad" style="padding-top:0"><p class="hint">„Paper“ bezeichnet hier nur ein Budgetgesuch. Die Umschaltung benötigt eine separate Backend-Freigabe. Live-Handel ist gesperrt.</p></div>
+      </article>
+    </section>
+  </main>
+</div>
+<footer class="footerbar">
+  <div class="statfoot">Eindeutige Pflanzen<b id="foot-plants">—</b></div>
+  <div class="statfoot">Sichtbare Projektionen<b id="foot-instances">—</b></div>
+  <div class="statfoot">Aktive Evolutionstiles<b id="foot-evolving">—</b></div>
+  <div class="statfoot">Samenwürfe / Landungen<b id="foot-seeds">—</b></div>
+  <div class="statfoot">Nachkommen-Kandidaten<b id="foot-children">—</b></div>
+  <div class="statfoot">Paper-Budget angefragt<b id="foot-paper">—</b></div>
+</footer>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="application/json" id="data-mock">__HUD_MOCK_JSON__</script>
+<script type="application/json" id="data-empty">__HUD_EMPTY_JSON__</script>
+<script>
+(function(){
+  'use strict';
+  const mock=JSON.parse(document.getElementById('data-mock').textContent);
+  const empty=JSON.parse(document.getElementById('data-empty').textContent);
+  let hud=mock, rankTab='winners', view='atlas', selectedTile='sol-imbase';
+  let toastTimeout=null;
+  const $=function(id){return document.getElementById(id);};
+  const txt=function(id,value){$(id).textContent=value;};
+  const pressed=function(id,value){$(id).setAttribute('aria-pressed',String(value));};
+  function say(message) {
+    txt('toast', message);
+    $('toast').classList.add('visible');
+    if(toastTimeout!==null)clearTimeout(toastTimeout);
+    toastTimeout=setTimeout(function(){$('toast').classList.remove('visible');},3300);
+  }
+  function finance(id) {
+    const m=hud.financialMetrics[id];
+    return m && m.value!==null ? m.value+(m.unit?' '+m.unit:'') : '—';
+  }
+  function putFinance() {
+    txt('nav',finance('totalBiomassPortfolioUsdt'));
+    txt('growth',finance('portfolioReturnPct'));
+    txt('pnl',finance('netPnlUsdt'));
+    txt('drawdown',finance('maxDrawdownPct'));
+    txt('winrate',finance('winRatePct'));
+    txt('finance-state',hud.financialSource==='synthetic_only'?
+      'FIKTIVE WERTE · KEINE HANDELSERGEBNISSE':'Keine bestätigten Finanzdaten verfügbar');
+    txt('mock-status',hud.financialSource==='synthetic_only'?'Fiktive Demo':'Nicht verbunden');
+    const points=hud.portfolioNavSeries.map(function(row){return Number(row.navUsdt);});
+    const path=$('sparkline-path');
+    if(points.length<2){path.setAttribute('d','');return;}
+    const min=Math.min.apply(null,points),max=Math.max.apply(null,points),span=Math.max(.001,max-min);
+    path.setAttribute('d',points.map(function(v,i){
+      const x=(i*270/(points.length-1)).toFixed(2);
+      const y=(67-(v-min)*54/span).toFixed(2);
+      return (i===0?'M ':' L ')+x+' '+y;
+    }).join(''));
+  }
+  function ranking() {
+    pressed('rank-winners',rankTab==='winners');
+    pressed('rank-losers',rankTab==='losers');
+    const list=$( 'ranking' );
+    list.replaceChildren();
+    const rows=rankTab==='winners'?hud.leaderboard.winnerRows:hud.leaderboard.loserRows;
+    if(!rows.length){
+      const d=document.createElement('div');
+      d.className='empty';
+      d.textContent=hud.financialSource==='unavailable_no_ledger'?
+        'Keine geprüften Einzelstrategien-PnL verfügbar.':'Keine passenden Einträge im fiktiven Beispiel.';
+      list.append(d);return;
+    }
+    rows.forEach(function(row,index){
+      const wrap=document.createElement('div');wrap.className='rank-row';
+      const head=document.createElement('div');head.className='rank-head';
+      const name=document.createElement('b');name.textContent=(index+1)+'. '+row.plantName;
+      const val=document.createElement('strong');
+      val.className=Number(row.netPnlUsdt)>=0?'profit':'loss';
+      val.textContent=(Number(row.netPnlUsdt)>0?'+':'')+row.netPnlUsdt+' USDT';
+      head.append(name,val);
+      const detail=document.createElement('div');detail.className='rank-sub';
+      const left=document.createElement('span');left.textContent='Rendite '+row.returnPct+' %';
+      const right=document.createElement('span');right.textContent=row.closedTrades+' Trades · '+row.status;
+      detail.append(left,right);wrap.append(head,detail);list.append(wrap);
+    });
+  }
+  function renderTiles() {
+    const grid=$('tile-grid'),control=$('tile-control');
+    grid.replaceChildren();control.replaceChildren();
+    hud.tileCards.forEach(function(tile) {
+      const map=document.createElement('button');map.type='button';map.className='tile';
+      map.setAttribute('aria-selected',String(tile.tileId===selectedTile));
+      const name=document.createElement('span');name.className='tile-name';name.textContent=tile.label;
+      const desc=document.createElement('span');desc.className='tile-status';
+      desc.textContent=(tile.evolutionEnabled?'EVO AN':'EVO AUS')+' · '+tile.capitalMode.toUpperCase();
+      const bud=document.createElement('span');bud.className='bud';bud.textContent='♣';
+      const count=document.createElement('span');count.className='count';
+      count.textContent=tile.visiblePlantInstances+' Pflanzenabbilder';
+      map.append(name,desc,bud,count);
+      map.addEventListener('click',function(){selectedTile=tile.tileId;renderTiles();});
+      grid.append(map);
+      const row=document.createElement('div');row.className='control-row';
+      const label=document.createElement('div');const b=document.createElement('b');
+      b.textContent=tile.label;
+      const small=document.createElement('small');
+      small.textContent=(tile.evolutionEnabled?'↻ Evolution AN':'Evolution pausiert')+' · '+tile.capitalMode.toUpperCase()+
+        ' · '+tile.paperBudgetRequestedUsdt+' USDT geplant';
+      label.append(b,small);
+      const action=document.createElement('button');action.className='small-button';
+      action.textContent='Vorschau';
+      action.addEventListener('click',function(){
+        say(tile.label+': Der Kapitalmodus wird nur vorgeschaut. Keine Änderung ausgeführt.');
+        selectedTile=tile.tileId;renderTiles();
+      });
+      row.append(label,action);control.append(row);
+    });
+    const selected=hud.tileCards.find(function(x){return x.tileId===selectedTile;});
+    txt('focus-tile',selected?selected.label:'—');
+  }
+  function footer() {
+    const e=hud.ecologyMetrics;
+    txt('foot-plants',e.activePlants+' / '+e.canonicalPlants);
+    txt('foot-instances',e.visibleTileRepresentations);
+    txt('foot-evolving',e.tilesEvolving+' / '+e.tilesTotal);
+    txt('foot-seeds',e.independentSeedReleases+' / '+e.referenceSeedLandings);
+    txt('foot-children',e.proposedOffspringCandidates+' (ungeprüft)');
+    txt('foot-paper',hud.paperBudget.requestedTotalUsdt+' USDT');
+    txt('clock','TAG '+hud.sceneRef.dayIndex+' · SOL · SYNTHETISCH');
+    txt('source-banner',hud.sourceBanner);
+  }
+  function recent(){
+    const items=$('event-stream');items.replaceChildren();
+    hud.recentResearchEvents.forEach(function(e){
+      const node=document.createElement('div');node.className='metric-row';
+      const left=document.createElement('span');left.textContent=e.type.replaceAll('_',' ')+' · '+e.tileId;
+      const right=document.createElement('strong');right.textContent='Tag '+e.dayIndex;
+      node.append(left,right);items.append(node);
+    });
+  }
+  function render(){
+    footer();putFinance();ranking();renderTiles();recent();
+    pressed('show-mock',hud===mock);pressed('show-missing',hud===empty);
+    pressed('atlas',view==='atlas');pressed('explore',view==='explore');
+    $('shell').classList.toggle('explore',view==='explore');
+    txt('view-label',view==='atlas'?'ATLAS · PARAMETERWIESEN':'EXPLORE · KAMERA- & HUD-VORSCHAU');
+  }
+  $('rank-winners').addEventListener('click',function(){rankTab='winners';ranking();});
+  $('rank-losers').addEventListener('click',function(){rankTab='losers';ranking();});
+  $('atlas').addEventListener('click',function(){view='atlas';render();});
+  $('explore').addEventListener('click',function(){view='explore';render();});
+  $('show-mock').addEventListener('click',function(){hud=mock;render();});
+  $('show-missing').addEventListener('click',function(){hud=empty;render();});
+  render();
+})();
+</script>
+</body>
+</html>
