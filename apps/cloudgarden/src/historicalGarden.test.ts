@@ -89,3 +89,23 @@ test("historical decisions reject mismatched warmup prices or a different source
   const wrongSource = { ...dataset, provenance: { ...dataset.provenance, source: "another archive" } };
   assert.throws(() => executeHistoricalDay(session, archive, dataset, wrongSource), /exact same historical day/);
 });
+
+test("game playback is deterministic and independent of external statistical verdicts", async () => {
+  // The garden may play on its single available archive even when research
+  // comparison reports no independent market evidence.
+  const { runControlledExperiment } = await import("./experiments.ts");
+  const session = createHistoricalSession(archive, "2025-01-02");
+  const before = JSON.stringify(session);
+  const dataset = await normalizeArchiveBars(bars("2025-01-02"), archive);
+  const warmup = await normalizeArchiveBars([...bars("2025-01-01"), ...bars("2025-01-02")], archive);
+  const gameBeforeResearch = executeHistoricalDay(session, archive, dataset, warmup);
+
+  const research = runControlledExperiment({ seeds: ["same-market-1"], days: 7 });
+  assert.equal(research.benchmarkConclusion, "not_comparable");
+  assert.equal(JSON.stringify(session), before, "external research must never mutate the playable world");
+
+  const gameAfterResearch = executeHistoricalDay(session, archive, dataset, warmup);
+  assert.deepEqual(gameAfterResearch, gameBeforeResearch);
+  assert.equal(gameAfterResearch.world.day, 1, "there is no research approval gate in the daily clock");
+  assertSimulationInvariants(gameAfterResearch.world);
+});
