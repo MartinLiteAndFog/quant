@@ -58,6 +58,12 @@ export interface MeadowProposalReport {
   readonly worldIsUnchanged: true;
 }
 
+const RESERVED_NON_AXIS_GENES = new Set([
+  "protective_stop", "max_leverage", "max_margin_fraction",
+  "reproduction_budget", "leaf_count", "branch_count",
+  "root_depth", "root_spread", "bark_strength",
+  "color", "rotation", "visual_color", "visual_rotation",
+]);
 function check(condition: boolean, reason: string): asserts condition {
   if (!condition) throw new Error("Meadow proposals: " + reason);
 }
@@ -102,6 +108,10 @@ export function proposeMissingMeadows(
     check(Boolean(item.pairId && item.moduleId && item.moduleVersion
                   && item.approvedStrategySpecId), "catalog pair needs explicit strategy specification");
     check(item.axisX.geneId !== item.axisY.geneId, "exactly two DISTINCT real axis genes required");
+    check([item.axisX.geneId,item.axisY.geneId].every(id=>
+      !RESERVED_NON_AXIS_GENES.has(id) &&
+      !id.startsWith("visual_") && !id.startsWith("appearance_")
+    ), "financial, safety and optical genes are forbidden as strategy axes");
     check(validAxis(item.axisX) && validAxis(item.axisY), "invalid strategy axis range");
     const k = JSON.stringify([item.moduleId, item.moduleVersion, item.pairId]);
     check(!pairKeys.has(k), "duplicate module/version/pair registration");
@@ -147,6 +157,10 @@ export function proposeMissingMeadows(
   // No placements outside a region's owned 4x4 tile grid, so one asset-class
   // region cannot silently overlap a neighbor's visualization.
   const occupied = new Set(world.tiles.map(t=>`${t.regionId}:${t.gridX}:${t.gridY}`));
+  const worldOccupied = new Set(world.tiles.map(t=>{
+    const r=world.regions.find(r=>r.id===t.regionId)!;
+    return `${r.worldX*4+t.gridX}:${r.worldY*4+t.gridY}`;
+  }));
   const suggestions:NewMeadowProposal[]=[];
   const groups=[...candidateGroups.entries()].sort(([a],[b])=>a.localeCompare(b));
   for (const [,group] of groups) {
@@ -162,7 +176,8 @@ export function proposeMissingMeadows(
     let slot:{x:number;y:number}|null=null;
     for(let y=0;y<4&&!slot;y++){
       for(let x=0;x<4&&!slot;x++){
-        if(!occupied.has(`${region.id}:${x}:${y}`)) slot={x,y};
+        if(!occupied.has(`${region.id}:${x}:${y}`) &&
+           !worldOccupied.has(`${region.worldX*4+x}:${region.worldY*4+y}`)) slot={x,y};
       }
     }
     if (!slot) {
@@ -172,6 +187,7 @@ export function proposeMissingMeadows(
       continue;
     }
     occupied.add(`${region.id}:${slot.x}:${slot.y}`);
+    worldOccupied.add(`${region.worldX*4+slot.x}:${region.worldY*4+slot.y}`);
     suggestions.push({
       proposalId:proposalId(group.assetId,group.pair),
       regionId:region.id,assetId:group.assetId,
