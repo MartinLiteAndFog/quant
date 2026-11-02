@@ -1,0 +1,24 @@
+name: Cloudgarden UE5 vitality tile projection
+on:
+  push:
+    branches:
+      - 'codex/cloudgarden-ue5-vitality-bridge-*'
+  pull_request:
+    paths:
+      - 'apps/cloudgarden-ue5/scripts/project_vitality_tiles.py'
+      - 'apps/cloudgarden-ue5/scripts/test_vitality_tiles.py'
+      - 'apps/cloudgarden-ue5/fixtures/vitality_snapshot_v1.json'
+      - '.github/workflows/cloudgarden-vitality-tiles.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-vitality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_vitality_tiles.py' -v
+      - run: python3 apps/cloudgarden-ue5/scripts/project_vitality_tiles.py > /tmp/cloudgarden_vitality_projection.json
+      - run: |
+          python3 -c 'import json; r=json.load(open("/tmp/cloudgarden_vitality_projection.json")); assert r["canonicalPlantCount"] == 4 and r["renderInstanceCount"] == 6 and r["simulationTicksApplied"] == 0 and not r["capitalOrGenomeWrites"]'
