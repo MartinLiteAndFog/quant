@@ -126,6 +126,10 @@ def _log_inbound_signal(payload: Dict[str, Any], *, disposition: str, detail: st
         )
 
 
+def _hedge_enabled() -> bool:
+    return _truthy(os.getenv("HEDGE_MULTI_BOT_ENABLED", "0"))
+
+
 def _expected_token() -> str:
     return str(os.getenv("BOT_WEBHOOK_TOKEN", "")).strip()
 
@@ -172,8 +176,15 @@ def _enforce_margin_mode() -> None:
 async def _lifespan(_app: FastAPI):
     # tv_signal_executor only arms itself when ENABLE_TV_EXECUTOR=1.
     os.environ.setdefault("ENABLE_TV_EXECUTOR", "1")
-    _enforce_margin_mode()
-    start_tv_executor()
+    if _hedge_enabled():
+        # Never start the single-net-position executor in hedge fleet mode.
+        # The new executor uses an independently attributed virtual ledger.
+        from quant.execution.blaupunkt_hedge import fleet
+        summary = fleet().status()
+        log.info("Blaupunkt hedge fleet configured: %s", summary)
+    else:
+        _enforce_margin_mode()
+        start_tv_executor()
     # Fleet curves need equity history on a fixed clock, not just /health-poll
     # side effects (audit 2026-07-22). Default ON for pilots; opt out with
     # FLEET_EQUITY_WRITER_ENABLED=0.
@@ -229,7 +240,8 @@ def health() -> Dict[str, Any]:
         "profile": active_profile(),
         "instance": strategy_instance_id(),
         "symbol": os.getenv("LIVE_SYMBOL", "SOL-USDT"),
-        "executor_ready": tv_ready.is_set(),
+        "executor_ready": tv_ready.is_set() if not _hedge_enabled() else False,
+        "hedge_multi_bot_enabled": _hedge_enabled(),
         "dry_run": dry,
         "live_trading_enabled": live and not dry,
         "venue": "kucoin",
@@ -253,6 +265,20 @@ def health() -> Dict[str, Any]:
     return out
 
 
+@app.get("/hedge/status")
+def hedge_status(
+    request: Request,
+    x_webhook_token: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    if not _hedge_enabled():
+        raise HTTPException(status_code=404, detail="hedge fleet disabled")
+    if not _expected_token() or _truthy(os.getenv("BOT_WEBHOOK_ALLOW_ANON")):
+        raise HTTPException(status_code=503, detail="hedge fleet requires authenticated webhook")
+    _check_token(x_webhook_token or request.query_params.get("token"))
+    from quant.execution.blaupunkt_hedge import fleet
+    return fleet().status()
+
+
 @app.post("/webhook/tv-execute")
 async def tv_execute(
     request: Request,
@@ -274,6 +300,39 @@ async def tv_execute(
         or request.query_params.get("token")
         or payload.get("token")
     )
+
+    if _hedge_enabled():
+        # In this opt-in mode, payload.bot is the strategy ID, not a
+        # single-instance routing filter. No anonymous multi-bot trading.
+        if not _expected_token() or _truthy(os.getenv("BOT_WEBHOOK_ALLOW_ANON")):
+            raise HTTPException(status_code=503, detail="hedge fleet requires authenticated webhook")
+        from quant.execution.blaupunkt_hedge import fleet
+        import asyncio
+
+        try:
+            signal = parse_tv_signal(
+                payload,
+                default_symbol=os.getenv("HEDGE_SYMBOL", "XBT-USDT"),
+            )
+            bot_id = str(payload.get("bot") or "").strip()
+            cfg = TVExecConfig.from_env()
+            _log_inbound_signal(payload, disposition="hedge_received", detail=f"bot={bot_id}")
+            result = await asyncio.get_running_loop().run_in_executor(
+                None,
+                lambda: fleet().execute(
+                    bot_id=bot_id, action=signal.action, side=signal.side,
+                    symbol=signal.symbol, sl_price=signal.sl_price,
+                    tp1_pct=cfg.tp1_close_pct, dry_run=cfg.dry_run,
+                ),
+            )
+        except ValueError as e:
+            _log_inbound_signal(payload, disposition="hedge_invalid", detail=str(e))
+            raise HTTPException(status_code=400, detail=str(e))
+        except RuntimeError as e:
+            log.error("hedge execution rejected bot=%s: %s", payload.get("bot"), e)
+            _log_inbound_signal(payload, disposition="hedge_blocked", detail=str(e))
+            raise HTTPException(status_code=409, detail=str(e))
+        return result
 
     # Reject alerts addressed to a different bot, so one shared TradingView
     # alert template cannot accidentally fire every sub-account at once.
