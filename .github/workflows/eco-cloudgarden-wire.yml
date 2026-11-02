@@ -1,0 +1,46 @@
+name: ECO Cloudgarden wire bridge (paper only)
+
+on:
+  pull_request:
+    paths:
+      - "apps/cloudgarden/src/ecoWireBridge*"
+      - "apps/cloudgarden/src/simulation.ts"
+      - "apps/cloudgarden/src/historicalGarden.ts"
+      - "apps/cloudgarden/src/sourceStrategies.ts"
+      - "src/quant/ecosystem/contracts.py"
+      - "src/quant/ecosystem/cloudgarden_bridge.py"
+      - "tests/ecosystem/test_cloudgarden_bridge.py"
+      - "tests/fixtures/ecosystem/cloudgarden-bridge-v1.json"
+      - ".github/workflows/eco-cloudgarden-wire.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  immutable-wire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/cloudgarden/package-lock.json
+      - name: Install isolated research test dependencies
+        run: |
+          python -m pip install "pydantic>=2,<3" "pytest>=8,<10"
+          npm ci --prefix apps/cloudgarden
+      - name: ECO-01 ↔ Cloudgarden Python → TS → Python golden roundtrip
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q tests/ecosystem/test_contracts.py tests/ecosystem/test_cloudgarden_bridge.py
+      - name: Cloudgarden exact budget, replay and provenance tests
+        working-directory: apps/cloudgarden
+        run: |
+          npm test
+          npm run build
