@@ -189,6 +189,12 @@ async def _lifespan(_app: FastAPI):
         from quant.execution.blaupunkt_hedge import fleet
         summary = fleet().status()
         log.info("Blaupunkt hedge fleet configured: %s", summary)
+        dry_run_flag = _truthy(os.getenv("TV_EXEC_DRY_RUN", "1"))
+        live_enabled_flag = _truthy(os.getenv("LIVE_TRADING_ENABLED"))
+        log.info(
+            "Blaupunkt runtime trading flags dry_run=%s live_enabled=%s effective_live=%s",
+            dry_run_flag, live_enabled_flag, live_enabled_flag and not dry_run_flag,
+        )
         try:
             mode_status = fleet().ensure_hedge_mode()
             log.info("Blaupunkt hedge mode preflight: %s", mode_status)
