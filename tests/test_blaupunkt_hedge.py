@@ -257,3 +257,18 @@ def test_queue_does_not_replay_interrupted_order(tmp_path, monkeypatch):
         )
     assert q._process_next() is False
     assert q.status()["counts"] == {"interrupted": 1}
+
+def test_hedged_exchange_margin_netting_cannot_overallocate_virtual_pool(fleet):
+    alert(fleet, "Blaupunkt", "flip", "buy")
+    alert(fleet, "ElliotP1", "flip", "sell")
+    assert fleet.broker.positions == {"long": 45, "short": 45}
+    # Simulate KuCoin netting 45+45 opposing hedge margin and reporting
+    # ample free margin. Per-bot virtual exposure still consumes 90% pool.
+    fleet.broker.get_account_balance = lambda currency="USDT": {
+        "equity": 1000, "available": 1000
+    }
+    assert alert(fleet, "ThirdBot", "exit")["reason"] == "already_flat"
+    result = alert(fleet, "ThirdBot", "flip", "buy")
+    assert result["ok"] is False
+    assert result["reason"] == "insufficient_allocated_margin"
+    assert fleet.broker.positions == {"long": 45, "short": 45}
