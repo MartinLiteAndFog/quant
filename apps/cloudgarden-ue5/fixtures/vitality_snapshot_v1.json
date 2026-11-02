@@ -1,0 +1,50 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_vitality_snapshot",
+  "authority": "synthetic_fixture_only",
+  "sceneRef": {
+    "seed": "ue5-visual-preview-v0",
+    "dayIndex": 7
+  },
+  "sourceContract": "Cloudgarden G2 world.plants: plant.id/status/vigor/genes.patience/inactiveDays; synthetic fixture only",
+  "plants": [
+    {
+      "plantId": "plant-a",
+      "revision": "synthetic-plant-a-v1",
+      "status": "active",
+      "vigor": 81.991,
+      "patience": 0.65,
+      "inactiveDays": 7
+    },
+    {
+      "plantId": "plant-b",
+      "revision": "synthetic-plant-b-v1",
+      "status": "archived",
+      "vigor": 52.5,
+      "patience": 0.31,
+      "inactiveDays": 5
+    },
+    {
+      "plantId": "plant-c",
+      "revision": "synthetic-plant-c-v1",
+      "status": "active",
+      "vigor": 76.4,
+      "patience": 0.42,
+      "inactiveDays": 1
+    },
+    {
+      "plantId": "plant-d",
+      "revision": "synthetic-plant-d-v1",
+      "status": "active",
+      "vigor": 85,
+      "patience": 0.88,
+      "inactiveDays": 0
+    }
+  ],
+  "policy": {
+    "oneDailyUpdatePerCanonicalPlant": true,
+    "individualTileVitalityState": false,
+    "readOnly": true,
+    "liveTrading": false
+  }
+}
