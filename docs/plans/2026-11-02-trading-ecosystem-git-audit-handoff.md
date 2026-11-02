@@ -317,3 +317,17 @@ Der Benutzer hat **Agent A (historische Daten/Cloudgarden), B (kanonische Schnit
 - **G:** Der 5-Jahres-State-/Millionen-Candidate-Performancepfad benötigt den echten Datensatz bzw. dessen nachgewiesenes Formatinventar von **A**. Reine synthetische Screening-Benchmarks können unabhängig weitergeführt werden, sind aber kein historisches Alpha.
 
 **Aktualisierte Bewertung:** Wir haben einen technisch enger abgesicherten **Forschungsprozess**, nicht die wissenschaftlich nachgewiesene Strategieevolution und nicht die Freigabe für echte Börsenpositionen.
+
+## 11. Agent-F-Teilpaket ebenfalls umgesetzt: Kategorievorschläge für zweidimensionale Wiesen (Draft PR #67)
+
+**[Draft PR #67](https://github.com/MartinLiteAndFog/quant/pull/67)**, Branch `codex/eco14-catalog-meadow-proposals-20261102` **stacked auf ECO-14 [#41](https://github.com/MartinLiteAndFog/quant/pull/41)**. **GitHub-CI grün** (neuer Workflow `ECO-14 Read-only New Two-Gene Meadow Proposals` und bestehende `Fleet Evolution Meadow`-CI).
+
+**Datenunabhängiger, bereits implementierter Teil:** `apps/fleet-desktop/src/lib/meadowCatalogProposals.ts`, `tests/meadowCatalogProposals.smoke.mjs`, `docs/architecture/eco14-missing-meadow-proposals.md`, Workflow `.github/workflows/eco14-meadow-proposals.yml`. Es wurde weder die Cloudgarden-Strategien-/Kapital-Engine noch das zurzeit von Agent B bearbeitete Contract-Modul verändert.
+
+- **Nicht zuordenbare Pflanze verschwindet nicht:** Pflanzen mit `homeTileId=null` werden gegen bereits vorhandene kompatible Zwei-Gen-Wiesen getestet. Besteht eine solche, meldet das Modul **nur die vorhandene Kategorie**, statt eine zweite finanzierte Pflanze zu erfinden.
+- Fehlt sie, werden **nur katalogisierte echte, numerische Strategie-Genpaare** betrachtet: Modul-ID/-Version, eindeutige Pair-ID, X-/Y-Gen, normalisierte begrenzte Parameterbereiche, separate `approvedStrategySpecId`. Es wird **nicht** willkürlich ein Paar aus irgendeinem numerischen Genom genommen. Bekannte Safety-/Finanz-/Optikgene werden als Achse abgewiesen.
+- Kandidaten desselben Assets und Genpaars erzeugen nur **einen** stabilen Wiesen-Vorschlag. Gleiche Genpaare auf SOL, WTI/Öl oder anderen Assets bleiben **getrennte Regions-/Symbol-Kategorien**, ohne Querverrechnung oder neues Kapital. Freie Slots werden stabil auf einem 4×4-Kachelraster gesucht, mit Kollisionsschutz auch auf globalen Weltkoordinaten. Ist die Region voll oder fehlt ein registriertes echtes Genpaar, bleibt die Pflanze **sichtbar als offener Zuordnungsfall** (`no_free_region_slot` oder `no_registered_two_gene_pair`).
+- **Alles ist rein lesend:** Vorschläge melden `proposalOnly=true`, `createsFundedPlants=false`, `transfersCapital=false`. Es wird **kein** `homeTileId`, Markt-Trade, Marginkonto, Genome-Fitness oder Water Budget geändert. Eine neue Kategorie wird erst nach Schema-/Modulfreigabe materialisiert.
+- GitHub-CI testet Eingabereihenfolge, zwei tatsächliche numerische Achsen, Gruppierung, fehlende Gene, bestehende Wiese, Öl-Region getrennt von SOL, volle Region, verbotene Optik-/Finanz-Gene und vorhandenes ECO-14-Navigations-/TypeScript-/Vite-Build.
+
+**Folgeschritt nach Agent B:** Das tatsächliche Cloudgarden-/ECO-01-Genom- und Versionsschema durch einen read-only Adapter auf die bereits existierende `TileWorld`-Schnittstelle übertragen, `approvedStrategySpecId` wirklich verifizieren und Vorschläge erst dann im UI zur Auswahl anbieten. Die Funktion ist **kein** Live-Trading-Kategorien-Autocreation-System. Keine lokalen Originaldaten benötigt.
