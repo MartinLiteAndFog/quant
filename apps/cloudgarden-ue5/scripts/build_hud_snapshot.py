@@ -12,6 +12,7 @@ import json
 from typing import Any
 
 from export_unreal_bootstrap import build_bootstrap
+from build_plant_inspector import build_plant_inspectors, make_focus_interaction
 from tile_research_journal import digest
 from validate_gene_physics import load
 
@@ -199,6 +200,7 @@ def build_hud_snapshot(bootstrap: dict, fin: dict | None = None) -> dict:
             "liveEnabled": False,
         })
     nav_history = (fin["navHistory"] if fin else [])
+    inspectors = build_plant_inspectors(bootstrap, fin)
     return {
         "schemaVersion": 1,
         "kind": "cloudgarden_ue5_hud_snapshot",
@@ -243,6 +245,8 @@ def build_hud_snapshot(bootstrap: dict, fin: dict | None = None) -> dict:
             "source": "virtual_requests_not_booked",
         },
         "tileCards": tile_cards,
+        "plantInspectors": inspectors,
+        "plantFocusInteraction": make_focus_interaction(bootstrap),
         "focus": {
             "selectedPlantId": "plant-a",
             "selectedTileId": "sol-imbase",

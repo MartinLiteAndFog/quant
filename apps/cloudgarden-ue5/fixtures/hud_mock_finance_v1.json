@@ -42,21 +42,75 @@
       "netPnlUsdt": "11.50",
       "notionalBasisUsdt": "20.00",
       "closedTrades": 13,
-      "winningTrades": 8
+      "winningTrades": 8,
+      "plantNavHistory": [
+        {
+          "dayIndex": 0,
+          "equityUsdt": "20.00"
+        },
+        {
+          "dayIndex": 1,
+          "equityUsdt": "23.00"
+        },
+        {
+          "dayIndex": 2,
+          "equityUsdt": "22.00"
+        },
+        {
+          "dayIndex": 3,
+          "equityUsdt": "24.50"
+        },
+        {
+          "dayIndex": 5,
+          "equityUsdt": "27.00"
+        },
+        {
+          "dayIndex": 7,
+          "equityUsdt": "31.50"
+        }
+      ]
     },
     {
       "plantId": "plant-b",
       "netPnlUsdt": "-2.50",
       "notionalBasisUsdt": "20.00",
       "closedTrades": 8,
-      "winningTrades": 3
+      "winningTrades": 3,
+      "plantNavHistory": [
+        {
+          "dayIndex": 0,
+          "equityUsdt": "20.00"
+        },
+        {
+          "dayIndex": 1,
+          "equityUsdt": "19.50"
+        },
+        {
+          "dayIndex": 3,
+          "equityUsdt": "18.50"
+        },
+        {
+          "dayIndex": 5,
+          "equityUsdt": "17.50"
+        }
+      ]
     },
     {
       "plantId": "plant-c",
       "netPnlUsdt": "-0.10",
       "notionalBasisUsdt": "20.00",
       "closedTrades": 1,
-      "winningTrades": 0
+      "winningTrades": 0,
+      "plantNavHistory": [
+        {
+          "dayIndex": 6,
+          "equityUsdt": "20.00"
+        },
+        {
+          "dayIndex": 7,
+          "equityUsdt": "19.90"
+        }
+      ]
     }
   ]
 }
