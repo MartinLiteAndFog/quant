@@ -1,0 +1,45 @@
+# Cloudgarden: game-first mechanistic evolution handoff
+**Date:** 2026-11-02  
+**Scope:** Research-only Cloudgarden game, stacked on Draft PR #62. No live-bot, exchange, Railway, main-branch or production change.
+
+## Product decision (confirmed in conversation)
+- The available **one historical SOL dataset is sufficient to run the game**. Reuse it as often as needed. It is not required to obtain independent datasets or a statistically significant result to let plants trade, breed, grow, become dormant, be eaten, or be archived.
+- Evolution is a **deterministic mechanical world**, not an optimizer centrally choosing a champion. Its outcomes emerge from individual trading, capital/resource accounting, ecology and breeding rules. An analyst's `beats`, `does_not_beat`, `not_comparable`, p-value, confidence interval, OOS review or data-license verification status must **never** become an ecological trigger, historical play lock or breeding eligibility criterion.
+- Later add other markets (BTC, FX, etc.) as distinct inputs/regions, with explicit market and execution assumptions. Do not force cross-market comparability as a prerequisite to play.
+- Scientific experiments, confidence levels and robustness reports are **observers**, performed separately and after game functionality. They may inspect frozen game snapshots, but may not feed verdicts back into the canonical world. Game safety guards for absent/invalid candles, risk, conservation, or live routing are separate from statistical evidence gating.
+- Do not secretly add statistical smoothing, winsorization, outlier filters, champions, or selection bias to gameplay. Possible ecology mechanisms should be designed and documented as game rules later, not smuggled in as significance fixes.
+
+## Code audit: what exists today (on Draft PR #62)
+1. `apps/cloudgarden/src/historicalGarden.ts` advances a local historical SOL day, generates signals for funded plants, accounts for paper fills/costs and updates the same NAV ledger **before** one deterministic ecology tick. The world is local and reproducible; no live venue route.
+2. `simulation.ts` implements three founding parents, a 90/10 ledger, 20 **single-use** funded seedling entitlements, scheduled conception every seven days, synthetic light/water/biomass/vigor/dormancy, a fifth-day predator patrol and capital release on archive.
+3. `experiments.ts` runs separate controlled **synthetic** cohort comparisons; `src/quant/ecosystem/experiments/` is also a separate research harness (Draft #59 with evidence fix Draft #64). **Neither is imported into the historical trading day nor the core ecology tick.** The old historical UI nonetheless displayed the research verdict inline with game controls; this follow-up removes that conflation.
+4. Historical records contain per-plant cumulative net PnL, fills, costs and opportunities. However **historical profit is not yet the direct driver of growth, mate selection or predation**. Current ecology is primarily synthetic climate-based. Scheduled births use retained founder-parent records (even after archive), not a competition among all economically successful living plants.
+5. `HISTORICAL_TRADING_SPEC.md` documents an actual local archived SOL export, but the private raw candles are not shipped with GitHub. Agent A audits the dataset/CI separately. A missing or corrupt candle day stops the clock to preserve determinism; that is **data integrity**, not a statistical significance gate.
+6. The existing historical engine intentionally differs from full TradingView Renko and actual venue rules; strategy signal parity and provenance work remain with Agents A/C. Do not present any historical profit as validated live performance.
+
+## Implemented in this follow-up
+- Historical **game screen** no longer displays the research `not_comparable` verdict as part of its trading controls. It explicitly states that external statistical comparisons do not control Play, breeding, growth or predation.
+- Regression test: a separate experiment can return `not_comparable`, yet the identical historical day advances, books transactions and conserves accounting **unchanged**. It requires only synthetic fixture candles; no access to the user's private local dataset.
+- No change to climate, PnL arithmetic, predation thresholds, mutation, birth timing, live trading or research significance calculations.
+
+## Practical game-development order (not scientific review)
+**G1 — Complete economic feedback and life-cycle contract.** Define simple, explicit deterministic links between each *plant's own* net trading outcome and its accessible resources/growth. Decide what performance/history a bee or predator observes. Keep market PnL separate from cosmetic climate and do not invent arbitrary statistical corrections. Record the exact rule and add no-trade, profit, loss and replay-determinism tests.
+
+**G2 — Make reproduction actually evolutionary.** Current offspring are created every seven days with ancestry based on founder records. Move toward a mechanically funded process in which eligible living plants and their heritable strategy genomes can be parents. Archive must remove economic reproduction eligibility without erasing genealogy. No centralized winner.
+
+**G3 — Long-running resource loop.** The present 20 one-time entitlements cap births after 140 days; ensure depleted and reclaimed resources have explicit rules for continued generations, while preserving 90/10 accounting and preventing capital creation. Stress test 1,000+ days.
+
+**G4 — Visual feedback and controls.** Surface deterministic causes directly in the world: plant profit/loss, resource level, lineage, age, dormancy, mutation, predation and capital transfers. Preserve save/load and Play/Pause at identical state hashes. Keep synthetic demo and historical SOL views clearly distinct.
+
+**G5 — Integration and scale.** Reconcile Cloudgarden/Python/Fleet genome, ledger and world-state contracts after Agent B, then improve performance without changing per-tick outcomes. New markets may enter as additional clearly labeled habitats after their own data integrity checks.
+
+**Last — Optional scientific evaluation.** On frozen output snapshots, compare search policies with statistical rigor appropriate to the available evidence. The presence or absence of such analysis never changes historical replay or ecological outcomes.
+
+## Invariants and acceptance checks
+- Same historical data, start date, world seed, game rules and user inputs => same plants, fills, records, NAV and events.
+- An external verdict (including `not_comparable`) must not be accessed by the game engine or used as a stop condition. One market dataset is fine for gameplay.
+- Real missing candles, malformed snapshots, invalid prices, nonconserving capital or unsettled exposure can still stop/fail a tick; no fabricated fills or repair by statistical inference.
+- All actions remain paper-only, no writes to Kraken, KuCoin, Railway, live bots or `main`.
+- Do not merge overlapping A/B/C work until interfaces are reconciled. This PR intentionally modifies only the isolated historical UI, its regression test and this handoff.
+
+**Next recommended coding task:** G1; avoid prematurely implementing arbitrary PnL-to-ecology coefficients without an explicit mechanical rule and before reconciling Agent B's shared accounting contract.
