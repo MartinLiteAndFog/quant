@@ -187,3 +187,26 @@ four parameter regions. On a capital-mode toggle use the mode preview module,
 then wait for external backend acceptance before representing the change as
 active or financially booked. The current bootstrap is generated, not an
 installed or packaged UE project.
+
+## HUD: next local agent implementation milestone
+
+Use docs/plans/2026-11-02-cloudgarden-ue5-hud.md and the starter in
+apps/cloudgarden-ue5/ue5-starter/Source/CloudgardenUE5/.
+
+As a visual and input reference generate the offline browser HUD:
+
+    python3 apps/cloudgarden-ue5/scripts/export_hud_preview.py > /tmp/cloudgarden-hud-preview.html
+
+Read the default missing-finance and --mock-finance snapshots separately.
+Create WBP_CloudgardenHUD child of UCloudgardenHUDWidget and bind source banner,
+Portfolio NAV as GESAMTBIOMASSE, return/net PnL, drawdown, winrate, risk unknown,
+unique canonical plant Top 5 winner/loser tabs, 4 tile rows, active/archived
+population, seed releases/proposed offspring, event ticker and view controls.
+Make Atlas information-dense and Explore compact, same selected plant and day.
+
+The C++ code is a starter: compile it in the local pinned UE5 project; there
+are no checked-in UMG Blueprint assets or Unreal Editor validation yet. HUD
+ApplySnapshotJson is READ ONLY and rejects unsupported live or funded claims.
+Capital tile button MUST use a pending backend request preview, not a direct
+client-side investment mutation. Never derive a portfolio valuation from 6
+visual instances, synthetic seed score or requested paper budget.

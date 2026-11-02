@@ -120,3 +120,28 @@ per-tile unfunded mode requests. The file digest is integrity-only, not a
 signature. Importing it is an explicit local Editor action, not a running MCP
 service or an authorized ecology/market/finance state. For actual Chaos physics
 and real data an independently trusted source and approval are required.
+
+## Game HUD, Top 5 winner/loser and portfolio biomass
+
+Specification: ../../docs/plans/2026-11-02-cloudgarden-ue5-hud.md
+Unreal C++ UMG code starter: ue5-starter/Source/CloudgardenUE5/
+Offline interactive browser layout template: hud/hud_preview_template.html
+
+Run from repo root:
+
+    python3 apps/cloudgarden-ue5/scripts/build_hud_snapshot.py > hud-missing-finance.json
+    python3 apps/cloudgarden-ue5/scripts/build_hud_snapshot.py --mock-finance > hud-fictional-finance.json
+    python3 apps/cloudgarden-ue5/scripts/export_hud_preview.py > cloudgarden-hud-preview.html
+    python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_hud*.py' -v
+
+The locally generated HTML can be opened in a browser: Atlas / Explore, Top 5
+winners/losers, tile selection, and *fictional finance / no finance* toggles are
+interactive. The center is a CSS preview, NOT an actual UE rendering.
+Gesamtbiomasse is labeled Portfolio-NAV and ONLY comes from a separate verified
+financial source; without it we show a dash, never inferred value from six tile
+visual copies or 60 USDT virtual paper funding requests. The fictional sample
+NAV 108.90, +8.90% and its rankings are marked MOCK/DEMO, not empirical trades.
+
+Future local Unreal agent must create actual UMG Blueprint assets and compile
+C++ starter on pinned UE version. No orders/risk controls/real-paper bookings
+are provided in the HUD starter.

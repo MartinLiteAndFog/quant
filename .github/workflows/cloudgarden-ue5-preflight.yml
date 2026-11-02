@@ -8,6 +8,7 @@ on:
       - 'docs/plans/2026-11-02-cloudgarden-ue5-multi-parameter-tiles.md'
       - 'docs/plans/2026-11-02-cloudgarden-ue5-tile-experiments-and-capital.md'
       - 'docs/plans/2026-11-02-cloudgarden-ue5-research-journal-and-mode-preview.md'
+      - 'docs/plans/2026-11-02-cloudgarden-ue5-hud.md'
       - '.github/workflows/cloudgarden-ue5-preflight.yml'
   workflow_dispatch:
 permissions:
@@ -58,3 +59,16 @@ jobs:
           python3 -c 'import json; b=json.load(open("/tmp/cloudgarden_unreal_bootstrap.json")); assert b["totals"]["visualInstances"] == 6 and b["totals"]["journalEvents"] == 42 and b["totals"]["liveOrders"] == 0'
       - name: Verify UE scene bundle signatures are just integrity and source-matched
         run: python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_unreal_bootstrap.py' -v
+      - name: Verify game HUD finance provenance and Top 5 canonical rankings
+        run: |
+          python3 apps/cloudgarden-ue5/scripts/build_hud_snapshot.py > /tmp/hud-no-ledger.json
+          python3 apps/cloudgarden-ue5/scripts/build_hud_snapshot.py --mock-finance > /tmp/hud-fictional.json
+          python3 -c 'import json; a=json.load(open("/tmp/hud-no-ledger.json")); b=json.load(open("/tmp/hud-fictional.json")); assert a["financialMetrics"]["totalBiomassPortfolioUsdt"]["value"] is None and b["financialMetrics"]["totalBiomassPortfolioUsdt"]["value"] == "108.90" and len(b["leaderboard"]["winnerRows"]) == 1'
+      - name: Run HUD source/risk/leaderboard regression suite
+        run: python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_hud_snapshot.py' -v
+      - name: Generate offline HUD layout from the same source model
+        run: |
+          python3 apps/cloudgarden-ue5/scripts/export_hud_preview.py > /tmp/cloudgarden-hud-preview.html
+          python3 -c 'from pathlib import Path; s=Path("/tmp/cloudgarden-hud-preview.html").read_text(); assert "__HUD_MOCK_JSON__" not in s and "id=\"rank-losers\"" in s and "id=\"explore\"" in s'
+      - name: Verify HUD browser interactions and escaped source data
+        run: python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_hud_preview.py' -v

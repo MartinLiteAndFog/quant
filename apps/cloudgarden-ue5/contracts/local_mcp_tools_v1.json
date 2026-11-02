@@ -15,7 +15,8 @@
     "No order/account/market/ledger tools are exposed",
     "All eligible tiles may independently drop seeds in RESEARCH; Unreal may not authorize canonical births or live money.",
     "Seed journal SHA256 chain detects changes against trusted plan but cannot authenticate a UE client or authorize a real event.",
-    "A one-file bootstrap bundle exists for synthetic scene preview; its digest is NOT a signature and does not grant authority."
+    "A one-file bootstrap bundle exists for synthetic scene preview; its digest is NOT a signature and does not grant authority.",
+    "HUD financial metrics and Top 5 require verified unique canonical-plant ledger data; synthetic demo finance must never be treated as real."
   ],
   "tools": [
     {
@@ -179,6 +180,36 @@
         "approvedPreviewId"
       ],
       "result": "previewAssetDiff"
+    },
+    {
+      "name": "ue5.hud_preview",
+      "action": "inspect_validated_readonly_hud_snapshot_and_blueprint_model",
+      "sideEffects": "none",
+      "args": [
+        "hudSnapshotJson",
+        "expectedBootstrapDigest"
+      ],
+      "result": "hudFieldsAndUnavailableEvidence"
+    },
+    {
+      "name": "ue5.hud_set_rank_tab",
+      "action": "switch_top_5_winners_or_losers_without_financial_side_effects",
+      "sideEffects": "umg_display_only",
+      "args": [
+        "rankingTab"
+      ],
+      "result": "visibleCanonicalPlantRows"
+    },
+    {
+      "name": "ue5.hud_set_view_density",
+      "action": "apply_atlas_or_explore_hud_layout_profile",
+      "sideEffects": "umg_display_only",
+      "args": [
+        "viewMode",
+        "selectedPlantId",
+        "selectedTileId"
+      ],
+      "result": "hudLayoutState"
     }
   ]
 }
