@@ -249,7 +249,7 @@ export function validateWire(input: unknown): CloudgardenWire {
     requireCondition(p.strategy_id.length > 0 && !plants.has(p.strategy_id)
       && p.genome_version === 1 && (p.status === "active" || p.status === "archived")
       && Array.isArray(p.lineage_parent_ids)
-      && p.lineage_parent_ids.every((id) => typeof id === "string")
+      && p.lineage_parent_ids.every((id: string) => typeof id === "string")
       && p.genome_kind === (p.source_genome ? "source_candle_research" : "synthetic_demo")
       && p.strategy_code_version === (p.source_genome ? "cloudgarden-source-v1" : "cloudgarden-demo-v1")
       && p.empirical === null && p.habitat && Number.isInteger(p.habitat.evidence_days)
