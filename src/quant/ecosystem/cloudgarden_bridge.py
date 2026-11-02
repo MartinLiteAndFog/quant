@@ -52,6 +52,7 @@ class CapitalAccounting(Contract):
     used_margin: Money
     reserved_order_margin: Money
     free_margin: Money
+    rounding_holdback: Money
 
 
 class HabitatMetrics(Contract):
@@ -146,7 +147,7 @@ class CloudgardenWire(Contract):
         if account.account_id != self.account_id or account.free_margin != self.capital_accounting.free_margin:
             raise ValueError("foreign writer or mismatched account free margin")
         positive = max(_ZERO, water.equity)
-        if positive.as_tuple().exponent < -4:
+        if positive != positive.quantize(Decimal("0.0001")):
             raise ValueError("Cloudgarden NAV is limited to 0.0001 USDT")
         if self.groundwater.reserve != positive * _ONE_TENTH or (
             self.groundwater.distributable != positive - self.groundwater.reserve
@@ -165,6 +166,7 @@ class CloudgardenWire(Contract):
             self.capital_accounting.seed_reserved_allocation,
             self.capital_accounting.free_allocation, self.capital_accounting.used_margin,
             self.capital_accounting.reserved_order_margin, self.capital_accounting.free_margin,
+            self.capital_accounting.rounding_holdback,
         ]:
             if not _exact_money(amount):
                 raise ValueError("wire money must have no more than five decimal places")
@@ -181,9 +183,12 @@ class CloudgardenWire(Contract):
         capital = self.capital_accounting
         if any(v < 0 for v in (
             capital.deployed_allocation, capital.seed_reserved_allocation, capital.free_allocation,
-            capital.used_margin, capital.reserved_order_margin, capital.free_margin
+            capital.used_margin, capital.reserved_order_margin, capital.free_margin,
+            capital.rounding_holdback
         )):
             raise ValueError("negative available allocations or margins")
+        if capital.rounding_holdback > Decimal("0.00005"):
+            raise ValueError("rounding holdback exceeds one half-unit at 4dp")
         if sum((e.amount for e in claims.values()), _ZERO) != (
             capital.deployed_allocation + capital.seed_reserved_allocation
         ) or sum((e.amount for e in claims.values()), _ZERO) + capital.free_allocation > water.distributable:
