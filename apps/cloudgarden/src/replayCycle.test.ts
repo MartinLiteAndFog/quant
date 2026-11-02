@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { handleSyntheticReplayWorkerMessage, runSyntheticReplayCycle, type SyntheticReplayCycleInput } from "./replayCycle.ts";
+import { advanceSimulationDays, createSimulationWorld } from "./simulation.ts";
 
 const cycleInput = (overrides: Partial<SyntheticReplayCycleInput> = {}): SyntheticReplayCycleInput => ({
   days: 90,
@@ -9,7 +10,7 @@ const cycleInput = (overrides: Partial<SyntheticReplayCycleInput> = {}): Synthet
   weekIndex: 2,
   plantId: "plant-90d",
   allocationUsdt: 20,
-  controls: { lookbackBars: 30, entryThresholdBps: 40, exitThresholdBps: 10 },
+  tradingTraits: { lookbackBars: 30, entryThresholdBps: 40, exitThresholdBps: 10 },
   ...overrides,
 });
 
@@ -30,10 +31,27 @@ test("a 90-day replay cycle returns flat, reconciled, synthetic-only evidence", 
   assert.ok(Math.abs(result.evidence.netPnlResidualUsdt) < 0.0001);
 });
 
+test("the replay genome is taken from the selected plant's inherited trading traits", async () => {
+  const world = advanceSimulationDays(createSimulationWorld("replay-inherited", { conceptionPolicy: "hive" }), 7);
+  const plant = world.plants.find((candidate) => candidate.id === "seedling-01");
+  assert.ok(plant);
+  const result = await runSyntheticReplayCycle(cycleInput({
+    days: 7,
+    plantId: plant.id,
+    allocationUsdt: plant.allocationUsdt,
+    tradingTraits: plant.tradingTraits,
+  }));
+
+  assert.equal(result.genome.strategyId, `${plant.id}:synthetic-momentum-v1`);
+  assert.equal(result.genome.lookbackBars, plant.tradingTraits.lookbackBars);
+  assert.equal(result.genome.entryThresholdBps, plant.tradingTraits.entryThresholdBps);
+  assert.equal(result.genome.exitThresholdBps, plant.tradingTraits.exitThresholdBps);
+});
+
 test("worker success response preserves the request id and serializes", async () => {
   const response = await handleSyntheticReplayWorkerMessage({
     id: "cycle-ok",
-    input: cycleInput({ days: 1, controls: { lookbackBars: 30, entryThresholdBps: 40, exitThresholdBps: 10 } }),
+    input: cycleInput({ days: 1, tradingTraits: { lookbackBars: 30, entryThresholdBps: 40, exitThresholdBps: 10 } }),
   });
 
   assert.equal(response.id, "cycle-ok");
