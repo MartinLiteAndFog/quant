@@ -21,7 +21,7 @@ def project_vitality(scene: dict, catalog: dict, gene_source: dict, snapshot: di
     scene_ref = tiles["sceneRef"]
     if (snapshot.get("schemaVersion") != 1
             or snapshot.get("kind") != "cloudgarden_vitality_snapshot"
-            or snapshot.get("authority") != "synthetic_fixture_only"
+            or snapshot.get("authority") not in ("synthetic_fixture_only", "canonical_readonly_export")
             or snapshot.get("sceneRef") != scene_ref):
         raise ValueError("Invalid, untrusted or stale vitality snapshot")
     policy = snapshot.get("policy", {})
@@ -80,7 +80,8 @@ def project_vitality(scene: dict, catalog: dict, gene_source: dict, snapshot: di
     return {
         "schemaVersion": 1,
         "kind": "cloudgarden_readonly_tile_vitality_projection",
-        "authority": "synthetic_visual_fixture_only",
+        "authority": "read_only_preview_no_transport_trust",
+        "declaredSourceAuthority": snapshot["authority"],
         "sceneRef": scene_ref,
         "ownership": "single_canonical_plant_per_plantId",
         "simulationTicksApplied": 0,
