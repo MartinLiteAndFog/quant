@@ -32,6 +32,19 @@ test("historical garden executes all parents on the same minute day, books real 
   assert.ok(next.trades.length > 0);
   assert.notEqual(next.world.capital.navUsdt, 100);
   assert.ok(next.world.capital.paperFeesUsdt > 0);
+  // Biological growth is proportional to each parent's booked net return,
+  // not to synthetic climate fitness or any research/significance verdict.
+  for (const parent of session.world.plants) {
+    const dayNetPnl = next.records[parent.id]?.netPnl ?? 0;
+    const factor = Math.max(0, 1 + dayNetPnl / parent.allocationUsdt);
+    const bound = (value: number, min: number, max: number) =>
+      Math.round(Math.max(min, Math.min(max, value)) * 10_000) / 10_000;
+    const grown = next.world.plants.find((p) => p.id === parent.id)!;
+    assert.equal(grown.biomass, bound(parent.biomass * factor, 5, 100));
+    assert.equal(grown.vigor, bound(parent.vigor * factor, 0, 100));
+    assert.equal(grown.evidence, parent.evidence, "synthetic evidence does not become an empirical gate");
+  }
+  assert.equal(next.world.events.find((e) => e.type === "daily_tick")?.detail.marketDrivenBiomass, true);
   assert.equal(next.world.capital.paperReplayCount, 3);
   assert.ok(next.trades.every((fill) => fill.executedAt >= "2025-01-02T00:02:00.000Z" && fill.executedAt < "2025-01-03"));
   const events = next.world.events.filter((e) => e.type === "paper_replay");
