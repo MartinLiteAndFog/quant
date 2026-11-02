@@ -504,9 +504,9 @@ function PaperReplayPanel({ plants, world, worldDay, navUsdt, run, runConfig, bu
 
 function ExperimentResults({ report }: { report: ExperimentReport }) {
   return <section className="experiment-results"><div className="section-title"><div><span>MATCHED SEED COHORTS</span><h2>Rule-level outcomes</h2></div><span className="record-count">{report.days} days · {report.seeds.length} seeds</span></div>
-    <table className="experiment-table"><thead><tr><th scope="col">Pollination</th><th scope="col">Living</th><th scope="col">Archived</th><th scope="col">Mean habitat fit · synthetic</th><th scope="col">Mean vigor</th><th scope="col">Capital reconciled</th></tr></thead>
-      <tbody>{report.cohorts.map((cohort) => <tr key={cohort.policy}><th scope="row">{cohort.policy}</th><td>{cohort.meanActivePlants.toFixed(1)}</td><td>{cohort.meanArchivedPlants.toFixed(1)}</td><td>{cohort.meanHabitatFit.toFixed(1)}</td><td>{cohort.meanVigor.toFixed(1)}</td><td>{cohort.capitalConserved ? "Yes · 90/10" : "Check"}</td></tr>)}</tbody>
-    </table><p className="experiment-verdict">{report.interpretation}</p><p className="experiment-disclaimer">No market, return, Sharpe, or execution claim. These results only compare Cloudgarden's own synthetic rules.</p>
+    <table className="experiment-table"><thead><tr><th scope="col">Pollination</th><th scope="col">Living</th><th scope="col">Archived</th><th scope="col">Mean habitat fit · synthetic</th><th scope="col">Mean vigor</th><th scope="col">Lookback · bars</th><th scope="col">Entry · bps</th><th scope="col">Exit · bps</th><th scope="col">Capital reconciled</th></tr></thead>
+      <tbody>{report.cohorts.map((cohort) => <tr key={cohort.policy}><th scope="row">{cohort.policy}</th><td>{cohort.meanActivePlants.toFixed(1)}</td><td>{cohort.meanArchivedPlants.toFixed(1)}</td><td>{cohort.meanHabitatFit.toFixed(1)}</td><td>{cohort.meanVigor.toFixed(1)}</td><td>{cohort.meanTradingLookbackBars.toFixed(1)}</td><td>{cohort.meanTradingEntryThresholdBps.toFixed(1)}</td><td>{cohort.meanTradingExitThresholdBps.toFixed(1)}</td><td>{cohort.capitalConserved ? "Yes · 90/10" : "Check"}</td></tr>)}</tbody>
+    </table><p className="experiment-verdict">{report.interpretation}</p><p className="experiment-disclaimer">Gene means describe the inherited genome only. No market, return, Sharpe, or execution claim; these results compare Cloudgarden's synthetic rules and remain not comparable to market performance.</p>
   </section>;
 }
 
