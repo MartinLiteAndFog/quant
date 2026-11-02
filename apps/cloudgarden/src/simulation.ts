@@ -77,6 +77,8 @@ export type GardenPlant = Readonly<{
   allocationUsdt: number;
   conceivedBy?: BeeMode;
   parents?: readonly [string, string];
+  /** Which existing budget financed the birth; neither route creates NAV. */
+  fundingSource?: "seedbank" | "recycled";
 }>;
 
 export type SeedEntitlement = Readonly<{
@@ -583,12 +585,34 @@ function allocateSeedling(world: SimulationWorld, plant: GardenPlant, entitlemen
     : slot);
   return {
     ...world,
-    plants: [...world.plants, plant],
+    plants: [...world.plants, { ...plant, fundingSource: "seedbank" as const }],
     capital: {
       ...world.capital,
       reservedMarginUsdt: round4(world.capital.reservedMarginUsdt - SEEDLING_ALLOCATION_USDT),
       deployedCapitalUsdt: round4(world.capital.deployedCapitalUsdt + SEEDLING_ALLOCATION_USDT),
       seedlingEntitlements: slots,
+    },
+  };
+}
+
+/** After all 20 single-use seed slots, re-use ONLY already free deployable NAV.
+ * An archived plant's allocation returns to this exact free slice. Not a
+ * new entitlement, not margin release from another bot, and not new money.
+ */
+function allocateRecycledSeedling(world: SimulationWorld, plant: GardenPlant): SimulationWorld {
+  if (world.capital.seedlingEntitlements.some((slot) => slot.status !== "used")) {
+    throw new Error("Recycled births are allowed only after original seedbank exhaustion.");
+  }
+  if (world.capital.freeCapitalUsdt < SEEDLING_ALLOCATION_USDT) {
+    throw new Error("Recycled seedling requires existing free deployable capital.");
+  }
+  return {
+    ...world,
+    plants: [...world.plants, { ...plant, fundingSource: "recycled" as const }],
+    capital: {
+      ...world.capital,
+      freeCapitalUsdt: round4(world.capital.freeCapitalUsdt - SEEDLING_ALLOCATION_USDT),
+      deployedCapitalUsdt: round4(world.capital.deployedCapitalUsdt + SEEDLING_ALLOCATION_USDT),
     },
   };
 }
@@ -695,20 +719,26 @@ export function advanceSimulationDay(world: SimulationWorld, tradingDayOutcomes?
   };
 
   // Every seventh day bees visit living adults, including grown offspring.
-  // The 20 entitlement slots are single-use; archived seedlings do not restore one.
+  // The original 20 entitlements stay single-use. Afterwards only capital
+  // *already freed* by an archived funded plant can finance further births.
   if (day % 7 === 0) {
     const used = next.capital.seedlingEntitlements.filter((slot) => slot.status === "used").length;
     const available = next.capital.seedlingEntitlements.length - used;
-    const index = used;
+    const index = next.plants.filter((plant) => plant.role === "seedling").length;
     const mode: BeeMode = next.conceptionPolicy === "mixed"
       ? (["local", "hive", "hybrid"] as const)[index % 3]
       : next.conceptionPolicy;
-    const fundingAvailable = next.capital.reservedMarginUsdt >= SEEDLING_ALLOCATION_USDT;
-    const conception = available > 0 && fundingAvailable
+    const seedbankFunded = available > 0
+      && next.capital.reservedMarginUsdt >= SEEDLING_ALLOCATION_USDT;
+    const recycledFunded = available === 0
+      && next.capital.freeCapitalUsdt >= SEEDLING_ALLOCATION_USDT;
+    const conception = (seedbankFunded || recycledFunded)
       ? makeConception(next.seed, day, index, next.plants, mode)
       : undefined;
     if (conception) {
-      next = allocateSeedling(next, conception.plant, conception.entitlementId);
+      next = seedbankFunded
+        ? allocateSeedling(next, conception.plant, conception.entitlementId)
+        : allocateRecycledSeedling(next, conception.plant);
       next = {
         ...next,
         events: appendEvents(next.events, [{
@@ -717,7 +747,13 @@ export function advanceSimulationDay(world: SimulationWorld, tradingDayOutcomes?
           type: "conception",
           actor: `${mode}-bee`,
           subject: conception.plant.id,
-          detail: { mode, entitlementId: conception.entitlementId, allocationUsdt: conception.plant.allocationUsdt, parents: conception.plant.parents?.join(",") ?? "" },
+          detail: {
+            mode,
+            fundingSource: seedbankFunded ? "seedbank" : "recycled",
+            entitlementId: seedbankFunded ? conception.entitlementId : null,
+            allocationUsdt: conception.plant.allocationUsdt,
+            parents: conception.plant.parents?.join(",") ?? "",
+          },
         }]),
       };
     }
@@ -786,12 +822,19 @@ export function assertSimulationInvariants(world: SimulationWorld): void {
   }
   const usedSlots = capital.seedlingEntitlements.filter((slot) => slot.status === "used");
   const seedlings = world.plants.filter((plant) => plant.role === "seedling");
-  if (usedSlots.length !== seedlings.length || usedSlots.length > SEEDLING_ENTITLEMENTS) {
-    throw new Error("Each seedling must consume exactly one unique entitlement.");
+  // Every original seedbank child consumes its own unique entitlement.
+  // Extra later generations must be marked as directly funded from existing
+  // FREE deployable capital; they cannot recycle the original seed slots.
+  const seeded = seedlings.filter((plant) => plant.fundingSource !== "recycled");
+  const recycled = seedlings.filter((plant) => plant.fundingSource === "recycled");
+  if (usedSlots.length !== seeded.length || usedSlots.length > SEEDLING_ENTITLEMENTS) {
+    throw new Error("Original seedling entitlements must be unique and single-use.");
   }
   const fundedIds = new Set(usedSlots.map((slot) => slot.plantId));
-  if (fundedIds.size !== usedSlots.length || seedlings.some((plant) => !fundedIds.has(plant.id))) {
-    throw new Error("Entitlements cannot fund a plant more than once or leave seedlings unfunded.");
+  if (fundedIds.size !== usedSlots.length || seeded.some((plant) => !fundedIds.has(plant.id))
+    || recycled.some((plant) => fundedIds.has(plant.id))
+    || (recycled.length > 0 && usedSlots.length !== SEEDLING_ENTITLEMENTS)) {
+    throw new Error("Seedbank and recycled births must have disjoint accounted funding.");
   }
   if (Math.abs(capital.reservedMarginUsdt - (SEEDLING_ENTITLEMENTS - usedSlots.length) * SEEDLING_ALLOCATION_USDT) > 0.0001) {
     throw new Error("Reserved margin must equal the unfunded seedling entitlement value.");
