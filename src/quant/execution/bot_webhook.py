@@ -193,9 +193,9 @@ async def _lifespan(_app: FastAPI):
             mode_status = fleet().ensure_hedge_mode()
             log.info("Blaupunkt hedge mode preflight: %s", mode_status)
         except Exception as e:
-            # Keep the receiver online to log rejected alerts, but do not
-            # arm any orders: the executor rechecks mode on every signal.
             log.error("Blaupunkt hedge mode preflight BLOCKED: %s", e)
+        from quant.execution.hedge_webhook_queue import start_worker
+        start_worker()
     else:
         _enforce_margin_mode()
         start_tv_executor()
