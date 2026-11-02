@@ -1,0 +1,13 @@
+# ECO-05: Groundwater capital proposals (isolated paper research)
+
+`groundwater.py` is a PURE Decimal ledger planner, no KuCoin/Railway/TradingView imports or writes. For every *reconciled, same-currency* account, the upper bound on new+existing bot budget entitlements is 90% positive account NAV; globally 10% remains out of entitlements. Multiple real accounts are **not** fungible without explicitly documented transfers: per-account budgets are isolated even if a strategy has strong roots.
+
+`allocate_groundwater(accounts, demands)` accepts unique Account snapshots and Strategy Demands; `weight` is a nonnegative quality/root priority score calculated externally (fitness, evidence and water access), never guaranteed profit. It iteratively allocates unused headroom among eligible strategies, respects per-bot `max_entitlement_fraction`, and returns unallocated headroom if caps/eligibility block spending. It **never forces utilization** or creates artificial orders.
+
+Each returned Entitlement records budget `amount`, already `used_margin`, `reserved_order_margin`, and a separately computed `entry_capacity`. The sum of capacities never exceeds the account's observed free margin; a dormant plant with an open position retains locked margin without receiving new funds. If existing locked margin exceeds new limits after loss, `risk_breach` and `allocations_frozen` are set. No forced closing, cancels or invented cash.
+
+`split_seed_budget` transfers a fixed fraction of a parent's uncommitted entitlement to a unique newborn (simulation only). Duplicated child IDs and attempts to steal funds from occupied positions are rejected; global equity/entitlements do not change on birth. It is intentionally strict and does not mutate the historical 3×3 Blaupunkt family capital rules.
+
+**Limitations:** This is an economic/allocator proposal, not venue margin reconciliation, tax/FX accounting or cashflow-adjusted TWR; actual live funds, 0.1-SOLUSDTM minimum, leverage, stop orders, fees, liquidity, reservations and account transfers are external hard risk gates. No repeated bot may be placed in two tile worlds/accounts. `as_of` and event ID deduplication belong to ECO-01/ECO-03; do not use planner results as proof that a fill occurred. Cross-account profit comparison requires reconciled marks and currency conversion.
+
+**Distressed multi-account NAV:** negative-equity accounts reduce global net equity before the 90/10 rule is applied. Positive-account budget targets are scaled down to the global distributable cap and the planner freezes all new entry capacity. Existing used margin is retained as an observation, not silently flattened.\n
