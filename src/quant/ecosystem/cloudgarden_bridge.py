@@ -242,7 +242,13 @@ def load_wire(document: str | dict[str, Any]) -> CloudgardenWire:
 
 
 def dump_wire(value: CloudgardenWire) -> str:
-    return json.dumps(value.model_dump(mode="json"), sort_keys=True, separators=(",", ":"), allow_nan=False)
+    document = value.model_dump(mode="json")
+    # ECO-01 parses UTC into datetime; preserve the exact bridge-known timestamp
+    # so the TypeScript as_of/account equality remains byte-stable.
+    document["groundwater"]["as_of"] = value.as_of
+    for account in document["groundwater"]["accounts"]:
+        account["as_of"] = value.as_of
+    return json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
 class WireObserverJournal:
