@@ -88,7 +88,9 @@ With both unmerged draft dependencies present in an authorized research branch
 
 \`\`\`bash
 cd apps/cloudgarden
-npm ci
+# PR #62 currently has an invalid package-lock; do not change it from Agent B.
+npm install --no-package-lock --no-audit --no-fund
+npm install --no-save --no-package-lock --no-audit --no-fund '@types/node@^22'
 npm test
 npm run build
 cd ../..
