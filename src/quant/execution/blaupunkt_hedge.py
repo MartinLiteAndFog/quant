@@ -109,6 +109,50 @@ class HedgeFleet:
             raise RuntimeError("KuCoin position mode unreadable; refusing orders")
         return int(data["positionMode"])
 
+    @staticmethod
+    def _require_no_active_orders(response: Any, label: str) -> None:
+        if not isinstance(response, dict) or "items" not in response or "totalNum" not in response:
+            raise RuntimeError(label + ": unexpected order response (blocked)")
+        if int(response["totalNum"]) != 0 or response["items"]:
+            raise RuntimeError(label + ": active orders exist; refusing mode switch")
+
+    def ensure_hedge_mode(self) -> Dict[str, Any]:
+        """Switch account mode only when it is *entirely* flat and order-free.
+
+        This is an account-wide KuCoin setting. Never cancel orders or flatten
+        positions as a side effect of switching. Any failed/ambiguous preflight
+        leaves the old mode intact and live orders disarmed.
+        """
+        with _LOCK:
+            mode = self._mode()
+            if mode == 1:
+                return {"hedge_mode": True, "changed": False}
+            if mode != 0:
+                raise RuntimeError("unknown position mode; refusing to switch")
+            if not _truthy(os.getenv("HEDGE_AUTO_SET_POSITION_MODE", "0")):
+                raise RuntimeError("KuCoin still in one-way mode; auto-switch disabled")
+
+            all_positions = self.broker._req("GET", "/api/v1/positions")
+            if not isinstance(all_positions, list):
+                raise RuntimeError("could not verify all KuCoin positions are flat")
+            if any(abs(float(p.get("currentQty", 0) or 0)) > 0 for p in all_positions):
+                raise RuntimeError("account has open positions; refusing account-wide mode switch")
+            self._require_no_active_orders(
+                self.broker._req("GET", "/api/v1/orders?status=active&pageSize=100"),
+                "regular orders",
+            )
+            self._require_no_active_orders(
+                self.broker._req("GET", "/api/v1/stopOrders?status=active&pageSize=100"),
+                "stop orders",
+            )
+            self.broker._req(
+                "POST", "/api/v2/position/switchPositionMode", body={"positionMode": "1"}
+            )
+            if self._mode() != 1:
+                raise RuntimeError("KuCoin did not confirm hedge mode after switch")
+            log.info("KuCoin hedge mode successfully enabled after account-wide flat-order preflight")
+            return {"hedge_mode": True, "changed": True}
+
     def _positions(self) -> Dict[str, int]:
         data = self.broker._req("GET", "/api/v2/position?symbol=" + self.contract)
         rows = data if isinstance(data, list) else ([data] if isinstance(data, dict) else [])
@@ -374,7 +418,9 @@ class HedgeFleet:
                 return {**summary, "ok": True, "dry_run": True,
                         "side": side, "current_side": b["side"]}
             if self._mode() != 1:
-                raise RuntimeError("KuCoin is not in Hedge Mode (positionMode=1); no orders placed")
+                # A restart may have missed the first mode switch, so retry
+                # the guarded account-wide flat/order check once per alert.
+                self.ensure_hedge_mode()
             if s.get("pending"):
                 result = self._poll_order(s)
                 if not result["complete"]:
