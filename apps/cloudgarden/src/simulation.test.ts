@@ -80,7 +80,7 @@ test("closed paper PnL updates the same NAV, reserve, and allocation ledger", ()
   assertSimulationInvariants(booked);
 });
 
-test("a zero-trade observation is recorded only when cash, margin, and PnL are unchanged", () => {
+test("a zero-trade booking leaves plant ecology unchanged through the next predator path", () => {
   const afterWeek = advanceSimulationDays(createSimulationWorld("paper-no-trade"), 7);
   const booked = bookClosedPaperReplay(afterWeek, "parent-01", {
     startDay: 0,
@@ -112,6 +112,10 @@ test("a zero-trade observation is recorded only when cash, margin, and PnL are u
   assert.equal(event?.detail.strategyId, "parent-01:synthetic-momentum-v1");
   assert.equal(event?.detail.opportunities, 0);
   assert.equal(event?.detail.generatedSignals, 0);
+  assert.deepEqual(booked.plants, afterWeek.plants, "booking a valid no-trade observation must not change any plant state");
+  const bookedPath = advanceSimulationDays(booked, 3);
+  const unbookedPath = advanceSimulationDays(afterWeek, 3);
+  assert.deepEqual(bookedPath.plants, unbookedPath.plants, "the same deterministic ecological/predator path must produce identical plants");
   assertSimulationInvariants(booked);
 
   assert.throws(() => bookClosedPaperReplay(afterWeek, "parent-01", {
