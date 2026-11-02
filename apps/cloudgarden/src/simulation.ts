@@ -750,7 +750,7 @@ export function advanceSimulationDay(world: SimulationWorld, tradingDayOutcomes?
           detail: {
             mode,
             fundingSource: seedbankFunded ? "seedbank" : "recycled",
-            entitlementId: seedbankFunded ? conception.entitlementId : null,
+            ...(seedbankFunded ? { entitlementId: conception.entitlementId } : {}),
             allocationUsdt: conception.plant.allocationUsdt,
             parents: conception.plant.parents?.join(",") ?? "",
           },
