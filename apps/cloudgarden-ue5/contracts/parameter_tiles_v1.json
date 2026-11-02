@@ -1,0 +1,144 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_parameter_tile_catalog",
+  "authority": "synthetic_research_fixture_only",
+  "sceneRef": {
+    "seed": "ue5-visual-preview-v0",
+    "dayIndex": 7
+  },
+  "axisDefinitions": [
+    {
+      "id": "trade.channel_lookback",
+      "label": "Lookback",
+      "kind": "integer",
+      "min": 20,
+      "max": 500,
+      "unit": "candles",
+      "sourceRef": "SourceGenome.channelLookback (Cloudgarden PR62)",
+      "sourceStatus": "existing_draft_source"
+    },
+    {
+      "id": "trade.stop_loss_bps",
+      "label": "Stop-Loss",
+      "kind": "number",
+      "min": 50,
+      "max": 500,
+      "unit": "bps",
+      "sourceRef": "SourceGenome.stopLossBps (Cloudgarden PR62)",
+      "sourceStatus": "existing_draft_source"
+    },
+    {
+      "id": "research.sensitivity",
+      "label": "Sensitivity",
+      "kind": "number",
+      "min": 12,
+      "max": 25,
+      "unit": "index",
+      "sourceRef": "fleet-desktop geneLibrary.sensitivity",
+      "sourceStatus": "synthetic_demo_not_in_cloudgarden_source_genome"
+    },
+    {
+      "id": "research.ttp_pct",
+      "label": "TTP",
+      "kind": "number",
+      "min": 0.25,
+      "max": 1.65,
+      "unit": "%",
+      "sourceRef": "fleet-desktop geneLibrary.ttp",
+      "sourceStatus": "synthetic_demo_not_in_cloudgarden_source_genome"
+    }
+  ],
+  "tiles": [
+    {
+      "id": "sol-imbase",
+      "label": "Lookback × Stop-Loss",
+      "assetRegion": "SOL",
+      "axes": {
+        "x": "trade.channel_lookback",
+        "y": "trade.stop_loss_bps"
+      },
+      "originM": [
+        0,
+        0,
+        0
+      ],
+      "sizeM": [
+        10,
+        10
+      ],
+      "yawDeg": 0,
+      "physicsPolicy": "only_canonical_home_tile"
+    },
+    {
+      "id": "sol-lookback-sensitivity",
+      "label": "Lookback × Sensitivity",
+      "assetRegion": "SOL",
+      "axes": {
+        "x": "trade.channel_lookback",
+        "y": "research.sensitivity"
+      },
+      "originM": [
+        14,
+        0,
+        0
+      ],
+      "sizeM": [
+        10,
+        10
+      ],
+      "yawDeg": 0,
+      "physicsPolicy": "only_canonical_home_tile"
+    },
+    {
+      "id": "sol-sensitivity-ttp",
+      "label": "Sensitivity × TTP",
+      "assetRegion": "SOL",
+      "axes": {
+        "x": "research.sensitivity",
+        "y": "research.ttp_pct"
+      },
+      "originM": [
+        0,
+        14,
+        0
+      ],
+      "sizeM": [
+        10,
+        10
+      ],
+      "yawDeg": 0,
+      "physicsPolicy": "only_canonical_home_tile"
+    },
+    {
+      "id": "sol-lookback-ttp",
+      "label": "Lookback × TTP",
+      "assetRegion": "SOL",
+      "axes": {
+        "x": "trade.channel_lookback",
+        "y": "research.ttp_pct"
+      },
+      "originM": [
+        14,
+        14,
+        0
+      ],
+      "sizeM": [
+        10,
+        10
+      ],
+      "yawDeg": 0,
+      "physicsPolicy": "only_canonical_home_tile"
+    }
+  ],
+  "rendering": {
+    "identity": "tileId::plantId",
+    "selection": "plantId",
+    "multipleInstancesOfOneCanonicalPlant": true,
+    "excludeWithoutBothAxes": true,
+    "excludeOutOfRange": true,
+    "excludeArchived": true,
+    "missingGenePolicy": "no_default_or_imputation",
+    "physicalSideEffects": "home_tile_only",
+    "units": "m"
+  }
+}
