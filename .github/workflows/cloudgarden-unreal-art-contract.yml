@@ -1,0 +1,22 @@
+name: Cloudgarden Unreal art contract (source smoke)
+
+on:
+  pull_request:
+    paths:
+      - "apps/cloudgarden-unreal/**"
+      - ".github/workflows/cloudgarden-unreal-art-contract.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  art-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Deterministic native art-source checks (NOT Unreal compilation)
+        run: python -m unittest discover -s apps/cloudgarden-unreal/scripts -p 'test_art_contract.py' -v
