@@ -280,3 +280,40 @@ Einige PRs enthalten temporär identische Abhängigkeitskopien. Vor Integration 
 - Tile/VisualDNA: https://github.com/MartinLiteAndFog/quant/pull/41 / https://github.com/MartinLiteAndFog/quant/pull/45
 
 **Betreiberregel:** Nichts auf main mergen, nichts auf Railway deployen, keine KuCoin-/Kraken-Trades, kein aktuelles Live-Stop-System anfassen, keine TradingView-Alarme erzeugen, keine Transfers oder Hedge-Mode-Wechsel ohne eigene ausdrückliche Freigabe. Forschungs-Drafts sind keine Handelsfreigaben.
+
+## 10. Ergänzung vom 02.11.2026: Eigenständige Umsetzung von E und H parallel zu A/B/C
+
+Der Benutzer hat **Agent A (historische Daten/Cloudgarden), B (kanonische Schnittstellen) und C (Signalparität)** bereits in getrennten Online-Arbeitssitzungen gestartet. **Diese drei Aufgaben bleiben im Zuständigkeitsbereich dieser Agenten.** Es wurden von diesem Bearbeiter deshalb weder das Dataset und Cloudgarden-`historicalGarden.ts` noch die ECO-01-Wire-Contracts noch TradingView-/Renko-Signalmodule geändert.
+
+### E – Wissenschaftliche Evidenz-Firewall auf ECO-12 (Draft PR #64)
+
+**[PR #64](https://github.com/MartinLiteAndFog/quant/pull/64)** auf Branch `codex/eco12-evidence-firewall-20261102`, **stacked auf ECO-12 [PR #59](https://github.com/MartinLiteAndFog/quant/pull/59)**, ist **GitHub-CI-grün** (Workflow `ECO-12 Evidence Firewall and Experimental Reproducibility`).
+
+**Entdeckte methodische Fehlermöglichkeit:** Die ursprüngliche ECO-12-v1-Auswertung verwendete verschiedene Zufalls-Seeds auf **ein und demselben finalen Markt-OOS-Zeitfenster**, berechnete darauf z-Tests/95%-Intervalle/Holm und ließ theoretisch ein positives `beats` zu, wenn das Eingabeobjekt `source_kind="empirical"` und der Evaluator eine andere ID als `SyntheticEvaluator` behauptete. **30 Such-Seeds auf derselben historischen Kurve sind aber nicht 30 unabhängige Marktstichproben.** Dieses Pseudoreplikationsproblem kann falsch kleine p-Werte erzeugen.
+
+**Implementiert:** `src/quant/ecosystem/experiments/core.py` → Protokoll **`eco12.v1.1`**, `tests/test_ecosystem_experiments.py` (einschließlich bewusst gefälschter `empirical`-/`verified`-Eingaben), `experiment.example.json`, Dokumentation und Actions-Workflow. Der jetzige Harness berichtet gepaarte Seed-Mittelwerte plus **ausdrücklich deskriptive** Seed-Streubänder, aber **immer** `p_value_two_sided=null`, `p_value_holm=null`, inferenzielle Konfidenzintervalle `null`, `independent_market_holdouts=1`, `inferential_interval_valid=false` und `not_comparable`. Auch ein externer Evaluator oder angeblich empirischer Datensatz umgeht das **nicht**. Er schreibt weder Trades noch Daten.
+
+**Wissenschaftlicher nächster Schritt:** Ein eigenständiges **v2-Experiment mit tatsächlich unabhängigen Out-of-sample-Marktsegmenten**, glaubwürdiger Datensatz-/Venue-/Signal-/Funding-Provenienz, Block-/Cluster-Abhängigkeit, vorab definierter Mehrfachtestfamilie und einmaliger Holdout-Verwendung. Erst dann sind valide positive/negative Signifikanzurteile zulässig. **Das ist ausdrücklich noch nicht implementiert und benötigt die Ergebnisse A/B/C und historische Daten.**
+
+### H – Expliziter 16-Gate-NO-GO-Sicherheitsbericht für Family Shadow (Draft PR #66)
+
+**[PR #66](https://github.com/MartinLiteAndFog/quant/pull/66)** auf Branch `codex/eco13-shadow-safety-gates-20261102`, **stacked auf ECO-13 [PR #58](https://github.com/MartinLiteAndFog/quant/pull/58)**, ist **GitHub-CI-grün** (Workflow `ECO-13 Read-only Shadow Safety Gate Checks`).
+
+**Problem:** ECO-13 bereitete bewusst eine read-only-Konfiguration aus einem behaupteten `eligible_for_sowing`-/`beats`-ResearchCandidate mit `out_of_sample=true` vor. Diese Eingabefelder sind **keine unabhängig verifizierten** wissenschaftlichen oder Börsen-Nachweise und dürfen niemals als automatische Live-Freigabe gelesen werden.
+
+**Implementiert:** `src/quant/ecosystem/adapters/shadow_audit.py`, `tests/ecosystem/test_shadow_audit.py`, `docs/plans/ecosystem-shadow-safety-gates.md` und Actions-CI. Der Bericht bindet jede behauptete Gateprüfung an einen **SHA-256 des exakten immutable Snapshot** (Änderung der Strategie-/Genomversion macht alte Nachweise ungültig); jeder grüne Claim braucht benannten Prüfer, UTC-Datum, externen Artefaktbeleg und dessen SHA-256. **Das Modul prüft die behaupteten Artefakt-Bytes nicht selbst** und kontaktiert weder GitHub noch Venue/TradingView. Fehlt ein Gate oder ist es abgelaufen, widersprüchlich, dupliziert oder für ein anderes Genom, bleibt `NO_GO`.
+
+**Alle 16 Gates:** Originalquelle/Lizenz; Markt-/Kontrakt-/Multiplier; TradingView-Parität; echte OOS-/Multipletests; Fees/Slippage/Funding; Netto-PnL/MTM; read-only Hedge-Mode; ein autoritativer Orderwriter; eigene Reduce-only-TP/SL; kein Cross-Bot-Cancel-all; aktuelle Mindestlotgröße; Order-/Fill-/Position-Reconciliation; Crash-Idempotenz; Account-Risk/90:10; read-only Shadow Replay; getrennte Operator-Cutover-Prozedur.
+
+**Wichtig:** Auch bei **16/16 behauptet grünen** Attestations meldet das Modul nur `claims_complete_needs_independent_review` und **ausnahmslos** `cutover="NO_GO"`, `live_routing_authorized=false`, `order_sent=false`, `artifact_hashes_unverified=true`. **Kein Live-Test, keine Registrierung oder Operator-Freigabe.**
+
+### Handoff/Integrationsanweisung und derzeitiger kritischer Pfad
+
+- In beiden PRs wurden nur **eigene Stack-Branches** beschrieben und geändert, keine Agent-A/B/C-Arbeitsdateien und keine Produktion. Vor Merge **#59 → #64** und **#58 → #66** separat prüfen und bei Bedarf rebasen; nicht direkt nach `main` oder in aktive Railway-Dienste mergen.
+- **E:** Mechanische Vergleichs-/Sicherheits-Tests abgeschlossen; tatsächlicher OOS-Test bleibt bis zur unabhängigen Markt-/Strategie-Beweisführung gesperrt.
+- **H:** Formal sichere, read-only Gate-Checkliste abgeschlossen; echte Belege und operatorseitige Abnahme stehen noch aus.
+- **D:** Eine nachgewiesene kausale Verbindung von echter pro-Genom-Rendite, Vitalität, Bienen-/Predator-/Kapitalentscheidung wäre der nächste große wissenschaftliche Mehrwert, **wartet sinnvollerweise auf B+C**. Die bestehenden synthetischen Cloudgarden-`fitness/evidence`-Begriffe nicht als reale ECO-07-Werte wiederverwenden.
+- **F:** 2D-Tiles/VisualDNA-Frontend ist teilweise in #41/#45/#61 vorhanden; Integration mit den tatsächlichen Cloudgarden-/Python-Snapshots folgt erst nach Schemaabgleich von **B**.
+- **G:** Der 5-Jahres-State-/Millionen-Candidate-Performancepfad benötigt den echten Datensatz bzw. dessen nachgewiesenes Formatinventar von **A**. Reine synthetische Screening-Benchmarks können unabhängig weitergeführt werden, sind aber kein historisches Alpha.
+
+**Aktualisierte Bewertung:** Wir haben einen technisch enger abgesicherten **Forschungsprozess**, nicht die wissenschaftlich nachgewiesene Strategieevolution und nicht die Freigabe für echte Börsenpositionen.
