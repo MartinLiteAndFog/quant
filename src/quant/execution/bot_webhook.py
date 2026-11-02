@@ -84,7 +84,14 @@ def _log_inbound_signal(payload: Dict[str, Any], *, disposition: str, detail: st
                 break
         if not sym:
             sym = os.getenv("LIVE_SYMBOL", "SOL-USDT").replace("-", "")
-        inst = strategy_instance_id()
+        # In multi-bot mode, distinguish strategies in Postgres as well as
+        # in the virtual position book; otherwise every alert would still
+        # appear as Blaupunkt in the fleet dashboard.
+        inst = (
+            str(payload.get("bot", "")).strip()
+            if _hedge_enabled() and str(payload.get("bot", "")).strip()
+            else strategy_instance_id()
+        )
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         code = _signal_code(action, side)
         insert_signal_event(
