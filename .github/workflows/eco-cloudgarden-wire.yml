@@ -37,6 +37,9 @@ jobs:
           # PR #62 currently has an invalid inherited nested package-lock version.
           # Avoid modifying Agent A's Cloudgarden dependency files in this PR.
           npm install --prefix apps/cloudgarden --no-package-lock --no-audit --no-fund
+          # Cloudgarden's inherited package.json lacks @types/node; include it
+          # transiently for the existing test files and our CLI typecheck.
+          npm install --prefix apps/cloudgarden --no-save --no-package-lock --no-audit --no-fund '@types/node@^22'
       - name: ECO-01 ↔ Cloudgarden Python → TS → Python golden roundtrip
         env:
           PYTHONPATH: src
