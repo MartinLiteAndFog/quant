@@ -164,3 +164,26 @@ PREVIEW (not a direct setting mutator). Preview must use CAS expected config
 hash, show budget/paper/evolution state, reject stale inputs and any live mode,
 and await future trusted backend approval. The preview is not accepted cash.
 See docs/plans/2026-11-02-cloudgarden-ue5-research-journal-and-mode-preview.md.
+
+## Preferred entrypoint for the local agent: single bootstrap JSON
+
+Instead of manually reconciling every contract, start from:
+
+    python3 apps/cloudgarden-ue5/scripts/export_unreal_bootstrap.py > /tmp/cloudgarden-unreal-bootstrap.json
+    python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_unreal_bootstrap.py' -v
+
+Implement a read-only JSON/UStruct importer with explicit schema and source
+SHA-256 checking. Consume its canonical sourcePlants once, tileVisualInstances
+many times, referenceEventJournal and tileCapitalAndEvolutionRequests separately.
+Do NOT deserialize world instances into independent canonical plants, copy
+ledger balances from visual objects or treat reference seed outcomes as real
+Chaos events. Reject unsupported schema versions, missing gene axes, stale
+source revision and any attempt to turn the bootstrap into live trading.
+
+The bundle's digest is not authentication; local agent must validate the known
+repository source and use only explicitly allowlisted Editor assets. Create
+seamless Atlas and Explore views plus one selection inspector shared across
+four parameter regions. On a capital-mode toggle use the mode preview module,
+then wait for external backend acceptance before representing the change as
+active or financially booked. The current bootstrap is generated, not an
+installed or packaged UE project.

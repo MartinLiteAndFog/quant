@@ -14,7 +14,8 @@
     "Never expose arbitrary script/console execution via MCP",
     "No order/account/market/ledger tools are exposed",
     "All eligible tiles may independently drop seeds in RESEARCH; Unreal may not authorize canonical births or live money.",
-    "Seed journal SHA256 chain detects changes against trusted plan but cannot authenticate a UE client or authorize a real event."
+    "Seed journal SHA256 chain detects changes against trusted plan but cannot authenticate a UE client or authorize a real event.",
+    "A one-file bootstrap bundle exists for synthetic scene preview; its digest is NOT a signature and does not grant authority."
   ],
   "tools": [
     {
@@ -157,6 +158,27 @@
         "independentlyTrustedPlanDigest"
       ],
       "result": "syntheticReplayProofOrError"
+    },
+    {
+      "name": "ue5.validate_synthetic_bootstrap",
+      "action": "validate_readonly_scene_tile_seed_camera_and_mode_contract_from_known_local_source",
+      "sideEffects": "none",
+      "args": [
+        "bootstrapJson",
+        "expectedSourceDigests"
+      ],
+      "result": "validationAndDiff"
+    },
+    {
+      "name": "ue5.import_synthetic_preview_assets",
+      "action": "create_editor_preview_only_data_assets_with_explicit_approved_digest",
+      "sideEffects": "editor_assets_only_explicit_approval",
+      "args": [
+        "validatedBootstrapDigest",
+        "allowedAssetPrefix",
+        "approvedPreviewId"
+      ],
+      "result": "previewAssetDiff"
     }
   ]
 }

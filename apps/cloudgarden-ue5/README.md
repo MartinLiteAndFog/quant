@@ -105,3 +105,18 @@ account/ledger/exchange writes occur. Actual approvals and persisted receipts
 must come from a future trusted backend.
 
 Full protocol: ../../docs/plans/2026-11-02-cloudgarden-ue5-research-journal-and-mode-preview.md
+
+## One-command local UE agent bootstrap
+
+Generate the complete, source-fingerprinted, strictly synthetic scene bundle:
+
+    python3 apps/cloudgarden-ue5/scripts/export_unreal_bootstrap.py > cloudgarden-unreal-bootstrap.json
+    python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_unreal_bootstrap.py' -v
+
+The JSON contains one source plant index, sparse genes, all registered axis/tile
+regions, 6 view instances, 6 independent seed research plans, a 42-event
+synthetic reference journal, camera itinerary, planned BP/PCG values and
+per-tile unfunded mode requests. The file digest is integrity-only, not a
+signature. Importing it is an explicit local Editor action, not a running MCP
+service or an authorized ecology/market/finance state. For actual Chaos physics
+and real data an independently trusted source and approval are required.

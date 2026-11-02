@@ -52,3 +52,9 @@ jobs:
           python3 -c 'import json; p=json.load(open("/tmp/tile_mode_preview.json")); assert p["requestedPaperPoolAfterUsdt"] == "35.00" and not p["accepted"] and not p["cashBooked"] and p["venueOrders"] == 0'
       - name: Verify causal journal, idempotency and requested-mode transition safety
         run: python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_tile_journal.py' -v
+      - name: Build all-in-one local UE scene bootstrap and validate read-only state
+        run: |
+          python3 apps/cloudgarden-ue5/scripts/export_unreal_bootstrap.py > /tmp/cloudgarden_unreal_bootstrap.json
+          python3 -c 'import json; b=json.load(open("/tmp/cloudgarden_unreal_bootstrap.json")); assert b["totals"]["visualInstances"] == 6 and b["totals"]["journalEvents"] == 42 and b["totals"]["liveOrders"] == 0'
+      - name: Verify UE scene bundle signatures are just integrity and source-matched
+        run: python3 -m unittest discover -s apps/cloudgarden-ue5/scripts -p 'test_unreal_bootstrap.py' -v
