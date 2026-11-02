@@ -811,7 +811,7 @@ export function assertSimulationInvariants(world: SimulationWorld): void {
     }
     if (plant.parents !== undefined && (plant.parents.length !== 2
       || plant.parents[0] === plant.parents[1]
-      || plant.parents.some((id) => !ids.has(id) || id === plant.id))) {
+      || plant.parents.some((id: string) => !ids.has(id) || id === plant.id))) {
       throw new Error(`Plant ${plant.id} has an invalid ancestral lineage.`);
     }
     if (!plant.tradingTraits
