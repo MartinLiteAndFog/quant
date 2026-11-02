@@ -1,0 +1,107 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_ue5_local_mcp_tool_manifest",
+  "state": "proposal_not_installed",
+  "boundHost": "127.0.0.1",
+  "onlyInUnrealEditor": true,
+  "allowedAssetPrefix": "/Game/Cloudgarden",
+  "allowExternalNetwork": false,
+  "sourceProject": "apps/cloudgarden-ue5",
+  "recordOperations": true,
+  "warnings": [
+    "Remote Control API Beta; Python Editor scripting experimental/editor-only",
+    "Actual MCP transport/tool binding must be built and approved locally",
+    "Never expose arbitrary script/console execution via MCP",
+    "No order/account/market/ledger tools are exposed"
+  ],
+  "tools": [
+    {
+      "name": "ue5.project_info",
+      "action": "read_engine_version_plugins_project_path",
+      "sideEffects": "none",
+      "args": [],
+      "result": "engineVersion,projectPath,pluginVersions"
+    },
+    {
+      "name": "ue5.list_cloudgarden_assets",
+      "action": "list_assets_under_allowlist",
+      "sideEffects": "none",
+      "args": [
+        "pathPrefix"
+      ],
+      "result": "assetPaths"
+    },
+    {
+      "name": "ue5.preview_gene_binding",
+      "action": "validate_registry_and_map_numeric_properties",
+      "sideEffects": "none",
+      "args": [
+        "snapshotJson",
+        "registryJson"
+      ],
+      "result": "validatedDryRunAssignments"
+    },
+    {
+      "name": "ue5.apply_gene_binding",
+      "action": "apply_approved_typed_property_assignments",
+      "sideEffects": "editor_assets_only_explicit_approval",
+      "args": [
+        "approvedDigest",
+        "allowlistedAssetIds",
+        "previewId"
+      ],
+      "result": "appliedDiff"
+    },
+    {
+      "name": "ue5.spawn_seed_preview",
+      "action": "create_synthetic_test_release_in_editor",
+      "sideEffects": "temporary_editor_scene_only",
+      "args": [
+        "releaseJson",
+        "sceneRevision"
+      ],
+      "result": "seedActorIds"
+    },
+    {
+      "name": "ue5.run_seed_preview",
+      "action": "run_chaos_preview_and_capture_terminal_contacts",
+      "sideEffects": "temporary_editor_scene_only",
+      "args": [
+        "releaseEventId",
+        "physicsConfigDigest"
+      ],
+      "result": "untrustedChaosCandidates"
+    },
+    {
+      "name": "ue5.export_observation_candidates",
+      "action": "export_schema_checked_untrusted_receipts",
+      "sideEffects": "restricted_local_output_file",
+      "args": [
+        "runId",
+        "outputRelativePath"
+      ],
+      "result": "receiptFileDigest"
+    },
+    {
+      "name": "ue5.camera_scene_preview",
+      "action": "switch_atlas_explore_underworld_without_world_reload",
+      "sideEffects": "camera_view_only",
+      "args": [
+        "mode",
+        "layer",
+        "focusPlantId"
+      ],
+      "result": "cameraState"
+    },
+    {
+      "name": "ue5.run_smoke_checks",
+      "action": "run_non_trading_editor_tests",
+      "sideEffects": "none",
+      "args": [
+        "sceneId",
+        "testPreset"
+      ],
+      "result": "testRunMetadata"
+    }
+  ]
+}

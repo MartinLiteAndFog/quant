@@ -26,7 +26,8 @@ Do not open broker endpoints, write to the live source ledger, or silently chang
 Run from repository root first:
     python3 apps/cloudgarden-ue5/scripts/validate_fixture.py
     python3 apps/cloudgarden-ue5/scripts/validate_gene_physics.py
-    python3 apps/cloudgarden-ue5/scripts/propose_offspring_genes.py
+    python3 apps/cloudgarden-ue5/scripts/project_unreal_parameters.py > ue-props.json
+    python3 apps/cloudgarden-ue5/scripts/propose_offspring_genes.py > proposed-children.json
 
 These are synthetic, not local market data tests. Golden fixtures are non-empirical.
 
@@ -87,3 +88,13 @@ Never expose arbitrary Python code execution, world destruction, trading/account
 - Derived child gene values apply only to future research generations after approval and independent trading evaluation.
 - Identical captured accepted receipts replay to identical ecology; rebuilding the visual scene does not re-roll the past.
 - Editor/PIE failure, missing plugins or lack of local market files is reported as such; never invent UE test results.
+
+## Dry-run machine contracts
+
+Before enabling any editor automation, consume the generator outputs as JSON:
+
+- scripts/project_unreal_parameters.py produces a signed-by-file-digest *preview* of 13 typed, allowlisted BP/PCG/WBP property assignments (not actual Unreal asset paths).
+- scripts/propose_offspring_genes.py produces JSON only on stdout and PASS/debug notices on stderr. It maps 3 reference landings to forward-only child gene proposals.
+- contracts/local_mcp_tools_v1.json specifies the planned local MCP tool names, allowlisted paths and side-effect classes. It is a design contract, not an implemented MCP server.
+
+The agent must implement and test each tool rather than assuming a native Unreal MCP. Neither JSON output contains private price data, account tokens or broker actions.

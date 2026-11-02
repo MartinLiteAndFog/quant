@@ -19,5 +19,11 @@ jobs:
         run: python3 apps/cloudgarden-ue5/scripts/validate_fixture.py
       - name: Verify gene bindings and ballistic seed feedback with tamper cases
         run: python3 apps/cloudgarden-ue5/scripts/validate_gene_physics.py
+      - name: Validate generated machine-readable Unreal bindings
+        run: |
+          python3 apps/cloudgarden-ue5/scripts/project_unreal_parameters.py > /tmp/ue_properties.json
+          python3 -c 'import json; r=json.load(open("/tmp/ue_properties.json")); assert r["mode"] == "dry_run_no_editor" and len(r["assignments"]) == 13'
       - name: Verify seed landing creates forward-only two-gene research proposals
-        run: python3 apps/cloudgarden-ue5/scripts/propose_offspring_genes.py
+        run: |
+          python3 apps/cloudgarden-ue5/scripts/propose_offspring_genes.py > /tmp/offspring_proposals.json
+          python3 -c 'import json; r=json.load(open("/tmp/offspring_proposals.json")); assert r["policy"].startswith("never_write_back") and len(r["proposals"]) == 3'

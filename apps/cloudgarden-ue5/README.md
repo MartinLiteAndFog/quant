@@ -41,7 +41,13 @@ research genome proposal**, never alter current trading parameters or balances.
 Run from repo root:
 
     python3 apps/cloudgarden-ue5/scripts/validate_gene_physics.py
-    python3 apps/cloudgarden-ue5/scripts/propose_offspring_genes.py
+    python3 apps/cloudgarden-ue5/scripts/project_unreal_parameters.py > ue-props.json
+    python3 apps/cloudgarden-ue5/scripts/propose_offspring_genes.py > proposed-children.json
 
 The reference solver is analytic, NOT actual Chaos; the latter requires a
 local Unreal editor and approved event ingestion.
+
+The two generated JSON files above are dry-run outputs; targets are proposed
+Unreal fields, not writable UE assets until a local agent creates the matching
+Blueprints/Data Assets. They are not live API calls. See contracts/local_mcp_tools_v1.json
+for proposed restricted automation tool signatures (not an installed MCP server).
