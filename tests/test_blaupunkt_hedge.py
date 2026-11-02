@@ -48,7 +48,7 @@ class FakeBroker:
         self.orders[str(order_id)]["status"] = "done"
 
     def get_account_balance(self, currency="USDT"):
-        return {"equity": 1000, "available": 1000}
+        return {"equity": 1000, "available": 1000 - sum(self.positions.values()) * 10}
 
     def get_best_bid_ask(self, symbol):
         return 100000, 100000
@@ -63,7 +63,7 @@ def fleet(tmp_path, monkeypatch):
         "HEDGE_BOT_IDS": "Blaupunkt,ElliotP1",
         "HEDGE_SYMBOL": "XBT-USDT",
         "HEDGE_AUTO_REGISTER": "1",
-        "HEDGE_BOT_CAPITAL_USAGE": "1",
+        "HEDGE_BOT_CAPITAL_USAGE": "0.90",
         "HEDGE_MAX_LEVERAGE": "20",
         "KUCOIN_FUTURES_ORDER_LEVERAGE": "10",
         "KUCOIN_FUTURES_MARGIN_MODE": "ISOLATED",
@@ -80,11 +80,11 @@ def alert(fleet, bot, action, side="", symbol="XBT-USDT", dry_run=False):
 def test_two_bots_long_and_short_independent(fleet):
     a = alert(fleet, "Blaupunkt", "flip", "buy")
     b = alert(fleet, "ElliotP1", "flip", "sell")
-    assert a["qty"] == b["qty"] == 50
-    assert fleet.broker.positions == {"long": 50, "short": 50}
+    assert a["qty"] == b["qty"] == 45
+    assert fleet.broker.positions == {"long": 45, "short": 45}
     assert fleet.status()["allocation_pct"] == 50
     alert(fleet, "Blaupunkt", "exit")
-    assert fleet.broker.positions == {"long": 0, "short": 50}
+    assert fleet.broker.positions == {"long": 0, "short": 45}
     assert fleet.status()["bots"][1]["side"] == "short"
 
 
@@ -92,7 +92,7 @@ def test_flip_one_bot_does_not_flatten_other(fleet):
     alert(fleet, "Blaupunkt", "flip", "buy")
     alert(fleet, "ElliotP1", "flip", "buy")
     alert(fleet, "Blaupunkt", "flip", "sell")
-    assert fleet.broker.positions == {"long": 50, "short": 50}
+    assert fleet.broker.positions == {"long": 45, "short": 45}
     assert fleet.status()["bots"][0]["side"] == "short"
     assert fleet.status()["bots"][1]["side"] == "long"
 
@@ -101,8 +101,8 @@ def test_auto_registration_changes_only_new_order_sizing(fleet):
     alert(fleet, "Blaupunkt", "flip", "buy")
     c = alert(fleet, "ThirdBot", "flip", "sell")
     assert c["bot_count"] == 3
-    assert c["qty"] == 33
-    assert fleet.broker.positions == {"long": 50, "short": 33}
+    assert c["qty"] == 30
+    assert fleet.broker.positions == {"long": 45, "short": 30}
     assert fleet.status()["allocation_pct"] == pytest.approx(100 / 3)
 
 
@@ -111,8 +111,8 @@ def test_tp1_scoped_to_owner_and_protection_replaced(fleet):
     alert(fleet, "ElliotP1", "flip", "buy")
     old_stop = fleet._read()["bots"]["blaupunkt"]["stop_id"]
     result = alert(fleet, "Blaupunkt", "tp1")
-    assert result["remaining"] == 25
-    assert fleet.broker.positions["long"] == 75
+    assert result["remaining"] == 23
+    assert fleet.broker.positions["long"] == 68
     assert old_stop in fleet.broker.cancelled
     assert fleet._read()["bots"]["blaupunkt"]["stop_id"] != old_stop
 
@@ -142,7 +142,7 @@ def test_dry_run_does_not_change_exchange(fleet):
 def test_state_persists_across_restart(fleet):
     alert(fleet, "Blaupunkt", "flip", "buy")
     again = HedgeFleet(broker=fleet.broker, path=fleet.path)
-    assert again.status()["bots"][0]["qty"] == 50
+    assert again.status()["bots"][0]["qty"] == 45
     assert alert(again, "Blaupunkt", "flip", "buy")["reason"] == "duplicate_same_side"
 
 
@@ -154,5 +154,29 @@ def test_non_hedge_account_no_trade(fleet):
         return original(method, path, body)
     fleet.broker._req = oneway
     with pytest.raises(RuntimeError, match="Hedge Mode"):
+        alert(fleet, "Blaupunkt", "flip", "buy")
+    assert fleet.broker.positions == {"long": 0, "short": 0}
+
+def test_three_bot_pool_uses_ninety_percent_not_compounded(fleet):
+    first = alert(fleet, "Blaupunkt", "flip", "buy")
+    second = alert(fleet, "ElliotP1", "flip", "sell")
+    # With N=2, 45% each. Close both then add a third registered bot.
+    alert(fleet, "Blaupunkt", "exit")
+    alert(fleet, "ElliotP1", "exit")
+    assert first["qty"] == second["qty"] == 45
+    assert fleet.broker.positions == {"long": 0, "short": 0}
+    assert alert(fleet, "ThirdBot", "exit")["reason"] == "already_flat"
+    # Even when available balance falls to 400 after two 300-USDT slots,
+    # the third slot should receive 300, keeping exactly 100 reserve.
+    a = alert(fleet, "Blaupunkt", "flip", "buy")
+    b = alert(fleet, "ElliotP1", "flip", "sell")
+    c = alert(fleet, "ThirdBot", "flip", "buy")
+    assert [a["qty"], b["qty"], c["qty"]] == [30, 30, 30]
+    assert fleet.broker.get_account_balance()["available"] == 100
+
+
+def test_more_than_ninety_percent_pool_forbidden(fleet, monkeypatch):
+    monkeypatch.setenv("HEDGE_BOT_CAPITAL_USAGE", "1.0")
+    with pytest.raises(RuntimeError, match="capital usage"):
         alert(fleet, "Blaupunkt", "flip", "buy")
     assert fleet.broker.positions == {"long": 0, "short": 0}
