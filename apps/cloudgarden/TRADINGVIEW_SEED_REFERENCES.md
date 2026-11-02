@@ -34,3 +34,21 @@ The nine candidate seed recipes have real SL bps, TTP deviation bps, 90% sizing,
 ## Causal EW signal and trade-tape verification, 2 November 2026
 
 See `TRADINGVIEW_EW_SIGNAL_PARITY.md` for exact methods, source SHA checksums, 422/422 confirmed primary pivots, 147/147 recovered EW long/short plot signals after warm-up (with TV MTF oracle), corrected Europe/Berlin import semantics, 41/41 matching KuCoin SOL entry reference rows and RSI gate limitations. The Pine indicator is **not** the Tradingade Strategy Builder execution engine. Never book these reference fills into simulated NAV as causal profits.
+
+## Offline independent Binance Renko-MTF RSI/market-price audit (2026-11-02)
+
+See [`TRADINGVIEW_MTF_RSI_AND_REAL_PRICE_AUDIT.md`](TRADINGVIEW_MTF_RSI_AND_REAL_PRICE_AUDIT.md).
+Independent source-close Traditional Renko from Binance 1m reproduced **10,217/10,225**
+historical plotted 30m RSI values to <1e-6, excluding incomplete source
+coverage. A strict **completed-30m-source** timing scenario accepted only
+353/726 TV reference entry timestamps with RSI enabled, versus 726/726 when
+looking up retrospectively plotted RSI values. This is a stress test, not
+proof of original TradingView indicator lookahead. The protected RSI source
+and original Tradingade exit engine remain unverified.
+
+At 746 closed BINANCE:SOLUSDT reference trades with both future-next-open
+prices available, the mean absolute discrepancy was 13.58 bp at entry and
+18.15 bp at exit. Those prices were derived from the *same original entry/exit
+timestamps*, not independently generated orders. This is NOT a market PnL
+backtest, fitness, alpha, or a causal comparison of generated strategies.
+Reference trade fills and PnL remain barred from Cloudgarden capital/vigor.
