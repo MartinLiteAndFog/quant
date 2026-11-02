@@ -321,32 +321,22 @@ async def tv_execute(
         # single-instance routing filter. No anonymous multi-bot trading.
         if not _expected_token() or _truthy(os.getenv("BOT_WEBHOOK_ALLOW_ANON")):
             raise HTTPException(status_code=503, detail="hedge fleet requires authenticated webhook")
-        from quant.execution.blaupunkt_hedge import fleet
-        import asyncio
+        from quant.execution.hedge_webhook_queue import enqueue
+        from quant.execution.blaupunkt_hedge import _VALID_BOT, _canonical
 
         try:
-            signal = parse_tv_signal(
-                payload,
-                default_symbol=os.getenv("HEDGE_SYMBOL", "XBT-USDT"),
-            )
+            signal = parse_tv_signal(payload, default_symbol=os.getenv("HEDGE_SYMBOL", "XBT-USDT"))
             bot_id = str(payload.get("bot") or "").strip()
-            cfg = TVExecConfig.from_env()
-            _log_inbound_signal(payload, disposition="hedge_received", detail=f"bot={bot_id}")
-            result = await asyncio.get_running_loop().run_in_executor(
-                None,
-                lambda: fleet().execute(
-                    bot_id=bot_id, action=signal.action, side=signal.side,
-                    symbol=signal.symbol, sl_price=signal.sl_price,
-                    tp1_pct=cfg.tp1_close_pct, dry_run=cfg.dry_run,
-                ),
-            )
+            if not _VALID_BOT.fullmatch(bot_id):
+                raise ValueError("missing or invalid bot ID")
+            if _canonical(signal.symbol) != _canonical(os.getenv("HEDGE_SYMBOL", "XBT-USDT")):
+                raise ValueError("wrong symbol")
+            result = enqueue(bot_id, signal, TVExecConfig.from_env())
         except ValueError as e:
-            _log_inbound_signal(payload, disposition="hedge_invalid", detail=str(e))
             raise HTTPException(status_code=400, detail=str(e))
-        except RuntimeError as e:
-            log.error("hedge execution rejected bot=%s: %s", payload.get("bot"), e)
-            _log_inbound_signal(payload, disposition="hedge_blocked", detail=str(e))
-            raise HTTPException(status_code=409, detail=str(e))
+        except Exception as e:
+            log.error("Hedge queue unavailable: %s", e)
+            raise HTTPException(status_code=503, detail="hedge queue unavailable")
         return result
 
     # Reject alerts addressed to a different bot, so one shared TradingView
