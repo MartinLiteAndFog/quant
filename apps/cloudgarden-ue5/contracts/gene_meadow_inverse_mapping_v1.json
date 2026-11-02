@@ -1,0 +1,35 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_gene_meadow_inverse_mapping",
+  "status": "experimental_offspring_candidates_not_adopted",
+  "sceneRef": {
+    "seed": "ue5-visual-preview-v0",
+    "dayIndex": 7
+  },
+  "tileId": "sol-imbase",
+  "positionFrame": "parent_local_offsets_m",
+  "tileMeters": {
+    "minX": 0,
+    "maxX": 10,
+    "minY": 0,
+    "maxY": 10
+  },
+  "axisX": {
+    "source": "trade.channel_lookback",
+    "min": 20,
+    "max": 500,
+    "quantizationStep": 1,
+    "outputType": "integer"
+  },
+  "axisY": {
+    "source": "trade.stop_loss_bps",
+    "min": 50,
+    "max": 500,
+    "quantizationStep": 1,
+    "outputType": "float"
+  },
+  "outOfBounds": "unassigned_no_clamping",
+  "mutationAuthority": "owner_review_only",
+  "effectiveDayRule": "not_earlier_than_seed_receipt_apply_day",
+  "note": "A landing site on a bounded TWO-GENE tile can propose offspring trading parameters. This does not modify any existing plant, emit orders, or book performance. Require fresh future-only paper evaluation and risk approval."
+}
