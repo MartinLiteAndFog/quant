@@ -167,3 +167,52 @@ def test_observer_rejects_stale_day_or_new_archive_identity():
     third["dataset_fingerprint"] = "a" * 64
     with pytest.raises(ValueError, match="stale replay or second capital writer"):
         journal.observe(third)
+
+
+@pytest.mark.parametrize("scenario", ["one_ten_thousand", "seed_transfer", "cashflow", "negative_nav"])
+def test_python_ts_python_golden_adversarial_roundtrip(scenario):
+    """Both runtimes must agree on four financial boundary/replay cases."""
+    node = shutil.which("node")
+    tsx = ROOT / "apps" / "cloudgarden" / "node_modules" / "tsx"
+    if node is None or not tsx.exists():
+        pytest.skip("Node/tsx missing; mandatory in bridge CI")
+    doc = golden()
+    if scenario == "one_ten_thousand":
+        doc["groundwater"].update(equity="100.00010", reserve="10.00001", distributable="90.00009")
+        doc["groundwater"]["accounts"][0].update(equity="100.00010", free_margin="100.00010")
+        doc["capital_accounting"].update(
+            free_allocation="68.50009", free_margin="100.00010", rounding_holdback="0.00001"
+        )
+        doc["booked"].update(net_pnl="0.00010", reconciliation_delta="0.00010")
+    elif scenario == "seed_transfer":
+        next_day(doc)
+        doc["seed_entitlements"][0] = {"id": 1, "status": "used", "plant_id": "seedling-01"}
+        claims = doc["groundwater"]["entitlements"]
+        doc["groundwater"]["entitlements"] = [
+            claims[0], {
+                **claims[0], "strategy_id": "seedling-01",
+                "amount": "1.5000", "realizable_margin": "1.5000",
+            }
+        ]
+        doc["plants"].append({
+            **doc["plants"][0], "strategy_id": "seedling-01", "allocation": "1.5000",
+            "lineage_parent_ids": ["parent-01", "parent-01"],
+        })
+        doc["capital_accounting"].update(
+            deployed_allocation="21.5000", seed_reserved_allocation="0.0000"
+        )
+    elif scenario == "cashflow":
+        next_day(doc)
+        doc["booked"]["cashflow"] = "10.0000"
+        doc["groundwater"].update(equity="110.00000", reserve="11.00000", distributable="99.00000")
+        doc["groundwater"]["accounts"][0].update(equity="110.00000", free_margin="110.00000")
+        doc["capital_accounting"].update(free_margin="110.00000", free_allocation="77.5000")
+    else:
+        negative_nav(doc)
+    first = dump_wire(load_wire(doc))
+    result = subprocess.run(
+        [node, "--import", "tsx", str(NODE_ENTRY)],
+        input=first, text=True, capture_output=True, check=True,
+        cwd=ROOT / "apps" / "cloudgarden",
+    )
+    assert dump_wire(load_wire(result.stdout)) == first
