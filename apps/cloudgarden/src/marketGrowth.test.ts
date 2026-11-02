@@ -73,7 +73,7 @@ test("14 idle days are free; from day 15 a tiny inherited patience-linked vigor 
       ...p, genes: { ...p.genes, patience: index === 0 ? 0.05 : index === 1 ? 0.95 : 0.5 },
     })),
   };
-  let current = world;
+  let current: SimulationWorld = world;
   for (let day = 1; day <= INACTIVITY_GRACE_DAYS; day += 1) {
     current = advanceSimulationDay(current, {});
     for (let i = 0; i < 3; i += 1) {
