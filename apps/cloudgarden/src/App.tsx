@@ -91,16 +91,21 @@ function App() {
       const runId = `${sourceWorld.seed}:${sourceWorld.day}:${plant.id}`;
       const { execution: report, strategy, genome, evidence } = await new Promise<SyntheticReplayCycleResult>((resolve, reject) => {
         let settled = false;
-        const finish = () => worker.terminate();
+        let timeout = 0;
+        const finish = () => {
+          window.clearTimeout(timeout);
+          worker.terminate();
+        };
         const fail = (error: Error) => {
           if (settled) return;
           settled = true;
           finish();
           reject(error);
         };
+        timeout = window.setTimeout(() => fail(new Error("The synthetic replay worker timed out.")), 30_000);
         worker.onmessage = (event: MessageEvent<unknown>) => {
           try {
-            const result = readSyntheticReplayWorkerResult(event.data, runId, days);
+            const result = readSyntheticReplayWorkerResult(event.data, runId, days, fixtureStart);
             if (settled) return;
             settled = true;
             finish();
