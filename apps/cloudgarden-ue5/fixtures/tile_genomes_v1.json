@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_tile_genome_projection_source",
+  "authority": "synthetic_research_fixture_only",
+  "sceneRef": {
+    "seed": "ue5-visual-preview-v0",
+    "dayIndex": 7
+  },
+  "plants": [
+    {
+      "plantId": "plant-a",
+      "assetRegion": "SOL",
+      "revision": "synthetic-plant-a-v1",
+      "geneValues": {
+        "trade.channel_lookback": 50,
+        "trade.stop_loss_bps": 250,
+        "research.sensitivity": 17.2,
+        "research.ttp_pct": 0.65
+      }
+    },
+    {
+      "plantId": "plant-b",
+      "assetRegion": "SOL",
+      "revision": "synthetic-plant-b-v1",
+      "geneValues": {
+        "trade.channel_lookback": 200,
+        "trade.stop_loss_bps": 250,
+        "research.sensitivity": 19.6
+      }
+    },
+    {
+      "plantId": "plant-c",
+      "assetRegion": "SOL",
+      "revision": "synthetic-plant-c-v1",
+      "geneValues": {
+        "trade.channel_lookback": 85,
+        "trade.stop_loss_bps": 270,
+        "research.sensitivity": 21.4
+      }
+    },
+    {
+      "plantId": "plant-d",
+      "assetRegion": "SOL",
+      "revision": "synthetic-plant-d-v1",
+      "geneValues": {
+        "research.sensitivity": 19.5
+      }
+    }
+  ],
+  "sourceMap": {
+    "trade.channel_lookback": "Cloudgarden scene genome.channelLookback, existing source field",
+    "trade.stop_loss_bps": "Cloudgarden scene genome.stopLossBps, existing source field",
+    "research.sensitivity": "demo-only fleet geneLibrary.sensitivity range; NOT a Cloudgarden SourceGenome field",
+    "research.ttp_pct": "demo-only fleet geneLibrary.ttp range; NOT a Cloudgarden SourceGenome field"
+  },
+  "policy": "Optional gene absence is NOT replaced with defaults. This sidecar does not add canonical plants, trade strategies, capital, or mutations."
+}
