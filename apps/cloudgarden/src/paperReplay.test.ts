@@ -95,8 +95,20 @@ test("30-day synthetic ranges are bounded, complete, varied, and valid OHLCV", a
     assert.ok(low <= Math.min(open, close));
     assert.ok(volume >= 0);
   }
-  await assert.rejects(() => createSyntheticMarketRange(31), { name: "RangeError" });
+  await assert.rejects(() => createSyntheticMarketRange(91), { name: "RangeError" });
   await assert.rejects(() => createSyntheticMarketRange(0), { name: "RangeError" });
+});
+
+test("90-day synthetic ranges cover three exact months without data gaps", async () => {
+  const dataset = await createSyntheticMarketRange(90, "2024-01-01T00:00:00Z", "garden-quarter", 12);
+
+  assert.equal(dataset.bars.length, 90 * 24 * 60);
+  assert.equal(dataset.report.start, "2024-01-01T00:00:00.000Z");
+  assert.equal(dataset.report.endExclusive, "2024-03-31T00:00:00.000Z");
+  assert.equal(dataset.report.missingBars, 0);
+  assert.equal(dataset.report.gapCount, 0);
+  assert.equal(dataset.provenance.synthetic, true);
+  assert.ok(new Set(dataset.bars.map((entry) => entry.close)).size > 100);
 });
 
 test("normalization sorts deterministically and rejects duplicate, naive, off-grid, and malformed bars", async () => {

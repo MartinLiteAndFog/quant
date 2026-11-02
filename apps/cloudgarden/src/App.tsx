@@ -11,9 +11,11 @@ import {
   type SimulationWorld,
 } from "./simulation";
 import { runControlledExperiment, type ExperimentReport } from "./experiments";
-import { createSyntheticMarketRange, runPaperReplay as executePaperReplay, type PaperReplayReport } from "./paperReplay";
-import { generateSyntheticMomentumSignals, type StrategySignalResult, type TradingSignalGenome } from "./strategySignals";
-import { buildSyntheticReplayEvidence, type SyntheticReplayEvidence } from "./replayEvidence";
+import { type PaperReplayReport } from "./paperReplay";
+import { type StrategySignalReport, type TradingSignalGenome } from "./strategySignals";
+import { type SyntheticReplayEvidence } from "./replayEvidence";
+import { type SyntheticReplayCycleResult } from "./replayCycle";
+import { readSyntheticReplayWorkerResult } from "./replayWorkerProtocol";
 
 type View = "meadow" | "understory";
 type GeneAxis = "root" | "leaf" | "water" | "sun";
@@ -23,15 +25,10 @@ const percent = (value: number) => `${Math.round(value * 100)}%`;
 type StrategyControls = Pick<TradingSignalGenome, "lookbackBars" | "entryThresholdBps" | "exitThresholdBps">;
 type PaperReplayRun = Readonly<{
   execution: PaperReplayReport;
-  strategy: StrategySignalResult["report"];
+  strategy: StrategySignalReport;
   genome: TradingSignalGenome;
   evidence: SyntheticReplayEvidence;
 }>;
-
-function quantityForPlantAllocation(allocationUsdt: number): string {
-  const quantity = Math.floor((allocationUsdt * 0.5 / 100) * 100_000_000) / 100_000_000;
-  return quantity.toFixed(8).replace(/\.?0+$/, "");
-}
 
 function App() {
   const [world, setWorld] = useState<SimulationWorld>(() => createSimulationWorld());
@@ -79,7 +76,7 @@ function App() {
       setExperimentBusy(false);
     }
   };
-  const runPaperReplay = async (plantId: string, controls: StrategyControls, days: 7 | 30) => {
+  const runPaperReplay = async (plantId: string, controls: StrategyControls, days: 7 | 30 | 90) => {
     if (paperReplayLock.current) return;
     const sourceWorld = world;
     const plant = sourceWorld.plants.find((candidate) => candidate.id === plantId && candidate.status === "active");
@@ -89,18 +86,50 @@ function App() {
     setPaperReplayBusy(true);
     setPaperReplayError(null);
     try {
-      const allocation = plant.allocationUsdt.toFixed(4);
       const fixtureStart = new Date(Date.parse("2024-01-01T00:00:00Z") + sourceWorld.day * 86_400_000).toISOString();
-      const dataset = await createSyntheticMarketRange(days, fixtureStart, sourceWorld.seed, Math.floor(sourceWorld.day / 7));
-      const genome: TradingSignalGenome = {
-        schemaVersion: 1,
-        strategyId: `${plant.id}:synthetic-momentum-v1`,
-        ...controls,
-        targetQuantity: quantityForPlantAllocation(plant.allocationUsdt),
-      };
-      const strategy = generateSyntheticMomentumSignals(dataset, genome);
-      const report = executePaperReplay({ dataset, signals: strategy.signals, allocationLimit: allocation, startingCash: allocation });
-      const evidence = buildSyntheticReplayEvidence(strategy.report, report);
+      const worker = new Worker(new URL("./replayWorker.ts", import.meta.url), { type: "module" });
+      const runId = `${sourceWorld.seed}:${sourceWorld.day}:${plant.id}`;
+      const { execution: report, strategy, genome, evidence } = await new Promise<SyntheticReplayCycleResult>((resolve, reject) => {
+        let settled = false;
+        const finish = () => worker.terminate();
+        const fail = (error: Error) => {
+          if (settled) return;
+          settled = true;
+          finish();
+          reject(error);
+        };
+        worker.onmessage = (event: MessageEvent<unknown>) => {
+          try {
+            const result = readSyntheticReplayWorkerResult(event.data, runId, days);
+            if (settled) return;
+            settled = true;
+            finish();
+            resolve(result);
+          } catch (error) {
+            fail(error instanceof Error ? error : new Error("The replay worker returned an invalid response."));
+          }
+        };
+        worker.onerror = (event) => {
+          fail(new Error(event.message || "The replay worker could not complete the synthetic cycle."));
+        };
+        worker.onmessageerror = () => fail(new Error("The replay worker response could not be decoded."));
+        try {
+          worker.postMessage({
+            id: runId,
+            input: {
+              days,
+              start: fixtureStart,
+              gardenSeed: sourceWorld.seed,
+              weekIndex: Math.floor(sourceWorld.day / 7),
+              plantId: plant.id,
+              allocationUsdt: plant.allocationUsdt,
+              controls,
+            },
+          });
+        } catch (error) {
+          fail(error instanceof Error ? error : new Error("The replay request could not be sent to its worker."));
+        }
+      });
       const advanced = advanceSimulationDays(sourceWorld, report.days);
       const booked = bookClosedPaperReplay(advanced, plant.id, {
         startDay: sourceWorld.day,
@@ -110,7 +139,7 @@ function App() {
         endedFlat: report.endedFlat,
         riskBreach: report.riskBreach,
         fillCount: report.fills.length,
-        signalStatus: strategy.report.status,
+        signalStatus: strategy.status,
         strategyId: genome.strategyId,
         signalGenome: {
           schemaVersion: genome.schemaVersion,
@@ -119,9 +148,9 @@ function App() {
           exitThresholdBps: genome.exitThresholdBps,
           targetQuantity: genome.targetQuantity,
         },
-        observations: strategy.report.observations,
-        opportunities: strategy.report.opportunities,
-        generatedSignals: strategy.report.generatedSignals,
+        observations: strategy.observations,
+        opportunities: strategy.opportunities,
+        generatedSignals: strategy.generatedSignals,
         allocationLimitUsdt: Number(report.allocationLimit),
         startingCashUsdt: Number(report.startingCash),
         endingCashUsdt: Number(report.endingCash),
@@ -132,7 +161,7 @@ function App() {
         netPnlUsdt: Number(report.netPnl),
       });
       setWorld(booked);
-      setPaperReplay({ execution: report, strategy: strategy.report, genome, evidence });
+      setPaperReplay({ execution: report, strategy, genome, evidence });
       setSelectedId(plant.id);
     } catch (error) {
       setPaperReplayError(error instanceof Error ? error.message : "The synthetic replay could not be reconciled.");
@@ -348,7 +377,7 @@ function GeneField({ population, axisX, axisY, setAxisX, setAxisY, selectedId, o
 function Understory({ world, experiment, experimentBusy, onRunExperiment, paperReplay, paperReplayBusy, paperReplayError, onRunPaperReplay, onReturn, onSelectPlant }: {
   world: SimulationWorld; experiment: ExperimentReport | null; experimentBusy: boolean; onRunExperiment: () => void;
   paperReplay: PaperReplayRun | null; paperReplayBusy: boolean; paperReplayError: string | null;
-  onRunPaperReplay: (plantId: string, controls: StrategyControls, days: 7 | 30) => void;
+  onRunPaperReplay: (plantId: string, controls: StrategyControls, days: 7 | 30 | 90) => void;
   onReturn: () => void; onSelectPlant: (id: string) => void;
 }) {
   const active = visiblePopulation(world);
@@ -392,10 +421,10 @@ function Understory({ world, experiment, experimentBusy, onRunExperiment, paperR
 
 function PaperReplayPanel({ plants, worldDay, navUsdt, run, busy, error, onRun }: {
   plants: readonly GardenPlant[]; worldDay: number; navUsdt: number; run: PaperReplayRun | null; busy: boolean; error: string | null;
-  onRun: (plantId: string, controls: StrategyControls, days: 7 | 30) => void;
+  onRun: (plantId: string, controls: StrategyControls, days: 7 | 30 | 90) => void;
 }) {
   const [plantId, setPlantId] = useState(plants.find((plant) => plant.role === "parent")?.id ?? plants[0]?.id ?? "");
-  const [days, setDays] = useState<7 | 30>(7);
+  const [days, setDays] = useState<7 | 30 | 90>(7);
   const [lookbackBars, setLookbackBars] = useState(5);
   const [entryThresholdBps, setEntryThresholdBps] = useState(40);
   const [exitThresholdBps, setExitThresholdBps] = useState(10);
@@ -408,8 +437,8 @@ function PaperReplayPanel({ plants, worldDay, navUsdt, run, busy, error, onRun }
       <label>Funded plant<select value={selected?.id ?? ""} onChange={(event) => setPlantId(event.target.value)} disabled={busy || plants.length === 0}>
         {plants.map((plant) => <option key={plant.id} value={plant.id}>{plant.name} · {money(plant.allocationUsdt)} available</option>)}
       </select></label>
-      <label>Replay horizon<select value={days} onChange={(event) => setDays(Number(event.target.value) as 7 | 30)} disabled={busy}>
-        <option value={7}>7 days · one ecology week</option><option value={30}>30 days · one ecology month</option>
+      <label>Replay horizon<select value={days} onChange={(event) => setDays(Number(event.target.value) as 7 | 30 | 90)} disabled={busy}>
+        <option value={7}>7 days · one ecology week</option><option value={30}>30 days · one ecology month</option><option value={90}>90 days · three ecology months</option>
       </select></label>
       <label>Lookback · bars<input type="number" min="1" max="120" value={lookbackBars} onChange={(event) => setLookbackBars(Math.max(1, Math.min(120, Number(event.target.value) || 1)))} disabled={busy} /></label>
       <label>Entry · basis points<input type="number" min={Math.max(1, exitThresholdBps)} max="3000" step="5" value={entryThresholdBps} onChange={(event) => setEntryThresholdBps(Math.max(exitThresholdBps, Math.min(3000, Number(event.target.value) || 1)))} disabled={busy} /></label>

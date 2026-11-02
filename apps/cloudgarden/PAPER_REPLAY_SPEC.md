@@ -4,7 +4,7 @@
 
 Add a reproducible, isolated intraday paper-execution vertical slice to the
 standalone Cloudgarden prototype. It demonstrates causal fills and cost-aware
-closed-position PnL using a generated one-week fixture, then books the replay's
+closed-position PnL using generated 7-, 30-, or 90-day fixtures, then books the replay's
 net result into the existing 100-USDT garden ledger. The fixture is explicitly
 synthetic; it is not a strategy test and cannot produce empirical trading
 evidence.
@@ -66,10 +66,12 @@ evidence.
   change, or reset.
 - A versioned synthetic evidence report reconciles price PnL, fees, funding,
   net PnL, ending cash, and daily marked drawdown, then lists observations,
-  executable opportunity observations, targets, fills, and rejected signals. Seven synthetic
-  days always remain `insufficient_sample`; independent opportunity count,
+  executable opportunity observations, targets, fills, and rejected signals.
+  All synthetic horizons always remain `insufficient_sample`; independent opportunity count,
   confidence, fitness, Sharpe, CVaR, and OOS claims are unavailable. Drawdown
   is descriptive for this fixture only.
+- Range generation, signal production, execution, and evidence building run in
+  a disposable Web Worker so the 90-day horizon does not block garden controls.
 
 ## Verification
 

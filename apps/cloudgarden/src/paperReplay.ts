@@ -341,8 +341,8 @@ export async function createSyntheticMarketRange(
   gardenSeed = "cloudgarden-demo",
   weekIndex = 0,
 ): Promise<MarketDataset> {
-  if (!Number.isInteger(days) || days < 1 || days > 30) {
-    throw new RangeError("Synthetic range must contain between 1 and 30 whole days.");
+  if (!Number.isInteger(days) || days < 1 || days > 90) {
+    throw new RangeError("Synthetic range must contain between 1 and 90 whole days.");
   }
   if (typeof gardenSeed !== "string" || gardenSeed.length === 0) {
     throw new RangeError("A non-empty garden seed is required.");
