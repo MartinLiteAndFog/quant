@@ -84,7 +84,14 @@ def _log_inbound_signal(payload: Dict[str, Any], *, disposition: str, detail: st
                 break
         if not sym:
             sym = os.getenv("LIVE_SYMBOL", "SOL-USDT").replace("-", "")
-        inst = strategy_instance_id()
+        # In multi-bot mode, distinguish strategies in Postgres as well as
+        # in the virtual position book; otherwise every alert would still
+        # appear as Blaupunkt in the fleet dashboard.
+        inst = (
+            str(payload.get("bot", "")).strip()
+            if _hedge_enabled() and str(payload.get("bot", "")).strip()
+            else strategy_instance_id()
+        )
         ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         code = _signal_code(action, side)
         insert_signal_event(
@@ -124,6 +131,10 @@ def _log_inbound_signal(payload: Dict[str, Any], *, disposition: str, detail: st
             f"(disposition={disposition}): {type(e).__name__}: {e}",
             flush=True,
         )
+
+
+def _hedge_enabled() -> bool:
+    return _truthy(os.getenv("HEDGE_MULTI_BOT_ENABLED", "0"))
 
 
 def _expected_token() -> str:
@@ -172,8 +183,28 @@ def _enforce_margin_mode() -> None:
 async def _lifespan(_app: FastAPI):
     # tv_signal_executor only arms itself when ENABLE_TV_EXECUTOR=1.
     os.environ.setdefault("ENABLE_TV_EXECUTOR", "1")
-    _enforce_margin_mode()
-    start_tv_executor()
+    if _hedge_enabled():
+        # Never start the single-net-position executor in hedge fleet mode.
+        # The new executor uses an independently attributed virtual ledger.
+        from quant.execution.blaupunkt_hedge import fleet
+        summary = fleet().status()
+        log.info("Blaupunkt hedge fleet configured: %s", summary)
+        dry_run_flag = _truthy(os.getenv("TV_EXEC_DRY_RUN", "1"))
+        live_enabled_flag = _truthy(os.getenv("LIVE_TRADING_ENABLED"))
+        log.info(
+            "Blaupunkt runtime trading flags dry_run=%s live_enabled=%s effective_live=%s",
+            dry_run_flag, live_enabled_flag, live_enabled_flag and not dry_run_flag,
+        )
+        try:
+            mode_status = fleet().ensure_hedge_mode()
+            log.info("Blaupunkt hedge mode preflight: %s", mode_status)
+        except Exception as e:
+            log.error("Blaupunkt hedge mode preflight BLOCKED: %s", e)
+        from quant.execution.hedge_webhook_queue import start_worker
+        start_worker()
+    else:
+        _enforce_margin_mode()
+        start_tv_executor()
     # Fleet curves need equity history on a fixed clock, not just /health-poll
     # side effects (audit 2026-07-22). Default ON for pilots; opt out with
     # FLEET_EQUITY_WRITER_ENABLED=0.
@@ -228,8 +259,10 @@ def health() -> Dict[str, Any]:
         "name": display_name(),
         "profile": active_profile(),
         "instance": strategy_instance_id(),
-        "symbol": os.getenv("LIVE_SYMBOL", "SOL-USDT"),
-        "executor_ready": tv_ready.is_set(),
+        "symbol": os.getenv("HEDGE_SYMBOL", "XBT-USDT") if _hedge_enabled()
+            else os.getenv("LIVE_SYMBOL", "SOL-USDT"),
+        "executor_ready": tv_ready.is_set() if not _hedge_enabled() else True,
+        "hedge_multi_bot_enabled": _hedge_enabled(),
         "dry_run": dry,
         "live_trading_enabled": live and not dry,
         "venue": "kucoin",
@@ -253,6 +286,49 @@ def health() -> Dict[str, Any]:
     return out
 
 
+@app.get("/hedge/status")
+def hedge_status(
+    request: Request,
+    x_webhook_token: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    if not _hedge_enabled():
+        raise HTTPException(status_code=404, detail="hedge fleet disabled")
+    if not _expected_token() or _truthy(os.getenv("BOT_WEBHOOK_ALLOW_ANON")):
+        raise HTTPException(status_code=503, detail="hedge fleet requires authenticated webhook")
+    _check_token(x_webhook_token or request.query_params.get("token"))
+    from quant.execution.blaupunkt_hedge import fleet
+    executor = fleet()
+    result = executor.status()
+    try:
+        result["exchange_position_mode"] = executor._mode()
+    except Exception as exc:
+        result["exchange_position_mode_error"] = str(exc)
+    try:
+        bal = executor.broker.get_account_balance(currency="USDT")
+        result["account_equity_usdt"] = bal.get("equity")
+        result["free_margin_usdt"] = bal.get("available")
+        result["allocated_pool_usdt"] = round(
+            float(bal.get("equity") or 0) * result["capital_pool_pct"] / 100, 8
+        )
+    except Exception as exc:
+        result["account_balance_error"] = str(exc)
+    return result
+
+
+@app.get("/hedge/events")
+def hedge_events(
+    request: Request,
+    x_webhook_token: Optional[str] = Header(default=None),
+) -> Dict[str, Any]:
+    if not _hedge_enabled():
+        raise HTTPException(status_code=404, detail="hedge mode not enabled")
+    if not _expected_token() or _truthy(os.getenv("BOT_WEBHOOK_ALLOW_ANON")):
+        raise HTTPException(status_code=503, detail="hedge monitoring needs authentication")
+    _check_token(x_webhook_token or request.query_params.get("token"))
+    from quant.execution.hedge_webhook_queue import status
+    return status()
+
+
 @app.post("/webhook/tv-execute")
 async def tv_execute(
     request: Request,
@@ -274,6 +350,29 @@ async def tv_execute(
         or request.query_params.get("token")
         or payload.get("token")
     )
+
+    if _hedge_enabled():
+        # In this opt-in mode, payload.bot is the strategy ID, not a
+        # single-instance routing filter. No anonymous multi-bot trading.
+        if not _expected_token() or _truthy(os.getenv("BOT_WEBHOOK_ALLOW_ANON")):
+            raise HTTPException(status_code=503, detail="hedge fleet requires authenticated webhook")
+        from quant.execution.hedge_webhook_queue import enqueue
+        from quant.execution.blaupunkt_hedge import _VALID_BOT, _canonical
+
+        try:
+            signal = parse_tv_signal(payload, default_symbol=os.getenv("HEDGE_SYMBOL", "XBT-USDT"))
+            bot_id = str(payload.get("bot") or "").strip()
+            if not _VALID_BOT.fullmatch(bot_id):
+                raise ValueError("missing or invalid bot ID")
+            if _canonical(signal.symbol) != _canonical(os.getenv("HEDGE_SYMBOL", "XBT-USDT")):
+                raise ValueError("wrong symbol")
+            result = enqueue(bot_id, signal, TVExecConfig.from_env())
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            log.error("Hedge queue unavailable: %s", e)
+            raise HTTPException(status_code=503, detail="hedge queue unavailable")
+        return result
 
     # Reject alerts addressed to a different bot, so one shared TradingView
     # alert template cannot accidentally fire every sub-account at once.
