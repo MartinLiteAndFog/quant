@@ -14,6 +14,7 @@ import {
   SEEDLING_ENTITLEMENTS,
   visiblePopulation,
   type GardenPlant,
+  type ClosedPaperReplayBooking,
   type SimulationWorld,
 } from "./simulation.ts";
 
@@ -78,6 +79,49 @@ test("closed paper PnL updates the same NAV, reserve, and allocation ledger", ()
   assert.equal(booked.capital.paperReplayCount, 1);
   assert.equal(booked.events.filter((event) => event.type === "paper_replay").length, 1);
   assertSimulationInvariants(booked);
+});
+
+test("historical ledger bookings require explicit source and keep clock, risk and cash checks", () => {
+  const afterWeek = advanceSimulationDays(createSimulationWorld("historical-booking"), 7);
+  const booking: ClosedPaperReplayBooking = {
+    startDay: 0, days: 7, datasetFingerprint: "a".repeat(64), synthetic: false,
+    historicalResearch: true, marketSource: "archive prices, linear 1x model; venue unverified",
+    endedFlat: true, riskBreach: false, fillCount: 2,
+    allocationLimitUsdt: 20, startingCashUsdt: 20, endingCashUsdt: 20.1,
+    maxMarginUsedUsdt: 10, realizedPricePnlUsdt: 0.11, feesUsdt: 0.01, fundingUsdt: 0, netPnlUsdt: 0.1,
+  };
+  assert.equal(bookClosedPaperReplay(afterWeek, "parent-01", booking).capital.navUsdt, 100.1);
+  for (const invalid of [
+    { historicalResearch: undefined }, { historicalResearch: false }, { marketSource: undefined },
+    { marketSource: " " }, { startDay: 1 }, { riskBreach: true }, { endingCashUsdt: 20.2 },
+    { maxMarginUsedUsdt: 21 }, { allocationLimitUsdt: 21 }, { fillCount: 0 },
+  ]) assert.throws(() => bookClosedPaperReplay(afterWeek, "parent-01", { ...booking, ...invalid }), RangeError);
+});
+
+test("repeated fine fractional replay profits and losses preserve every capital partition", () => {
+  let world = createSimulationWorld("fractional-ledger");
+  const increments = [.0005, -.0003, .0015, -.0009, .02345678, -.01876543];
+  let expectedNav = 100;
+  for (let i = 0; i < 120; i += 1) {
+    const pnl = increments[i % increments.length]!;
+    const cash = world.plants.find((plant) => plant.id === "parent-01")!.allocationUsdt;
+    const startDay = world.day;
+    world = bookClosedPaperReplay({ ...world, day: startDay + 1 }, "parent-01", {
+      startDay, days: 1, datasetFingerprint: "f".repeat(64), synthetic: false,
+      historicalResearch: true, marketSource: "fractional accounting research fixture",
+      endedFlat: true, riskBreach: false, fillCount: 2, allocationLimitUsdt: cash,
+      startingCashUsdt: cash, endingCashUsdt: cash + pnl, maxMarginUsedUsdt: 10,
+      realizedPricePnlUsdt: pnl + .0001, feesUsdt: .0001, fundingUsdt: 0, netPnlUsdt: pnl,
+    });
+    expectedNav = Math.round((expectedNav + pnl) * 10_000) / 10_000;
+    const capital = world.capital;
+    assert.equal(capital.navUsdt, expectedNav);
+    assert.ok(Math.abs(capital.protectedReserveUsdt + capital.allocationCeilingUsdt - expectedNav) < 1e-10);
+    assert.ok(Math.abs(capital.freeCapitalUsdt + capital.reservedMarginUsdt + capital.deployedCapitalUsdt
+      - capital.allocationCeilingUsdt) < 1e-10);
+    assertSimulationInvariants(world);
+  }
+  assert.equal(world.capital.paperReplayCount, 120);
 });
 
 test("a zero-trade booking leaves plant ecology unchanged through the next predator path", () => {
