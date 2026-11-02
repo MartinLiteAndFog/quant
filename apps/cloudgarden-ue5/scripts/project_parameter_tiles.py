@@ -63,6 +63,7 @@ def validate_catalog(catalog: dict, scene: dict) -> dict[str, dict]:
         if (axis["kind"] not in ("number", "integer")
                 or not finite_number(axis["min"]) or not finite_number(axis["max"])
                 or axis["min"] >= axis["max"]
+                or not finite_number(axis.get("step")) or axis["step"] <= 0
                 or not isinstance(axis["unit"], str) or not axis["unit"]
                 or not isinstance(axis["sourceStatus"], str)):
             raise ValueError("Invalid axis definition")
