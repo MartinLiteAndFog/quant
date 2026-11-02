@@ -1,0 +1,29 @@
+name: Cloudgarden Tradingade exit reference audit (offline)
+on:
+  pull_request:
+    paths:
+      - 'apps/cloudgarden/scripts/tradingade_exit_parity.py'
+      - 'apps/cloudgarden/scripts/test_tradingade_exit_parity.py'
+      - '.github/workflows/cloudgarden-tradingade-exit-audit-ci.yml'
+      - 'apps/cloudgarden/TRADINGADE_EXIT_PARITY.md'
+  push:
+    paths:
+      - 'apps/cloudgarden/scripts/tradingade_exit_parity.py'
+      - 'apps/cloudgarden/scripts/test_tradingade_exit_parity.py'
+      - '.github/workflows/cloudgarden-tradingade-exit-audit-ci.yml'
+jobs:
+  deterministic-private-data-free-unit-tests:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Compile offline Python without running any backtest or orders
+        run: python3 -m py_compile apps/cloudgarden/scripts/tradingade_exit_parity.py
+      - name: Test stop/ttp state and forbidden lookahead boundaries
+        run: python3 -m unittest discover -s apps/cloudgarden/scripts -p 'test_tradingade_exit_parity.py' -v
+      - name: Verify CLI can show help without private market inputs
+        run: python3 apps/cloudgarden/scripts/tradingade_exit_parity.py --help
