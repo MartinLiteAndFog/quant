@@ -189,6 +189,13 @@ async def _lifespan(_app: FastAPI):
         from quant.execution.blaupunkt_hedge import fleet
         summary = fleet().status()
         log.info("Blaupunkt hedge fleet configured: %s", summary)
+        try:
+            mode_status = fleet().ensure_hedge_mode()
+            log.info("Blaupunkt hedge mode preflight: %s", mode_status)
+        except Exception as e:
+            # Keep the receiver online to log rejected alerts, but do not
+            # arm any orders: the executor rechecks mode on every signal.
+            log.error("Blaupunkt hedge mode preflight BLOCKED: %s", e)
     else:
         _enforce_margin_mode()
         start_tv_executor()
@@ -246,8 +253,9 @@ def health() -> Dict[str, Any]:
         "name": display_name(),
         "profile": active_profile(),
         "instance": strategy_instance_id(),
-        "symbol": os.getenv("LIVE_SYMBOL", "SOL-USDT"),
-        "executor_ready": tv_ready.is_set() if not _hedge_enabled() else False,
+        "symbol": os.getenv("HEDGE_SYMBOL", "XBT-USDT") if _hedge_enabled()
+            else os.getenv("LIVE_SYMBOL", "SOL-USDT"),
+        "executor_ready": tv_ready.is_set() if not _hedge_enabled() else True,
         "hedge_multi_bot_enabled": _hedge_enabled(),
         "dry_run": dry,
         "live_trading_enabled": live and not dry,
