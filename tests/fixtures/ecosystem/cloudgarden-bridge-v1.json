@@ -1,0 +1,108 @@
+{
+  "schema_version": "eco-cloudgarden/1.0",
+  "ecosystem_schema_version": "1.0",
+  "simulation_id": "golden-demo",
+  "dataset_fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
+  "source_kind": "synthetic",
+  "capital_writer": "cloudgarden-paper",
+  "access": "read_only",
+  "account_id": "cloudgarden-paper:golden-demo",
+  "currency": "USDT",
+  "as_of": "2026-01-01T00:00:00.000Z",
+  "known_at": "2026-01-01T00:00:00.000Z",
+  "day_index": 0,
+  "event_id": "golden-demo:d0:wire-snapshot",
+  "booked": {
+    "opening_nav": "100.0000",
+    "cashflow": "0.0000",
+    "price_pnl": "0.00000",
+    "fees": "0.00000",
+    "funding": "0.00000",
+    "net_pnl": "0.00000",
+    "reconciliation_delta": "0.00000"
+  },
+  "groundwater": {
+    "as_of": "2026-01-01T00:00:00.000Z",
+    "currency": "USDT",
+    "accounts": [
+      {
+        "account_id": "cloudgarden-paper:golden-demo",
+        "currency": "USDT",
+        "as_of": "2026-01-01T00:00:00.000Z",
+        "equity": "100.00000",
+        "free_margin": "100.00000"
+      }
+    ],
+    "equity": "100.00000",
+    "reserve": "10.00000",
+    "distributable": "90.00000",
+    "entitlements": [
+      {
+        "strategy_id": "parent-01",
+        "account_id": "cloudgarden-paper:golden-demo",
+        "amount": "20.0000",
+        "used_margin": "0.0000",
+        "reserved_order_margin": "0.0000",
+        "realizable_margin": "20.0000",
+        "notional_exposure": "0.0000"
+      },
+      {
+        "strategy_id": "seedbank:01",
+        "account_id": "cloudgarden-paper:golden-demo",
+        "amount": "1.5000",
+        "used_margin": "0.0000",
+        "reserved_order_margin": "0.0000",
+        "realizable_margin": "1.5000",
+        "notional_exposure": "0.0000"
+      }
+    ],
+    "depth": 1,
+    "risk_breach": false,
+    "allocations_frozen": false
+  },
+  "capital_accounting": {
+    "deployed_allocation": "20.0000",
+    "seed_reserved_allocation": "1.5000",
+    "free_allocation": "68.5000",
+    "used_margin": "0.0000",
+    "reserved_order_margin": "0.0000",
+    "free_margin": "100.00000"
+  },
+  "seed_entitlements": [
+    {
+      "id": 1,
+      "status": "available",
+      "plant_id": null
+    }
+  ],
+  "plants": [
+    {
+      "strategy_id": "parent-01",
+      "status": "active",
+      "allocation": "20.0000",
+      "genome_version": 1,
+      "strategy_code_version": "cloudgarden-demo-v1",
+      "genome_kind": "synthetic_demo",
+      "source_genome": null,
+      "visual_genes": {
+        "root": 0.42,
+        "leaf": 0.82,
+        "water": 0.58,
+        "sun": 0.74
+      },
+      "trading_traits": {
+        "lookbackBars": 5,
+        "entryThresholdBps": 40,
+        "exitThresholdBps": 10
+      },
+      "lineage_parent_ids": [],
+      "habitat": {
+        "fitness": 73,
+        "vigor": 82,
+        "evidence": 76,
+        "evidence_days": 0
+      },
+      "empirical": null
+    }
+  ]
+}
