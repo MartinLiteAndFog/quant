@@ -17,6 +17,7 @@ import { type SyntheticReplayEvidence } from "./replayEvidence";
 import { type SyntheticReplayCycleResult } from "./replayCycle";
 import { readSyntheticReplayWorkerResult } from "./replayWorkerProtocol";
 import { CLOUDGARDEN_SAVE_SCHEMA_VERSION, loadCloudgardenSave, saveCloudgardenSave, type SavedExperimentInput, type SavedPaperReplayConfig } from "./saveGame";
+import { HistoricalTrading } from "./HistoricalTrading";
 
 type View = "meadow" | "understory";
 type GeneAxis = "root" | "leaf" | "water" | "sun";
@@ -32,6 +33,7 @@ type PaperReplayRun = Readonly<{
 }>;
 
 function App() {
+  const [showHistorical, setShowHistorical] = useState(true);
   const [loadedSave] = useState(() => readBrowserSave());
   const [saveStatus, setSaveStatus] = useState(() => loadedSave.status === "restored"
     ? "Garden restored from this device"
@@ -217,8 +219,9 @@ function App() {
       <aside className="rail" aria-label="Main navigation">
         <a className="brand-mark" href="#home" aria-label="Cloudgarden home"><span>C</span><i /></a>
         <div className="rail-divider" />
-        <button className={`rail-button ${view === "meadow" ? "is-active" : ""}`} onClick={() => setView("meadow")} aria-label="Meadow" aria-pressed={view === "meadow"}><span className="rail-glyph">✳</span></button>
-        <button className={`rail-button ${view === "understory" ? "is-active" : ""}`} onClick={() => setView("understory")} aria-label="Understory" aria-pressed={view === "understory"}><span className="rail-glyph glyph-roots">⌁</span></button>
+        <button className={`rail-button ${showHistorical ? "is-active" : ""}`} onClick={() => { setPlaying(false); setShowHistorical(true); }} aria-label="SOL historical trading" aria-pressed={showHistorical}><span className="rail-glyph">↗</span></button>
+        <button className={`rail-button ${!showHistorical && view === "meadow" ? "is-active" : ""}`} onClick={() => { setShowHistorical(false); setView("meadow"); }} aria-label="Demo meadow" aria-pressed={!showHistorical && view === "meadow"}><span className="rail-glyph">✳</span></button>
+        <button className={`rail-button ${!showHistorical && view === "understory" ? "is-active" : ""}`} onClick={() => { setShowHistorical(false); setView("understory"); }} aria-label="Demo understory" aria-pressed={!showHistorical && view === "understory"}><span className="rail-glyph glyph-roots">⌁</span></button>
         <div className="rail-spacer" />
         <div className="seed-mark" title={`World seed ${world.seed}`}>CG</div>
       </aside>
@@ -227,13 +230,18 @@ function App() {
         <header className="topbar">
           <div className="wordmark"><span className="wordmark-cloud">Cloud</span><span>garden</span></div>
           <nav className="view-tabs" aria-label="World view">
-            <button className={view === "meadow" ? "tab-active" : ""} onClick={() => setView("meadow")}>Meadow</button>
-            <button className={view === "understory" ? "tab-active" : ""} onClick={() => setView("understory")}>Understory</button>
+            <button className={showHistorical ? "tab-active" : ""} onClick={() => { setPlaying(false); setShowHistorical(true); }}>SOL Trading</button>
+            <button className={!showHistorical && view === "meadow" ? "tab-active" : ""} onClick={() => { setShowHistorical(false); setView("meadow"); }}>Meadow demo</button>
+            <button className={!showHistorical && view === "understory" ? "tab-active" : ""} onClick={() => { setShowHistorical(false); setView("understory"); }}>Understory demo</button>
           </nav>
-          <div className="world-status"><span className="status-leaf" /> Synthetic world <span className="status-separator">·</span> no exchange connection <span className="status-separator">·</span> <span aria-live="polite">{saveStatus}</span></div>
+          <div className="world-status"><span className="status-leaf" /> {showHistorical ? "Historical SOL · paper execution" : "Synthetic demo"} <span className="status-separator">·</span> no exchange connection {!showHistorical && <><span className="status-separator">·</span><span aria-live="polite">{saveStatus}</span></>}</div>
         </header>
 
-        {view === "meadow" ? (
+        {showHistorical ? <HistoricalTrading renderGarden={(game) => <Meadow
+          historical world={game.world} population={visiblePopulation(game.world)} selected={game.selected} selectedId={game.selectedId}
+          playing={game.playing} paperReplayBusy={game.busy} axisX={axisX} axisY={axisY} setAxisX={setAxisX} setAxisY={setAxisY}
+          onSelect={game.onSelect} onAdvance={game.onAdvance} onTogglePlay={game.onTogglePlay} onReset={game.onReset} onPolicy={game.onPolicy}
+        />} /> : view === "meadow" ? (
           <Meadow
             world={world} population={population} selected={selected} selectedId={selectedId} playing={playing}
             paperReplayBusy={paperReplayBusy}
@@ -255,12 +263,13 @@ function App() {
 
 function Meadow({
   world, population, selected, selectedId, playing, paperReplayBusy, axisX, axisY, setAxisX, setAxisY,
-  onSelect, onAdvance, onTogglePlay, onReset, onPolicy,
+  onSelect, onAdvance, onTogglePlay, onReset, onPolicy, historical = false,
 }: {
   world: SimulationWorld; population: readonly GardenPlant[]; selected: GardenPlant; selectedId: string; playing: boolean; paperReplayBusy: boolean;
   axisX: GeneAxis; axisY: GeneAxis; setAxisX: (axis: GeneAxis) => void; setAxisY: (axis: GeneAxis) => void;
   onSelect: (id: string) => void; onAdvance: (days: number) => void; onTogglePlay: () => void; onReset: () => void;
   onPolicy: (policy: "mixed" | "random" | BeeMode) => void;
+  historical?: boolean;
 }) {
   const archivedCount = world.plants.length - population.length;
   const usedSeeds = world.capital.seedlingEntitlements.filter((seed) => seed.status === "used").length;
@@ -276,15 +285,15 @@ function Meadow({
     <div className="page-content game-page">
       <div className="game-heading">
         <div>
-          <div className="eyebrow"><span className="eyebrow-line" /> A living strategy ecosystem <span className="eyebrow-coordinate">SYNTHETIC / REPLAYABLE</span></div>
+          <div className="eyebrow"><span className="eyebrow-line" /> A living strategy ecosystem <span className="eyebrow-coordinate">{historical ? "HISTORICAL PAPER / SIMULATED ECOLOGY" : "SYNTHETIC / REPLAYABLE"}</span></div>
           <h1>A world shaped <em>by its genes.</em></h1>
           <p className="lede">Every plant, seed and unit of capital follows the same deterministic rules.</p>
         </div>
         <div className="weather-pill"><span className="sun-symbol">☼</span><span><b>Day {world.day}</b><small>{percent(world.climate.sunlight)} sunlight · {percent(world.climate.water)} water</small></span></div>
       </div>
 
-      <section className="ledger-strip" aria-label="Synthetic capital ledger">
-        <LedgerMetric label="Test NAV" value={money(world.capital.navUsdt)} detail="single synthetic 90/10 ledger" />
+      <section className="ledger-strip" aria-label={historical ? "Historical paper capital ledger" : "Synthetic capital ledger"}>
+        <LedgerMetric label={historical ? "Paper NAV" : "Test NAV"} value={money(world.capital.navUsdt)} detail={historical ? "historical PnL · single 90/10 ledger" : "single synthetic 90/10 ledger"} />
         <LedgerMetric label="Budget ceiling" value={money(world.capital.allocationCeilingUsdt)} detail="90% maximum" />
         <LedgerMetric label="Protected reserve" value={money(world.capital.protectedReserveUsdt)} detail="never allocated" />
         <LedgerMetric label="Active / archived" value={`${population.length} / ${archivedCount}`} detail="archived plants hidden" />
@@ -295,7 +304,7 @@ function Meadow({
           <div className="garden-card">
             <div className="garden-toolbar">
               <div><span className="mini-world-icon">◌</span><span><b>Upper meadow</b><small>World seed {world.seed} · {world.plants.filter((plant) => plant.role === "parent").length} parents · {usedSeeds}/20 seedlings</small></span></div>
-              <div className="toolbar-actions"><span className="fixture-tag">SYNTHETIC FIXTURE</span><button className="quiet-icon-button" onClick={onReset} disabled={paperReplayBusy} aria-label="Reset Cloudgarden">↺</button></div>
+              <div className="toolbar-actions"><span className="fixture-tag">{historical ? "SOL ARCHIVE · PAPER" : "SYNTHETIC FIXTURE"}</span><button className="quiet-icon-button" onClick={onReset} disabled={paperReplayBusy} aria-label="Reset Cloudgarden">↺</button></div>
             </div>
 
             <div className={`garden-scene ${population.length > 10 ? "dense-population" : ""}`} role="group" aria-label="Select an active plant">
@@ -324,7 +333,7 @@ function Meadow({
           <div className="ledger-details">
             <div><span>Deployed</span><b>{money(world.capital.deployedCapitalUsdt)}</b></div>
             <div><span>Reserved for seed bank</span><b>{money(world.capital.reservedMarginUsdt)}</b></div>
-            <div><span>Freed by predation</span><b>{money(world.capital.freeCapitalUsdt)}</b></div>
+            <div><span>Free allocation</span><b>{money(world.capital.freeCapitalUsdt)}</b></div>
             <div><span>Available seed entitlements</span><b>{20 - usedSeeds} / 20</b></div>
           </div>
 
@@ -360,7 +369,7 @@ function Meadow({
         </aside>
       </div>
 
-      <footer className="game-footer"><span>Cloudgarden is a closed, synthetic simulation. No historical market feed, account, strategy executor or orders are connected.</span><span>Same seed + same actions = same garden.</span></footer>
+      <footer className="game-footer"><span>{historical ? "Historical SOL prices drive local paper trades; ecology remains simulated. See the execution ledger below." : "Cloudgarden is a closed, synthetic simulation. No historical market feed, account, strategy executor or orders are connected."}</span><span>Same seed + same actions = same garden.</span></footer>
     </div>
   );
 }
