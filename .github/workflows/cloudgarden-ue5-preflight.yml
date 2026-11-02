@@ -4,6 +4,7 @@ on:
     paths:
       - 'apps/cloudgarden-ue5/**'
       - 'docs/plans/2026-11-02-cloudgarden-unreal5-agent-f.md'
+      - 'docs/plans/2026-11-02-cloudgarden-ue5-gene-physics-bridge.md'
       - '.github/workflows/cloudgarden-ue5-preflight.yml'
   workflow_dispatch:
 permissions:
@@ -16,3 +17,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Check non-empirical scene fixture and safe two-gene tile assignment
         run: python3 apps/cloudgarden-ue5/scripts/validate_fixture.py
+      - name: Verify gene bindings and ballistic seed feedback with tamper cases
+        run: python3 apps/cloudgarden-ue5/scripts/validate_gene_physics.py
+      - name: Verify seed landing creates forward-only two-gene research proposals
+        run: python3 apps/cloudgarden-ue5/scripts/propose_offspring_genes.py

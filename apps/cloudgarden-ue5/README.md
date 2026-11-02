@@ -27,3 +27,21 @@ one perspective camera rig, one population, one selected plant, one research
 day and one authoritative ledger. No level loading or second simulation occurs
 when switching. See fixtures/camera_journey_v0.json for synthetic state checks.
 Do not port trading/PnL, strategy, risk or bot execution code into Unreal.
+
+## Gene → procedural parameters → physics → numeric feedback (Agent F)
+
+See ../../docs/plans/2026-11-02-cloudgarden-ue5-gene-physics-bridge.md and
+LOCAL_AGENT_UNREAL_HANDOFF.md. Typed registry, inverse 2-gene meadow map,
+reference seed falls, provisional Chaos hit schema and all synthetic fixtures
+are checked into contracts/ and fixtures/. Existing visual/morph genes are
+reused by explicit mapping; seed release genes are NEW PROPOSALS, not yet in
+the authoritative ecology genome. Seed landing can create a future-only **child
+research genome proposal**, never alter current trading parameters or balances.
+
+Run from repo root:
+
+    python3 apps/cloudgarden-ue5/scripts/validate_gene_physics.py
+    python3 apps/cloudgarden-ue5/scripts/propose_offspring_genes.py
+
+The reference solver is analytic, NOT actual Chaos; the latter requires a
+local Unreal editor and approved event ingestion.
