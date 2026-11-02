@@ -1,4 +1,5 @@
 #include "Cloudgarden.h"
+#include "CloudgardenArtStyle.h"
 #include "Modules/ModuleManager.h"
 #include "Components/StaticMeshComponent.h"
 #include "Camera/CameraActor.h"
@@ -45,10 +46,10 @@ void ACloudgardenMode::LoadSnapshot(){
  for(auto Actor:Generated)if(IsValid(Actor)){Actor->SetActorHiddenInGame(true);Actor->SetActorEnableCollision(false);}Generated.Empty();Flights.Empty();ShapeCursor=0;BotanicalCursor=0;if(Controller)Controller->Selected=nullptr;
  const TArray<TSharedPtr<FJsonValue>>* Gardens;if(!Snapshot->TryGetArrayField(TEXT("gardens"),Gardens)){Status=TEXT("Snapshot enthaelt keine Gaerten.");return;}
  int GardenIndex=0;for(auto Value:*Gardens){auto Garden=Value->AsObject();const float Offset=Gardens->Num()==1?0:(GardenIndex++==0?-1050:1050);
- Shape(GetWorld(),Generated,FVector(Offset,0,-85),FVector(17,17,1.5),TEXT("/Engine/BasicShapes/Cube.Cube"),FLinearColor(.22,.28,.12));
+ Shape(GetWorld(),Generated,FVector(Offset,0,-85),FVector(17,17,1.5),TEXT("/Engine/BasicShapes/Cube.Cube"),FCloudgardenArtStyle::Soil());
  const float Ratio=Num(Garden,TEXT("nav"))/FMath::Max(1.,100+Num(Garden,TEXT("deposits")));const float WaterDepth=FMath::Clamp(28+76*(1-Ratio),12.,104.);
- Shape(GetWorld(),Generated,FVector(Offset,0,-WaterDepth),FVector(17.05,17.05,.06),TEXT("/Engine/BasicShapes/Cube.Cube"),FLinearColor(.24,.57,.59));
- Shape(GetWorld(),Generated,FVector(Offset,0,-3),FVector(17,17,.12),TEXT("/Engine/BasicShapes/Cube.Cube"),FLinearColor(.31,.42,.17));
+ Shape(GetWorld(),Generated,FVector(Offset,0,-WaterDepth),FVector(17.05,17.05,.06),TEXT("/Engine/BasicShapes/Cube.Cube"),FCloudgardenArtStyle::Water());
+ Shape(GetWorld(),Generated,FVector(Offset,0,-3),FVector(17,17,.12),TEXT("/Engine/BasicShapes/Cube.Cube"),FCloudgardenArtStyle::Meadow());
  const TArray<TSharedPtr<FJsonValue>>* Plants;if(!Garden->TryGetArrayField(TEXT("plants"),Plants))continue;
  TArray<FVector> Crowns;TMap<FString,FVector> Anchors;TMap<FString,ACloudgardenPlant*> PlantActors;
  int Index=0;for(auto PV:*Plants){auto D=PV->AsObject();if(Str(D,TEXT("status"),TEXT("active"))!=TEXT("active"))continue;if(Index>=50)break;
@@ -59,23 +60,26 @@ void ACloudgardenMode::LoadSnapshot(){
  for(int Attempt=0;Attempt<300;Attempt++){bool Clear=true;for(const FVector& Other:Crowns)if(FVector::Dist2D(Crown,Other)<75){Clear=false;break;}if(Clear)break;const float Angle=(Attempt+1)*2.39996323f;const float Radius=30*FMath::Sqrt(float(Attempt+1));Crown=Plant->ExactAnchor+FVector(FMath::Cos(Angle)*Radius,FMath::Sin(Angle)*Radius,0);Crown.X=FMath::Clamp(Crown.X,Offset-810,Offset+810);Crown.Y=FMath::Clamp(Crown.Y,-810.,810.);}
  Crowns.Add(Crown);Plant->CrownOffset=Crown-Plant->ExactAnchor;Anchors.Add(Plant->PlantId,Plant->ExactAnchor);PlantActors.Add(Plant->PlantId,Plant);
  const float Biomass=FMath::Clamp(Num(D,TEXT("biomass")),0.,100.);const float Height=90+Biomass*3.6;const FString Form=Str(D,TEXT("phenotype"));
+  const float VisualWater=FMath::Clamp(static_cast<float>(Num(D,TEXT("water"),.5)),0.f,1.f);
+  const float VisualSun=FMath::Clamp(static_cast<float>(Num(D,TEXT("sun"),.5)),0.f,1.f);
+  const float VisualLeaf=FMath::Clamp(static_cast<float>(Num(D,TEXT("leaf"),.5)),0.f,1.f);
  const bool Cactus=Form==TEXT("Cactus");Plant->Mesh->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cylinder.Cylinder")));
- ColorMesh(Plant->Mesh,Cactus?FLinearColor(.18,.43,.25):FLinearColor(.30,.42,.12));Plant->SetActorLocation(Crown+FVector(0,0,Height*.5));Plant->SetActorScale3D(FVector(Cactus?.15:.045,Cactus?.15:.045,Height/100));Generated.Add(Plant);
- Shape(GetWorld(),Generated,Plant->ExactAnchor+FVector(0,0,2),FVector(.28,.28,.025),TEXT("/Engine/BasicShapes/Cylinder.Cylinder"),FLinearColor(.48,.84,.66));Segment(GetWorld(),Generated,Plant->ExactAnchor,Crown+FVector(0,0,Height*.14),.055,FLinearColor(.28,.4,.13));
- const int LeafCount=Cactus?4:FMath::Clamp(FMath::RoundToInt(12+Biomass*.12),12,24);
+ ColorMesh(Plant->Mesh,FCloudgardenArtStyle::Stem(Cactus,VisualWater,VisualSun));Plant->SetActorLocation(Crown+FVector(0,0,Height*.5));Plant->SetActorScale3D(FVector(Cactus?.15:.045,Cactus?.15:.045,Height/100));Generated.Add(Plant);
+ Shape(GetWorld(),Generated,Plant->ExactAnchor+FVector(0,0,2),FVector(.28,.28,.025),TEXT("/Engine/BasicShapes/Cylinder.Cylinder"),FCloudgardenArtStyle::Anchor());Segment(GetWorld(),Generated,Plant->ExactAnchor,Crown+FVector(0,0,Height*.14),.055,FCloudgardenArtStyle::RootConnector());
+ const int LeafCount=Cactus?4:FMath::Clamp(FMath::RoundToInt(12+Biomass*.12),12,24);const float VisualPhase=FCloudgardenArtStyle::PhyllotaxisPhase(Plant->PlantId);
  for(int Leaf=0;Leaf<LeafCount;Leaf++){
-  const float Fraction=float(Leaf)/FMath::Max(1,LeafCount-1);const float Angle=Leaf*2.39996323f+Index*.3f;
+  const float Fraction=float(Leaf)/FMath::Max(1,LeafCount-1);const float Angle=Leaf*2.39996323f+VisualPhase;
   const FVector Direction(FMath::Cos(Angle),FMath::Sin(Angle),.12+.32*Fraction);
   const FVector Base=Crown+FVector(0,0,Height*(.13+.77*Fraction));
   const float Length=(28+Biomass*.55)*(1-.52*Fraction);const FVector Tip=Base+Direction*Length;
-  auto Stalk=Shape(GetWorld(),Generated,(Base+Tip)*.5,FVector(Cactus?.065:.018,Cactus?.065:.018,FVector::Dist(Base,Tip)/100),TEXT("/Engine/BasicShapes/Cylinder.Cylinder"),FLinearColor(.27,.4,.12));Stalk->SetActorRotation(FQuat::FindBetweenNormals(FVector::UpVector,(Tip-Base).GetSafeNormal()));
+  auto Stalk=Shape(GetWorld(),Generated,(Base+Tip)*.5,FVector(Cactus?.065:.018,Cactus?.065:.018,FVector::Dist(Base,Tip)/100),TEXT("/Engine/BasicShapes/Cylinder.Cylinder"),FCloudgardenArtStyle::Branch(VisualWater,VisualSun));Stalk->SetActorRotation(FQuat::FindBetweenNormals(FVector::UpVector,(Tip-Base).GetSafeNormal()));
   if(Cactus){Stalk->SetActorScale3D(FVector(.09,.09,FVector::Dist(Base,Tip)/100));continue;}
   // Two opposed tapered halves form a slender lanceolate leaf, rather than a sphere or a flat card.
   const FVector End=Tip+Direction*Length*.7;const FVector Middle=FMath::Lerp(Tip,End,.43f);
-  for(int Half=0;Half<2;Half++){const FVector Point=Half==0?Tip:End;const FVector LeafDirection=(Point-Middle).GetSafeNormal();auto Blade=Shape(GetWorld(),Generated,(Point+Middle)*.5,FVector(Length*(Form==TEXT("Grass")?.10:.22)/100,.026,FVector::Dist(Point,Middle)/100),TEXT("/Engine/BasicShapes/Cone.Cone"),FLinearColor(.25+.08*Fraction,.44+.12*Fraction,.12+.03*Fraction));Blade->SetActorRotation(FQuat::FindBetweenNormals(FVector::UpVector,LeafDirection));Blade->SetOwner(Plant);Blade->SetActorEnableCollision(true);Cast<UStaticMeshComponent>(Blade->GetRootComponent())->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Cast<UStaticMeshComponent>(Blade->GetRootComponent())->SetCollisionResponseToChannel(ECC_Visibility,ECR_Block);}
+  for(int Half=0;Half<2;Half++){const FVector Point=Half==0?Tip:End;const FVector LeafDirection=(Point-Middle).GetSafeNormal();auto Blade=Shape(GetWorld(),Generated,(Point+Middle)*.5,FVector(Length*(Form==TEXT("Grass")?.10:.22)*FCloudgardenArtStyle::LeafWidthScale(VisualLeaf)/100,.026,FVector::Dist(Point,Middle)/100),TEXT("/Engine/BasicShapes/Cone.Cone"),FCloudgardenArtStyle::Leaf(Form,Fraction,VisualWater,VisualSun));Blade->SetActorRotation(FQuat::FindBetweenNormals(FVector::UpVector,LeafDirection));Blade->SetOwner(Plant);Blade->SetActorEnableCollision(true);Cast<UStaticMeshComponent>(Blade->GetRootComponent())->SetCollisionEnabled(ECollisionEnabled::QueryOnly);Cast<UStaticMeshComponent>(Blade->GetRootComponent())->SetCollisionResponseToChannel(ECC_Visibility,ECR_Block);}
  }
  if(Controller&&((Plant->PlantId==SelectedId&&Plant->GardenSymbol==SelectedGarden)||(!IsValid(Controller->Selected)&&SelectedId.IsEmpty())))Controller->Selected=Plant;Index++;}
- const TArray<TSharedPtr<FJsonValue>>* Events;if(Garden->TryGetArrayField(TEXT("events"),Events))for(auto EV:*Events){auto E=EV->AsObject();if(Str(E,TEXT("type"))!=TEXT("conception")||Num(Garden,TEXT("day"))-Num(E,TEXT("day"))>1)continue;const FVector* Target=Anchors.Find(Str(E,TEXT("subject")));if(!Target)continue;FVector From(Offset-720,-720,80);const FVector* Parent=Anchors.Find(Str(E,TEXT("actor")));if(Parent)From=*Parent+FVector(0,0,100);FVector To=*Target+FVector(0,0,100);auto Bee=Shape(GetWorld(),Generated,From,FVector(.12,.12,.12),TEXT("/Engine/BasicShapes/Sphere.Sphere"),FLinearColor(.95,.72,.2));Flights.Add({Bee,From,To,0});}
+ const TArray<TSharedPtr<FJsonValue>>* Events;if(Garden->TryGetArrayField(TEXT("events"),Events))for(auto EV:*Events){auto E=EV->AsObject();if(Str(E,TEXT("type"))!=TEXT("conception")||Num(Garden,TEXT("day"))-Num(E,TEXT("day"))>1)continue;const FVector* Target=Anchors.Find(Str(E,TEXT("subject")));if(!Target)continue;FVector From(Offset-720,-720,80);const FVector* Parent=Anchors.Find(Str(E,TEXT("actor")));if(Parent)From=*Parent+FVector(0,0,100);FVector To=*Target+FVector(0,0,100);auto Bee=Shape(GetWorld(),Generated,From,FVector(.12,.12,.12),TEXT("/Engine/BasicShapes/Sphere.Sphere"),FCloudgardenArtStyle::Bee());Flights.Add({Bee,From,To,0});}
  }
  Status=TEXT("P: Koordinatenebene | M: Bewegung | G: Genbibliothek | I: Pflanzenakte | PAPER ohne Boersenverbindung");
 }
@@ -83,8 +87,8 @@ void ACloudgardenHUD::DrawHUD(){
  Super::DrawHUD();if(!Canvas)return;
  auto Mode=Cast<ACloudgardenMode>(GetWorld()->GetAuthGameMode());if(!Mode)return;
  const float W=Canvas->SizeX,H=Canvas->SizeY,S=FMath::Min(W/1440.f,H/900.f);
- const FLinearColor Ink(.80,.94,.88),Mint(.39,.82,.69),Muted(.53,.68,.64),Panel(.025,.075,.065,.88),Loss(.95,.43,.29);
- auto Text=[&](const FString& V,float X,float Y,float Size=1.f,FLinearColor C=FLinearColor(.80,.94,.88)){DrawText(V,C,X*S,Y*S,GEngine->GetMediumFont(),Size*S);};
+ const FLinearColor Ink=FCloudgardenArtStyle::HudInk(),Mint=FCloudgardenArtStyle::HudMint(),Muted=FCloudgardenArtStyle::HudMuted(),Panel=FCloudgardenArtStyle::HudPanel(),Loss=FCloudgardenArtStyle::HudLoss();
+ auto Text=[&](const FString& V,float X,float Y,float Size=1.f,FLinearColor C=FCloudgardenArtStyle::HudInk()){DrawText(V,C,X*S,Y*S,GEngine->GetMediumFont(),Size*S);};
  auto Box=[&](float X,float Y,float A,float B){DrawRect(Panel,X*S,Y*S,A*S,B*S);DrawLine(X*S,Y*S,(X+A)*S,Y*S,Mint,1);DrawLine(X*S,(Y+B)*S,(X+A)*S,(Y+B)*S,Mint,1);};
  const float VW=W/S,VH=H/S;const TArray<TSharedPtr<FJsonValue>>* Gardens=nullptr;
  if(Mode->Snapshot.IsValid())Mode->Snapshot->TryGetArrayField(TEXT("gardens"),Gardens);
