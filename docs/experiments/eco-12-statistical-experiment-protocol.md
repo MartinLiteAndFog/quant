@@ -33,17 +33,30 @@ genome complexity, and capital utilization. Each seed records walk-forward and
 final metrics, candidate evaluations, and the frozen genome. Runtime is observed
 and reported, but deterministic fairness is based on evaluation count.
 
-The predeclared primary benchmark is A. B/C/D are paired to A by seed and each
-challenger receives one family-wise comparison. The report uses a normal
-approximation for paired two-sided p-values, Holm step-down adjustment, and a
-conservative Bonferroni family-wise interval.
-`beats` requires genuine empirical provenance, a non-synthetic evaluator, the
-minimum number of common seeds, a positive predeclared edge, and adjusted
-significance. `does_not_beat` requires the adjusted interval's upper bound to
-be at or below the edge threshold. Everything else is `not_comparable`.
-Exploratory gene, ecology, or threshold sweeps create additional hypotheses and
-must be preregistered or corrected as a larger family; they cannot reuse the
-same untouched final split repeatedly and call each pass confirmatory.
+The predeclared descriptive benchmark is A. B/C/D are paired to A by
+*search seed* and share a common frozen final market tail. **This is one
+market sample, not 30 independent market experiments.** Even with distinct
+random seeds and a self-reported empirical dataset, a t/z-test over the
+30 seeded returns would be pseudoreplication and cannot establish market
+confidence.
+
+Protocol v1.1 therefore records paired mean return differences and a
+**descriptive seed-spread band** only. Machine-readable results set
+`p_value_two_sided=null`, `p_value_holm=null`, all confidence intervals to
+`null`, `independent_market_holdouts=1`,
+`inferential_interval_valid=false` and **all** B/C/D verdicts to
+`not_comparable`. The displayed 95%-width seed-spread band is **not**
+a confidence interval or inferential p-value; it quantifies how much the
+algorithm's results change with different random seeds on the *same*
+price path.
+
+A future ECO-12 v2 protocol must independently validate the market source,
+contract/costs, TradingView strategy signal parity, genuine chronological
+out-of-sample separation and sufficient independent regimes or appropriately
+clustered/block inference. It must preregister its multiple-testing family
+and never reuse the final holdout for another tuning cycle. A user-supplied
+`source_kind="empirical"`, `signal_parity="verified"` or arbitrary external
+`Evaluator.evaluator_id` does **not** bypass the v1.1 gate.
 
 ## Ablations and current limits
 
