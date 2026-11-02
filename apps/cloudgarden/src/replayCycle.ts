@@ -1,6 +1,7 @@
 import { createSyntheticMarketRange, runPaperReplay, type PaperReplayReport } from "./paperReplay.ts";
 import { buildSyntheticReplayEvidence, type SyntheticReplayEvidence } from "./replayEvidence.ts";
 import { generateSyntheticMomentumSignals, type StrategySignalReport, type TradingSignalGenome } from "./strategySignals.ts";
+import type { TradingTraits } from "./simulation.ts";
 
 export type SyntheticReplayCycleInput = Readonly<{
   days: number;
@@ -9,11 +10,7 @@ export type SyntheticReplayCycleInput = Readonly<{
   weekIndex: number;
   plantId: string;
   allocationUsdt: number;
-  controls: Readonly<{
-    lookbackBars: number;
-    entryThresholdBps: number;
-    exitThresholdBps: number;
-  }>;
+  tradingTraits: TradingTraits;
 }>;
 
 export type SyntheticReplayCycleResult = Readonly<{
@@ -46,7 +43,7 @@ export async function runSyntheticReplayCycle(input: SyntheticReplayCycleInput):
   const genome: TradingSignalGenome = {
     schemaVersion: 1,
     strategyId: `${input.plantId}:synthetic-momentum-v1`,
-    ...input.controls,
+    ...input.tradingTraits,
     targetQuantity: quantityForPlantAllocation(input.allocationUsdt),
   };
   const strategy = generateSyntheticMomentumSignals(dataset, genome);
