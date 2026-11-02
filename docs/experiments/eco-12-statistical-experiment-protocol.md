@@ -1,6 +1,6 @@
 # ECO-12 statistical experiment protocol
 
-Protocol `eco12.v1` compares four search policies against A, the random-mutation
+Protocol `eco12.v1.1` compares four search policies against A, the random-mutation
 benchmark: A random mutation, B local pollination, C central hive, and D hybrid.
 This package owns only the experiment contract; it does not import or modify the
 upstream market-data, ecology, metrics, breeding, or compute packages. Its
