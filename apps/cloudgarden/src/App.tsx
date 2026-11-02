@@ -359,6 +359,8 @@ function Meadow({
             <div className="plant-allocation"><span>Consecutive inactive days</span><b>{selected.inactiveDays ?? 0} · decay after day 14</b></div>
             <div className="plant-allocation"><span>Inherited patience</span><b>{((selected.genes.patience ?? 0.5) * 100).toFixed(1)}%</b></div>
             <div className="plant-allocation"><span>Parents</span><b>{selected.parents?.join(" × ") ?? "Founding plant"}</b></div>
+            <div className="plant-allocation"><span>Birth funding</span><b>{selected.role === "parent" ? "Founding allocation" : selected.fundingSource === "recycled"
+              ? "Reused free NAV" : "Original 20-slot seedbank"}</b></div>
           </>}
           <div className="plant-allocation"><span>Capital entitlement</span><b>{money(selected.allocationUsdt)}</b></div>
           <div className="plant-allocation"><span>Observed in this world</span><b>{selected.evidenceDays} days</b></div>
