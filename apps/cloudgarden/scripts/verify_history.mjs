@@ -1,6 +1,7 @@
 // Reproducible integration check over actual exported SOL candles, not generated fixtures.
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { advanceHistoricalSession, createHistoricalSession, loadSolArchive } from "../src/historicalGarden.ts";
 const days = Number(process.argv[2] ?? 7);
@@ -11,7 +12,8 @@ globalThis.fetch = async (input, init) => {
   const path = String(input);
   if (!/^\/market\/(?:manifest|\d{4}-\d{2}-\d{2})\.json$/.test(path)) throw new Error("Unexpected history request.");
   if (origin) return httpFetch(new URL(path, origin), init);
-  return new Response(await readFile(fileURLToPath(new URL(`../public${path}`, import.meta.url))));
+  const sourceFile = process.env.CLOUDGARDEN_MARKET_DIR ? resolve(process.env.CLOUDGARDEN_MARKET_DIR, path.slice("/market/".length)) : fileURLToPath(new URL(`../public${path}`, import.meta.url));
+  return new Response(await readFile(sourceFile));
 };
 const archive = await loadSolArchive();
 let session = createHistoricalSession(archive, "2026-01-01");
@@ -25,9 +27,33 @@ assert.notEqual(session.world.capital.navUsdt, 100);
 assert.ok(session.world.capital.paperFeesUsdt > 0);
 assert.equal(session.world.day, days);
 assert.ok(session.world.events.filter((e) => e.type === "paper_replay").every((e) => e.detail.synthetic === false));
-console.log(JSON.stringify({ sourceSha256: archive.sourceSha256, archiveMinutes: archive.totalBars,
+const output = {
+  schemaVersion: 1, sourceSha256: archive.sourceSha256, archiveMinutes: archive.totalBars,
   firstDay: session.startDate, lastDay: session.history.at(-1).date, days, fills,
-  navUsdt: session.world.capital.navUsdt, netPnlUsdt: Number((session.world.capital.navUsdt - 100).toFixed(4)),
-  feesUsdt: session.world.capital.paperFeesUsdt, seedlingEntitlementsUsed: session.world.capital.seedlingEntitlements.filter((s) => s.status === "used").length,
-  plants: session.world.plants.length, source: origin ? "HTTP archive assets" : "local archive assets",
-  benchmark: "cash_no_trade", verdict: "not_comparable", note: "Integration evidence only; source-derived daily-flat variants, assumed costs, unverified venue, no funding model or OOS claim." }, null, 2));
+  navUsdt: session.world.capital.navUsdt,
+  netPnlUsdt: Number((session.world.capital.navUsdt - 100).toFixed(4)),
+  feesUsdt: session.world.capital.paperFeesUsdt,
+  seedlingEntitlementsUsed: session.world.capital.seedlingEntitlements.filter((s) => s.status === "used").length,
+  plants: session.world.plants.length,
+  source: origin ? "HTTP archive assets" : "local archive assets",
+  commitSha: process.env.GITHUB_SHA ?? null,
+  benchmark: "cash_no_trade", verdict: "not_comparable", provenanceVerified: false,
+  note: "Integration only: daily-flat research, assumed costs, unverified instrument/funding, no OOS claim."
+};
+if (days === 140) {
+  assert.equal(output.sourceSha256, "fa3e689ddbc42b35b89f66db4240521a330896e2d89fc2d2df8624bc749fda64", "Frozen source SHA mismatch.");
+  assert.equal(output.archiveMinutes, 3_109_186, "Frozen archive count mismatch.");
+  assert.equal(output.firstDay, "2026-01-01");
+  assert.equal(output.lastDay, "2026-05-20");
+  assert.equal(output.fills, 28_078, "Frozen fill count mismatch.");
+  assert.equal(output.navUsdt.toFixed(4), "31.3791", "Frozen NAV mismatch.");
+  assert.equal(output.feesUsdt.toFixed(4), "45.9937", "Frozen fees mismatch.");
+  assert.equal(output.seedlingEntitlementsUsed, 20, "Frozen seedling count mismatch.");
+  output.referenceMatched = true;
+} else {
+  output.referenceMatched = null;
+}
+if (process.env.CLOUDGARDEN_RESULT_MANIFEST) {
+  await writeFile(process.env.CLOUDGARDEN_RESULT_MANIFEST, JSON.stringify(output, null, 2) + "\n");
+}
+console.log(JSON.stringify(output, null, 2));

@@ -1,0 +1,20 @@
+// Six generated synthetic bars only; NOT an empirical market test.
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { normalizeMarketData, runPaperReplay } from "../src/paperReplay.ts";
+const fixture = JSON.parse(await readFile(new URL("../fixtures/ci_synthetic_minute.json", import.meta.url), "utf8"));
+assert.equal(fixture.provenance.synthetic, true);
+assert.equal(fixture.provenance.symbol, "SOL-DEMO");
+const dataset = await normalizeMarketData(fixture.bars, fixture.provenance);
+assert.equal(dataset.report.eligibility, "synthetic_demo_only");
+assert.equal(dataset.report.barCount, 6);
+assert.equal(dataset.report.missingBars, 0);
+const result = runPaperReplay({ dataset, signals: fixture.signals, allocationLimit: "20", startingCash: "20" });
+assert.equal(result.endedFlat, true);
+assert.equal(result.finalQuantity, "0");
+assert.equal(result.fills.length, 2);
+assert.equal(result.fills[0].executedAt, "2024-01-01T00:01:00.000Z");
+assert.equal(result.fills[1].executedAt, "2024-01-01T00:04:00.000Z");
+assert.ok(Number(result.fees) > 0);
+assert.equal(result.benchmarkConclusion, "not_comparable");
+console.log("PASS: small public synthetic price-to-fill fixture, not empirical trading evidence.");

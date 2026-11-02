@@ -1,0 +1,34 @@
+name: Cloudgarden CI - public synthetic only
+on:
+  pull_request:
+    paths:
+      - 'apps/cloudgarden/**'
+      - '.github/workflows/cloudgarden-ci.yml'
+      - '.github/workflows/cloudgarden-private-history.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  synthetic-test-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: apps/cloudgarden
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: apps/cloudgarden/package-lock.json
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Require synthetic-only CI (no private archive)
+        run: test ! -e public/market/manifest.json
+      - name: Unit tests
+        run: npm test
+      - name: Checked-in six-minute synthetic fixture
+        run: npm run verify:fixture
+      - name: Typecheck and build without real market data
+        run: npm run build
