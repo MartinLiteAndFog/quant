@@ -32,6 +32,10 @@ export type SeedOutcome = Readonly<{
   meanVigor: number;
   meanSyntheticEvidence: number;
   meanBiomass: number;
+  /** Descriptive means over active plants at the end of this trial. */
+  meanTradingLookbackBars: number;
+  meanTradingEntryThresholdBps: number;
+  meanTradingExitThresholdBps: number;
 }>;
 
 export type CohortResult = Readonly<{
@@ -48,6 +52,10 @@ export type CohortResult = Readonly<{
   meanVigor: number;
   meanSyntheticEvidence: number;
   meanBiomass: number;
+  /** Mean of each trial's active-plant mean, so each matched seed has equal weight. */
+  meanTradingLookbackBars: number;
+  meanTradingEntryThresholdBps: number;
+  meanTradingExitThresholdBps: number;
   meanNavUsdt: number;
   meanProtectedReserveUsdt: number;
   meanDeployedCapitalUsdt: number;
@@ -95,6 +103,9 @@ function outcomeFor(world: SimulationWorld, seed: string, days: number): SeedOut
     meanVigor: mean(activeMetrics("vigor")),
     meanSyntheticEvidence: mean(activeMetrics("evidence")),
     meanBiomass: mean(activeMetrics("biomass")),
+    meanTradingLookbackBars: mean(visible.map((plant) => plant.tradingTraits.lookbackBars)),
+    meanTradingEntryThresholdBps: mean(visible.map((plant) => plant.tradingTraits.entryThresholdBps)),
+    meanTradingExitThresholdBps: mean(visible.map((plant) => plant.tradingTraits.exitThresholdBps)),
   };
 }
 
@@ -113,6 +124,9 @@ function summarize(mode: CohortResult["mode"], outcomes: readonly SeedOutcome[],
     meanVigor: mean(values("meanVigor")),
     meanSyntheticEvidence: mean(values("meanSyntheticEvidence")),
     meanBiomass: mean(values("meanBiomass")),
+    meanTradingLookbackBars: mean(values("meanTradingLookbackBars")),
+    meanTradingEntryThresholdBps: mean(values("meanTradingEntryThresholdBps")),
+    meanTradingExitThresholdBps: mean(values("meanTradingExitThresholdBps")),
     meanNavUsdt: mean(values("navUsdt")),
     meanProtectedReserveUsdt: mean(values("protectedReserveUsdt")),
     meanDeployedCapitalUsdt: mean(values("deployedCapitalUsdt")),
