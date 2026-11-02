@@ -45,7 +45,7 @@ class ArtStyleContractTests(unittest.TestCase):
         for expected in ("HudPanel()", "HudMint()", "HudInk()", "HudLoss()"):
             self.assertIn(expected, RENDER)
         for source in ('Num(G,TEXT("nav"))', 'Num(G,TEXT("netPnl"))',
-                       'Num(G,TEXT("deposits"))', 'Num(A,TEXT("equity"))'):
+                       'Num(G,TEXT("deposits"))', 'Num(P->AsObject(),TEXT("equity"))'):
             self.assertIn(source, RENDER)
 
 
