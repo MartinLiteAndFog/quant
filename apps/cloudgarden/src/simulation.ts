@@ -32,6 +32,13 @@ export type TradingTraits = Readonly<{
   exitThresholdBps: number;
 }>;
 
+/** Paper outcome for one strategy on exactly one completed trading day. No research verdicts. */
+export type TradingDayOutcome = Readonly<{
+  netPnlUsdt: number;
+  startingAllocationUsdt: number;
+}>;
+export type TradingDayOutcomes = Readonly<Record<string, TradingDayOutcome>>;
+
 export type Phenotype = "Grass" | "Bush" | "Cactus";
 export type PlantRole = "parent" | "seedling";
 export type PlantStatus = "active" | "archived";
@@ -374,7 +381,7 @@ function shadeAt(plant: GardenPlant, plants: readonly GardenPlant[]): number {
 }
 
 /** Purely synthetic root, leaf, water, and sunlight response for one plant. */
-function growPlant(plant: GardenPlant, plants: readonly GardenPlant[], climate: GardenClimate): GardenPlant {
+function growPlant(plant: GardenPlant, plants: readonly GardenPlant[], climate: GardenClimate, tradingDayOutcomes?: TradingDayOutcomes): GardenPlant {
   if (plant.status === "archived") return plant;
   const entersDormancy = plant.physiology === "awake"
     && plant.vigor <= 55
@@ -387,6 +394,23 @@ function growPlant(plant: GardenPlant, plants: readonly GardenPlant[], climate: 
     : recovers
       ? "awake"
       : plant.physiology;
+
+  if (tradingDayOutcomes !== undefined) {
+    // The first historical economy rule: the organism's size and vigor compound
+    // by its OWN booked net paper return, in units of its start-of-day allocation.
+    // No synthetic habitat score, p-value, champion, or external evaluator is read.
+    // A no-trade day has a factor of exactly one and leaves economic size unchanged.
+    const outcome = tradingDayOutcomes[plant.id];
+    const growthFactor = outcome ? Math.max(0, 1 + outcome.netPnlUsdt / outcome.startingAllocationUsdt) : 1;
+    return {
+      ...plant,
+      physiology,
+      biomass: round4(clamp(plant.biomass * growthFactor, 5, 100)),
+      vigor: round4(clamp(plant.vigor * growthFactor, 0, 100)),
+      evidenceDays: plant.evidenceDays + 1,
+    };
+  }
+
   const rootAccess = clamp(0.18 + plant.genes.root * climate.water * 0.72 + plant.genes.root * 0.12, 0.12, 1);
   const leafCapture = clamp(plant.genes.leaf * climate.sunlight * 1.22 - shadeAt(plant, plants) + 0.12, 0.08, 1);
   const waterResponse = clamp(plant.genes.water * climate.water + (1 - plant.genes.water) * (1 - Math.abs(0.5 - climate.water)), 0.08, 1);
@@ -598,11 +622,24 @@ function applyPredation(world: SimulationWorld, day: number): SimulationWorld {
 }
 
 /** Advance exactly one deterministic synthetic day without mutating the input. */
-export function advanceSimulationDay(world: SimulationWorld): SimulationWorld {
+export function advanceSimulationDay(world: SimulationWorld, tradingDayOutcomes?: TradingDayOutcomes): SimulationWorld {
   assertSimulationInvariants(world);
+  if (tradingDayOutcomes !== undefined) {
+    if (!tradingDayOutcomes || typeof tradingDayOutcomes !== "object" || Array.isArray(tradingDayOutcomes)) {
+      throw new RangeError("Trading day outcomes must be a map of actual active plants.");
+    }
+    const activeIds = new Set(world.plants.filter((plant) => plant.status === "active").map((plant) => plant.id));
+    for (const [plantId, outcome] of Object.entries(tradingDayOutcomes)) {
+      if (!activeIds.has(plantId) || !outcome || !Number.isFinite(outcome.netPnlUsdt)
+        || !Number.isFinite(outcome.startingAllocationUsdt) || outcome.startingAllocationUsdt <= 0
+        || outcome.netPnlUsdt < -outcome.startingAllocationUsdt - 0.0001) {
+        throw new RangeError("Invalid or unknown plant paper outcome for this historical day.");
+      }
+    }
+  }
   const day = world.day + 1;
   const climate = climateForDay(world.seed, day);
-  const plants = world.plants.map((plant) => growPlant(plant, world.plants, climate));
+  const plants = world.plants.map((plant) => growPlant(plant, world.plants, climate, tradingDayOutcomes));
   const physiologyEvents: GardenEvent[] = plants.flatMap((plant, index) => {
     const before = world.plants[index];
     if (!before || before.physiology === plant.physiology) return [];
@@ -625,7 +662,7 @@ export function advanceSimulationDay(world: SimulationWorld): SimulationWorld {
       id: `${world.seed}:d${day}:tick`,
       day,
       type: "daily_tick",
-      detail: { water: climate.water, sunlight: climate.sunlight, predatorPatrol: climate.predatorPatrol },
+      detail: { water: climate.water, sunlight: climate.sunlight, predatorPatrol: climate.predatorPatrol, marketDrivenBiomass: tradingDayOutcomes !== undefined },
     }, ...physiologyEvents]),
   };
 
