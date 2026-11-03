@@ -1,5 +1,5 @@
 import { normalizeMarketData, runPaperReplay, type MarketBarInput, type MarketDataset, type PaperFill } from "./paperReplay.ts";
-import { advanceSimulationDay, assertSimulationInvariants, bookClosedPaperReplay, bookHistoricalMark, fundSimulationWorld, createSimulationWorld, type SimulationWorld, type GardenClimate } from "./simulation.ts";
+import { advanceSimulationDay, assertSimulationInvariants, bookClosedPaperReplay, bookHistoricalMark, fundSimulationWorld, createSimulationWorld, setEcologyControls, GENTLE_ECOLOGY, type SimulationWorld, type GardenClimate } from "./simulation.ts";
 import { generateSourceSignals, inheritSourceGenome, SOURCE_PARENT_GENOMES, validateSourceGenome, type SourceGenome } from "./sourceStrategies.ts";
 
 import { createKrakenPaperState, advanceKrakenPaper, resumeKrakenPaperAfterGap, validateKrakenPaperState, type KrakenPaperState, type KrakenPaperFill } from "./krakenPaper.ts";
@@ -70,7 +70,8 @@ export function validateSolArchive(value: unknown): SolArchive {
 export function createHistoricalSession(archive: SolArchive, startDate = archive.firstDate, options: { engine?: "source" | "kraken"; profileIds?: readonly string[]; monthlyEur?: number; eurUsdt?: number } = {}): HistoricalSession {
   const archiveIndex = archive.days.findIndex((day) => day.date === startDate);
   if (archiveIndex < 0) throw new Error("Choose an observed UTC date from the SOL archive.");
-  const world = createSimulationWorld(`${archive.symbol}:${archive.sourceSha256.slice(0, 12)}:${startDate}`, { dynamicEcology: options.engine !== "source", maxLivingPlants: 50 });
+  // Game default: no predators and no negative-vitality penalty. Old non-game worlds retain their own rules.
+  const world = setEcologyControls(createSimulationWorld(`${archive.symbol}:${archive.sourceSha256.slice(0, 12)}:${startDate}`, { dynamicEcology: options.engine !== "source", maxLivingPlants: 50 }), GENTLE_ECOLOGY);
   const genomes = Object.fromEntries(world.plants.map((plant, i) => [plant.id, SOURCE_PARENT_GENOMES[i]!])) as Record<string, SourceGenome>;
   const profileIds = options.profileIds ?? ["kraken_legacy", "kraken_17_2_close", "kraken_17_2_reverse"];
   if (profileIds.length !== 3) throw new RangeError("Choose exactly three source profiles for the three parent plants.");
