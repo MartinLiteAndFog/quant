@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { setConceptionPolicy, type BeeMode, type GardenPlant, type SimulationWorld } from "./simulation";
+import { setConceptionPolicy, setEcologyControls, setEcologyEvolution, GENTLE_ECOLOGY, type EcologyControls, type BeeMode, type GardenPlant, type SimulationWorld } from "./simulation";
 import { advanceHistoricalSession, createHistoricalSession, HISTORICAL_SAVE_KEY, loadSolArchive, validateHistoricalSession,
   type HistoricalSession, type SolArchive } from "./historicalGarden";
 import "./historical.css";
 import { GameSurface } from "./GameSurface";
 import { loadHistoricalSnapshot, saveHistoricalSnapshot } from "./historicalStorage";
+import { GameMenu } from "./GameMenu";
+import { observedStartDate, requireObservedDate } from "./gameStart";
 
 export type HistoricalGardenControls = {
   world: SimulationWorld; selected: GardenPlant; selectedId: string; playing: boolean; busy: boolean;
@@ -16,13 +18,21 @@ export type HistoricalGardenControls = {
 /** Historical trading is the default playable path; legacy ecology fixtures remain separate. */
 export function HistoricalTrading(_props: { renderGarden?: (controls: HistoricalGardenControls) => ReactNode }) {
   const [playing,setPlaying]=useState(false);
-  return <div className="cg-two-gardens"><HistoricalGarden symbol="SOL-USDT" sharedPlaying={playing} setSharedPlaying={setPlaying}/></div>;
+  const [symbol, setSymbol] = useState<"SOL-USDT" | "BTC-USDT">("SOL-USDT");
+  return <div className="cg-two-gardens"><HistoricalGarden key={symbol} symbol={symbol}
+    onSymbol={(value)=>{setPlaying(false);setSymbol(value);}}
+    sharedPlaying={playing} setSharedPlaying={setPlaying}/></div>;
 }
-function HistoricalGarden({symbol,sharedPlaying,setSharedPlaying}:{symbol:"SOL-USDT"|"BTC-USDT";sharedPlaying:boolean;setSharedPlaying:(value:boolean)=>void}) {
+function HistoricalGarden({symbol,onSymbol,sharedPlaying,setSharedPlaying}:{symbol:"SOL-USDT"|"BTC-USDT";onSymbol:(symbol:"SOL-USDT"|"BTC-USDT")=>void;sharedPlaying:boolean;setSharedPlaying:(value:boolean)=>void}) {
   const snapshotKey=symbol==="SOL-USDT"?HISTORICAL_SAVE_KEY:`${HISTORICAL_SAVE_KEY}.btc`;
   const [archive, setArchive] = useState<SolArchive | null>(null);
   const [session, setSession] = useState<HistoricalSession | null>(null);
   const [startDate, setStartDate] = useState("");
+  const [menuOpen, setMenuOpen] = useState(true);
+  const [started, setStarted] = useState(false);
+  const [hasSnapshot, setHasSnapshot] = useState(false);
+  const [ecologyControls, setControls] = useState<EcologyControls>(GENTLE_ECOLOGY);
+  const [evolutionEnabled, setEvolutionEnabled] = useState(true);
   const [speed, setSpeed] = useState(1);
   const [profileIds, setProfileIds] = useState<readonly string[]>(["kraken_legacy", "kraken_17_2_close", "kraken_17_2_reverse"]);
   const [selectedId, setSelectedId] = useState("parent-01");
@@ -41,29 +51,34 @@ function HistoricalGarden({symbol,sharedPlaying,setSharedPlaying}:{symbol:"SOL-U
     let cancelled = false;
     void loadSolArchive(symbol).then(async (a) => {
       if (cancelled) return;
-      const initialDate = a.firstDate;
+      const initialDate = observedStartDate(a, "last30");
       let restored = createHistoricalSession(a, initialDate);
+      let recovered = false;
       try {
         const raw = await loadHistoricalSnapshot(snapshotKey);
         if (cancelled) return;
-        if (raw) restored = validateHistoricalSession(raw, a);
+        if (raw) { restored = validateHistoricalSession(raw, a); recovered = true; }
+        // Existing saves keep their financial history and can disable historical predation on resume.
+        if (!restored.world.ecologyControls) restored = {...restored, world:setEcologyControls(restored.world, GENTLE_ECOLOGY)};
         setSaveStatus(raw ? "Gespeicherte Welt wiederhergestellt" : "Welt bereit");
       } catch {
         saveEnabled.current = false;
         setSaveStatus("Älterer Spielstand bleibt geschützt. Eine neue Welt ersetzt ihn.");
       }
       current.current = restored; setSession(restored); setArchive(a); setStartDate(restored.startDate);
+      setHasSnapshot(recovered); setControls(restored.world.ecologyControls ?? GENTLE_ECOLOGY);
+      setEvolutionEnabled(!restored.world.evolutionPaused);
       if (restored.initialProfileIds) setProfileIds(restored.initialProfileIds);
     }).catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : "SOL history could not be loaded."); });
     return () => { cancelled = true; stop.current = true; generation.current += 1; };
   }, []);
 
   useEffect(() => {
-    if (!session || !saveEnabled.current) return;
+    if (!session || !started || !saveEnabled.current) return;
     let cancelled=false;
     void saveHistoricalSnapshot(session,snapshotKey).then(()=>{if(!cancelled)setSaveStatus("Welt auf diesem Gerät gespeichert");}).catch(()=>{if(!cancelled)setSaveStatus("Speicher nicht verfügbar; halte dieses Fenster für den Fortschritt offen");});
     return ()=>{cancelled=true;};
-  }, [session]);
+  }, [session, started]);
 
   const advance = useCallback(async (days: number, autoplay = false) => {
     if (locked.current || !archive || !current.current) return;
@@ -92,10 +107,33 @@ function HistoricalGarden({symbol,sharedPlaying,setSharedPlaying}:{symbol:"SOL-U
   const restart = () => {
     if (!archive || locked.current) return;
     try {
-      const next = createHistoricalSession(archive, startDate, { profileIds });
+      const observed = requireObservedDate(archive,startDate);
+      const fresh = createHistoricalSession(archive, observed, { profileIds });
+      const next = {...fresh, world:setEcologyEvolution(setEcologyControls(fresh.world,ecologyControls),evolutionEnabled)};
       saveEnabled.current = true; stop.current = true; setPlaying(false); setSelectedId("parent-01");
-      current.current = next; setSession(next); setError(null);
+      current.current = next; setSession(next); setError(null); setHasSnapshot(true);
+      setStarted(true); setMenuOpen(false);
     } catch (e) { setError(e instanceof Error ? e.message : "Choose an available date."); }
+  };
+  const continueGame = () => {
+    if (!current.current || locked.current) return;
+    const next = {...current.current,world:setEcologyEvolution(setEcologyControls(current.current.world,ecologyControls),evolutionEnabled)};
+    current.current = next;setSession(next);setError(null);
+    setStarted(true);setMenuOpen(false);
+  };
+  const changeRules = (value: EcologyControls) => {
+    setControls(value);
+    if (started && current.current && !locked.current) {
+      const next = {...current.current,world:setEcologyControls(current.current.world,value)};
+      current.current=next;setSession(next);
+    }
+  };
+  const changeEvolution = (enabled:boolean) => {
+    setEvolutionEnabled(enabled);
+    if (started && current.current && !locked.current) {
+      const next = {...current.current,world:setEcologyEvolution(current.current.world,enabled)};
+      current.current=next;setSession(next);
+    }
   };
   const onPolicy = (policy: "mixed" | BeeMode) => {
     if (!current.current || locked.current) return;
@@ -103,12 +141,23 @@ function HistoricalGarden({symbol,sharedPlaying,setSharedPlaying}:{symbol:"SOL-U
     current.current = next; setSession(next);
   };
 
-  if (!session || !archive) return <div className="page-content"><section className="historical-panel"><h1>{symbol} · Archiv laden</h1>
-    <p>{error ?? saveStatus}</p></section></div>;
+  if (!session || !archive) return <><GameMenu archive={null} symbol={symbol}
+    onSymbol={onSymbol} startDate="" onStartDate={setStartDate}
+    controls={ecologyControls} onControls={changeRules} evolutionEnabled={evolutionEnabled}
+    onEvolution={changeEvolution} hasProgress={false} canClose={false} busy={true}
+    error={error} onNew={()=>{}} onContinue={()=>{}}/></>;
   return <section aria-label={`${symbol} Garten`}><h2 className="cg-garden-title">{symbol} · eigener Garten</h2><p className="cg-garden-disclosure">Eigene Population und eigenes Kapital · 100 € Zufluss pro Monat und Garten. {symbol==="BTC-USDT"?"SOL-Strategievorlagen auf Bitcoin: unveränderte Parameter als expliziter Transferversuch, keine bestätigte Eignung.":"SOL-Strategievorlagen auf dem SOL-Archiv."}</p><GameSurface session={session} archive={archive} selectedId={selectedId} onSelect={setSelectedId}
     playing={playing} busy={busy} error={error} saveStatus={saveStatus} startDate={startDate}
     onDate={setStartDate} onRestart={restart} onAdvance={(days)=>{void advance(days);}}
     onPlay={()=>{stop.current=playing;setPlaying(!playing);}}
     onPause={()=>{stop.current=true;setPlaying(false);}} onPolicy={onPolicy}
-    speed={speed} onSpeed={setSpeed} profileIds={profileIds} onProfiles={setProfileIds}/></section>;
+    speed={speed} onSpeed={setSpeed} profileIds={profileIds} onProfiles={setProfileIds}
+    onOpenMenu={()=>{stop.current=true;setPlaying(false);setMenuOpen(true);}}/>
+    {menuOpen&&<GameMenu archive={archive} symbol={symbol} onSymbol={onSymbol}
+      startDate={startDate} onStartDate={(date)=>{setError(null);setStartDate(date);}}
+      controls={ecologyControls} onControls={changeRules}
+      evolutionEnabled={evolutionEnabled} onEvolution={changeEvolution}
+      hasProgress={hasSnapshot || started} canClose={hasSnapshot || started}
+      busy={busy} error={error} onNew={restart} onContinue={continueGame}/>}
+    </section>;
 }
