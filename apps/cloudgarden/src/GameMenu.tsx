@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { type EcologyControls, GENTLE_ECOLOGY } from "./simulation";
 import type { SolArchive } from "./historicalGarden";
+import type { FundingSettings } from "./fundingPolicy";
 import { observedStartDate, type StartPreset } from "./gameStart";
 import "./gameMenu.css";
 
@@ -16,6 +17,8 @@ export type GameMenuProps = {
   onControls: (controls: EcologyControls) => void;
   evolutionEnabled: boolean;
   onEvolution: (enabled: boolean) => void;
+  funding: FundingSettings;
+  onFunding: (settings: FundingSettings) => void;
   hasProgress: boolean;
   canClose: boolean;
   busy: boolean;
@@ -34,6 +37,7 @@ const presets: readonly [StartPreset, string][] = [
 export function GameMenu(p: GameMenuProps) {
   const rules = p.controls ?? GENTLE_ECOLOGY;
   const [rulesOpen, setRulesOpen] = useState(true);
+  const [fundingOpen, setFundingOpen] = useState(true);
   return <div className="cg-menu-backdrop">
     <section className="cg-menu" role="dialog" aria-modal="true" aria-labelledby="cg-menu-heading">
       <div className="cg-menu-head"><div className="cg-menu-logo">◌ <strong>CLOUDGARDEN</strong><small>STRATEGY ECOSYSTEM</small></div>
@@ -85,6 +89,24 @@ export function GameMenu(p: GameMenuProps) {
               <label className="cg-menu-rule"><span>Evolution / Samen <small>Geburten bleiben kapitalbegrenzt</small></span>
                 <input type="checkbox" checked={p.evolutionEnabled} onChange={e=>p.onEvolution(e.target.checked)}/></label>
               <p>Standard: Räuber aus, Vitalitätsmalus null. Diese Einstellung verhindert keine handelsbedingten Verluste, Kapitalgrenzen oder die Populationsobergrenze.</p>
+            </details>
+            <details className="cg-menu-rules cg-funding-rules" open={fundingOpen} onToggle={e=>setFundingOpen(e.currentTarget.open)}>
+              <summary>Kapital / Einzahlungen <span>{p.funding.mode==="topup"?"AUFSTOCKUNG AN":p.funding.mode==="monthly"?"MONATLICH AN":"AUS"}</span></summary>
+              <label className="cg-menu-rule"><span>Monatlicher Kapitalzuschuss <small>Standardmäßig aus. Nur bei Aktivierung jeden neuen Archivmonat einzahlen.</small></span>
+                <input type="checkbox" checked={p.funding.mode==="monthly"} onChange={e=>p.onFunding({...p.funding,mode:e.target.checked?"monthly":"off"})}/></label>
+              <label className="cg-menu-rule"><span>Betrag pro Monat (€)</span>
+                <input className="cg-funding-number" type="number" min="1" max="10000" step="10"
+                  disabled={p.funding.mode!=="monthly"} value={p.funding.monthlyEur}
+                  onChange={e=>{const n=e.currentTarget.valueAsNumber;if(Number.isFinite(n)&&n>0&&n<=10000)p.onFunding({...p.funding,monthlyEur:n});}}/></label>
+              <label className="cg-menu-rule"><span>Depot auf Zielwert auffüllen <small>Standardmäßig an. Nach jedem Handelstag nur die Differenz einzahlen, falls das Depot darunter liegt.</small></span>
+                <input type="checkbox" checked={p.funding.mode==="topup"} onChange={e=>p.onFunding({...p.funding,mode:e.target.checked?"topup":"off"})}/></label>
+              <label className="cg-menu-rule"><span>Zielkapital (€)</span>
+                <input className="cg-funding-number" type="number" min="1" max="10000" step="10"
+                  disabled={p.funding.mode!=="topup"} value={p.funding.topUpTargetEur}
+                  onChange={e=>{const n=e.currentTarget.valueAsNumber;if(Number.isFinite(n)&&n>0&&n<=10000)p.onFunding({...p.funding,topUpTargetEur:n});}}/></label>
+              <p>Beide Automatiken schließen sich aus. Beispiel: 93 € Depot → 7 € Aufstockung auf 100 €.
+                Gemessen wird das gesamte Depot einschließlich offener Positionen nach der Tagesabrechnung.
+                Fester Forschungskurs: {p.funding.eurUsdt} USDT je €. Externe Einzahlungen zählen niemals als Handelsgewinn.</p>
             </details>
           </div>
         </div>
