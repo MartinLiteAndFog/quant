@@ -446,7 +446,7 @@ export async function executeHistoricalDay(session: HistoricalSession, archive: 
     const parents = plant.parents?.map((id) => genomes[id]!).filter(Boolean) ?? SOURCE_PARENT_GENOMES;
     genomes[plant.id] = inheritSourceGenome(plant.conceivedBy ?? "hive", parents.length ? parents : SOURCE_PARENT_GENOMES, world.seed, world.plants.indexOf(plant));
   }
-  const funded = applyEndOfDayFunding({ ...session, world });
+  const funded = applyEndOfDayFunding({ ...session, world, loop: { ...session.loop, capitalHalted } });
   world = funded.world;
   const history = [...session.history, { date: session.nextDate, nav: world.capital.navUsdt, fills: totalFills,
     close: Number(dataset.bars.at(-1)!.close), observedBars: dataset.bars.length, skippedBars, segments: groups.length }].slice(-300);
@@ -583,7 +583,7 @@ async function executeKrakenHistoricalDay(session: HistoricalSession, archive: S
     profiles[plant.id] = marketProfile(profiles[plant.id]!, archive.symbol);
     states[plant.id] = createKrakenPaperState(profiles[plant.id]!.id, plant.allocationUsdt);
   }
-  const funded = applyEndOfDayFunding({ ...session, world });
+  const funded = applyEndOfDayFunding({ ...session, world, loop: { ...session.loop, capitalHalted } });
   world = funded.world;
   const index = session.loop.archiveIndex + 1;
   const next: HistoricalSession = { ...session, ...(funded.funding ? { funding: funded.funding } : {}), world, genomes, krakenStates: states, krakenProfiles: profiles, records,
