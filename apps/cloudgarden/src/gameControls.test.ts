@@ -62,7 +62,8 @@ test("0% vitality malus preserves stressed vigor and evolution can be independen
   assert.throws(()=>setEcologyControls(base,{predatorsEnabled:false,vitalityMalus:-0.1}));
   assert.throws(()=>setEcologyControls(base,{predatorsEnabled:true,vitalityMalus:1.1}));
   const paused=setEcologyEvolution(setEcologyControls(base,GENTLE_ECOLOGY),false);
-  const week=Array.from({length:7}).reduce((world)=>advanceSimulationDay(world),paused);
+  let week=paused;
+  for(let i=0;i<7;i++) week=advanceSimulationDay(week);
   assert.equal(week.plants.length,3);
   assert.equal(week.capital.navUsdt,100);
   assertSimulationInvariants(week);
