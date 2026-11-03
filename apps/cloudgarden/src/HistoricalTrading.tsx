@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { setConceptionPolicy, setEcologyControls, setEcologyEvolution, GENTLE_ECOLOGY, type EcologyControls, type BeeMode, type GardenPlant, type SimulationWorld } from "./simulation";
 import { advanceHistoricalSession, createHistoricalSession, HISTORICAL_SAVE_KEY, loadSolArchive, validateHistoricalSession,
-  type HistoricalSession, type SolArchive } from "./historicalGarden";
+  configureHistoricalFunding, fundingSettings, type HistoricalSession, type SolArchive } from "./historicalGarden";
+import { DEFAULT_FUNDING_SETTINGS, type FundingSettings } from "./fundingPolicy";
 import "./historical.css";
 import { GameSurface } from "./GameSurface";
 import { loadHistoricalSnapshot, saveHistoricalSnapshot } from "./historicalStorage";
@@ -32,6 +33,7 @@ function HistoricalGarden({symbol,onSymbol,sharedPlaying,setSharedPlaying}:{symb
   const [started, setStarted] = useState(false);
   const [hasSnapshot, setHasSnapshot] = useState(false);
   const [ecologyControls, setControls] = useState<EcologyControls>(GENTLE_ECOLOGY);
+  const [funding, setFunding] = useState<FundingSettings>(DEFAULT_FUNDING_SETTINGS);
   const [evolutionEnabled, setEvolutionEnabled] = useState(true);
   const [speed, setSpeed] = useState(1);
   const [profileIds, setProfileIds] = useState<readonly string[]>(["kraken_legacy", "kraken_17_2_close", "kraken_17_2_reverse"]);
@@ -67,6 +69,7 @@ function HistoricalGarden({symbol,onSymbol,sharedPlaying,setSharedPlaying}:{symb
       }
       current.current = restored; setSession(restored); setArchive(a); setStartDate(restored.startDate);
       setHasSnapshot(recovered); setControls(restored.world.ecologyControls ?? GENTLE_ECOLOGY);
+      setFunding(fundingSettings(restored.funding));
       setEvolutionEnabled(!restored.world.evolutionPaused);
       if (restored.initialProfileIds) setProfileIds(restored.initialProfileIds);
     }).catch((e: unknown) => { if (!cancelled) setError(e instanceof Error ? e.message : "SOL history could not be loaded."); });
@@ -110,7 +113,8 @@ function HistoricalGarden({symbol,onSymbol,sharedPlaying,setSharedPlaying}:{symb
       && !window.confirm("Den bisherigen Spielstand ersetzen und bei Tag 0 neu beginnen?")) return;
     try {
       const observed = requireObservedDate(archive,startDate);
-      const fresh = createHistoricalSession(archive, observed, { profileIds });
+      const fresh = createHistoricalSession(archive, observed, { profileIds, fundingMode: funding.mode,
+        monthlyEur: funding.monthlyEur, topUpTargetEur: funding.topUpTargetEur, eurUsdt: funding.eurUsdt });
       const next = {...fresh, world:setEcologyEvolution(setEcologyControls(fresh.world,ecologyControls),evolutionEnabled)};
       saveEnabled.current = true; stop.current = true; setPlaying(false); setSelectedId("parent-01");
       current.current = next; setSession(next); setError(null); setHasSnapshot(true);
@@ -119,9 +123,16 @@ function HistoricalGarden({symbol,onSymbol,sharedPlaying,setSharedPlaying}:{symb
   };
   const continueGame = () => {
     if (!current.current || locked.current) return;
-    const next = {...current.current,world:setEcologyEvolution(setEcologyControls(current.current.world,ecologyControls),evolutionEnabled)};
+    const next = configureHistoricalFunding({...current.current,world:setEcologyEvolution(setEcologyControls(current.current.world,ecologyControls),evolutionEnabled)},funding);
     current.current = next;setSession(next);setError(null);
     setStarted(true);setMenuOpen(false);
+  };
+  const changeFunding = (value: FundingSettings) => {
+    setFunding(value);
+    if (started && current.current && !locked.current) {
+      const next = configureHistoricalFunding(current.current,value);
+      current.current=next;setSession(next);
+    }
   };
   const changeRules = (value: EcologyControls) => {
     setControls(value);
@@ -146,9 +157,9 @@ function HistoricalGarden({symbol,onSymbol,sharedPlaying,setSharedPlaying}:{symb
   if (!session || !archive) return <><GameMenu archive={null} symbol={symbol}
     onSymbol={onSymbol} startDate="" onStartDate={setStartDate}
     controls={ecologyControls} onControls={changeRules} evolutionEnabled={evolutionEnabled}
-    onEvolution={changeEvolution} hasProgress={false} canClose={false} busy={true}
+    onEvolution={changeEvolution} funding={funding} onFunding={changeFunding} hasProgress={false} canClose={false} busy={true}
     error={error} onNew={()=>{}} onContinue={()=>{}}/></>;
-  return <section aria-label={`${symbol} Garten`}><h2 className="cg-garden-title">{symbol} · eigener Garten</h2><p className="cg-garden-disclosure">Eigene Population und eigenes Kapital · 100 € Zufluss pro Monat und Garten. {symbol==="BTC-USDT"?"SOL-Strategievorlagen auf Bitcoin: unveränderte Parameter als expliziter Transferversuch, keine bestätigte Eignung.":"SOL-Strategievorlagen auf dem SOL-Archiv."}</p><GameSurface session={session} archive={archive} selectedId={selectedId} onSelect={setSelectedId}
+  return <section aria-label={`${symbol} Garten`}><h2 className="cg-garden-title">{symbol} · eigener Garten</h2><p className="cg-garden-disclosure">Eigene Population und eigenes Kapital · {funding.mode==="topup"?`Nach dem Handelstag auf ${funding.topUpTargetEur} € auffüllen` : funding.mode==="monthly"?`${funding.monthlyEur} € monatlicher Zuschuss`:"Keine automatischen Einzahlungen"}. {symbol==="BTC-USDT"?"SOL-Strategievorlagen auf Bitcoin: unveränderte Parameter als expliziter Transferversuch, keine bestätigte Eignung.":"SOL-Strategievorlagen auf dem SOL-Archiv."}</p><GameSurface session={session} archive={archive} selectedId={selectedId} onSelect={setSelectedId}
     playing={playing} busy={busy} error={error} saveStatus={saveStatus} startDate={startDate}
     onDate={setStartDate} onRestart={restart} onAdvance={(days)=>{void advance(days);}}
     onPlay={()=>{stop.current=playing;setPlaying(!playing);}}
@@ -158,7 +169,7 @@ function HistoricalGarden({symbol,onSymbol,sharedPlaying,setSharedPlaying}:{symb
     {menuOpen&&<GameMenu archive={archive} symbol={symbol} onSymbol={onSymbol}
       startDate={startDate} onStartDate={(date)=>{setError(null);setStartDate(date);}}
       controls={ecologyControls} onControls={changeRules}
-      evolutionEnabled={evolutionEnabled} onEvolution={changeEvolution}
+      evolutionEnabled={evolutionEnabled} onEvolution={changeEvolution} funding={funding} onFunding={changeFunding}
       hasProgress={hasSnapshot || started} canClose={hasSnapshot || started}
       busy={busy} error={error} onNew={restart} onContinue={continueGame}/>}
     </section>;
