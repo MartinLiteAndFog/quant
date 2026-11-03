@@ -451,7 +451,7 @@ export async function executeHistoricalDay(session: HistoricalSession, archive: 
   const history = [...session.history, { date: session.nextDate, nav: world.capital.navUsdt, fills: totalFills,
     close: Number(dataset.bars.at(-1)!.close), observedBars: dataset.bars.length, skippedBars, segments: groups.length }].slice(-300);
   const index = session.loop.archiveIndex + 1;
-  const next: HistoricalSession = { ...session, funding: funded.funding, nextDate: archive.days[index]?.date ?? nextUtcDate(session.nextDate), world, genomes, records, history,
+  const next: HistoricalSession = { ...session, ...(funded.funding ? { funding: funded.funding } : {}), nextDate: archive.days[index]?.date ?? nextUtcDate(session.nextDate), world, genomes, records, history,
     loop: { ...session.loop, archiveIndex: index, totalDays: session.loop.totalDays + 1, totalBars: session.loop.totalBars + dataset.bars.length,
       totalFills: session.loop.totalFills + totalFills,
       totalFees: rounded(session.loop.totalFees + world.capital.paperFeesUsdt - session.world.capital.paperFeesUsdt), capitalHalted: funded.loop.capitalHalted },
@@ -586,7 +586,7 @@ async function executeKrakenHistoricalDay(session: HistoricalSession, archive: S
   const funded = applyEndOfDayFunding({ ...session, world });
   world = funded.world;
   const index = session.loop.archiveIndex + 1;
-  const next: HistoricalSession = { ...session, funding: funded.funding, world, genomes, krakenStates: states, krakenProfiles: profiles, records,
+  const next: HistoricalSession = { ...session, ...(funded.funding ? { funding: funded.funding } : {}), world, genomes, krakenStates: states, krakenProfiles: profiles, records,
     nextDate: archive.days[index]?.date ?? nextUtcDate(session.nextDate),
     history: [...session.history, { date: session.nextDate, nav: world.capital.navUsdt, fills: totalFills, close: Number(dataset.bars.at(-1)!.close),
       observedBars: dataset.bars.length, skippedBars: 0, segments: dataset.report.gapCount + 1,
