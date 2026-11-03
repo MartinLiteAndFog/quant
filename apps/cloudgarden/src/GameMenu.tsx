@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { type EcologyControls, GENTLE_ECOLOGY } from "./simulation";
 import type { SolArchive } from "./historicalGarden";
 import { observedStartDate, type StartPreset } from "./gameStart";
@@ -32,6 +33,7 @@ const presets: readonly [StartPreset, string][] = [
 
 export function GameMenu(p: GameMenuProps) {
   const rules = p.controls ?? GENTLE_ECOLOGY;
+  const [rulesOpen, setRulesOpen] = useState(true);
   return <div className="cg-menu-backdrop">
     <section className="cg-menu" role="dialog" aria-modal="true" aria-labelledby="cg-menu-heading">
       <div className="cg-menu-head"><div className="cg-menu-logo">◌ <strong>CLOUDGARDEN</strong><small>STRATEGY ECOSYSTEM</small></div>
@@ -71,7 +73,7 @@ export function GameMenu(p: GameMenuProps) {
           </div>
           <div className="cg-menu-group">
             <h2>03 · Spielregeln</h2>
-            <details className="cg-menu-rules" defaultOpen>
+            <details className="cg-menu-rules" open={rulesOpen} onToggle={e=>setRulesOpen(e.currentTarget.open)}>
               <summary>Ökologie / Debug-Profil <span>ANPASSBAR</span></summary>
               <label className="cg-menu-rule"><span>Fressfeinde <small>Aus: keine pflanzenbedingte Archivierung durch Räuber</small></span>
                 <input type="checkbox" checked={rules.predatorsEnabled}
