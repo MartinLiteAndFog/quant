@@ -95,13 +95,13 @@ export function GameMenu(p: GameMenuProps) {
               <label className="cg-menu-rule"><span>Monatlicher Kapitalzuschuss <small>Standardmäßig aus. Nur bei Aktivierung jeden neuen Archivmonat einzahlen.</small></span>
                 <input type="checkbox" checked={p.funding.mode==="monthly"} onChange={e=>p.onFunding({...p.funding,mode:e.target.checked?"monthly":"off"})}/></label>
               <label className="cg-menu-rule"><span>Betrag pro Monat (€)</span>
-                <input className="cg-funding-number" type="number" min="1" max="10000" step="10"
+                <input className="cg-funding-number" type="number" min="1" max="10000" step="1"
                   disabled={p.funding.mode!=="monthly"} value={p.funding.monthlyEur}
                   onChange={e=>{const n=e.currentTarget.valueAsNumber;if(Number.isFinite(n)&&n>0&&n<=10000)p.onFunding({...p.funding,monthlyEur:n});}}/></label>
               <label className="cg-menu-rule"><span>Depot auf Zielwert auffüllen <small>Standardmäßig an. Nach jedem Handelstag nur die Differenz einzahlen, falls das Depot darunter liegt.</small></span>
                 <input type="checkbox" checked={p.funding.mode==="topup"} onChange={e=>p.onFunding({...p.funding,mode:e.target.checked?"topup":"off"})}/></label>
               <label className="cg-menu-rule"><span>Zielkapital (€)</span>
-                <input className="cg-funding-number" type="number" min="1" max="10000" step="10"
+                <input className="cg-funding-number" type="number" min="1" max="10000" step="1"
                   disabled={p.funding.mode!=="topup"} value={p.funding.topUpTargetEur}
                   onChange={e=>{const n=e.currentTarget.valueAsNumber;if(Number.isFinite(n)&&n>0&&n<=10000)p.onFunding({...p.funding,topUpTargetEur:n});}}/></label>
               <p>Beide Automatiken schließen sich aus. Beispiel: 93 € Depot → 7 € Aufstockung auf 100 €.
