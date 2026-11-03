@@ -37,6 +37,14 @@ export type PlantPhysiology = "awake" | "dormant";
 export type BeeMode = "random" | "local" | "hive" | "hybrid";
 export type ConceptionPolicy = BeeMode | "mixed";
 
+/** Research game rules. Optional on older saves to preserve their historic behavior. */
+export type EcologyControls = Readonly<{
+  predatorsEnabled: boolean;
+  /** Multiplier on negative daily vigor change only: 0 means no vitality penalty. */
+  vitalityMalus: number;
+}>;
+export const GENTLE_ECOLOGY: EcologyControls = Object.freeze({ predatorsEnabled: false, vitalityMalus: 0 });
+
 export type GardenPlant = Readonly<{
   id: string;
   name: string;
@@ -139,6 +147,7 @@ export type SimulationWorld = Readonly<{
   day: number;
   conceptionPolicy: ConceptionPolicy;
   evolutionPaused?: boolean;
+  ecologyControls?: EcologyControls;
   dynamicEcology?: Readonly<{ maxLivingPlants: number; birthCount: number }>;
   /** Frozen prior-day research ranking; no current-day returns enter conception selection. */
   breedingCandidates?: readonly string[];
@@ -228,6 +237,18 @@ export function createSimulationWorld(
 }
 
 /** Return an immutable world snapshot with a selected bee/seed conception policy. */
+export function setEcologyControls(world: SimulationWorld, ecologyControls: EcologyControls): SimulationWorld {
+  const next = { ...world, ecologyControls: { ...ecologyControls } };
+  assertSimulationInvariants(next);
+  return next;
+}
+
+export function setEcologyEvolution(world: SimulationWorld, enabled: boolean): SimulationWorld {
+  const next = { ...world, evolutionPaused: !enabled };
+  assertSimulationInvariants(next);
+  return next;
+}
+
 export function setConceptionPolicy(world: SimulationWorld, conceptionPolicy: ConceptionPolicy): SimulationWorld {
   const next = { ...world, conceptionPolicy };
   assertSimulationInvariants(next);
@@ -454,7 +475,7 @@ function shadeAt(plant: GardenPlant, plants: readonly GardenPlant[]): number {
 }
 
 /** Purely synthetic root, leaf, water, and sunlight response for one plant. */
-function growPlant(plant: GardenPlant, plants: readonly GardenPlant[], climate: GardenClimate): GardenPlant {
+function growPlant(plant: GardenPlant, plants: readonly GardenPlant[], climate: GardenClimate, ecologyControls?: EcologyControls): GardenPlant {
   if (plant.status === "archived") return plant;
   const entersDormancy = plant.physiology === "awake"
     && plant.vigor <= 55
@@ -490,14 +511,16 @@ function growPlant(plant: GardenPlant, plants: readonly GardenPlant[], climate: 
   const vigorDelta = physiology === "dormant"
     ? Math.max(-0.1, Math.min(0, potentialVigorDelta * 0.1))
     : potentialVigorDelta;
-  const evidenceDelta = physiology === "dormant" ? 0 : (netGrowth * 0.65 + vigorDelta * 0.25);
+  // Keeping positive physiology intact avoids turning the debug setting into a growth subsidy.
+  const controlledVigorDelta = vigorDelta < 0 ? vigorDelta * (ecologyControls?.vitalityMalus ?? 1) : vigorDelta;
+  const evidenceDelta = physiology === "dormant" ? 0 : (netGrowth * 0.65 + controlledVigorDelta * 0.25);
   return {
     ...plant,
     physiology,
     biomass: round1(clamp(plant.biomass + netGrowth, 5, 100)),
-    growthBreakdown: { rootAccess, leafCapture, waterResponse, sunResponse, rootLeafCost: rootLeafTradeoff, netGrowth, vigorDelta },
+    growthBreakdown: { rootAccess, leafCapture, waterResponse, sunResponse, rootLeafCost: rootLeafTradeoff, netGrowth, vigorDelta: controlledVigorDelta },
     fitness,
-    vigor: round1(clamp(plant.vigor + vigorDelta, 0, 100)),
+    vigor: round1(clamp(plant.vigor + controlledVigorDelta, 0, 100)),
     evidence: round1(clamp(plant.evidence + evidenceDelta, 0, 100)),
     evidenceDays: plant.evidenceDays + 1,
   };
@@ -688,7 +711,7 @@ export function advanceSimulationDay(world: SimulationWorld, observedClimate?: G
   const climate = observedClimate ?? climateForDay(world.seed, day);
   if (![climate.water, climate.sunlight].every((value) => Number.isFinite(value) && value >= 0 && value <= 1)
     || typeof climate.predatorPatrol !== "boolean") throw new RangeError("Observed climate must be finite and bounded.");
-  const plants = world.plants.map((plant) => growPlant(plant, world.plants, climate));
+  const plants = world.plants.map((plant) => growPlant(plant, world.plants, climate, world.ecologyControls));
   const physiologyEvents: GardenEvent[] = plants.flatMap((plant, index) => {
     const before = world.plants[index];
     if (!before || before.physiology === plant.physiology) return [];
@@ -743,7 +766,7 @@ export function advanceSimulationDay(world: SimulationWorld, observedClimate?: G
       };
     }
   }
-  next = applyPredation(next, day, protectedPlantIds);
+  if (world.ecologyControls?.predatorsEnabled !== false) next = applyPredation(next, day, protectedPlantIds);
   assertSimulationInvariants(next);
   return next;
 }
@@ -764,6 +787,9 @@ export function assertSimulationInvariants(world: SimulationWorld): void {
     || !["mixed", "random", "local", "hive", "hybrid"].includes(world.conceptionPolicy)
     || !world.climate || ![world.climate.water, world.climate.sunlight].every((value) => Number.isFinite(value) && value >= 0 && value <= 1)
     || typeof world.climate.predatorPatrol !== "boolean"
+    || (world.ecologyControls !== undefined && (typeof world.ecologyControls.predatorsEnabled !== "boolean"
+      || !Number.isFinite(world.ecologyControls.vitalityMalus)
+      || world.ecologyControls.vitalityMalus < 0 || world.ecologyControls.vitalityMalus > 1))
     || !Array.isArray(world.plants) || !Array.isArray(world.events)) {
     throw new Error("World clock, policy, climate, and collections must match the versioned simulation contract.");
   }

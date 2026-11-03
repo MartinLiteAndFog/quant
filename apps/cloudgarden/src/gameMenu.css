@@ -1,0 +1,57 @@
+.cg-single-garden{display:block;width:100%;min-width:0}
+/* Separate gameplay layer: never recolor or replace the actual 3D landscape.
+   Sparse, transparent information design follows the approved CloudGarden mood. */
+.cg-menu-backdrop{position:fixed;inset:0;z-index:1000;overflow:auto;display:flex;align-items:center;justify-content:center;padding:4vh 3vw;background:linear-gradient(145deg,rgba(7,26,34,.74),rgba(16,47,48,.48));backdrop-filter:blur(15px) saturate(.85);color:#e9faf4;font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+.cg-menu,.cg-menu *{box-sizing:border-box}
+.cg-menu{width:min(1180px,100%);background:linear-gradient(130deg,rgba(15,44,52,.91),rgba(13,45,46,.87) 75%,rgba(28,60,67,.88));box-shadow:0 26px 110px #061c28b3;min-height:400px}
+.cg-menu-head{display:flex;justify-content:space-between;align-items:center;gap:20px;padding:28px 38px 19px;border-bottom:1px solid #bce9df26}
+.cg-menu-logo{font-size:23px;letter-spacing:.25em;font-weight:300;display:flex;align-items:center;gap:13px;white-space:nowrap}
+.cg-menu-logo strong{font-weight:400;font-size:19px}
+.cg-menu-logo small{font-size:9px;opacity:.7;letter-spacing:.32em;margin-left:-4px}
+.cg-menu-status{font-size:10px;letter-spacing:.13em;color:#b6dfd4}
+.cg-menu-content{padding:30px 38px 36px}
+.cg-menu-intro>span,.cg-menu-group h2{font-size:10px;letter-spacing:.18em;color:#9ed8ce;font-weight:600}
+.cg-menu-intro h1{font-size:clamp(27px,3.3vw,47px);line-height:1.13;font-weight:300;letter-spacing:-.025em;margin:11px 0 10px;color:#f0fff9}
+.cg-menu-intro p{color:#bddad7;font-size:13px;line-height:1.55;margin:0;max-width:680px}
+.cg-menu-columns{display:grid;grid-template-columns:1.08fr 1fr 1.12fr;gap:30px;margin-top:39px}
+.cg-menu-group{min-width:0;border-top:1px solid #c6f5e342;padding-top:18px}
+.cg-menu-group h2{margin:0 0 16px;font-weight:600}
+.cg-menu button,.cg-menu input{font:inherit;color:#e4fff3;accent-color:#a3e7cf}
+.cg-menu button{background:transparent;border:0;cursor:pointer}
+.cg-menu button:disabled{opacity:.35;cursor:not-allowed}
+.cg-menu button:focus-visible,.cg-menu input:focus-visible,.cg-menu summary:focus-visible{outline:2px solid #a3eddf;outline-offset:3px}
+.cg-menu-options{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.cg-menu-options button{min-height:66px;border:1px solid #acd8ce43;text-align:left;padding:11px 13px;font-size:13px;letter-spacing:.075em}
+.cg-menu-options button[aria-pressed=true]{background:#77baaa29;border-color:#b3f5e2b8}
+.cg-menu-options small{font-size:10px;display:block;margin-top:7px;color:#a6d1c7}
+.cg-menu-source{margin:21px 0 0;font-size:11px}
+.cg-menu-source div{display:flex;gap:8px;justify-content:space-between;align-items:start;padding:8px 0;border-bottom:1px solid #bce9df1d}
+.cg-menu-source dt{color:#a6c9c7}.cg-menu-source dd{margin:0;text-align:right;max-width:64%;overflow-wrap:anywhere;color:#e4f5ec}
+.cg-menu-no-data{font-size:12px;color:#ffcfbe;line-height:1.6}
+.cg-menu-presets{display:grid;gap:5px}
+.cg-menu-presets button{min-height:34px;display:flex;align-items:center;text-align:left;padding:7px 9px;font-size:12px;border-bottom:1px solid #bce9df29}
+.cg-menu-presets button[aria-pressed=true]{color:#adffde;background:#9ddcca18}
+.cg-menu-date{display:block;color:#b9d9cf;font-size:11px;margin-top:19px}
+.cg-menu-date input{color-scheme:dark;background:#a8d1c317;border:1px solid #bce9df45;padding:9px 12px;display:block;width:100%;margin-top:8px;font-size:12px}
+.cg-menu-group>p,.cg-menu-rules p{font-size:11px;line-height:1.6;color:#acd2ca}
+.cg-menu-rules summary{font-size:12px;cursor:pointer;padding:5px 0 13px;display:flex;justify-content:space-between;gap:6px;color:#e7fff6}
+.cg-menu-rules summary span{font-size:9px;letter-spacing:.14em;color:#b6d8c9}
+.cg-menu-rule{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;padding:12px 0;border-bottom:1px solid #bce9df29;font-size:12px;cursor:pointer}
+.cg-menu-rule small{font-size:10px;display:block;line-height:1.45;color:#a6c7bf;margin-top:5px}
+.cg-menu-rule input[type=checkbox]{width:18px;height:18px}.cg-menu-rule input[type=range]{max-width:100px}
+.cg-menu-rule output{grid-column:2;text-align:right;color:#b4f1df;font-size:11px}
+.cg-menu-actions{display:flex;align-items:center;gap:24px;flex-wrap:wrap;margin-top:34px}
+.cg-menu .cg-menu-primary{background:#b9ead6;color:#123932;padding:15px 19px;min-width:225px;display:flex;align-items:center;justify-content:space-between;gap:20px;font-size:12px;font-weight:700;letter-spacing:.12em}
+.cg-menu .cg-menu-primary:hover{background:#e0ffef}
+.cg-menu .cg-menu-primary span{font-size:18px}
+.cg-menu .cg-menu-continue{padding:12px 0;color:#d1f2e3;text-decoration:underline;text-underline-offset:6px;font-size:12px}
+.cg-menu-error{color:#ffc4b0;margin-top:18px;font-size:13px}
+.cg-menu-caution{font-size:10px;color:#a9c7bb;margin:16px 0 0}
+.cg-menu-trigger{border:0!important;color:#235644!important;background:transparent!important;min-height:36px!important;text-decoration:underline;text-underline-offset:4px}
+@media(max-width:850px){.cg-menu{max-width:650px}.cg-menu-columns{grid-template-columns:1fr 1fr;gap:23px}.cg-menu-group:last-child{grid-column:1/-1}.cg-menu-head,.cg-menu-content{padding-left:23px;padding-right:23px}.cg-menu-status{display:none}}
+@media(max-width:560px){.cg-menu-backdrop{align-items:start;padding:0}.cg-menu{min-height:100dvh}.cg-menu-columns{grid-template-columns:1fr}.cg-menu-group:last-child{grid-column:auto}.cg-menu-head,.cg-menu-content{padding-left:18px;padding-right:18px}.cg-menu-logo{font-size:18px}.cg-menu-logo strong{font-size:16px}.cg-menu-logo small{display:none}}
+
+.cg-funding-rules{margin-top:18px;padding-top:12px;border-top:1px solid #c6f5e342}
+.cg-funding-rules .cg-menu-rule{grid-template-columns:minmax(0,1fr) auto}
+.cg-funding-number{max-width:96px!important;min-width:75px;background:#a8d1c317;border:1px solid #bce9df45;padding:7px 9px;color:#effff9!important;color-scheme:dark;font-size:12px!important;text-align:right}
+.cg-funding-number:disabled{opacity:.45}
