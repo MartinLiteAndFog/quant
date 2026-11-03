@@ -71,7 +71,7 @@ export function GameMenu(p: GameMenuProps) {
           </div>
           <div className="cg-menu-group">
             <h2>03 · Spielregeln</h2>
-            <details className="cg-menu-rules" open>
+            <details className="cg-menu-rules" defaultOpen>
               <summary>Ökologie / Debug-Profil <span>ANPASSBAR</span></summary>
               <label className="cg-menu-rule"><span>Fressfeinde <small>Aus: keine pflanzenbedingte Archivierung durch Räuber</small></span>
                 <input type="checkbox" checked={rules.predatorsEnabled}
