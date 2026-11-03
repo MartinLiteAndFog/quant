@@ -19,7 +19,7 @@ export type HistoricalGardenControls = {
 export function HistoricalTrading(_props: { renderGarden?: (controls: HistoricalGardenControls) => ReactNode }) {
   const [playing,setPlaying]=useState(false);
   const [symbol, setSymbol] = useState<"SOL-USDT" | "BTC-USDT">("SOL-USDT");
-  return <div className="cg-two-gardens"><HistoricalGarden key={symbol} symbol={symbol}
+  return <div className="cg-single-garden"><HistoricalGarden key={symbol} symbol={symbol}
     onSymbol={(value)=>{setPlaying(false);setSymbol(value);}}
     sharedPlaying={playing} setSharedPlaying={setPlaying}/></div>;
 }
@@ -106,6 +106,8 @@ function HistoricalGarden({symbol,onSymbol,sharedPlaying,setSharedPlaying}:{symb
 
   const restart = () => {
     if (!archive || locked.current) return;
+    if (started && current.current && current.current.world.day > 0
+      && !window.confirm("Den bisherigen Spielstand ersetzen und bei Tag 0 neu beginnen?")) return;
     try {
       const observed = requireObservedDate(archive,startDate);
       const fresh = createHistoricalSession(archive, observed, { profileIds });
