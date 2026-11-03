@@ -1,0 +1,2 @@
+using UnrealBuildTool;
+public class Cloudgarden : ModuleRules { public Cloudgarden(ReadOnlyTargetRules Target) : base(Target) { if (Target.Platform == UnrealTargetPlatform.Mac) PublicFrameworks.Add("AppKit"); PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs; PublicDependencyModuleNames.AddRange(new string[] {"Core","CoreUObject","Engine","InputCore","Json","JsonUtilities","Slate","SlateCore","ApplicationCore"}); } }

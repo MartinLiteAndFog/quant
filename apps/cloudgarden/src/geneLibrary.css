@@ -1,0 +1,65 @@
+.gene-library { width: min(1060px, calc(100vw - 40px)); max-height: calc(100dvh - 40px); padding: 0; border: 0; border-radius: 16px; color: #283f30; background: #f6f7ef; box-shadow: 0 24px 80px #223b3340; }
+.gene-library::backdrop { background: #243b325e; }
+.gene-library[open] { display: flex; flex-direction: column; animation: gene-library-enter 180ms cubic-bezier(.16,1,.3,1); }
+@keyframes gene-library-enter { from { opacity: .65; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+.gene-library :focus-visible { outline: 2px solid #476e4f; outline-offset: 3px; }
+.gene-library ::selection { color: #213d2b; background: #d7e5ca; }
+.gene-library input, .gene-library textarea { caret-color: #3e6343; }
+.gene-library-header { display: flex; align-items: start; justify-content: space-between; gap: 24px; padding: 26px 30px 22px; }
+.gene-library-header h2 { margin: 0; font: 500 30px/1.1 var(--serif); letter-spacing: -.02em; }
+.gene-library-header p { margin: 9px 0 0; color: #566a57; font-size: 13px; }
+.gene-library button { cursor: pointer; border: 1px solid #cbd6c4; border-radius: 9px; padding: 10px 13px; background: #edf1e6; color: #34503c; font-size: 12px; }
+.gene-library button:hover { background: #e1e9d9; }
+.gene-library button:disabled { cursor: not-allowed; opacity: .55; }
+.gene-library .gene-close { padding: 8px; border: 0; background: transparent; display: grid; place-items: center; }
+.gene-library .gene-primary { background: #48664b; color: #fffdf2; border-color: #48664b; }
+.gene-library .gene-primary:hover { background: #3e5940; }
+.gene-library-tabs { display: flex; gap: 5px; padding: 0 30px; border-bottom: 1px solid #d6dfcf; }
+.gene-library-tabs button { margin-bottom: -1px; padding: 12px 15px; border-radius: 8px 8px 0 0; background: transparent; border: 1px solid transparent; font-size: 13px; }
+.gene-library-tabs button[aria-current] { background: #edf1e6; border-color: #d6dfcf; border-bottom-color: #edf1e6; font-weight: 600; }
+.gene-library-tabs span { padding-left: 6px; color: #566a57; font-variant-numeric: tabular-nums; }
+.gene-library-content { padding: 23px 30px; overflow-y: auto; scrollbar-color: #b7c7ac #eef2e7; min-height: 160px; }
+.gene-library-search { margin-bottom: 22px; }
+.gene-library-search label { display: block; margin-bottom: 7px; font-size: 12px; font-weight: 600; }
+.gene-library input, .gene-library textarea { width: 100%; padding: 10px 12px; border: 1px solid #b9c8b0; border-radius: 8px; background: #fffef6; color: #2d4433; font: inherit; font-size: 13px; line-height: 1.55; }
+.gene-library input::placeholder, .gene-library textarea::placeholder { color: #657961; opacity: 1; }
+.gene-library input[type=search] { max-width: 420px; }
+.gene-library-browser { display: grid; grid-template-columns: 260px minmax(0,1fr); gap: 28px; align-items: start; }
+.gene-module-list { display: flex; flex-direction: column; gap: 3px; }
+.gene-module-list button { text-align: left; background: transparent; border: 0; padding: 12px; }
+.gene-module-list button[aria-pressed=true] { background: #e4ecdb; }
+.gene-module-list span { display: block; color: #566d52; font-size: 11px; margin-bottom: 5px; }
+.gene-module-list strong { display: block; font-weight: 600; font-size: 13px; line-height: 1.4; }
+.gene-module-detail h3, .gene-editor h3, .gene-empty h3 { margin: 0 0 13px; font: 500 23px/1.25 var(--serif); }
+.gene-module-detail > p { color: #4f654f; font-size: 13px; line-height: 1.65; max-width: 68ch; }
+.gene-module-detail h4 { font-size: 12px; margin: 25px 0 10px; }
+.gene-parameters { margin: 20px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 0 22px; font-size: 12px; }
+.gene-parameters > div { display: flex; justify-content: space-between; gap: 12px; padding: 9px 0; border-bottom: 1px solid #dde4d5; min-width: 0; }
+.gene-parameters dt { overflow-wrap: anywhere; color: #50654e; }
+.gene-parameters dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; text-align: right; }
+.gene-module-detail pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 16px; margin: 0; border-radius: 10px; background: #e9eee2; font: 11px/1.75 var(--mono); }
+.gene-module-detail .gene-source { font-size: 11px; overflow-wrap: anywhere; }
+.gene-module-detail .gene-license, .gene-caveat { color: #576d50; font-size: 11px; line-height: 1.6; }
+.gene-module-detail > button { margin-top: 12px; }
+.gene-saved-list { display: flex; flex-direction: column; }
+.gene-saved-list > button { display: flex; align-items: start; justify-content: space-between; gap: 20px; text-align: left; padding: 16px 0; border: 0; border-bottom: 1px solid #d8e0d0; background: transparent; border-radius: 0; }
+.gene-saved-list strong { font-size: 14px; }
+.gene-saved-list p { margin: 7px 0 0; color: #52694e; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.gene-saved-list time { color: #5b7056; font-size: 11px; white-space: nowrap; }
+.gene-empty { padding: 24px 0 35px; max-width: 65ch; }
+.gene-empty p { line-height: 1.65; font-size: 14px; color: #52694e; }
+.gene-empty button { margin-top: 12px; }
+.gene-editor-heading { display: flex; align-items: baseline; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.gene-editor-heading span { color: #5c7257; font-size: 11px; }
+.gene-editor > label, .gene-field-pair > label { display: flex; flex-direction: column; gap: 7px; font-size: 12px; font-weight: 600; min-width: 0; }
+.gene-field-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin: 16px 0; }
+.gene-library textarea { resize: vertical; min-height: 80px; font-weight: 400; }
+.gene-library .gene-code-field { font: 11px/1.7 var(--mono); }
+.gene-editor-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 18px; }
+.gene-error { color: #8b3b2d; font-size: 12px; line-height: 1.6; background: #f4e7da; padding: 12px 14px; border-radius: 9px; }
+.gene-message { margin: 14px 0 0; color: #365c3e; min-height: 18px; font-size: 12px; line-height: 1.5; }
+.gene-library-footer { border-top: 1px solid #d6dfcf; padding: 16px 30px; background: #eef2e7; display: flex; gap: 15px; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+.gene-library-footer p { margin: 0; font-size: 11px; color: #536c4c; }
+.gene-library-footer > div { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 720px) { .gene-library { width: calc(100vw - 16px); max-height: calc(100dvh - 16px); border-radius: 12px; }.gene-library-header { padding: 22px 18px 18px; }.gene-library-header h2 { font-size: 27px; }.gene-library-tabs { padding: 0 8px; }.gene-library-tabs button { padding: 11px 8px; font-size: 11px; }.gene-library-content { padding: 18px; }.gene-library-browser { grid-template-columns: minmax(0,1fr); gap: 25px; }.gene-module-list { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }.gene-module-list strong { font-size: 12px; }.gene-field-pair { grid-template-columns: 1fr; gap: 15px; }.gene-library-footer { padding: 15px 18px; }.gene-library-footer > div { width: 100%; }.gene-library-footer button { flex: 1 1 auto; }.gene-parameters { gap: 0 13px; font-size: 11px; } }
+@media (prefers-reduced-motion: reduce) { .gene-library[open] { animation: none; } }
