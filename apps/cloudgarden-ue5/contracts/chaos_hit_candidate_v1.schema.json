@@ -1,0 +1,158 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Cloudgarden UE5 Chaos hit candidate v1 — UNTRUSTED observation; NOT a committed simulation event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "kind",
+    "authority",
+    "releaseEventId",
+    "seedId",
+    "plantId",
+    "sceneRef",
+    "engine",
+    "hit"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "kind": {
+      "const": "cloudgarden_chaos_observation_candidate"
+    },
+    "authority": {
+      "const": "untrusted_ue_observation_only"
+    },
+    "releaseEventId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "seedId": {
+      "type": "string",
+      "pattern": "^seed-[1-9][0-9]*$"
+    },
+    "plantId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "sceneRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "seed",
+        "dayIndex",
+        "terrainRevision"
+      ],
+      "properties": {
+        "seed": {
+          "type": "string"
+        },
+        "dayIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "terrainRevision": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "engine": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "platform",
+        "physicsSettingsHash",
+        "collisionGeometryHash",
+        "timeStepSeconds",
+        "seedU32",
+        "runId"
+      ],
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "platform": {
+          "type": "string",
+          "minLength": 1
+        },
+        "physicsSettingsHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "collisionGeometryHash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "timeStepSeconds": {
+          "type": "number",
+          "exclusiveMinimum": 0,
+          "maximum": 0.1
+        },
+        "seedU32": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        },
+        "runId": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "hit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "pointCm",
+        "normal",
+        "velocityCmps",
+        "collisionActorId",
+        "physicalMaterialId",
+        "physicsTick",
+        "terminalLanding"
+      ],
+      "properties": {
+        "pointCm": {
+          "$ref": "#/$defs/vector3"
+        },
+        "normal": {
+          "$ref": "#/$defs/vector3"
+        },
+        "velocityCmps": {
+          "$ref": "#/$defs/vector3"
+        },
+        "collisionActorId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "physicalMaterialId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "physicsTick": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "terminalLanding": {
+          "const": true
+        }
+      }
+    }
+  },
+  "$defs": {
+    "vector3": {
+      "type": "array",
+      "items": {
+        "type": "number"
+      },
+      "minItems": 3,
+      "maxItems": 3
+    }
+  }
+}

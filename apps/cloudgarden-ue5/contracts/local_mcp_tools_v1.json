@@ -1,0 +1,215 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_ue5_local_mcp_tool_manifest",
+  "state": "proposal_not_installed",
+  "boundHost": "127.0.0.1",
+  "onlyInUnrealEditor": true,
+  "allowedAssetPrefix": "/Game/Cloudgarden",
+  "allowExternalNetwork": false,
+  "sourceProject": "apps/cloudgarden-ue5",
+  "recordOperations": true,
+  "warnings": [
+    "Remote Control API Beta; Python Editor scripting experimental/editor-only",
+    "Actual MCP transport/tool binding must be built and approved locally",
+    "Never expose arbitrary script/console execution via MCP",
+    "No order/account/market/ledger tools are exposed",
+    "All eligible tiles may independently drop seeds in RESEARCH; Unreal may not authorize canonical births or live money.",
+    "Seed journal SHA256 chain detects changes against trusted plan but cannot authenticate a UE client or authorize a real event.",
+    "A one-file bootstrap bundle exists for synthetic scene preview; its digest is NOT a signature and does not grant authority.",
+    "HUD financial metrics and Top 5 require verified unique canonical-plant ledger data; synthetic demo finance must never be treated as real."
+  ],
+  "tools": [
+    {
+      "name": "ue5.project_info",
+      "action": "read_engine_version_plugins_project_path",
+      "sideEffects": "none",
+      "args": [],
+      "result": "engineVersion,projectPath,pluginVersions"
+    },
+    {
+      "name": "ue5.list_cloudgarden_assets",
+      "action": "list_assets_under_allowlist",
+      "sideEffects": "none",
+      "args": [
+        "pathPrefix"
+      ],
+      "result": "assetPaths"
+    },
+    {
+      "name": "ue5.preview_gene_binding",
+      "action": "validate_registry_and_map_numeric_properties",
+      "sideEffects": "none",
+      "args": [
+        "snapshotJson",
+        "registryJson"
+      ],
+      "result": "validatedDryRunAssignments"
+    },
+    {
+      "name": "ue5.apply_gene_binding",
+      "action": "apply_approved_typed_property_assignments",
+      "sideEffects": "editor_assets_only_explicit_approval",
+      "args": [
+        "approvedDigest",
+        "allowlistedAssetIds",
+        "previewId"
+      ],
+      "result": "appliedDiff"
+    },
+    {
+      "name": "ue5.spawn_seed_preview",
+      "action": "create_synthetic_test_release_in_editor",
+      "sideEffects": "temporary_editor_scene_only",
+      "args": [
+        "tileId",
+        "experimentId",
+        "releaseEventId",
+        "releaseJson",
+        "sceneRevision"
+      ],
+      "result": "seedActorIds"
+    },
+    {
+      "name": "ue5.run_seed_preview",
+      "action": "run_chaos_preview_and_capture_terminal_contacts",
+      "sideEffects": "temporary_editor_scene_only",
+      "args": [
+        "tileId",
+        "experimentId",
+        "releaseEventId",
+        "physicsConfigDigest"
+      ],
+      "result": "untrustedChaosCandidates"
+    },
+    {
+      "name": "ue5.export_observation_candidates",
+      "action": "export_schema_checked_untrusted_receipts",
+      "sideEffects": "restricted_local_output_file",
+      "args": [
+        "runId",
+        "outputRelativePath"
+      ],
+      "result": "receiptFileDigest"
+    },
+    {
+      "name": "ue5.camera_scene_preview",
+      "action": "switch_atlas_explore_underworld_without_world_reload",
+      "sideEffects": "camera_view_only",
+      "args": [
+        "mode",
+        "layer",
+        "focusPlantId"
+      ],
+      "result": "cameraState"
+    },
+    {
+      "name": "ue5.run_smoke_checks",
+      "action": "run_non_trading_editor_tests",
+      "sideEffects": "none",
+      "args": [
+        "sceneId",
+        "testPreset"
+      ],
+      "result": "testRunMetadata"
+    },
+    {
+      "name": "ue5.preview_tile_experiments",
+      "action": "validate_and_plan_independent_tile_seed_research_and_virtual_paper_modes",
+      "sideEffects": "none",
+      "args": [
+        "tileCatalogJson",
+        "tileActivationJson",
+        "seedProfilesJson",
+        "sceneRevision"
+      ],
+      "result": "tileScopedPlan"
+    },
+    {
+      "name": "ue5.request_tile_capital_mode",
+      "action": "send_non_executable_mode_change_request_to_trusted_research_backend",
+      "sideEffects": "requires_explicit_backend_review_not_an_order",
+      "args": [
+        "tileId",
+        "newMode",
+        "requestedPaperBudget",
+        "sourceRevision"
+      ],
+      "result": "pending_or_rejected_no_venue_order"
+    },
+    {
+      "name": "ue5.preview_tile_mode_transition",
+      "action": "preview_cas_guarded_capital_mode_and_evolution_setting_without_approval",
+      "sideEffects": "none",
+      "args": [
+        "tileId",
+        "capitalMode",
+        "paperBudget",
+        "paperFeed",
+        "evolutionEnabled",
+        "expectedActivationDigest"
+      ],
+      "result": "unappliedModeChangeRequest"
+    },
+    {
+      "name": "ue5.validate_tile_research_journal",
+      "action": "check_hash_chain_vs_approved_reference_plan_no_ecology_commit",
+      "sideEffects": "none",
+      "args": [
+        "journalJson",
+        "independentlyTrustedPlanDigest"
+      ],
+      "result": "syntheticReplayProofOrError"
+    },
+    {
+      "name": "ue5.validate_synthetic_bootstrap",
+      "action": "validate_readonly_scene_tile_seed_camera_and_mode_contract_from_known_local_source",
+      "sideEffects": "none",
+      "args": [
+        "bootstrapJson",
+        "expectedSourceDigests"
+      ],
+      "result": "validationAndDiff"
+    },
+    {
+      "name": "ue5.import_synthetic_preview_assets",
+      "action": "create_editor_preview_only_data_assets_with_explicit_approved_digest",
+      "sideEffects": "editor_assets_only_explicit_approval",
+      "args": [
+        "validatedBootstrapDigest",
+        "allowedAssetPrefix",
+        "approvedPreviewId"
+      ],
+      "result": "previewAssetDiff"
+    },
+    {
+      "name": "ue5.hud_preview",
+      "action": "inspect_validated_readonly_hud_snapshot_and_blueprint_model",
+      "sideEffects": "none",
+      "args": [
+        "hudSnapshotJson",
+        "expectedBootstrapDigest"
+      ],
+      "result": "hudFieldsAndUnavailableEvidence"
+    },
+    {
+      "name": "ue5.hud_set_rank_tab",
+      "action": "switch_top_5_winners_or_losers_without_financial_side_effects",
+      "sideEffects": "umg_display_only",
+      "args": [
+        "rankingTab"
+      ],
+      "result": "visibleCanonicalPlantRows"
+    },
+    {
+      "name": "ue5.hud_set_view_density",
+      "action": "apply_atlas_or_explore_hud_layout_profile",
+      "sideEffects": "umg_display_only",
+      "args": [
+        "viewMode",
+        "selectedPlantId",
+        "selectedTileId"
+      ],
+      "result": "hudLayoutState"
+    }
+  ]
+}

@@ -1,0 +1,480 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cloudgarden · UE5 HUD Konzept</title>
+<style>
+  :root{color-scheme:dark;--bg:#08120f;--panel:rgba(8,26,22,.90);--panel2:rgba(12,33,29,.84);--line:#345147;--fg:#e2efdd;--muted:#93b1a2;--green:#a6ef94;--red:#f0a59d;--gold:#e1d094;--cyan:#8dcbdb}
+  *{box-sizing:border-box}
+  body{margin:0;background:radial-gradient(ellipse at 60% 28%,#235046 0%,#112822 38%,#071511 85%);font-family:Inter,system-ui,-apple-system,Segoe UI,sans-serif;color:var(--fg);min-height:100vh;overflow-x:hidden}
+  button{font:inherit;color:inherit;cursor:pointer}
+  .shell{position:relative;min-height:100vh;max-width:1800px;margin:auto}
+  .top{min-height:66px;display:flex;gap:20px;align-items:center;padding:12px 25px;background:rgba(4,15,13,.91);border-bottom:1px solid #476658;flex-wrap:wrap}
+  .brand{font-weight:800;font-size:16px;letter-spacing:.15em;color:#d0f0d3}
+  .brand small{font-size:10px;letter-spacing:.22em;color:#a4b7a0;display:block;margin-top:3px}
+  .pill{font-size:11px;padding:6px 10px;display:inline-flex;align-items:center;border:1px solid #6d6954;border-radius:5px;color:var(--gold);background:rgba(52,46,25,.48);letter-spacing:.08em}
+  .view-controls{display:flex;gap:2px;padding:3px;border:1px solid var(--line);border-radius:7px;margin-left:auto;background:#142a24}
+  .view-controls button,.seg button{background:transparent;border:0;border-radius:4px;padding:8px 13px;font-size:12px;font-weight:700}
+  button[aria-pressed="true"]{background:#36614b;color:#fff}
+  .top-meta{font-size:12px;color:var(--muted);white-space:nowrap}
+  .dash{display:grid;grid-template-columns:minmax(290px,320px) minmax(400px,1fr) minmax(300px,335px);gap:18px;padding:20px 22px 100px;min-height:calc(100vh - 66px);align-items:start}
+  .panel{border:1px solid rgba(130,171,144,.36);border-radius:10px;background:var(--panel);box-shadow:0 16px 60px rgba(0,0,0,.25);backdrop-filter:blur(14px);overflow:hidden}
+  .pad{padding:17px 18px}
+  .label{font-size:10px;text-transform:uppercase;letter-spacing:.16em;color:var(--muted);font-weight:800}
+  .bigval{font-size:clamp(27px,3vw,42px);font-weight:750;letter-spacing:-.04em;margin:5px 0}
+  .source-note{font-size:10px;color:var(--muted);line-height:1.5}
+  .profit{color:var(--green)}.loss{color:var(--red)}.warning{color:var(--gold)}
+  .micro{font-size:11px;color:var(--muted)}
+  .kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px}
+  .kpi{background:rgba(255,255,255,.035);border:1px solid rgba(142,185,159,.18);border-radius:7px;padding:10px}
+  .kpi b{display:block;margin-top:6px;font-size:18px;font-variant-numeric:tabular-nums}
+  .sep{height:1px;background:var(--line);opacity:.75}
+  .metric-row{display:flex;justify-content:space-between;gap:8px;padding:10px 0;font-size:12px}
+  .metric-row strong{font-variant-numeric:tabular-nums}
+  #sparkline{width:100%;height:77px;margin-top:7px;opacity:.85}
+  .viewport{height:clamp(460px,62vh,700px);position:relative;overflow:hidden;border:1px solid #416a55;border-radius:11px;background:
+    radial-gradient(ellipse at 65% 42%,rgba(109,173,90,.24),transparent 34%),
+    linear-gradient(135deg,#203f35 0%,#122d23 52%,#0e1c1b 100%);box-shadow:inset 0 0 120px #020c0966}
+  .viewport:before{content:"";position:absolute;inset:-40%;opacity:.15;transform:perspective(450px) rotateX(61deg) rotateZ(-14deg);background-image:linear-gradient(#90b99a 1px,transparent 1px),linear-gradient(90deg,#90b99a 1px,transparent 1px);background-size:66px 66px;pointer-events:none}
+  .viewport-top{position:absolute;top:17px;left:17px;right:17px;display:flex;justify-content:space-between;gap:8px;align-items:start;z-index:2}
+  .viewer-label{font-size:11px;color:#cee9d7;background:#0a211bba;border:1px solid #50715e;border-radius:5px;padding:7px 11px}
+  .tile-grid{position:absolute;inset:75px 24px 75px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));grid-template-rows:repeat(2,minmax(0,1fr));gap:15px;transform:perspective(800px) rotateX(13deg)}
+  .tile{border:1px solid #649179a8;position:relative;padding:12px;border-radius:8px;background:radial-gradient(circle at 30% 40%,#406e4355,#1a3b2d60 68%);text-align:left;transition:.2s;overflow:hidden}
+  .tile:hover,.tile[aria-selected="true"]{border-color:var(--green);box-shadow:0 0 0 1px #b6ef9a66,0 0 28px #b6ef9a28;background-color:#40604b30}
+  .tile .tile-name{font-size:12px;font-weight:700;display:block;position:relative;z-index:1;max-width:90%}
+  .tile .tile-status{font-size:10px;color:#b4cdb9;display:block;margin-top:5px;position:relative;z-index:1}
+  .tile .bud{position:absolute;top:49%;left:47%;font-size:30px;opacity:.55;filter:drop-shadow(0 2px 3px #000)}
+  .tile .count{position:absolute;right:8px;bottom:8px;padding:3px 6px;background:#0a1d16;border-radius:4px;color:#b3dfbf;font-size:11px}
+  .viewport-bottom{position:absolute;bottom:14px;left:17px;right:17px;display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:11px;color:#b5d4c2;z-index:2}
+  .viewport-bottom span{background:#081a17bd;padding:7px 10px;border:1px solid #4e745d;border-radius:5px}
+  .section-header{padding:15px 17px 10px;display:flex;justify-content:space-between;align-items:center;gap:12px}
+  .section-header h2{margin:0;font-size:14px;letter-spacing:.035em}
+  .seg{display:flex;gap:2px;background:#081711;border:1px solid var(--line);padding:3px;border-radius:6px}
+  .seg button{font-size:11px;padding:6px 9px}
+  .rank{padding:8px 16px 14px;min-height:210px}
+  .rank-row{border:1px solid #3d5549;background:#1a2e26a0;padding:10px 11px;margin-bottom:8px;border-radius:7px}
+  .rank-head{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:13px}
+  .rank-head b{font-size:13px}
+  .rank-sub{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);margin-top:5px}
+  .empty{display:flex;align-items:center;justify-content:center;text-align:center;color:var(--muted);font-size:13px;min-height:120px;line-height:1.6}
+  .tile-control{padding:10px 15px 15px}
+  .control-row{display:grid;grid-template-columns:1fr auto;gap:7px;padding:9px 0;border-top:1px solid #36534875}
+  .control-row b{font-size:12px}
+  .control-row small{font-size:11px;color:var(--muted);display:block;margin-top:4px}
+  .small-button{border:1px solid #567a62;background:#1c392f;border-radius:5px;padding:6px 8px;font-size:11px;color:#c6e6d1}
+  .footerbar{position:fixed;z-index:5;bottom:0;left:0;right:0;background:#061310f5;border-top:1px solid #53745d;min-height:62px;padding:10px max(22px,calc((100vw - 1780px)/2));display:flex;gap:25px;align-items:center;flex-wrap:wrap;backdrop-filter:blur(9px)}
+  .statfoot{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+  .statfoot b{display:block;color:var(--fg);font-size:16px;letter-spacing:normal;margin-top:3px}
+  .toast{position:fixed;right:20px;bottom:77px;max-width:330px;padding:12px 16px;border-radius:8px;background:#172f26;border:1px solid var(--gold);color:#e5ddb0;font-size:12px;z-index:7;opacity:0;pointer-events:none;transition:.2s}
+  .toast.visible{opacity:1}
+  .explore .tile-grid{transform:perspective(700px) rotateX(42deg) scale(1.2);inset:160px 55px 50px;filter:blur(1px)}
+  .explore .viewport{background:radial-gradient(ellipse at 52% 73%,#416445 0%,#17372b 30%,#0c1e1b 83%)}
+  .explore .secondary-details{display:none}
+  .hint{font-size:10px;color:var(--muted);line-height:1.55}
+  @media(max-width:1150px){.dash{grid-template-columns:280px 1fr}.rightcol{grid-column:1 / -1;display:grid;grid-template-columns:1fr 1fr;gap:18px}.viewport{height:610px}}
+  @media(max-width:750px){.top{padding:12px;gap:10px}.view-controls{margin-left:0}.dash{display:flex;flex-direction:column;padding:12px 12px 100px}.dash>*,.rightcol{width:100%}.rightcol{display:block}.rightcol>.panel{margin-bottom:14px}.viewport{height:390px}.tile-grid{inset:65px 14px 60px;gap:8px}.tile{padding:8px}.tile .tile-name{font-size:10px}.tile .tile-status{font-size:9px}.footerbar{padding:10px;gap:14px}.statfoot{font-size:9px}.statfoot b{font-size:13px}}
+  :focus-visible{outline:2px solid var(--green);outline-offset:3px}
+
+  /* User-selected direction: ONE physical garden; four logical tile labels only. */
+  .viewport{background:linear-gradient(180deg,#6582809f 0%,#44675b9e 40%,#23493e 68%,#10251d 100%);isolation:isolate}
+  .viewport:before{opacity:0;background:none}
+  .garden-scene{position:absolute;inset:0;overflow:hidden;transition:transform .7s cubic-bezier(.18,.7,.24,1);transform-origin:50% 64%;background:
+    radial-gradient(ellipse at 63% 39%,#c4c9ac8a 0%,transparent 22%),
+    radial-gradient(ellipse at 41% 79%,#42795b 0%,transparent 45%),
+    linear-gradient(180deg,#8fae9f 0%,#6e958b 25%,#376a53 52%,#163626 100%)}
+  .garden-scene:before{content:"";position:absolute;inset:8% -10% 20%;background:radial-gradient(ellipse at 68% 74%,#1f4336 0%,transparent 43%),radial-gradient(ellipse at 24% 79%,#284e3b 0%,transparent 47%);filter:blur(10px);opacity:.95}
+  .garden-scene:after{content:"";position:absolute;bottom:-2%;left:-10%;width:120%;height:43%;opacity:.65;background:repeating-linear-gradient(110deg,transparent 0 16px,#9abf6c2a 18px 20px,transparent 22px 36px),linear-gradient(180deg,transparent,#152a1c)}
+  .garden-scene.is-focused{transform:scale(1.1) translateY(2%)}
+  .garden-plant{position:absolute;z-index:2;bottom:var(--plant-bottom);left:var(--plant-left);width:110px;height:170px;background:transparent;border:0;transform:translateX(-50%);transition:transform .4s,filter .4s}
+  .garden-plant:focus-visible,.garden-plant:hover{outline:0;filter:drop-shadow(0 0 18px #a5e7d8)}
+  .garden-plant.is-selected{transform:translateX(-50%) scale(1.17);filter:drop-shadow(0 0 18px #b5e5cf99)}
+  .garden-plant svg{width:100%;height:100%;overflow:visible;filter:drop-shadow(0 8px 4px #0a2e1b)}
+  .garden-plant .plant-tag{position:absolute;bottom:-20px;left:50%;transform:translateX(-50%);white-space:nowrap;font-size:11px;background:#102b22ad;color:#dcf7dc;padding:5px 10px;border-radius:13px;border:1px solid #a7dcc850}
+  .garden-plant.is-selected .plant-tag{color:#ddffea;border-color:#9fe4c7;background:#173a2fbb}
+  .tile-grid{display:flex;position:absolute;inset:auto 10px 52px;transform:none;gap:5px;z-index:4;flex-wrap:wrap;pointer-events:none}
+  .tile-grid .tile{pointer-events:auto;flex:0 1 auto;min-width:0;padding:5px 8px;border:none;border-bottom:1px solid #d2f6df2d;background:#102b2270;box-shadow:none;border-radius:3px}
+  .tile-grid .tile[aria-selected="true"]{box-shadow:none;border-color:#b9f0ca;color:#c8fad6}
+  .tile-grid .tile .tile-name{font-size:10px}
+  .tile-grid .tile .tile-status,.tile-grid .tile .bud,.tile-grid .tile .count{display:none}
+  .focus-inspector{position:fixed;z-index:8;bottom:68px;left:24px;right:24px;min-height:235px;display:grid;grid-template-columns:180px 240px minmax(180px,1fr) 220px;gap:15px;padding:17px 23px 19px;background:linear-gradient(125deg,#102a23e8,#15372edb 53%,#18372eb3);border-top:1px solid #aed5bf66;border-bottom:1px solid #aed5bf45;border-radius:14px;box-shadow:0 -17px 80px #061b1266;backdrop-filter:blur(19px);transition:opacity .2s,transform .24s}
+  .focus-inspector[hidden]{display:none!important}
+  .focus-inspector .miniature{height:185px;position:relative;border-radius:9px;overflow:hidden;background:radial-gradient(ellipse at 50% 85%,#5b936955,transparent 56%)}
+  .focus-inspector .miniature svg{height:170px;width:150px;display:block;margin:auto}
+  .focus-inspector .small-data{font-size:12px;line-height:1.7;color:#cce5d5}
+  .focus-inspector .small-data .big-id{font-size:20px;color:#edffed;letter-spacing:.05em}
+  .focus-inspector .small-data .kv{display:flex;justify-content:space-between;gap:10px;border-bottom:1px solid #ffffff1a;padding:2px 0}
+  .focus-inspector .small-data strong{font-variant-numeric:tabular-nums}
+  .focus-inspector .focus-chart-wrap{display:flex;flex-direction:column;gap:8px;padding:6px 12px 0;border-left:1px solid #ffffff29;border-right:1px solid #ffffff29}
+  .focus-inspector .focus-chart-wrap svg{width:100%;height:125px}
+  .focus-inspector .focus-chart-title{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#c4e7d2;font-weight:750}
+  .focus-inspector .gene-list{display:grid;grid-template-columns:1fr auto;row-gap:12px;gap:12px 8px;padding-top:11px;font-size:11px}
+  .focus-inspector .gene-list b{font-size:11px;font-variant-numeric:tabular-nums;text-align:right;color:#daf0dc}
+  .focus-dismiss{position:absolute;right:9px;top:8px;background:#173c2c;border:none;border-radius:3px;padding:4px 9px;font-size:13px}
+  .focus-inspector .source-note{margin-top:7px;color:#a2c1af}
+  .focus-inspector .mini-caption{font-size:9px;text-align:center;color:#b4cabd}
+  .focus-inspector .inspector-badge{font-size:10px;color:#afe8c5;margin-bottom:8px}
+  .world-click-note{position:absolute;top:76px;left:12px;color:#d0e3d1bb;font-size:11px;z-index:3;text-shadow:0 1px 9px #001c15}
+  @media(max-width:1150px){.focus-inspector{grid-template-columns:150px 170px minmax(130px,1fr);gap:11px}.focus-inspector .focus-genomes{display:none}.focus-inspector .miniature{height:165px}}
+  @media(max-width:750px){.focus-inspector{left:8px;right:8px;bottom:72px;grid-template-columns:105px minmax(90px,1fr);padding:10px;max-height:55vh;overflow:auto}.focus-inspector .focus-chart-wrap{grid-column:1/-1;border:none}.focus-inspector .miniature{height:145px}.focus-inspector .miniature svg{height:125px;width:100px}.focus-inspector .small-data .big-id{font-size:14px}.focus-inspector .focus-genomes{display:none}.tile-grid{display:none}.garden-plant{width:90px;height:140px}}
+
+</style>
+</head>
+<body>
+<div class="shell" id="shell">
+  <header class="top">
+    <div class="brand">✳ CLOUDGARDEN <small>STRATEGY ECOSYSTEM / HUD STUDY</small></div>
+    <span class="pill" id="source-banner">DEMO · KEIN LIVE-HANDEL</span>
+    <div class="view-controls" role="group" aria-label="Kameraansicht">
+      <button id="atlas" aria-pressed="true">⌖ Atlas</button>
+      <button id="explore" aria-pressed="false">◉ Explore</button>
+    </div>
+    <div class="top-meta" id="clock">TAG — · SOL · PROJEKTION</div>
+  </header>
+  <main class="dash">
+    <section class="leftcol">
+      <article class="panel">
+        <div class="pad">
+          <div class="label">Gesamtbiomasse · Portfolio-NAV</div>
+          <div class="bigval" id="nav">—</div>
+          <div class="micro" id="finance-state">Keine geprüften Finanzdaten</div>
+          <svg id="sparkline" viewBox="0 0 270 77" preserveAspectRatio="none" role="img" aria-label="Portfolio-NAV Verlauf"><path id="sparkline-path" d="" stroke="#b6e99d" stroke-width="2" fill="none"/><path d="M 0 66 L 270 66" stroke="#6b9982" opacity=".4" fill="none"/></svg>
+          <div class="kpis">
+            <div class="kpi"><div class="label">Wachstum</div><b id="growth">—</b></div>
+            <div class="kpi"><div class="label">Netto-PnL</div><b id="pnl">—</b></div>
+            <div class="kpi"><div class="label">Max. Drawdown</div><b id="drawdown">—</b></div>
+            <div class="kpi"><div class="label">Trefferquote</div><b id="winrate">—</b></div>
+          </div>
+        </div>
+        <div class="sep"></div>
+        <div class="pad secondary-details">
+          <div class="label">Risikostatus</div>
+          <div class="metric-row"><span>Aggregierte Exposure</span><strong class="warning">— nicht verbunden</strong></div>
+          <div class="metric-row"><span>Daily-Loss-Limit</span><strong class="warning">—</strong></div>
+          <div class="metric-row"><span>Kill-Switch</span><strong class="warning">Unbekannt</strong></div>
+          <div class="source-note">Keine grüne Risikoanzeige ohne bestätigte Daten aus dem Risk-/OMS-Backend.</div>
+        </div>
+      </article>
+      <article class="panel secondary-details" style="margin-top:16px">
+        <div class="pad">
+          <div class="label">Datenansicht</div>
+          <div class="metric-row"><span>Finanzdaten</span><strong id="mock-status">Fiktive Demo</strong></div>
+          <div class="seg" role="group" aria-label="Finanzdaten anzeigen">
+            <button id="show-mock" aria-pressed="true">Fiktives Beispiel</button>
+            <button id="show-missing" aria-pressed="false">Ohne Quelle</button>
+          </div>
+          <p class="hint">„Portfolio-Biomasse“ ist der NAV aus einem Finanz-Ledger. Die visuell mehrfach dargestellten Pflanzen erhöhen den NAV nicht.</p>
+        </div>
+      </article>
+    </section>
+
+    <section class="centercol">
+      <div class="viewport" aria-label="Stilisierte Kartenplatzhalteransicht, kein Unreal-Render">
+        <div class="viewport-top">
+          <span class="viewer-label" id="view-label">ATLAS · PARAMETERWIESEN</span>
+          <span class="viewer-label">2D-PARAMETER-TILES / 3D-WELT</span>
+        </div>
+        <div class="garden-scene" id="garden-scene"><div class="world-click-note">Pflanze wählen · HUD-Inspektor öffnen</div><div id="world-plants"></div></div>
+        <div class="tile-grid" id="tile-grid"></div>
+        <div class="viewport-bottom">
+          <span>⌖ Auswahl: <b id="focus-tile">—</b></span>
+          <span>LAYOUT-VORSCHAU · KEIN UE-RENDER</span>
+        </div>
+      </div>
+      <article class="panel secondary-details" style="margin-top:16px">
+        <div class="pad">
+          <div class="label">Ereignisse · synthetische Forschung</div>
+          <div id="event-stream" class="hint" style="margin-top:8px"></div>
+        </div>
+      </article>
+    </section>
+
+    <section class="rightcol">
+      <article class="panel">
+        <div class="section-header">
+          <h2>Rangliste</h2>
+          <div class="seg" role="group" aria-label="Top-5-Umschalter">
+            <button id="rank-winners" aria-pressed="true">↑ Top 5</button>
+            <button id="rank-losers" aria-pressed="false">↓ Bottom 5</button>
+          </div>
+        </div>
+        <div class="source-note" style="padding:0 17px 4px">Netto-PnL pro eindeutiger Pflanze, nicht pro Tile-Kopie.</div>
+        <div class="rank" id="ranking"></div>
+      </article>
+      <article class="panel" style="margin-top:16px">
+        <div class="section-header"><h2>Parameterregionen</h2><span class="label">Evolution / Kapital</span></div>
+        <div class="tile-control" id="tile-control"></div>
+        <div class="pad" style="padding-top:0"><p class="hint">„Paper“ bezeichnet hier nur ein Budgetgesuch. Die Umschaltung benötigt eine separate Backend-Freigabe. Live-Handel ist gesperrt.</p></div>
+      </article>
+    </section>
+  </main>
+  <section class="focus-inspector" id="plant-inspector" hidden aria-label="Ausgewählte Pflanze im HUD">
+    <button class="focus-dismiss" id="close-plant" aria-label="Pflanzeninspektor schließen">✕</button>
+    <div class="miniature">
+      <svg viewBox="0 0 170 190" aria-label="Visuelle Pflanzenkopie, keine neue Strategie" role="img">
+        <defs><linearGradient id="plantMiniLeaf" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#b3e5ac"/><stop offset="1" stop-color="#3d8768"/></linearGradient></defs>
+        <ellipse cx="85" cy="184" rx="50" ry="7" fill="#426e5044"/>
+        <path d="M85 181 Q79 120 85 35" stroke="#a7d8a9" stroke-width="4" fill="none"/>
+        <path d="M85 155 Q33 102 21 116 Q41 150 85 158 M85 131 Q135 80 149 96 Q137 129 85 135 M85 99 Q44 55 36 67 Q54 98 85 103 M85 75 Q122 37 139 48 Q126 80 85 79" stroke="#acd5ac" stroke-width="1" fill="url(#plantMiniLeaf)"/>
+        <path d="M86 65 Q60 42 73 15 Q95 35 86 65 M85 54 Q108 24 115 15 Q123 47 85 62" fill="#b9dec2" opacity=".84"/>
+        <circle cx="88" cy="20" r="11" fill="#f1edc6"/><circle cx="73" cy="25" r="6" fill="#f1edc6"/><circle cx="99" cy="33" r="5" fill="#f1edc6"/>
+      </svg>
+      <div class="mini-caption">Visuelles Duplikat · UE SceneCapture2D geplant</div>
+    </div>
+    <div class="small-data">
+      <div class="big-id" id="focus-name">—</div>
+      <div class="inspector-badge" id="focus-subtitle">Forschung · Lesemodus</div>
+      <div class="kv"><span>Indiv. Equity</span><strong id="focus-equity">—</strong></div>
+      <div class="kv"><span>Netto-PnL</span><strong id="focus-net">—</strong></div>
+      <div class="kv"><span>Histor. Höchststand</span><strong id="focus-high">—</strong></div>
+      <div class="kv"><span>Max. Drawdown</span><strong id="focus-dd">—</strong></div>
+      <div class="kv"><span>Trefferquote</span><strong id="focus-win">—</strong></div>
+      <div class="kv"><span>Alter / Gen.</span><strong id="focus-age">—</strong></div>
+    </div>
+    <div class="focus-chart-wrap">
+      <div class="focus-chart-title">Biomasseentwicklung der Strategie</div>
+      <svg viewBox="0 0 400 135" preserveAspectRatio="none" role="img" aria-label="Individuelle Equity-Kurve aus separater fiktiver Zeitreihe">
+        <path d="M0 126 H400 M0 80 H400 M0 34 H400" stroke="#c8f0d53b" stroke-width="1"/>
+        <path id="focus-chart-path" stroke="#9ce6c6" stroke-width="3" fill="none" d=""/>
+      </svg>
+      <div class="source-note" id="focus-chart-status">Keine individuelle Zeitreihe vorhanden</div>
+    </div>
+    <div class="focus-genomes">
+      <div class="focus-chart-title">Parameter der Pflanze</div>
+      <div class="gene-list" id="focus-genome"></div>
+      <div class="source-note">Kanonische Genwerte, keine editierbaren Handelsorders</div>
+    </div>
+  </section>
+</div>
+<footer class="footerbar">
+  <div class="statfoot">Eindeutige Pflanzen<b id="foot-plants">—</b></div>
+  <div class="statfoot">Sichtbare Projektionen<b id="foot-instances">—</b></div>
+  <div class="statfoot">Aktive Evolutionstiles<b id="foot-evolving">—</b></div>
+  <div class="statfoot">Samenwürfe / Landungen<b id="foot-seeds">—</b></div>
+  <div class="statfoot">Nachkommen-Kandidaten<b id="foot-children">—</b></div>
+  <div class="statfoot">Paper-Budget angefragt<b id="foot-paper">—</b></div>
+</footer>
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<script type="application/json" id="data-mock">__HUD_MOCK_JSON__</script>
+<script type="application/json" id="data-empty">__HUD_EMPTY_JSON__</script>
+<script>
+(function(){
+  'use strict';
+  const mock=JSON.parse(document.getElementById('data-mock').textContent);
+  const empty=JSON.parse(document.getElementById('data-empty').textContent);
+  let hud=mock, rankTab='winners', view='atlas', selectedTile='sol-imbase';
+  let selectedPlantId=null, inspectorOpen=false;
+  let toastTimeout=null;
+  const $=function(id){return document.getElementById(id);};
+  const txt=function(id,value){$(id).textContent=value;};
+  const pressed=function(id,value){$(id).setAttribute('aria-pressed',String(value));};
+  function say(message) {
+    txt('toast', message);
+    $('toast').classList.add('visible');
+    if(toastTimeout!==null)clearTimeout(toastTimeout);
+    toastTimeout=setTimeout(function(){$('toast').classList.remove('visible');},3300);
+  }
+  function finance(id) {
+    const m=hud.financialMetrics[id];
+    return m && m.value!==null ? m.value+(m.unit?' '+m.unit:'') : '—';
+  }
+  function putFinance() {
+    txt('nav',finance('totalBiomassPortfolioUsdt'));
+    txt('growth',finance('portfolioReturnPct'));
+    txt('pnl',finance('netPnlUsdt'));
+    txt('drawdown',finance('maxDrawdownPct'));
+    txt('winrate',finance('winRatePct'));
+    txt('finance-state',hud.financialSource==='synthetic_only'?
+      'FIKTIVE WERTE · KEINE HANDELSERGEBNISSE':'Keine bestätigten Finanzdaten verfügbar');
+    txt('mock-status',hud.financialSource==='synthetic_only'?'Fiktive Demo':'Nicht verbunden');
+    const points=hud.portfolioNavSeries.map(function(row){return Number(row.navUsdt);});
+    const path=$('sparkline-path');
+    if(points.length<2){path.setAttribute('d','');return;}
+    const min=Math.min.apply(null,points),max=Math.max.apply(null,points),span=Math.max(.001,max-min);
+    path.setAttribute('d',points.map(function(v,i){
+      const x=(i*270/(points.length-1)).toFixed(2);
+      const y=(67-(v-min)*54/span).toFixed(2);
+      return (i===0?'M ':' L ')+x+' '+y;
+    }).join(''));
+  }
+  function ranking() {
+    pressed('rank-winners',rankTab==='winners');
+    pressed('rank-losers',rankTab==='losers');
+    const list=$( 'ranking' );
+    list.replaceChildren();
+    const rows=rankTab==='winners'?hud.leaderboard.winnerRows:hud.leaderboard.loserRows;
+    if(!rows.length){
+      const d=document.createElement('div');
+      d.className='empty';
+      d.textContent=hud.financialSource==='unavailable_no_ledger'?
+        'Keine geprüften Einzelstrategien-PnL verfügbar.':'Keine passenden Einträge im fiktiven Beispiel.';
+      list.append(d);return;
+    }
+    rows.forEach(function(row,index){
+      const wrap=document.createElement('div');wrap.className='rank-row';
+      const head=document.createElement('div');head.className='rank-head';
+      const name=document.createElement('b');name.textContent=(index+1)+'. '+row.plantName;
+      const val=document.createElement('strong');
+      val.className=Number(row.netPnlUsdt)>=0?'profit':'loss';
+      val.textContent=(Number(row.netPnlUsdt)>0?'+':'')+row.netPnlUsdt+' USDT';
+      head.append(name,val);
+      const detail=document.createElement('div');detail.className='rank-sub';
+      const left=document.createElement('span');left.textContent='Rendite '+row.returnPct+' %';
+      const right=document.createElement('span');right.textContent=row.closedTrades+' Trades · '+row.status;
+      detail.append(left,right);wrap.append(head,detail);list.append(wrap);
+    });
+  }
+
+  function selectPlant(plantId) {
+    if (!hud.plantInspectors || !Object.prototype.hasOwnProperty.call(hud.plantInspectors,plantId)) return;
+    selectedPlantId=plantId;
+    inspectorOpen=true;
+    $('garden-scene').classList.add('is-focused');
+    renderWorldPlants();
+    renderPlantInspector();
+  }
+  function plantSVG() {
+    // Illustrative SVG in browser; actual UE must render the same source plant
+    // appearance in an isolated SceneCapture2D without physics or entity birth.
+    return '<svg viewBox="0 0 100 150" aria-hidden="true"><path d="M50 135 Q42 80 50 15" stroke="#c4e6b5" stroke-width="3" fill="none"/><path d="M48 113 Q8 70 8 90 Q26 122 49 117 M49 99 Q79 56 95 80 Q78 106 51 104 M49 73 Q19 40 17 55 Q30 75 49 77 M50 52 Q68 20 85 30 Q78 51 50 56" fill="#5db28b" stroke="#bee6aa" stroke-width="1"/><circle cx="52" cy="12" r="10" fill="#f3efd3"/><circle cx="38" cy="20" r="6" fill="#fbf5dd"/><circle cx="61" cy="25" r="5" fill="#f3efd3"/></svg>';
+  }
+  function renderWorldPlants() {
+    const area=$('world-plants');
+    area.replaceChildren();
+    const src=Object.values(hud.plantInspectors||{}).filter(function(p){return p.status==='active';});
+    const placement=[{x:43,y:17},{x:70,y:28},{x:25,y:30},{x:83,y:19}];
+    src.forEach(function(p,i){
+      const spot=placement[i%placement.length];
+      const button=document.createElement('button');
+      button.type='button';button.className='garden-plant';
+      button.style.setProperty('--plant-left',spot.x+'%');
+      button.style.setProperty('--plant-bottom',spot.y+'%');
+      if(selectedPlantId===p.plantId)button.classList.add('is-selected');
+      button.setAttribute('aria-label','Pflanze '+p.name+' auswählen');
+      button.innerHTML=plantSVG();
+      const tag=document.createElement('span');tag.className='plant-tag';
+      tag.textContent=p.name;button.append(tag);
+      button.addEventListener('click',function(){selectPlant(p.plantId);});
+      area.append(button);
+    });
+  }
+  function valueOrDash(value,unit) {return value===null||value===undefined?'—':String(value)+(unit?' '+unit:'');}
+  function drawPlantEquity(series){
+    const path=$('focus-chart-path');
+    if(!series || series.length<2){path.setAttribute('d','');return;}
+    const values=series.map(function(x){return Number(x.equityUsdt);});
+    const min=Math.min.apply(null,values),max=Math.max.apply(null,values),diff=Math.max(.001,max-min);
+    const start=series[0].dayIndex,end=series[series.length-1].dayIndex;
+    const dayspan=Math.max(1,end-start);
+    path.setAttribute('d',series.map(function(p){
+      const idx=series.indexOf(p),x=((p.dayIndex-start)/dayspan*395+2).toFixed(1);
+      const y=(120-(Number(p.equityUsdt)-min)/diff*105).toFixed(1);
+      return (idx?'L ':'M ')+x+' '+y;
+    }).join(' '));
+  }
+  function renderPlantInspector() {
+    const box=$('plant-inspector');
+    const p=hud.plantInspectors?.[selectedPlantId];
+    if(!inspectorOpen || !p){box.hidden=true;return;}
+    box.hidden=false;
+    txt('focus-name',p.name+' · '+p.plantId);
+    txt('focus-subtitle',(p.status==='active'?'Aktiv':'Archiviert')+' · Generation '+p.generation+
+      ' · '+p.tileInstanceIds.length+' Tile-Ansichten · DEMO');
+    const m=p.metrics;
+    txt('focus-equity',valueOrDash(m.individualEquityUsdt,'USDT'));
+    txt('focus-net',valueOrDash(m.netPnlUsdt,'USDT'));
+    txt('focus-high',valueOrDash(m.highWaterMarkUsdt,'USDT'));
+    txt('focus-dd',valueOrDash(m.maxDrawdownPct,'%'));
+    txt('focus-win',valueOrDash(m.winRatePct,'%'));
+    txt('focus-age',p.ageDays+' Tage · Gen. '+p.generation);
+    txt('focus-chart-status',p.financialSource==='fictional_per_plant_equity_only'?
+        'Fiktive Strategie-Equity · keine echten Trades':'Keine bestätigte individuelle Equity-Zeitreihe');
+    drawPlantEquity(p.equitySeries);
+    const g=$('focus-genome');g.replaceChildren();
+    const genes=p.genes.researchOptionalAxes||{};
+    Object.keys(genes).slice(0,6).forEach(function(key){
+      const k=document.createElement('span'),v=document.createElement('b');
+      k.textContent=key.replace('trade.','').replace('research.','');
+      v.textContent=String(genes[key]);
+      g.append(k,v);
+    });
+  }
+
+  function renderTiles() {
+    const grid=$('tile-grid'),control=$('tile-control');
+    grid.replaceChildren();control.replaceChildren();
+    hud.tileCards.forEach(function(tile) {
+      const map=document.createElement('button');map.type='button';map.className='tile';
+      map.setAttribute('aria-selected',String(tile.tileId===selectedTile));
+      const name=document.createElement('span');name.className='tile-name';name.textContent=tile.label;
+      const desc=document.createElement('span');desc.className='tile-status';
+      desc.textContent=(tile.evolutionEnabled?'EVO AN':'EVO AUS')+' · '+tile.capitalMode.toUpperCase();
+      const bud=document.createElement('span');bud.className='bud';bud.textContent='♣';
+      const count=document.createElement('span');count.className='count';
+      count.textContent=tile.visiblePlantInstances+' Pflanzenabbilder';
+      map.append(name,desc,bud,count);
+      map.addEventListener('click',function(){selectedTile=tile.tileId;renderTiles();});
+      grid.append(map);
+      const row=document.createElement('div');row.className='control-row';
+      const label=document.createElement('div');const b=document.createElement('b');
+      b.textContent=tile.label;
+      const small=document.createElement('small');
+      small.textContent=(tile.evolutionEnabled?'↻ Evolution AN':'Evolution pausiert')+' · '+tile.capitalMode.toUpperCase()+
+        ' · '+tile.paperBudgetRequestedUsdt+' USDT geplant';
+      label.append(b,small);
+      const action=document.createElement('button');action.className='small-button';
+      action.textContent='Vorschau';
+      action.addEventListener('click',function(){
+        say(tile.label+': Der Kapitalmodus wird nur vorgeschaut. Keine Änderung ausgeführt.');
+        selectedTile=tile.tileId;renderTiles();
+      });
+      row.append(label,action);control.append(row);
+    });
+    const selected=hud.tileCards.find(function(x){return x.tileId===selectedTile;});
+    txt('focus-tile',selected?selected.label:'—');
+  }
+  function footer() {
+    const e=hud.ecologyMetrics;
+    txt('foot-plants',e.activePlants+' / '+e.canonicalPlants);
+    txt('foot-instances',e.visibleTileRepresentations);
+    txt('foot-evolving',e.tilesEvolving+' / '+e.tilesTotal);
+    txt('foot-seeds',e.independentSeedReleases+' / '+e.referenceSeedLandings);
+    txt('foot-children',e.proposedOffspringCandidates+' (ungeprüft)');
+    txt('foot-paper',hud.paperBudget.requestedTotalUsdt+' USDT');
+    txt('clock','TAG '+hud.sceneRef.dayIndex+' · SOL · SYNTHETISCH');
+    txt('source-banner',hud.sourceBanner);
+  }
+  function recent(){
+    const items=$('event-stream');items.replaceChildren();
+    hud.recentResearchEvents.forEach(function(e){
+      const node=document.createElement('div');node.className='metric-row';
+      const left=document.createElement('span');left.textContent=e.type.replaceAll('_',' ')+' · '+e.tileId;
+      const right=document.createElement('strong');right.textContent='Tag '+e.dayIndex;
+      node.append(left,right);items.append(node);
+    });
+  }
+  function render(){
+    footer();putFinance();ranking();renderTiles();recent();
+    renderWorldPlants();renderPlantInspector();
+    pressed('show-mock',hud===mock);pressed('show-missing',hud===empty);
+    pressed('atlas',view==='atlas');pressed('explore',view==='explore');
+    $('shell').classList.toggle('explore',view==='explore');
+    txt('view-label',view==='atlas'?'ATLAS · PARAMETERWIESEN':'EXPLORE · KAMERA- & HUD-VORSCHAU');
+  }
+  $('rank-winners').addEventListener('click',function(){rankTab='winners';ranking();});
+  $('rank-losers').addEventListener('click',function(){rankTab='losers';ranking();});
+  $('atlas').addEventListener('click',function(){view='atlas';render();});
+  $('explore').addEventListener('click',function(){view='explore';render();});
+  $('show-mock').addEventListener('click',function(){hud=mock;render();});
+  $('show-missing').addEventListener('click',function(){hud=empty;render();});
+  $('close-plant').addEventListener('click',function(){
+    inspectorOpen=false;$('garden-scene').classList.remove('is-focused');render();
+  });
+  document.addEventListener('keydown',function(e){
+    if(e.key==='Escape' && inspectorOpen){inspectorOpen=false;$('garden-scene').classList.remove('is-focused');render();}
+  });
+  render();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_seedfall_offspring_proposals",
+  "authority": "synthetic_fixture_proposal_only",
+  "sourceReleaseEventId": "seed-release:plant-a:7:001",
+  "sourceReceiptId": "seed-receipt:plant-a:7:001",
+  "sourcePlantId": "plant-a",
+  "earliestEffectiveDay": 8,
+  "source": "reference_ballistic_not_unreal_chaos",
+  "tileId": "sol-imbase",
+  "parentXYMeters": [
+    0.625,
+    4.444444
+  ],
+  "proposals": [
+    {
+      "seedId": "seed-1",
+      "tileId": "sol-imbase",
+      "landedXYMeters": [
+        1.811534,
+        5.145001
+      ],
+      "state": "research_candidate_only",
+      "proposedGenomeAxes": {
+        "trade.channel_lookback": 107,
+        "trade.stop_loss_bps": 282
+      },
+      "normalizedXY": [
+        0.1811534,
+        0.51450014
+      ]
+    },
+    {
+      "seedId": "seed-2",
+      "tileId": "sol-imbase",
+      "landedXYMeters": [
+        1.766141,
+        5.21674
+      ],
+      "state": "research_candidate_only",
+      "proposedGenomeAxes": {
+        "trade.channel_lookback": 105,
+        "trade.stop_loss_bps": 285
+      },
+      "normalizedXY": [
+        0.1766141,
+        0.52167404
+      ]
+    },
+    {
+      "seedId": "seed-3",
+      "tileId": "sol-imbase",
+      "landedXYMeters": [
+        1.778475,
+        5.198193
+      ],
+      "state": "research_candidate_only",
+      "proposedGenomeAxes": {
+        "trade.channel_lookback": 105,
+        "trade.stop_loss_bps": 284
+      },
+      "normalizedXY": [
+        0.1778475,
+        0.51981934
+      ]
+    }
+  ],
+  "policy": "never_write_back_to_trading_or_ledger_without_owner_approval"
+}

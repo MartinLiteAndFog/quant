@@ -1,0 +1,43 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_seed_release_request",
+  "authority": "synthetic_fixture_only",
+  "sceneRef": {
+    "seed": "ue5-visual-preview-v0",
+    "dayIndex": 7,
+    "terrainRevision": "synthetic-ground-plane-v1"
+  },
+  "eventId": "seed-release:plant-a:7:001",
+  "plantId": "plant-a",
+  "createdDay": 7,
+  "earliestApplyDay": 8,
+  "rng": {
+    "algorithm": "xorshift32_v1",
+    "seedU32": 20261102
+  },
+  "physics": {
+    "solver": "ballistic_ground_plane_v1",
+    "gravityMps2": 9.81,
+    "groundZ_m": 0,
+    "windMps": [
+      0,
+      0,
+      0
+    ],
+    "drag": "none",
+    "terrain": "uniform_loam",
+    "terrainRevision": "synthetic-ground-plane-v1"
+  },
+  "launch": {
+    "originM": [
+      0,
+      0,
+      1.7
+    ],
+    "azimuthDeg": 35,
+    "elevationDeg": 25,
+    "speedMps": 2.2,
+    "yawSpreadDeg": 6,
+    "seedCount": 3
+  }
+}

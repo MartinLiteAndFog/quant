@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_tile_research_activation",
+  "authority": "synthetic_research_fixture_only",
+  "sceneRef": {
+    "seed": "ue5-visual-preview-v0",
+    "dayIndex": 7
+  },
+  "globalResearchBudget": {
+    "currency": "USDT",
+    "paperBudgetPoolCeiling": "100.00",
+    "liveBudgetAuthorized": "0.00",
+    "cashAccountingWrites": false
+  },
+  "policy": {
+    "evolutionIndependentOfCapital": true,
+    "eachTileIndependentSeedExperiment": true,
+    "capitalModeOptions": [
+      "off",
+      "paper",
+      "live"
+    ],
+    "defaultCapitalMode": "off",
+    "liveMode": "blocked_pending_backend_risk_and_venue_authorization",
+    "paperBudgetMeaning": "virtual_cap_request_not_funds_booked",
+    "sourceAccount": "none_synthetic_fixture",
+    "simulationStepRule": "future_day_only",
+    "maxSeedsPerRelease": 30
+  },
+  "tiles": [
+    {
+      "tileId": "sol-imbase",
+      "evolutionEnabled": true,
+      "capitalMode": "paper",
+      "paperBudgetRequestedUsdt": "25.00",
+      "paperFeedMode": "historical"
+    },
+    {
+      "tileId": "sol-lookback-sensitivity",
+      "evolutionEnabled": true,
+      "capitalMode": "paper",
+      "paperBudgetRequestedUsdt": "25.00",
+      "paperFeedMode": "historical"
+    },
+    {
+      "tileId": "sol-sensitivity-ttp",
+      "evolutionEnabled": true,
+      "capitalMode": "off",
+      "paperBudgetRequestedUsdt": "0.00",
+      "paperFeedMode": "none"
+    },
+    {
+      "tileId": "sol-lookback-ttp",
+      "evolutionEnabled": true,
+      "capitalMode": "paper",
+      "paperBudgetRequestedUsdt": "10.00",
+      "paperFeedMode": "historical"
+    }
+  ]
+}

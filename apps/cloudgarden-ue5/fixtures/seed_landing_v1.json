@@ -1,0 +1,105 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_seed_landing_receipt",
+  "authority": "synthetic_fixture_only",
+  "releaseEventId": "seed-release:plant-a:7:001",
+  "sourcePlantId": "plant-a",
+  "sceneRef": {
+    "seed": "ue5-visual-preview-v0",
+    "dayIndex": 7,
+    "terrainRevision": "synthetic-ground-plane-v1"
+  },
+  "physicsSolver": "ballistic_ground_plane_v1",
+  "applyAtDay": 8,
+  "receiptId": "seed-receipt:plant-a:7:001",
+  "source": "reference_ballistic_not_unreal_chaos",
+  "sourceDataProvenance": {
+    "sourceHash": "synthetic-fixture-only",
+    "engineVersion": "reference-python-stdlib",
+    "physicsConfigRevision": "ballistic-ground-plane-v1",
+    "collisionGeometryRevision": "synthetic-ground-plane-v1"
+  },
+  "outcomes": [
+    {
+      "seedId": "seed-1",
+      "randomU32": 557835706,
+      "yawDeg": 30.558575,
+      "timeSeconds": 0.691072,
+      "impactM": [
+        1.186534,
+        0.700557,
+        0
+      ],
+      "groundMaterial": "uniform_loam",
+      "distanceM": 1.377912,
+      "cellXY": [
+        1,
+        0
+      ]
+    },
+    {
+      "seedId": "seed-2",
+      "randomU32": 1821484222,
+      "yawDeg": 34.089168,
+      "timeSeconds": 0.691072,
+      "impactM": [
+        1.141141,
+        0.772296,
+        0
+      ],
+      "groundMaterial": "uniform_loam",
+      "distanceM": 1.377912,
+      "cellXY": [
+        1,
+        0
+      ]
+    },
+    {
+      "seedId": "seed-3",
+      "randomU32": 1489985309,
+      "yawDeg": 33.162971,
+      "timeSeconds": 0.691072,
+      "impactM": [
+        1.153475,
+        0.753749,
+        0
+      ],
+      "groundMaterial": "uniform_loam",
+      "distanceM": 1.377912,
+      "cellXY": [
+        1,
+        0
+      ]
+    }
+  ],
+  "derivedSignals": [
+    {
+      "seedId": "seed-1",
+      "dispersalDistanceM": 1.377912,
+      "landingCellXY": [
+        1,
+        0
+      ],
+      "ecologyOnly": true
+    },
+    {
+      "seedId": "seed-2",
+      "dispersalDistanceM": 1.377912,
+      "landingCellXY": [
+        1,
+        0
+      ],
+      "ecologyOnly": true
+    },
+    {
+      "seedId": "seed-3",
+      "dispersalDistanceM": 1.377912,
+      "landingCellXY": [
+        1,
+        0
+      ],
+      "ecologyOnly": true
+    }
+  ],
+  "commitPolicy": "proposal_only_until_canonical_ecology_accepts"
+}

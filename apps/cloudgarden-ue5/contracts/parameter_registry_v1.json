@@ -1,0 +1,265 @@
+{
+  "schemaVersion": 1,
+  "kind": "cloudgarden_ue5_parameter_registry",
+  "status": "proposed_not_implemented",
+  "disclaimer": "Read-only bridge prototype. 'existing' refers to code in draft PRs, not approved economic rules.",
+  "units": {
+    "spatial": "m",
+    "unrealSpatial": "cm",
+    "time": "s",
+    "angle": "deg",
+    "money": "never_accepted",
+    "coordinateFrame": "right-handed reference x-east/y-north/z-up; UE adapter must document axis and handedness conversion"
+  },
+  "parameters": [
+    {
+      "id": "visual.hue_deg",
+      "sourceRef": "VisualDNA.hue (ECO-15 PR45)",
+      "sourceStatus": "existing_model_proposed_in_pr",
+      "kind": "float",
+      "min": 0,
+      "max": 359.99,
+      "defaultValue": 126,
+      "unit": "deg",
+      "role": "visual_only",
+      "binding": {
+        "target": "BP_CloudPlant.HueDegrees",
+        "transform": "linear_or_identity",
+        "scale": 1,
+        "offset": 0,
+        "unit": "deg",
+        "writeFromUnreal": false
+      }
+    },
+    {
+      "id": "visual.saturation_ratio",
+      "sourceRef": "VisualDNA.saturation (ECO-15 PR45)",
+      "sourceStatus": "existing_model_proposed_in_pr",
+      "kind": "float",
+      "min": 0,
+      "max": 1,
+      "defaultValue": 0.65,
+      "unit": "ratio",
+      "role": "visual_only",
+      "binding": {
+        "target": "BP_CloudPlant.Saturation",
+        "transform": "linear_or_identity",
+        "scale": 1,
+        "offset": 0,
+        "unit": "ratio",
+        "writeFromUnreal": false
+      }
+    },
+    {
+      "id": "morph.branching_ratio",
+      "sourceRef": "FunctionalMorphology.branching (ECO-15 PR45)",
+      "sourceStatus": "existing_model_proposed_in_pr",
+      "kind": "float",
+      "min": 0,
+      "max": 1,
+      "defaultValue": 0.62,
+      "unit": "ratio",
+      "role": "visual_ecology",
+      "binding": {
+        "target": "PCG_CloudPlant.Branching",
+        "transform": "linear_or_identity",
+        "scale": 1,
+        "offset": 0,
+        "unit": "ratio",
+        "writeFromUnreal": false
+      }
+    },
+    {
+      "id": "morph.leaf_count",
+      "sourceRef": "FunctionalMorphology.leaf_count (ECO-15 PR45)",
+      "sourceStatus": "existing_model_proposed_in_pr",
+      "kind": "integer",
+      "min": 1,
+      "max": 64,
+      "defaultValue": 22,
+      "unit": "leaves",
+      "role": "visual_ecology",
+      "binding": {
+        "target": "PCG_CloudPlant.LeafCount",
+        "transform": "linear_or_identity",
+        "scale": 1,
+        "offset": 0,
+        "unit": "leaves",
+        "writeFromUnreal": false
+      }
+    },
+    {
+      "id": "morph.photosynthetic_rind",
+      "sourceRef": "FunctionalMorphology.photosynthetic_rind (ECO-15 PR45)",
+      "sourceStatus": "existing_model_proposed_in_pr",
+      "kind": "boolean",
+      "allowed": [
+        false,
+        true
+      ],
+      "defaultValue": false,
+      "unit": "bool",
+      "role": "visual_ecology",
+      "binding": {
+        "target": "BP_CloudPlant.PhotosyntheticRind",
+        "transform": "linear_or_identity",
+        "scale": 1,
+        "offset": 0,
+        "unit": "bool",
+        "writeFromUnreal": false
+      }
+    },
+    {
+      "id": "eco.seed_release_height_m",
+      "sourceRef": "NEW ecology gene (not in current genome)",
+      "sourceStatus": "proposed_new_gene",
+      "kind": "float",
+      "min": 0.2,
+      "max": 8,
+      "defaultValue": 1.7,
+      "unit": "m",
+      "role": "ecology_input",
+      "binding": {
+        "target": "BP_SeedEmitter.ReleaseHeightCm",
+        "transform": "linear_or_identity",
+        "scale": 100,
+        "offset": 0,
+        "unit": "cm",
+        "writeFromUnreal": false
+      }
+    },
+    {
+      "id": "eco.seed_azimuth_deg",
+      "sourceRef": "NEW ecology gene; yaw from +X towards +Y",
+      "sourceStatus": "proposed_new_gene",
+      "kind": "float",
+      "min": 0,
+      "max": 359.99,
+      "defaultValue": 35,
+      "unit": "deg",
+      "role": "ecology_input",
+      "binding": {
+        "target": "BP_SeedEmitter.AzimuthDeg",
+        "transform": "linear_or_identity",
+        "scale": 1,
+        "offset": 0,
+        "unit": "deg",
+        "writeFromUnreal": false
+      }
+    },
+    {
+      "id": "eco.seed_elevation_deg",
+      "sourceRef": "NEW ecology gene; 0 horizontal, positive upwards",
+      "sourceStatus": "proposed_new_gene",
+      "kind": "float",
+      "min": 0,
+      "max": 85,
+      "defaultValue": 25,
+      "unit": "deg",
+      "role": "ecology_input",
+      "binding": {
+        "target": "BP_SeedEmitter.ElevationDeg",
+        "transform": "linear_or_identity",
+        "scale": 1,
+        "offset": 0,
+        "unit": "deg",
+        "writeFromUnreal": false
+      }
+    },
+    {
+      "id": "eco.seed_launch_speed_mps",
+      "sourceRef": "NEW ecology gene",
+      "sourceStatus": "proposed_new_gene",
+      "kind": "float",
+      "min": 0.1,
+      "max": 15,
+      "defaultValue": 2.2,
+      "unit": "m/s",
+      "role": "ecology_input",
+      "binding": {
+        "target": "BP_SeedEmitter.LaunchSpeedCmps",
+        "transform": "linear_or_identity",
+        "scale": 100,
+        "offset": 0,
+        "unit": "cm/s",
+        "writeFromUnreal": false
+      }
+    },
+    {
+      "id": "eco.seed_spread_deg",
+      "sourceRef": "NEW ecology gene; uniform yaw variation +/-spread",
+      "sourceStatus": "proposed_new_gene",
+      "kind": "float",
+      "min": 0,
+      "max": 45,
+      "defaultValue": 6,
+      "unit": "deg",
+      "role": "ecology_input",
+      "binding": {
+        "target": "BP_SeedEmitter.YawSpreadDeg",
+        "transform": "linear_or_identity",
+        "scale": 1,
+        "offset": 0,
+        "unit": "deg",
+        "writeFromUnreal": false
+      }
+    },
+    {
+      "id": "eco.seed_count",
+      "sourceRef": "NEW ecology gene; bounded spawn for proof-of-concept",
+      "sourceStatus": "proposed_new_gene",
+      "kind": "integer",
+      "min": 1,
+      "max": 30,
+      "defaultValue": 3,
+      "unit": "seeds",
+      "role": "ecology_input",
+      "binding": {
+        "target": "BP_SeedEmitter.SeedCount",
+        "transform": "linear_or_identity",
+        "scale": 1,
+        "offset": 0,
+        "unit": "seeds",
+        "writeFromUnreal": false
+      }
+    },
+    {
+      "id": "trade.channel_lookback",
+      "sourceRef": "SourceGenome.channelLookback (Cloudgarden PR62)",
+      "sourceStatus": "existing_model_proposed_in_pr",
+      "kind": "integer",
+      "min": 20,
+      "max": 500,
+      "defaultValue": 50,
+      "unit": "candles",
+      "role": "trading_readonly",
+      "binding": {
+        "target": "WBP_PlantInspector.ChannelLookback",
+        "transform": "linear_or_identity",
+        "scale": 1,
+        "offset": 0,
+        "unit": "candles",
+        "writeFromUnreal": false
+      }
+    },
+    {
+      "id": "trade.stop_loss_bps",
+      "sourceRef": "SourceGenome.stopLossBps (Cloudgarden PR62)",
+      "sourceStatus": "existing_model_proposed_in_pr",
+      "kind": "float",
+      "min": 50,
+      "max": 500,
+      "defaultValue": 250,
+      "unit": "bps",
+      "role": "trading_readonly",
+      "binding": {
+        "target": "WBP_PlantInspector.StopLossBps",
+        "transform": "linear_or_identity",
+        "scale": 1,
+        "offset": 0,
+        "unit": "bps",
+        "writeFromUnreal": false
+      }
+    }
+  ]
+}

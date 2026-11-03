@@ -1,0 +1,145 @@
+{
+  "schemaVersion": 0,
+  "kind": "synthetic_visual_fixture_only",
+  "fixture": true,
+  "disclaimer": "NON-EMPIRICAL. Fictional UE5 scene preview, no market data or PnL evidence.",
+  "scene": {
+    "seed": "ue5-visual-preview-v0",
+    "dayIndex": 7,
+    "sourceStatus": "synthetic_visual_only",
+    "camera": "oblique_atlas"
+  },
+  "tiles": [
+    {
+      "id": "sol-imbase",
+      "displayName": "SOL · IMBA demo research tile",
+      "assetRegion": "SOL",
+      "familyGroup": "imba_candle_research",
+      "axisX": {
+        "gene": "channelLookback",
+        "min": 20,
+        "max": 500,
+        "unit": "candles"
+      },
+      "axisY": {
+        "gene": "stopLossBps",
+        "min": 50,
+        "max": 500,
+        "unit": "bps"
+      }
+    }
+  ],
+  "plants": [
+    {
+      "id": "plant-a",
+      "tileId": "sol-imbase",
+      "name": "Cloud fern",
+      "family": "imba_trend",
+      "role": "parent",
+      "status": "active",
+      "bornDay": 0,
+      "parentIds": [],
+      "genome": {
+        "channelLookback": 50,
+        "stopLossBps": 250
+      },
+      "phenotype": "bush",
+      "appearance": {
+        "hue": 126,
+        "saturation": 0.65,
+        "leafCount": 22,
+        "branching": 0.62,
+        "photosyntheticRind": false,
+        "rootDepth": 0.6
+      }
+    },
+    {
+      "id": "plant-b",
+      "tileId": "sol-imbase",
+      "name": "Stone sage",
+      "family": "imba_countertrend",
+      "role": "parent",
+      "status": "archived",
+      "bornDay": 0,
+      "archivedDay": 5,
+      "parentIds": [],
+      "genome": {
+        "channelLookback": 200,
+        "stopLossBps": 250
+      },
+      "phenotype": "cactus",
+      "appearance": {
+        "hue": 144,
+        "saturation": 0.47,
+        "leafCount": 1,
+        "branching": 0.08,
+        "photosyntheticRind": true,
+        "rootDepth": 0.85
+      }
+    },
+    {
+      "id": "plant-c",
+      "tileId": "sol-imbase",
+      "name": "Hybrid child",
+      "family": "imba_ew",
+      "role": "seedling",
+      "status": "active",
+      "bornDay": 6,
+      "parentIds": [
+        "plant-a",
+        "plant-b"
+      ],
+      "genome": {
+        "channelLookback": 85,
+        "stopLossBps": 270
+      },
+      "phenotype": "flower",
+      "appearance": {
+        "hue": 305,
+        "saturation": 0.74,
+        "leafCount": 8,
+        "branching": 0.33,
+        "photosyntheticRind": false,
+        "rootDepth": 0.44
+      }
+    },
+    {
+      "id": "plant-d",
+      "tileId": null,
+      "name": "Unassigned research example",
+      "family": "unknown",
+      "role": "seedling",
+      "status": "active",
+      "bornDay": 6,
+      "parentIds": [],
+      "genome": {},
+      "phenotype": "grass",
+      "appearance": {
+        "hue": 79,
+        "saturation": 0.5,
+        "leafCount": 3,
+        "branching": 0.12,
+        "photosyntheticRind": false,
+        "rootDepth": 0.3
+      }
+    }
+  ],
+  "events": [
+    {
+      "id": "demo-event-1",
+      "dayIndex": 5,
+      "type": "archive",
+      "plantId": "plant-b"
+    },
+    {
+      "id": "demo-event-2",
+      "dayIndex": 6,
+      "type": "birth",
+      "plantId": "plant-c",
+      "parentIds": [
+        "plant-a",
+        "plant-b"
+      ]
+    }
+  ]
+}
