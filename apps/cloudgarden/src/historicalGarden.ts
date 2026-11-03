@@ -5,6 +5,7 @@ import { generateSourceSignals, inheritSourceGenome, SOURCE_PARENT_GENOMES, vali
 import { createKrakenPaperState, advanceKrakenPaper, resumeKrakenPaperAfterGap, validateKrakenPaperState, type KrakenPaperState, type KrakenPaperFill } from "./krakenPaper.ts";
 import { attachKrakenEwGenes, inheritKrakenProfile, validateEvolvedKrakenProfile } from "./krakenEvolution.ts";
 import { getKrakenProfile, type KrakenProfile } from "./krakenProfiles.ts";
+import { DEFAULT_FUNDING_SETTINGS, topUpWorldAfterDay, validateFundingSettings, type FundingMode, type FundingSettings } from "./fundingPolicy.ts";
 
 export type ArchiveDay = Readonly<{ date: string; barCount: number; gapCount: number; missingMinutes: number; file: string; sha256: string }>;
 export type SolArchive = Readonly<{
@@ -22,7 +23,7 @@ export type ArchiveLoop = Readonly<{
 export type HistoricalSession = Readonly<{
   schemaVersion: 1; sourceSha256: string; startDate: string; nextDate: string; world: SimulationWorld;
   loop: ArchiveLoop;
-  funding?: Readonly<{ monthlyEur: number; eurUsdt: number; totalEur: number; totalUsdt: number; lastMonthKey: string }>;
+  funding?: HistoricalFunding;
   retiredRecords?: PlantTradingRecord;
   retiredPlantCount?: number;
   initialProfileIds?: readonly string[];
@@ -33,10 +34,60 @@ export type HistoricalSession = Readonly<{
   history: readonly Readonly<{ date: string; nav: number; fills: number; close: number; observedBars?: number; skippedBars?: number; segments?: number; deposits?: number; netPnl?: number }>[];
   trades: readonly HistoricalTrade[];
 }>;
+/** Old snapshots without a mode retain their historical monthly setting. */
+export type HistoricalFunding = Readonly<{
+  monthlyEur: number; eurUsdt: number; totalEur: number; totalUsdt: number; lastMonthKey: string;
+  mode?: FundingMode; topUpTargetEur?: number; lastTopUpDay?: number;
+}>;
 export const HISTORICAL_SAVE_KEY = "cloudgarden.historical.v1";
 const DAY = 86_400_000;
 const emptyRecord = (): PlantTradingRecord => ({ fills: 0, netPnl: 0, fees: 0, rejected: 0, opportunities: 0 });
 const rounded = (n: number) => Math.round(n * 100_000_000) / 100_000_000;
+
+/** Legacy saved sessions with unspecified mode continue as monthly; new games default to top-up. */
+export function fundingSettings(funding?: HistoricalFunding): FundingSettings {
+  return validateFundingSettings(funding ? {
+    mode: funding.mode ?? "monthly",
+    monthlyEur: funding.monthlyEur,
+    topUpTargetEur: funding.topUpTargetEur ?? 100,
+    eurUsdt: funding.eurUsdt,
+  } : DEFAULT_FUNDING_SETTINGS);
+}
+
+/** Change future contributions only: no retroactive funding or rewritten PnL. */
+export function configureHistoricalFunding(session: HistoricalSession, settings: FundingSettings): HistoricalSession {
+  if (!session.funding) return session;
+  const valid = validateFundingSettings(settings);
+  const previous = fundingSettings(session.funding);
+  return {
+    ...session,
+    funding: {
+      ...session.funding, ...valid,
+      lastMonthKey: valid.mode === "monthly" && previous.mode !== "monthly"
+        ? `${session.loop.cycle}:${session.nextDate.slice(0, 7)}`
+        : session.funding.lastMonthKey,
+    },
+  };
+}
+
+/** Exactly one end-of-observed-day top-up, after the account is marked. */
+export function applyEndOfDayFunding(session: HistoricalSession): HistoricalSession {
+  const funding = session.funding;
+  if (!funding || fundingSettings(funding).mode !== "topup") return session;
+  if (funding.lastTopUpDay !== undefined && funding.lastTopUpDay >= session.world.day) return session;
+  const applied = topUpWorldAfterDay(session.world, fundingSettings(funding));
+  return {
+    ...session,
+    world: applied.world,
+    funding: {
+      ...funding,
+      totalEur: rounded(funding.totalEur + applied.depositEur),
+      totalUsdt: rounded(funding.totalUsdt + applied.depositUsdt),
+      lastTopUpDay: session.world.day,
+    },
+    ...(applied.depositUsdt > 0 ? { loop: { ...session.loop, capitalHalted: false } } : {}),
+  };
+}
 
 export function nextUtcDate(date: string, offset = 1): string {
   return new Date(Date.parse(`${date}T00:00:00Z`) + offset * DAY).toISOString().slice(0, 10);
@@ -67,7 +118,10 @@ export function validateSolArchive(value: unknown): SolArchive {
   return a;
 }
 
-export function createHistoricalSession(archive: SolArchive, startDate = archive.firstDate, options: { engine?: "source" | "kraken"; profileIds?: readonly string[]; monthlyEur?: number; eurUsdt?: number } = {}): HistoricalSession {
+export function createHistoricalSession(archive: SolArchive, startDate = archive.firstDate, options: {
+  engine?: "source" | "kraken"; profileIds?: readonly string[];
+  monthlyEur?: number; eurUsdt?: number; fundingMode?: FundingMode; topUpTargetEur?: number;
+} = {}): HistoricalSession {
   const archiveIndex = archive.days.findIndex((day) => day.date === startDate);
   if (archiveIndex < 0) throw new Error("Choose an observed UTC date from the SOL archive.");
   // Game default: no predators and no negative-vitality penalty. Old non-game worlds retain their own rules.
@@ -76,8 +130,15 @@ export function createHistoricalSession(archive: SolArchive, startDate = archive
   const profileIds = options.profileIds ?? ["kraken_legacy", "kraken_17_2_close", "kraken_17_2_reverse"];
   if (profileIds.length !== 3) throw new RangeError("Choose exactly three source profiles for the three parent plants.");
   for (const id of profileIds) getKrakenProfile(id);
+  const fundingConfig = validateFundingSettings({
+    ...DEFAULT_FUNDING_SETTINGS,
+    mode: options.fundingMode ?? (options.monthlyEur !== undefined ? "monthly" : "topup"),
+    monthlyEur: options.monthlyEur ?? DEFAULT_FUNDING_SETTINGS.monthlyEur,
+    topUpTargetEur: options.topUpTargetEur ?? DEFAULT_FUNDING_SETTINGS.topUpTargetEur,
+    eurUsdt: options.eurUsdt ?? DEFAULT_FUNDING_SETTINGS.eurUsdt,
+  });
   return { schemaVersion: 1, sourceSha256: archive.sourceSha256, startDate, nextDate: startDate, world,
-    ...(options.engine === "source" ? {} : { funding: { monthlyEur: options.monthlyEur ?? 100, eurUsdt: options.eurUsdt ?? 1, totalEur: 0, totalUsdt: 0, lastMonthKey: `1:${startDate.slice(0, 7)}` }, initialProfileIds: [...profileIds],
+    ...(options.engine === "source" ? {} : { funding: { ...fundingConfig, totalEur: 0, totalUsdt: 0, lastMonthKey: `1:${startDate.slice(0, 7)}` }, initialProfileIds: [...profileIds],
       krakenProfiles: Object.fromEntries(world.plants.map((plant, i) => [plant.id, attachKrakenEwGenes(marketProfile(getKrakenProfile(profileIds[i]!), archive.symbol), genomes[plant.id]!)])), krakenStates: Object.fromEntries(world.plants.map((plant, i) =>
       [plant.id, createKrakenPaperState(profileIds[i]!, plant.allocationUsdt)])) }),
     loop: { cycle: 1, archiveIndex, totalDays: 0, totalBars: 0, totalFills: 0, totalFees: 0, capitalHalted: false, completedRounds: [], roundStartDay: 0, roundStartNav: 100, roundStartFees: 0, roundStartFills: 0 },
@@ -168,7 +229,10 @@ export function validateHistoricalSession(value: unknown, archive: SolArchive): 
   if (s.funding && (![s.funding.monthlyEur, s.funding.eurUsdt, s.funding.totalEur, s.funding.totalUsdt].every(Number.isFinite)
     || s.funding.monthlyEur <= 0 || s.funding.monthlyEur > 10_000 || s.funding.eurUsdt <= 0 || s.funding.eurUsdt > 100
     || s.funding.totalEur < 0 || s.funding.totalUsdt < 0 || typeof s.funding.lastMonthKey !== "string" || !/^[1-9]\d*:\d{4}-(?:0[1-9]|1[0-2])$/.test(s.funding.lastMonthKey)
-    || Math.abs(s.funding.totalUsdt - (s.world.capital.externalDepositsUsdt ?? 0)) > .0001)) throw new Error("Invalid monthly contribution ledger.");
+    || (s.funding.mode !== undefined && !["off", "monthly", "topup"].includes(s.funding.mode))
+    || (s.funding.topUpTargetEur !== undefined && (!Number.isFinite(s.funding.topUpTargetEur) || s.funding.topUpTargetEur <= 0 || s.funding.topUpTargetEur > 10_000))
+    || (s.funding.lastTopUpDay !== undefined && (!Number.isSafeInteger(s.funding.lastTopUpDay) || s.funding.lastTopUpDay < 0 || s.funding.lastTopUpDay > s.world.day))
+    || Math.abs(s.funding.totalUsdt - (s.world.capital.externalDepositsUsdt ?? 0)) > .0001)) throw new Error("Invalid external contribution ledger.");
   const retainedKeys = new Set<string>();
   for (const fill of s.trades) {
     const decimal = (v: unknown) => typeof v === "string" && /^-?(?:0|[1-9]\d*)(?:\.\d{1,8})?$/.test(v) && Number.isFinite(Number(v));
@@ -265,7 +329,7 @@ function wrapHistoricalRound(session: HistoricalSession, archive: SolArchive): H
 /** Execute actual contiguous segments independently, close flat before every gap, then update ecology once. */
 export async function executeHistoricalDay(session: HistoricalSession, archive: SolArchive, dataset: MarketDataset, warmup: MarketDataset): Promise<HistoricalSession> {
   session = validateHistoricalSession(session, archive);
-  if (session.funding) {
+  if (session.funding && fundingSettings(session.funding).mode === "monthly") {
     const key = `${session.loop.cycle}:${session.nextDate.slice(0, 7)}`;
     if (key !== session.funding.lastMonthKey) {
       const monthIndex = (date: string) => Number(date.slice(0, 4)) * 12 + Number(date.slice(5, 7)) - 1;
@@ -375,20 +439,22 @@ export async function executeHistoricalDay(session: HistoricalSession, archive: 
     }
   }
   // Intraday accounting precedes end-of-day growth and predation. Advance ecology exactly once.
-  const world = advanceSimulationDay({ ...booked, day: session.world.day }, observedSolClimate(dataset));
+  let world = advanceSimulationDay({ ...booked, day: session.world.day }, observedSolClimate(dataset));
   const genomes = { ...session.genomes };
   for (const plant of world.plants) {
     if (genomes[plant.id]) continue;
     const parents = plant.parents?.map((id) => genomes[id]!).filter(Boolean) ?? SOURCE_PARENT_GENOMES;
     genomes[plant.id] = inheritSourceGenome(plant.conceivedBy ?? "hive", parents.length ? parents : SOURCE_PARENT_GENOMES, world.seed, world.plants.indexOf(plant));
   }
+  const funded = applyEndOfDayFunding({ ...session, world });
+  world = funded.world;
   const history = [...session.history, { date: session.nextDate, nav: world.capital.navUsdt, fills: totalFills,
     close: Number(dataset.bars.at(-1)!.close), observedBars: dataset.bars.length, skippedBars, segments: groups.length }].slice(-300);
   const index = session.loop.archiveIndex + 1;
-  const next: HistoricalSession = { ...session, nextDate: archive.days[index]?.date ?? nextUtcDate(session.nextDate), world, genomes, records, history,
+  const next: HistoricalSession = { ...session, funding: funded.funding, nextDate: archive.days[index]?.date ?? nextUtcDate(session.nextDate), world, genomes, records, history,
     loop: { ...session.loop, archiveIndex: index, totalDays: session.loop.totalDays + 1, totalBars: session.loop.totalBars + dataset.bars.length,
       totalFills: session.loop.totalFills + totalFills,
-      totalFees: rounded(session.loop.totalFees + world.capital.paperFeesUsdt - session.world.capital.paperFeesUsdt), capitalHalted },
+      totalFees: rounded(session.loop.totalFees + world.capital.paperFeesUsdt - session.world.capital.paperFeesUsdt), capitalHalted: funded.loop.capitalHalted },
     trades: trades.sort((a, b) => a.executedAt.localeCompare(b.executedAt) || a.orderId.localeCompare(b.orderId)).slice(-400) };
   return validateHistoricalSession(index === archive.days.length ? wrapHistoricalRound(compactHistoricalSession(next), archive) : compactHistoricalSession(next), archive);
 }
@@ -503,7 +569,7 @@ async function executeKrakenHistoricalDay(session: HistoricalSession, archive: S
     totalFills += fills.length;
   }
   const protectedIds = Object.entries(states).filter(([, state]) => state.quantity !== 0 || state.pending.length > 0).map(([id]) => id);
-  const world = advanceSimulationDay({ ...booked, day: session.world.day }, observedSolClimate(dataset), protectedIds);
+  let world = advanceSimulationDay({ ...booked, day: session.world.day }, observedSolClimate(dataset), protectedIds);
   const genomes = { ...session.genomes };
   for (const plant of world.plants) {
     if (genomes[plant.id]) continue;
@@ -517,15 +583,17 @@ async function executeKrakenHistoricalDay(session: HistoricalSession, archive: S
     profiles[plant.id] = marketProfile(profiles[plant.id]!, archive.symbol);
     states[plant.id] = createKrakenPaperState(profiles[plant.id]!.id, plant.allocationUsdt);
   }
+  const funded = applyEndOfDayFunding({ ...session, world });
+  world = funded.world;
   const index = session.loop.archiveIndex + 1;
-  const next: HistoricalSession = { ...session, world, genomes, krakenStates: states, krakenProfiles: profiles, records,
+  const next: HistoricalSession = { ...session, funding: funded.funding, world, genomes, krakenStates: states, krakenProfiles: profiles, records,
     nextDate: archive.days[index]?.date ?? nextUtcDate(session.nextDate),
     history: [...session.history, { date: session.nextDate, nav: world.capital.navUsdt, fills: totalFills, close: Number(dataset.bars.at(-1)!.close),
       observedBars: dataset.bars.length, skippedBars: 0, segments: dataset.report.gapCount + 1,
       deposits: world.capital.externalDepositsUsdt ?? 0, netPnl: rounded(world.capital.navUsdt - 100 - (world.capital.externalDepositsUsdt ?? 0)) }].slice(-300),
     trades: trades.sort((a, b) => a.executedAt.localeCompare(b.executedAt) || a.orderId.localeCompare(b.orderId)).slice(-400),
     loop: { ...session.loop, archiveIndex: index, totalDays: session.loop.totalDays + 1, totalBars: session.loop.totalBars + dataset.bars.length,
-      totalFills: session.loop.totalFills + totalFills, totalFees: rounded(session.loop.totalFees + world.capital.paperFeesUsdt - session.world.capital.paperFeesUsdt), capitalHalted } };
+      totalFills: session.loop.totalFills + totalFills, totalFees: rounded(session.loop.totalFees + world.capital.paperFeesUsdt - session.world.capital.paperFeesUsdt), capitalHalted: funded.loop.capitalHalted } };
   return validateHistoricalSession(index === archive.days.length ? wrapHistoricalRound(compactHistoricalSession(next), archive) : compactHistoricalSession(next), archive);
 }
 
