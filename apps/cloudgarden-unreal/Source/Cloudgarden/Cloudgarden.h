@@ -17,6 +17,8 @@ public:
  FVector CrownOffset;
  TSharedPtr<FJsonObject> Data;
 };
+struct FCloudgardenHUDAction { FBox2D Bounds; FString Action; };
+bool CloudgardenReducedMotion();
 UCLASS()
 class ACloudgardenController : public APlayerController {
  GENERATED_BODY()
@@ -28,12 +30,20 @@ public:
  int InspectorScroll=0;
  bool ShowDetails=false, ShowLibrary=false;
  int CatalogIndex=0;
+ int HistoryWindow=30;
+ bool Winners=true;
+ float PanelProgress=1.f;
+ TArray<FCloudgardenHUDAction> HUDActions;
+ void HandleHUDAction(const FString& Action,bool Keyboard=false);
 };
 UCLASS()
 class ACloudgardenHUD : public AHUD {
  GENERATED_BODY()
 public:
  virtual void DrawHUD() override;
+ virtual void BeginPlay() override;
+ virtual void EndPlay(const EEndPlayReason::Type Reason) override;
+ TSharedPtr<SWidget> NativeHUDWidget;
 };
 UCLASS()
 class ACloudgardenMode : public AGameModeBase {
