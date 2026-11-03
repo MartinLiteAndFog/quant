@@ -1,5 +1,5 @@
 import { useId, useState } from 'react';
-import type { HistoricalSession, SolArchive } from './historicalGarden';
+import { fundingSettings, type HistoricalSession, type SolArchive } from './historicalGarden';
 import { IsometricGarden } from './IsometricGarden';
 import { GeneLibrary } from './GeneLibraryPanel';
 import { getKrakenProfile, KRAKEN_STARTER_PROFILES } from './krakenProfiles';
@@ -31,6 +31,10 @@ export function GameSurface(p:GameSurfaceProps) {
   const state=plant ? s.krakenStates?.[plant.id] : undefined;
   const profile=state ? (s.krakenProfiles?.[plant!.id] ?? getKrakenProfile(state.profileId)) : undefined;
   const funding=s.funding;
+  const fundingRule=fundingSettings(funding);
+  const fundingLabel=!funding ? "Keine automatischen Einzahlungen" : fundingRule.mode==="topup"
+    ? `Auffüllen auf ${fundingRule.topUpTargetEur} € bei Unterschreitung (Tagesende)`
+    : fundingRule.mode==="monthly" ? `${fundingRule.monthlyEur} € monatlicher Zuschuss` : "Keine automatischen Einzahlungen";
   const deposits=funding?.totalUsdt ?? 0, pnl=c.navUsdt-100-deposits;
   const alive=w.plants.filter(x=>x.status==='active').length;
   const parameters=profile ? {...profile} : {...genome};
@@ -61,7 +65,7 @@ export function GameSurface(p:GameSurfaceProps) {
       {tab==='Abstammung'&&<><h3>Eltern und Nachkommen</h3><p>{plant.parents?.join(' × ')??(plant.conceivedBy?'Aus dem Quellgen-Pool bestäubt':'Anfangsvariante aus einer Quellstrategie')}</p><p>Bestäubung: {plant.conceivedBy??'Startpopulation'}</p><ul>{w.plants.filter(x=>x.parents?.includes(plant.id)).map(x=><li key={x.id}><button onClick={()=>p.onSelect(x.id)}>{x.name} · {x.status}</button></li>)}</ul><h3>Saat und Kapital</h3><p>Bestäubung kombiniert vorhandene Gene mit begrenzter Zufallsmutation. Neue Pflanzen erhalten nur verfügbares Kapital. {w.dynamicEcology ? "Es gibt keine festen Pflanzplätze. Die Berechnung begrenzt gleichzeitig lebende Pflanzen auf 50." : "Dieser ältere Spielstand besitzt 20 einmalig nutzbare Saatplätze; starte eine neue Welt für die dynamische Population."}</p><dl className="cg-values"><div><dt>Freies Kapital</dt><dd>{money(c.freeCapitalUsdt)}</dd></div><div><dt>Geschützte Reserve</dt><dd>{money(c.protectedReserveUsdt)}</dd></div></dl><h3>Letzte Ereignisse</h3><ol className="cg-fills">{w.events.filter(e=>e.actor===plant.id||e.subject===plant.id).slice(-12).reverse().map(e=><li key={e.id}>Tag {e.day} · {e.type}<small>{JSON.stringify(e.detail)}</small></li>)}</ol></>}
       </section></>:<p>Wähle eine Pflanze im Garten.</p>}
     </aside></div>
-    <details className="cg-method"><summary>Daten, Forschungsgrenzen und neue Welt</summary><p>{a.totalBars.toLocaleString('de-DE')} echte Minuten · {a.firstDate} bis {a.lastDate} · {a.missingMinutes} fehlende Minuten bleiben Lücken. Quelle SHA {a.sourceSha256.slice(0,16)}…</p><p>Wiederholte Archivdurchläufe sind Training auf denselben Daten. Kein unabhängiger Nachweis einer profitablen Strategie: not_comparable. Preise sind historisch, Ausführungen und Kosten modelliert; Funding fehlt. {funding?.monthlyEur??100} € monatlich sind externe Einzahlungen, kein Gewinn. Verwendeter fester Simulationskurs: {funding?.eurUsdt??1} USDT je EUR; kein historischer Devisenkurs.</p><div className="cg-new-world"><label>Startdatum<input type="date" min={a.firstDate} max={a.lastDate} value={p.startDate} onChange={e=>p.onDate(e.target.value)} disabled={p.busy}/></label>{p.profileIds.map((id,i)=><label key={i}>Anfangsvariante {i+1}<select value={id} disabled={p.busy} onChange={e=>p.onProfiles(p.profileIds.map((x,j)=>j===i?e.target.value:x))}>{KRAKEN_STARTER_PROFILES.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label>)}<button onClick={p.onRestart} disabled={p.busy}>Neue Welt mit diesen Varianten</button></div></details>
+    <details className="cg-method"><summary>Daten, Forschungsgrenzen und neue Welt</summary><p>{a.totalBars.toLocaleString('de-DE')} echte Minuten · {a.firstDate} bis {a.lastDate} · {a.missingMinutes} fehlende Minuten bleiben Lücken. Quelle SHA {a.sourceSha256.slice(0,16)}…</p><p>Wiederholte Archivdurchläufe sind Training auf denselben Daten. Kein unabhängiger Nachweis einer profitablen Strategie: not_comparable. Preise sind historisch, Ausführungen und Kosten modelliert; Funding fehlt. Finanzierung: {fundingLabel}. Einzahlungen sind externe Kapitalzuflüsse, kein Gewinn. Verwendeter fester Simulationskurs: {funding?.eurUsdt??1} USDT je EUR; kein historischer Devisenkurs.</p><div className="cg-new-world"><label>Startdatum<input type="date" min={a.firstDate} max={a.lastDate} value={p.startDate} onChange={e=>p.onDate(e.target.value)} disabled={p.busy}/></label>{p.profileIds.map((id,i)=><label key={i}>Anfangsvariante {i+1}<select value={id} disabled={p.busy} onChange={e=>p.onProfiles(p.profileIds.map((x,j)=>j===i?e.target.value:x))}>{KRAKEN_STARTER_PROFILES.map(x=><option key={x.id} value={x.id}>{x.name}</option>)}</select></label>)}<button onClick={p.onRestart} disabled={p.busy}>Neue Welt mit diesen Varianten</button></div></details>
     <GeneLibrary open={library} onClose={()=>setLibrary(false)} candidate={candidate}/>
   </main>;
 }
