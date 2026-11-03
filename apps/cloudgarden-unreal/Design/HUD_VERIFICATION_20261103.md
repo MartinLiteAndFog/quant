@@ -29,3 +29,7 @@ Current logs unexpectedly load `/Engine/Maps/Templates/OpenWorld` although packa
 GitNexus impact attempts for the native HUD/controller/portrait/scrim report unindexed symbols. The global change scan includes other shared trading/fleet work and does not cover these untracked native files. Review and publish only explicitly selected Cloudgarden files. Preserve source freeze while compiling: editing a file while the compiler reads it previously produced a partial-file diagnostic. Compile success alone does not establish runtime success.
 
 The profitable plant disappearance remains a separately preserved, deferred report. No trading or ecological behavior was changed during this HUD implementation. No live orders, independent profitability, finished environment art or complete game is claimed.
+
+## Follow-up after Xcode update
+
+The user updated Xcode and the complete native Game build subsequently passed, including ApplePostBuildSync, in46.18s. The earlier license block is resolved. Latest drawer/portrait runtime checks remain pending. The explicit Entry-map control also terminated with the same uploader assertion (exit139), so the unintended OpenWorld template is not established as the cause and changing maps is not a demonstrated fix.
