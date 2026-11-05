@@ -1,0 +1,36 @@
+{
+  "version": "v10.0-research-2026-11-05",
+  "model": "research only",
+  "assets": [
+    {
+      "basename": "imba_genome_parameter_lab_v10_ui.html",
+      "size_bytes": 24374621,
+      "sha256": "9c7b3875737d3557b90134bcadd59d8434f24dadb451030b8a2b73848407e00d",
+      "bundled_in_repo": false
+    },
+    {
+      "basename": "history_payload.json",
+      "size_bytes": 18117263,
+      "sha256": "ba3f2dd6e78f07bb5c559780afee2bf3452aee270d38bbf446429d54b0340689",
+      "bundled_in_repo": false
+    },
+    {
+      "basename": "historical_7326_equity_2021Dec_2022_2023_2024.npz",
+      "size_bytes": 10359610,
+      "sha256": "87441f51fb33a779c82cd1439da5f88a4ec4d05fb984eae74fa66a3b15c5ede4",
+      "bundled_in_repo": false
+    },
+    {
+      "basename": "full_4158_genomes_2026_daily.npz",
+      "size_bytes": 5087512,
+      "sha256": "a230b1f3a680b5db4f5b7b828dff3372d83d647ec0259b974797c8cc385921a0",
+      "bundled_in_repo": false
+    },
+    {
+      "basename": "extra_3168_mode_curves_2025_2026.npz",
+      "size_bytes": 2407692,
+      "sha256": "91ce1f3ba74225e753f3c420607c2adbef1c1177268f1a43140bf49638df2c54",
+      "bundled_in_repo": false
+    }
+  ]
+}
