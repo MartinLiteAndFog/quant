@@ -12,7 +12,7 @@ const GENE_ORDER=[['imba','⌁','IMBA','#48cbd5'],['renko','▦','RENKO','#70a8e
 const EXIT_NAMES=['Ohne TP/TTP','TP 6 %','TP 4 %','TP 3 %','TP6 + TTP3/1,5','TP 2 %','TP4 + TTP2/1','TTP 3/1,5','TTP 2/1'];
 const AXES={s:'Sensitivity',b:'Renko-Box (USD)',tp:'TP-Ziel (%)',act:'TTP-Aktivierung (%)',trail:'TTP-Abstand (%)',exit:'Exit-Programm'};
 const state={priceMode:'renko_usd',day:0,horizon:30,x:'s',y:'b',mode:'all4158',family:'all',familyEnabled:{none:true,tp:true,ttp:true,both:true},box:'all',dataset:'2026',
-  aggregate:'max',chart:'3d',points:'top6',guard:30,rank:14,corrLimit:null,corrFallback:false,manual:new Set(),selected:-1,
+  aggregate:'max',chart:'3d',points:'top6',guard:30,rank:14,topN:6,stopScope:'strategy',corrLimit:null,corrFallback:false,manual:new Set(),selected:-1,
   playing:null,dir:1,port:null,portKey:'',filtered:[],gridN:0,cacheKey:'',grid:null,rendering:false,pending:false,
   smooth:1,playMs:650,sidebarOpen:true,surfaceMode:'overlay',layers:{none:true,tp:true,ttp:true,both:true},layerOpacity:0.62};
 const IDMAP=new Map(META.map((m,i)=>[m.id,i]));
@@ -144,60 +144,102 @@ function pearsonPrevious28(a,b,day){
   if(xx<1e-18||yy<1e-18)return 0;
   return Math.max(-1,Math.min(1,(sxy-sx*sy/n)/Math.sqrt(xx*yy)));
 }
-function applyCorrelationCap(ranked,day){
- if(state.corrLimit===null||!Number.isFinite(state.corrLimit))return ranked.slice(0,6);
+function applyCorrelationCap(ranked,day,topN=state.topN,corrLimit=state.corrLimit,corrFallback=state.corrFallback){
+ if(corrLimit===null||!Number.isFinite(corrLimit))return ranked.slice(0,topN);
  const selected=[];
  for(const candidate of ranked){
-   if(selected.length>=6)break;
-   if(selected.every(s=>pearsonPrevious28(s[0],candidate[0],day)<=state.corrLimit))selected.push(candidate);
+  if(selected.length>=topN)break;
+  if(selected.every(s=>pearsonPrevious28(s[0],candidate[0],day)<=corrLimit))selected.push(candidate);
  }
- if(state.corrFallback&&selected.length<6){
-   const chosen=new Set(selected.map(s=>s[0]));
-   for(const c of ranked){if(selected.length>=6)break;if(!chosen.has(c[0])){selected.push(c);chosen.add(c[0]);}}
+ if(corrFallback&&selected.length<topN){
+  const chosen=new Set(selected.map(s=>s[0]));
+  for(const c of ranked){if(selected.length>=topN)break;if(!chosen.has(c[0])){selected.push(c);chosen.add(c[0]);}}
  }
  return selected;
 }
-function choosePortfolio(){
- const pool=state.filtered,hash=pool.join(',')+'|'+state.guard+'|'+state.rank+'|'+state.corrLimit+'|'+state.corrFallback;
- if(hash===state.portKey&&state.port)return state.port;
+function simulatePortfolio(config,selections=null,summaryOnly=false){
+ const pool=config.pool,rank=config.rank,guard=config.guard,topN=config.topN;
+ const stopScope=config.stopScope,corrLimit=config.corrLimit,corrFallback=config.corrFallback;
  let reserve=1000,cash=0,basis=0,paid=0,payoutN=0,stopN=0,milestone=0;
  const h=[0,0,0,0,0,0],ids=[-1,-1,-1,-1,-1,-1],stopped=[false,false,false,false,false,false];
  const idx=[1,1,1,1,1,1],hi=[1,1,1,1,1,1];
- const results=[];const sum=a=>a.reduce((x,y)=>x+y,0);
+ let sleeveIndex=1,sleevePeak=1,sleeveStopped=false;
+ let wealthPeak=1000,maxDrawdownPct=0,wealth=1000;
+ const results=summaryOnly?null:[],sum=a=>a.reduce((x,y)=>x+y,0);
  for(let d=0;d<DAYS;d++){
   const date=DATES[d],newMonth=date.endsWith('-01'),newCycle=d%14===0;
   let sub=0;
   if(newMonth){sub=Math.min(reserve,Math.max(100,.2*reserve));reserve-=sub;cash+=sub;basis+=sub;}
-  if(newCycle){cash+=sum(h);h.fill(0);ids.fill(-1);stopped.fill(false);idx.fill(1);hi.fill(1);
-   const allRanked=pool.map(i=>[i,score(i,d)]).filter(v=>v[1]>0).sort((a,b)=>b[1]-a[1]||a[0]-b[0]);
-   const scored=applyCorrelationCap(allRanked,d);
-   scored.forEach((v,k)=>ids[k]=v[0]);const n=scored.length;
-   if(n&&cash>0){for(let k=0;k<n;k++)h[k]=cash/n;cash=0;}
-  }else if(sub>0){const active=ids.filter((i,k)=>i>=0&&!stopped[k]).length;
-   if(active){for(let k=0;k<6;k++)if(ids[k]>=0&&!stopped[k])h[k]+=sub/active;cash-=sub;}
+  if(newCycle){
+   cash+=sum(h);h.fill(0);ids.fill(-1);stopped.fill(false);idx.fill(1);hi.fill(1);
+   sleeveIndex=1;sleevePeak=1;sleeveStopped=false;
+   let chosen;
+   if(selections)chosen=selections.get(rank+'|'+topN+'|'+d)||[];
+   else{
+    const ranked=pool.map(i=>[i,rPct(i,d-1,rank)]).filter(v=>v[1]>0).sort((a,b)=>b[1]-a[1]||a[0]-b[0]);
+    chosen=applyCorrelationCap(ranked,d,topN,corrLimit,corrFallback).map(v=>v[0]);
+   }
+   chosen.forEach((id,k)=>ids[k]=id);
+   if(chosen.length&&cash>0){for(let k=0;k<chosen.length;k++)h[k]=cash/chosen.length;cash=0;}
+  }else if(sub>0&&!sleeveStopped){
+   const active=ids.filter((i,k)=>i>=0&&!stopped[k]).length;
+   if(active){for(let k=0;k<topN;k++)if(ids[k]>=0&&!stopped[k])h[k]+=sub/active;cash-=sub;}
   }
-  for(let k=0;k<6;k++)if(ids[k]>=0&&!stopped[k]&&h[k]>1e-10){
+  const beforeReturns=cash+sum(h);
+  for(let k=0;k<topN;k++)if(ids[k]>=0&&!stopped[k]&&h[k]>1e-10){
    const factor=Math.max(0,1+10*(dayFactor(ids[k],d)-1));h[k]*=factor;idx[k]*=factor;hi[k]=Math.max(hi[k],idx[k]);
   }
-  let nav=cash+sum(h),profit=Math.max(0,nav+paid-basis),ratio=basis>0?profit/basis:0;
-  if(basis>0&&ratio>=Math.max(1,milestone+1)-1e-10){const take=Math.min(nav*.5,.5*profit);
-   if(take>1e-10){const c=Math.min(cash,take);cash-=c;const rest=take-c;
-    if(rest>1e-10&&sum(h)>0){const scale=Math.max(0,1-rest/sum(h));for(let k=0;k<6;k++)h[k]*=scale;}
-    reserve+=take;paid+=take;payoutN++;milestone++;}
+  const afterReturns=cash+sum(h);
+  // Portfolio stop uses performance-only trading capital, not the protected reserve.
+  // New deposits and profit transfers must NOT generate artificial drawdowns.
+  if(stopScope==='portfolio'&&!sleeveStopped&&beforeReturns>1e-10){
+   sleeveIndex*=Math.max(0,afterReturns/beforeReturns);
+   sleevePeak=Math.max(sleevePeak,sleeveIndex);
   }
-  if(state.guard>0){for(let k=0;k<6;k++)if(ids[k]>=0&&!stopped[k]&&idx[k]/Math.max(hi[k],1e-12)-1<=-state.guard/100){
-    stopped[k]=true;cash+=h[k];h[k]=0;stopN++;
-  }}
+  const nav=cash+sum(h),profit=Math.max(0,nav+paid-basis),ratio=basis>0?profit/basis:0;
+  if(basis>0&&ratio>=Math.max(1,milestone+1)-1e-10){
+   const take=Math.min(nav*.5,.5*profit);
+   if(take>1e-10){
+    const c=Math.min(cash,take);cash-=c;const rest=take-c;
+    if(rest>1e-10&&sum(h)>0){
+     const scale=Math.max(0,1-rest/sum(h));for(let k=0;k<topN;k++)h[k]*=scale;
+    }
+    reserve+=take;paid+=take;payoutN++;milestone++;
+   }
+  }
+  if(guard>0){
+   if(stopScope==='portfolio'){
+    if(!sleeveStopped&&sleeveIndex/Math.max(sleevePeak,1e-12)-1<=-guard/100){
+     sleeveStopped=true;cash+=sum(h);h.fill(0);
+     for(let k=0;k<topN;k++)if(ids[k]>=0)stopped[k]=true;
+     stopN++;
+    }
+   }else{
+    for(let k=0;k<topN;k++)if(ids[k]>=0&&!stopped[k]&&idx[k]/Math.max(hi[k],1e-12)-1<=-guard/100){
+     stopped[k]=true;cash+=h[k];h[k]=0;stopN++;
+    }
+   }
+  }
   const trading=cash+sum(h),live=ids.filter((i,k)=>i>=0&&!stopped[k]&&h[k]>1e-10);
-  results.push({date,wealth:reserve+trading,reserve,trading,cash,ids:ids.slice(),h:h.slice(),stopped:stopped.slice(),live,payoutN,stopN,score:ids.map(i=>i>=0?score(i,Math.floor(d/14)*14):null)});
+  wealth=reserve+trading;wealthPeak=Math.max(wealthPeak,wealth);
+  maxDrawdownPct=Math.min(maxDrawdownPct,100*(wealth/Math.max(wealthPeak,1e-12)-1));
+  if(!summaryOnly)results.push({date,wealth,reserve,trading,cash,ids:ids.slice(),h:h.slice(),stopped:stopped.slice(),live,payoutN,stopN,
+    score:ids.map(i=>i>=0?rPct(i,Math.floor(d/14)*14-1,rank):null)});
  }
- state.portKey=hash;state.port=results;
- return results;
+ return summaryOnly?{endWealth:wealth,maxDrawdownPct,payoutN,stopN}:results;
+}
+function choosePortfolio(){
+ const pool=state.filtered,hash=pool.join(',')+'|'+state.guard+'|'+state.rank+'|'+state.topN+'|'+state.stopScope+'|'+state.corrLimit+'|'+state.corrFallback;
+ if(hash===state.portKey&&state.port)return state.port;
+ state.port=simulatePortfolio({pool,rank:state.rank,guard:state.guard,topN:state.topN,stopScope:state.stopScope,
+   corrLimit:state.corrLimit,corrFallback:state.corrFallback});
+ state.portKey=hash;
+ return state.port;
 }
 function refreshPool(){state.filtered=eligible();state.grid=buildHeatmap();state.portKey='';choosePortfolio();setStatus();renderChart();}
 function familyName(f){return ({none:'Nur IMBA',tp:'TP ohne TTP',ttp:'TTP ohne TP',both:'TP + TTP'})[f]||'Alle';}
 function setStatus(){const d=choosePortfolio()[state.day];const len=state.filtered.length;const chosen=d.ids.filter(i=>i>=0).length;
- $('candidateCount').textContent=number(len,0);$('cellCount').textContent=number(state.grid.occupied,0);$('activeCount').textContent=d.live.length+'/6';
+ $('candidateCount').textContent=number(len,0);$('cellCount').textContent=number(state.grid.occupied,0);$('activeCount').textContent=d.live.length+'/'+state.topN;
  $('wealth').textContent=euro(d.wealth);$('wealthChange').textContent=pct(100*(d.wealth/1000-1));
  $('reserve').textContent=euro(d.reserve);$('trading').textContent=euro(d.trading);
  $('payouts').textContent=d.payoutN;$('stops').textContent=d.stopN;
@@ -208,7 +250,7 @@ function setStatus(){const d=choosePortfolio()[state.day];const len=state.filter
  $('dataWarning').textContent=`${state.dataset}: Echte Tagesrenditen für alle 7.326 Gen-Kombinationen im gewählten Marktmodus. 10× Portfolio mit eigenem Startkapital zu Jahresbeginn. Keine TradingView-/Liquidationsparität.`;
  if(state.mode.startsWith('rawYear')&&Number(state.dataset)<=Number(state.mode.slice(7)))$('dataWarning').textContent+=' Trainingsfamilie darf erst in den folgenden Jahren gehandelt werden: kein Lookahead; deshalb keine Kandidaten.';
  renderGeneCards(d);renderTop6(d);renderEquityChart();renderFamilyBreakdown(d);
- const shot=$('activeSnapshot');if(shot){const match=Object.values(SCREENSHOT_PRESETS).find(x=>x.pool===state.mode&&x.guard===state.guard&&x.rank===state.rank&&state.dataset==='2026'&&state.priceMode==='renko_usd'&&state.box==='all'&&state.corrLimit===null&&Object.values(state.familyEnabled).every(Boolean));shot.textContent=match?'Aktiv: '+match.label:'Aktive Einstellungen: individuell verändert / anderes Jahr';}
+ const shot=$('activeSnapshot');if(shot){const match=Object.values(SCREENSHOT_PRESETS).find(x=>state.topN===6&&state.stopScope==='strategy'&&x.pool===state.mode&&x.guard===state.guard&&x.rank===state.rank&&state.dataset==='2026'&&state.priceMode==='renko_usd'&&state.box==='all'&&state.corrLimit===null&&Object.values(state.familyEnabled).every(Boolean));shot.textContent=match?'Aktiv: '+match.label:'Aktive Einstellungen: individuell verändert / anderes Jahr';}
 }
 function renderFamilyBreakdown(d){
  const base=eligibleBase(), selected=d.ids.filter(i=>i>=0), live=d.live;
@@ -230,7 +272,7 @@ function renderFamilyBreakdown(d){
   </div>`;
  }).join('');
  const breakdown=$('poolAuditSummary');
- if(breakdown)breakdown.innerHTML=`<strong>${number(totalEligible,0)}</strong> wirklich simulierte Kandidaten im Top-6-Ranking · <strong>${listed}/6</strong> gewählt · <strong>${trading}/6</strong> handeln.<br>
+ if(breakdown)breakdown.innerHTML=`<strong>${number(totalEligible,0)}</strong> wirklich simulierte Kandidaten im Top-6-Ranking · <strong>${listed}/${state.topN}</strong> gewählt · <strong>${trading}/${state.topN}</strong> handeln.<br>
   <strong>${number(uniqueCells,0)}</strong> belegte Koordinaten mit <strong>${number(totalVisible,0)}</strong> aktuell eingeblendeten Bot-Markern. <span style="color:#9cb5cd">Mehrere echte Bots können dieselbe XY-Stelle besetzen.</span>`;
  const modeInfo=$('rasterExplain');
  if(modeInfo){
@@ -388,6 +430,8 @@ function setControls(){
  $('axisX').value=state.x;$('axisY').value=state.y;$('exitFamily').value=familySelectionMode();
  $('boxFilter').value=state.box;$('poolMode').value=state.mode;$('ranking').value=String(state.rank);
  $('guard').value=state.guard;$('stopVal').textContent=state.guard===0?'Aus':'−'+state.guard+' %';
+ if($('topN')){$('topN').value=state.topN;$('topNValue').textContent=String(state.topN);}
+ if($('stopScope'))$('stopScope').value=state.stopScope;
  $('correlationLimit').value=state.corrLimit===null?'off':String(state.corrLimit);$('corrFallback').checked=state.corrFallback;
 }
 function changePool(){state.portKey='';state.filtered=eligible();state.grid=buildHeatmap();state.port=null;setStatus();renderChart();}
@@ -401,7 +445,7 @@ function applyPreset(n){
  syncModeControls();setControls();changePool();
 }
 function serialize(){return {version:13,priceMode:state.priceMode,date:DATES[state.day],year:state.dataset,smooth:state.smooth,surfaceMode:state.surfaceMode,layers:state.layers,layerOpacity:state.layerOpacity,axisX:state.x,axisY:state.y,family:state.family,box:state.box,
- mode:state.mode,familyEnabled:state.familyEnabled,horizon:state.horizon,rank:state.rank,stop:state.guard,corrLimit:state.corrLimit,corrFallback:state.corrFallback,selected:[...state.manual].map(i=>META[i].id)};}
+ mode:state.mode,familyEnabled:state.familyEnabled,horizon:state.horizon,rank:state.rank,topN:state.topN,stop:state.guard,stopScope:state.stopScope,corrLimit:state.corrLimit,corrFallback:state.corrFallback,selected:[...state.manual].map(i=>META[i].id)};}
 function downloadJSON(){const b=new Blob([JSON.stringify(serialize(),null,2)],{type:'application/json'}),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download='quant_genome_v13_preset.json';a.click();URL.revokeObjectURL(u);}
 function supportsWebGL(){try{const c=document.createElement('canvas');return !!(c.getContext('webgl2')||c.getContext('webgl')||c.getContext('experimental-webgl'));}catch(e){return false;}}
 
@@ -525,7 +569,7 @@ function bindUI(){
     state.family=familySelectionMode();
    state.priceMode=['candle','renko_pct','renko_usd'].includes(x.priceMode)?x.priceMode:'renko_usd';
    state.box=x.box||'all';state.mode=x.mode||'all4158';state.horizon=x.horizon??30;
-   state.rank=x.rank??14;state.guard=x.stop??30;state.corrLimit=(x.corrLimit===null||x.corrLimit===undefined)?null:Number(x.corrLimit);state.corrFallback=!!x.corrFallback;
+   state.rank=x.rank??14;state.guard=x.stop??30;state.topN=Math.max(1,Math.min(6,Number(x.topN)||6));state.stopScope=x.stopScope==='portfolio'?'portfolio':'strategy';state.corrLimit=(x.corrLimit===null||x.corrLimit===undefined)?null:Number(x.corrLimit);state.corrFallback=!!x.corrFallback;
    syncModeControls();setControls();$('horizon').value=state.horizon;$('slider').value=state.day;updateManual();changePool();
   }catch(err){alert('Preset konnte nicht geladen werden: '+err.message);}
  };
@@ -552,7 +596,7 @@ async function loadSaved2026(key){
  const p=SCREENSHOT_PRESETS[key];if(!p)return;
  if(state.playing!==null){cancelAnimationFrame(state.playing);state.playing=null;}
  if(state.dataset!=='2026')await loadYear('2026');
- state.mode=p.pool;state.rank=p.rank;state.guard=p.guard;state.corrLimit=null;state.corrFallback=false;
+ state.mode=p.pool;state.rank=p.rank;state.guard=p.guard;state.topN=6;state.stopScope='strategy';state.corrLimit=null;state.corrFallback=false;
  state.family='all';state.familyEnabled={none:true,tp:true,ttp:true,both:true};
  state.priceMode='renko_usd';state.box='all';state.x='s';state.y='b';state.day=DAYS-1;
  state.chart=supportsWebGL()?'3d':'2d';state.points='top6';state.horizon=30;
