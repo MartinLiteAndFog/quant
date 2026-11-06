@@ -12,7 +12,7 @@ const GENE_ORDER=[['imba','⌁','IMBA','#48cbd5'],['renko','▦','RENKO','#70a8e
 const EXIT_NAMES=['Ohne TP/TTP','TP 6 %','TP 4 %','TP 3 %','TP6 + TTP3/1,5','TP 2 %','TP4 + TTP2/1','TTP 3/1,5','TTP 2/1'];
 const AXES={s:'Sensitivity',b:'Renko-Box (USD)',tp:'TP-Ziel (%)',act:'TTP-Aktivierung (%)',trail:'TTP-Abstand (%)',exit:'Exit-Programm'};
 const state={priceMode:'renko_usd',day:0,horizon:30,x:'s',y:'b',mode:'all4158',family:'all',familyEnabled:{none:true,tp:true,ttp:true,both:true},box:'all',dataset:'2026',
-  aggregate:'max',chart:'3d',points:'top6',guard:30,rank:14,corrLimit:null,corrFallback:false,manual:new Set(),selected:-1,
+  aggregate:'max',chart:'3d',points:'top6',guard:30,rank:14,topN:6,stopScope:'strategy',corrLimit:null,corrFallback:false,manual:new Set(),selected:-1,
   playing:null,dir:1,port:null,portKey:'',filtered:[],gridN:0,cacheKey:'',grid:null,rendering:false,pending:false,
   smooth:1,playMs:650,sidebarOpen:true,surfaceMode:'overlay',layers:{none:true,tp:true,ttp:true,both:true},layerOpacity:0.62};
 const IDMAP=new Map(META.map((m,i)=>[m.id,i]));
@@ -144,71 +144,113 @@ function pearsonPrevious28(a,b,day){
   if(xx<1e-18||yy<1e-18)return 0;
   return Math.max(-1,Math.min(1,(sxy-sx*sy/n)/Math.sqrt(xx*yy)));
 }
-function applyCorrelationCap(ranked,day){
- if(state.corrLimit===null||!Number.isFinite(state.corrLimit))return ranked.slice(0,6);
+function applyCorrelationCap(ranked,day,topN=state.topN,corrLimit=state.corrLimit,corrFallback=state.corrFallback){
+ if(corrLimit===null||!Number.isFinite(corrLimit))return ranked.slice(0,topN);
  const selected=[];
  for(const candidate of ranked){
-   if(selected.length>=6)break;
-   if(selected.every(s=>pearsonPrevious28(s[0],candidate[0],day)<=state.corrLimit))selected.push(candidate);
+  if(selected.length>=topN)break;
+  if(selected.every(s=>pearsonPrevious28(s[0],candidate[0],day)<=corrLimit))selected.push(candidate);
  }
- if(state.corrFallback&&selected.length<6){
-   const chosen=new Set(selected.map(s=>s[0]));
-   for(const c of ranked){if(selected.length>=6)break;if(!chosen.has(c[0])){selected.push(c);chosen.add(c[0]);}}
+ if(corrFallback&&selected.length<topN){
+  const chosen=new Set(selected.map(s=>s[0]));
+  for(const c of ranked){if(selected.length>=topN)break;if(!chosen.has(c[0])){selected.push(c);chosen.add(c[0]);}}
  }
  return selected;
 }
-function choosePortfolio(){
- const pool=state.filtered,hash=pool.join(',')+'|'+state.guard+'|'+state.rank+'|'+state.corrLimit+'|'+state.corrFallback;
- if(hash===state.portKey&&state.port)return state.port;
+function simulatePortfolio(config,selections=null,summaryOnly=false){
+ const pool=config.pool,rank=config.rank,guard=config.guard,topN=config.topN;
+ const stopScope=config.stopScope,corrLimit=config.corrLimit,corrFallback=config.corrFallback;
  let reserve=1000,cash=0,basis=0,paid=0,payoutN=0,stopN=0,milestone=0;
  const h=[0,0,0,0,0,0],ids=[-1,-1,-1,-1,-1,-1],stopped=[false,false,false,false,false,false];
  const idx=[1,1,1,1,1,1],hi=[1,1,1,1,1,1];
- const results=[];const sum=a=>a.reduce((x,y)=>x+y,0);
+ let sleeveIndex=1,sleevePeak=1,sleeveStopped=false;
+ let wealthPeak=1000,maxDrawdownPct=0,wealth=1000;
+ const results=summaryOnly?null:[],sum=a=>a.reduce((x,y)=>x+y,0);
  for(let d=0;d<DAYS;d++){
   const date=DATES[d],newMonth=date.endsWith('-01'),newCycle=d%14===0;
   let sub=0;
   if(newMonth){sub=Math.min(reserve,Math.max(100,.2*reserve));reserve-=sub;cash+=sub;basis+=sub;}
-  if(newCycle){cash+=sum(h);h.fill(0);ids.fill(-1);stopped.fill(false);idx.fill(1);hi.fill(1);
-   const allRanked=pool.map(i=>[i,score(i,d)]).filter(v=>v[1]>0).sort((a,b)=>b[1]-a[1]||a[0]-b[0]);
-   const scored=applyCorrelationCap(allRanked,d);
-   scored.forEach((v,k)=>ids[k]=v[0]);const n=scored.length;
-   if(n&&cash>0){for(let k=0;k<n;k++)h[k]=cash/n;cash=0;}
-  }else if(sub>0){const active=ids.filter((i,k)=>i>=0&&!stopped[k]).length;
-   if(active){for(let k=0;k<6;k++)if(ids[k]>=0&&!stopped[k])h[k]+=sub/active;cash-=sub;}
+  if(newCycle){
+   cash+=sum(h);h.fill(0);ids.fill(-1);stopped.fill(false);idx.fill(1);hi.fill(1);
+   sleeveIndex=1;sleevePeak=1;sleeveStopped=false;
+   let chosen;
+   if(selections)chosen=selections.get(rank+'|'+topN+'|'+d)||[];
+   else{
+    const ranked=pool.map(i=>[i,rPct(i,d-1,rank)]).filter(v=>v[1]>0).sort((a,b)=>b[1]-a[1]||a[0]-b[0]);
+    chosen=applyCorrelationCap(ranked,d,topN,corrLimit,corrFallback).map(v=>v[0]);
+   }
+   chosen.forEach((id,k)=>ids[k]=id);
+   if(chosen.length&&cash>0){for(let k=0;k<chosen.length;k++)h[k]=cash/chosen.length;cash=0;}
+  }else if(sub>0&&!sleeveStopped){
+   const active=ids.filter((i,k)=>i>=0&&!stopped[k]).length;
+   if(active){for(let k=0;k<topN;k++)if(ids[k]>=0&&!stopped[k])h[k]+=sub/active;cash-=sub;}
   }
-  for(let k=0;k<6;k++)if(ids[k]>=0&&!stopped[k]&&h[k]>1e-10){
+  const beforeReturns=cash+sum(h);
+  for(let k=0;k<topN;k++)if(ids[k]>=0&&!stopped[k]&&h[k]>1e-10){
    const factor=Math.max(0,1+10*(dayFactor(ids[k],d)-1));h[k]*=factor;idx[k]*=factor;hi[k]=Math.max(hi[k],idx[k]);
   }
-  let nav=cash+sum(h),profit=Math.max(0,nav+paid-basis),ratio=basis>0?profit/basis:0;
-  if(basis>0&&ratio>=Math.max(1,milestone+1)-1e-10){const take=Math.min(nav*.5,.5*profit);
-   if(take>1e-10){const c=Math.min(cash,take);cash-=c;const rest=take-c;
-    if(rest>1e-10&&sum(h)>0){const scale=Math.max(0,1-rest/sum(h));for(let k=0;k<6;k++)h[k]*=scale;}
-    reserve+=take;paid+=take;payoutN++;milestone++;}
+  const afterReturns=cash+sum(h);
+  // Portfolio stop uses performance-only trading capital, not the protected reserve.
+  // New deposits and profit transfers must NOT generate artificial drawdowns.
+  if(stopScope==='portfolio'&&!sleeveStopped&&beforeReturns>1e-10){
+   sleeveIndex*=Math.max(0,afterReturns/beforeReturns);
+   sleevePeak=Math.max(sleevePeak,sleeveIndex);
   }
-  if(state.guard>0){for(let k=0;k<6;k++)if(ids[k]>=0&&!stopped[k]&&idx[k]/Math.max(hi[k],1e-12)-1<=-state.guard/100){
-    stopped[k]=true;cash+=h[k];h[k]=0;stopN++;
-  }}
+  const nav=cash+sum(h),profit=Math.max(0,nav+paid-basis),ratio=basis>0?profit/basis:0;
+  if(basis>0&&ratio>=Math.max(1,milestone+1)-1e-10){
+   const take=Math.min(nav*.5,.5*profit);
+   if(take>1e-10){
+    const c=Math.min(cash,take);cash-=c;const rest=take-c;
+    if(rest>1e-10&&sum(h)>0){
+     const scale=Math.max(0,1-rest/sum(h));for(let k=0;k<topN;k++)h[k]*=scale;
+    }
+    reserve+=take;paid+=take;payoutN++;milestone++;
+   }
+  }
+  if(guard>0){
+   if(stopScope==='portfolio'){
+    if(!sleeveStopped&&sleeveIndex/Math.max(sleevePeak,1e-12)-1<=-guard/100){
+     sleeveStopped=true;cash+=sum(h);h.fill(0);
+     for(let k=0;k<topN;k++)if(ids[k]>=0)stopped[k]=true;
+     stopN++;
+    }
+   }else{
+    for(let k=0;k<topN;k++)if(ids[k]>=0&&!stopped[k]&&idx[k]/Math.max(hi[k],1e-12)-1<=-guard/100){
+     stopped[k]=true;cash+=h[k];h[k]=0;stopN++;
+    }
+   }
+  }
   const trading=cash+sum(h),live=ids.filter((i,k)=>i>=0&&!stopped[k]&&h[k]>1e-10);
-  results.push({date,wealth:reserve+trading,reserve,trading,cash,ids:ids.slice(),h:h.slice(),stopped:stopped.slice(),live,payoutN,stopN,score:ids.map(i=>i>=0?score(i,Math.floor(d/14)*14):null)});
+  wealth=reserve+trading;wealthPeak=Math.max(wealthPeak,wealth);
+  maxDrawdownPct=Math.min(maxDrawdownPct,100*(wealth/Math.max(wealthPeak,1e-12)-1));
+  if(!summaryOnly)results.push({date,wealth,reserve,trading,cash,ids:ids.slice(),h:h.slice(),stopped:stopped.slice(),live,payoutN,stopN,
+    score:ids.map(i=>i>=0?rPct(i,Math.floor(d/14)*14-1,rank):null)});
  }
- state.portKey=hash;state.port=results;
- return results;
+ return summaryOnly?{endWealth:wealth,maxDrawdownPct,payoutN,stopN}:results;
+}
+function choosePortfolio(){
+ const pool=state.filtered,hash=pool.join(',')+'|'+state.guard+'|'+state.rank+'|'+state.topN+'|'+state.stopScope+'|'+state.corrLimit+'|'+state.corrFallback;
+ if(hash===state.portKey&&state.port)return state.port;
+ state.port=simulatePortfolio({pool,rank:state.rank,guard:state.guard,topN:state.topN,stopScope:state.stopScope,
+   corrLimit:state.corrLimit,corrFallback:state.corrFallback});
+ state.portKey=hash;
+ return state.port;
 }
 function refreshPool(){state.filtered=eligible();state.grid=buildHeatmap();state.portKey='';choosePortfolio();setStatus();renderChart();}
 function familyName(f){return ({none:'Nur IMBA',tp:'TP ohne TTP',ttp:'TTP ohne TP',both:'TP + TTP'})[f]||'Alle';}
 function setStatus(){const d=choosePortfolio()[state.day];const len=state.filtered.length;const chosen=d.ids.filter(i=>i>=0).length;
- $('candidateCount').textContent=number(len,0);$('cellCount').textContent=number(state.grid.occupied,0);$('activeCount').textContent=d.live.length+'/6';
+ $('candidateCount').textContent=number(len,0);$('cellCount').textContent=number(state.grid.occupied,0);$('activeCount').textContent=d.live.length+'/'+state.topN;
  $('wealth').textContent=euro(d.wealth);$('wealthChange').textContent=pct(100*(d.wealth/1000-1));
  $('reserve').textContent=euro(d.reserve);$('trading').textContent=euro(d.trading);
  $('payouts').textContent=d.payoutN;$('stops').textContent=d.stopN;
  $('dayLabel').textContent=DATES[state.day];$('slider').value=state.day;
  $('liveNote').textContent=`${chosen} gewählt · ${d.live.length} handeln · ${chosen-d.live.length} gestoppt/ohne Einsatz`;
  $('plotCountNote').textContent=`${len} echte Bot-Kurven · ${state.grid.occupied} belegte Parameterzellen · ${state.priceMode==='candle'?'5-Minuten-Candles':state.priceMode==='renko_pct'?'Prozent-Renko':'USD-Renko'} · ${state.box==='all'?'Alle getesteten Größen': 'Box '+state.box} · 10× nur im Portfolio`;
- $('corrInfo').textContent=state.corrLimit===null?'Korrelationsfilter ausgeschaltet':('Pearson-Korrelation der letzten 28 vollständigen Tage ≤ '+state.corrLimit.toFixed(2)+(state.corrFallback?' · Aufstockung kann den Grenzwert verletzen':' · strikt, auch weniger als sechs Bots möglich'));
+ $('corrInfo').textContent=state.corrLimit===null?'Korrelationsfilter ausgeschaltet':('Pearson-Korrelation der letzten 28 vollständigen Tage ≤ '+state.corrLimit.toFixed(2)+(state.corrFallback?' · Aufstockung kann den Grenzwert verletzen':' · strikt, auch weniger als '+state.topN+' Bots möglich'));
  $('dataWarning').textContent=`${state.dataset}: Echte Tagesrenditen für alle 7.326 Gen-Kombinationen im gewählten Marktmodus. 10× Portfolio mit eigenem Startkapital zu Jahresbeginn. Keine TradingView-/Liquidationsparität.`;
  if(state.mode.startsWith('rawYear')&&Number(state.dataset)<=Number(state.mode.slice(7)))$('dataWarning').textContent+=' Trainingsfamilie darf erst in den folgenden Jahren gehandelt werden: kein Lookahead; deshalb keine Kandidaten.';
  renderGeneCards(d);renderTop6(d);renderEquityChart();renderFamilyBreakdown(d);
- const shot=$('activeSnapshot');if(shot){const match=Object.values(SCREENSHOT_PRESETS).find(x=>x.pool===state.mode&&x.guard===state.guard&&x.rank===state.rank&&state.dataset==='2026'&&state.priceMode==='renko_usd'&&state.box==='all'&&state.corrLimit===null&&Object.values(state.familyEnabled).every(Boolean));shot.textContent=match?'Aktiv: '+match.label:'Aktive Einstellungen: individuell verändert / anderes Jahr';}
+ const shot=$('activeSnapshot');if(shot){const match=Object.values(SCREENSHOT_PRESETS).find(x=>state.topN===6&&state.stopScope==='strategy'&&x.pool===state.mode&&x.guard===state.guard&&x.rank===state.rank&&state.dataset==='2026'&&state.priceMode==='renko_usd'&&state.box==='all'&&state.corrLimit===null&&Object.values(state.familyEnabled).every(Boolean));shot.textContent=match?'Aktiv: '+match.label:'Aktive Einstellungen: individuell verändert / anderes Jahr';}
 }
 function renderFamilyBreakdown(d){
  const base=eligibleBase(), selected=d.ids.filter(i=>i>=0), live=d.live;
@@ -230,7 +272,7 @@ function renderFamilyBreakdown(d){
   </div>`;
  }).join('');
  const breakdown=$('poolAuditSummary');
- if(breakdown)breakdown.innerHTML=`<strong>${number(totalEligible,0)}</strong> wirklich simulierte Kandidaten im Top-6-Ranking · <strong>${listed}/6</strong> gewählt · <strong>${trading}/6</strong> handeln.<br>
+ if(breakdown)breakdown.innerHTML=`<strong>${number(totalEligible,0)}</strong> wirklich simulierte Kandidaten im Top-6-Ranking · <strong>${listed}/${state.topN}</strong> gewählt · <strong>${trading}/${state.topN}</strong> handeln.<br>
   <strong>${number(uniqueCells,0)}</strong> belegte Koordinaten mit <strong>${number(totalVisible,0)}</strong> aktuell eingeblendeten Bot-Markern. <span style="color:#9cb5cd">Mehrere echte Bots können dieselbe XY-Stelle besetzen.</span>`;
  const modeInfo=$('rasterExplain');
  if(modeInfo){
@@ -242,10 +284,10 @@ function renderFamilyBreakdown(d){
  }
  const heatmapMath=$('heatmapMath');
  if(heatmapMath){const w=state.horizon===0?'seit Jahresbeginn':state.horizon+' Tage';
-   heatmapMath.innerHTML=`<strong>So entsteht die Fläche:</strong> X=${AXES[state.x]}, Y=${AXES[state.y]}, Höhe/Farbe=${state.aggregate==='max'?'beste':'mittlere'} tatsächlich zurückgerechnete <strong>1×-Rendite</strong> über ${w}. Pro Zelle liegen ${state.grid.occupied===state.filtered.length?'genau ein':'ein oder mehrere'} echte Bots. Die Top-6-Neuwahl erfolgt alle 14 Tage nach dem <strong>${state.rank}-Tage-Ranking vor dem Auswahlstichtag</strong>, nicht nach der hier dargestellten aktuellen Rendite. Optische Glättung ändert keine Bot-Rendite.`;
+   heatmapMath.innerHTML=`<strong>So entsteht die Fläche:</strong> X=${AXES[state.x]}, Y=${AXES[state.y]}, Höhe/Farbe=${state.aggregate==='max'?'beste':'mittlere'} tatsächlich zurückgerechnete <strong>1×-Rendite</strong> über ${w}. Pro Zelle liegen ${state.grid.occupied===state.filtered.length?'genau ein':'ein oder mehrere'} echte Bots. Die Top-${state.topN}-Neuwahl erfolgt alle 14 Tage nach dem <strong>${state.rank}-Tage-Ranking vor dem Auswahlstichtag</strong>, nicht nach der hier dargestellten aktuellen Rendite. Optische Glättung ändert keine Bot-Rendite.`;
  }
  const pointHint=$('pointHint');
- if(pointHint)pointHint.textContent=`Punktmodus: ${state.points==='all'?'alle tatsächlichen Kandidaten':state.points==='manual'?'manuelle Punkte':'nur gewählte Top 6'} · ${number(totalVisible,0)} sichtbare Marker · Top-6-Auswahl nutzt immer alle ${number(totalEligible,0)} zulässigen Strategien (nicht nur die eingeblendeten).`;
+ if(pointHint)pointHint.textContent=`Punktmodus: ${state.points==='all'?'alle tatsächlichen Kandidaten':state.points==='manual'?'manuelle Punkte':'nur gewählte Top '+state.topN} · ${number(totalVisible,0)} sichtbare Marker · Top-${state.topN}-Auswahl nutzt immer alle ${number(totalEligible,0)} zulässigen Strategien (nicht nur die eingeblendeten).`;
  table.querySelectorAll('[data-trade-family]').forEach(el=>el.onchange=e=>{
   state.familyEnabled[e.target.dataset.tradeFamily]=e.target.checked;
   state.family=familySelectionMode();setControls();changePool();
@@ -388,9 +430,15 @@ function setControls(){
  $('axisX').value=state.x;$('axisY').value=state.y;$('exitFamily').value=familySelectionMode();
  $('boxFilter').value=state.box;$('poolMode').value=state.mode;$('ranking').value=String(state.rank);
  $('guard').value=state.guard;$('stopVal').textContent=state.guard===0?'Aus':'−'+state.guard+' %';
+ if($('topN')){$('topN').value=state.topN;$('topNValue').textContent=String(state.topN);}
+ if($('stopScope'))$('stopScope').value=state.stopScope;
  $('correlationLimit').value=state.corrLimit===null?'off':String(state.corrLimit);$('corrFallback').checked=state.corrFallback;
 }
-function changePool(){state.portKey='';state.filtered=eligible();state.grid=buildHeatmap();state.port=null;setStatus();renderChart();}
+function changePool(){cancelTradeSweep();if($('tradeSweepResults'))$('tradeSweepResults').replaceChildren();state.portKey='';state.filtered=eligible();state.grid=buildHeatmap();state.port=null;setStatus();
+ if(state.priceMode==='renko_pct'&&!state.filtered.length){
+  $('dataWarning').textContent+=' Keine berechneten %-Renko-Gegenstücke im aktuellen Pool/Boxfilter. Wähle „Alle wirklich berechneten Strategien“ und „Alle gerechneten Werte“, oder einen anderen Exit-Filter.';
+ }
+ renderChart();}
 function applyPreset(n){
  if(n==='tp'){state.x='tp';state.y='s';state.family='tp';state.familyEnabled={none:false,tp:true,ttp:false,both:false};state.box='all';state.mode='all4158';}
  else if(n==='ttp'){state.x='act';state.y='s';state.family='ttp';state.familyEnabled={none:false,tp:false,ttp:true,both:false};state.box='all';state.mode='all4158';}
@@ -401,7 +449,7 @@ function applyPreset(n){
  syncModeControls();setControls();changePool();
 }
 function serialize(){return {version:13,priceMode:state.priceMode,date:DATES[state.day],year:state.dataset,smooth:state.smooth,surfaceMode:state.surfaceMode,layers:state.layers,layerOpacity:state.layerOpacity,axisX:state.x,axisY:state.y,family:state.family,box:state.box,
- mode:state.mode,familyEnabled:state.familyEnabled,horizon:state.horizon,rank:state.rank,stop:state.guard,corrLimit:state.corrLimit,corrFallback:state.corrFallback,selected:[...state.manual].map(i=>META[i].id)};}
+ mode:state.mode,familyEnabled:state.familyEnabled,horizon:state.horizon,rank:state.rank,topN:state.topN,stop:state.guard,stopScope:state.stopScope,corrLimit:state.corrLimit,corrFallback:state.corrFallback,selected:[...state.manual].map(i=>META[i].id)};}
 function downloadJSON(){const b=new Blob([JSON.stringify(serialize(),null,2)],{type:'application/json'}),u=URL.createObjectURL(b),a=document.createElement('a');a.href=u;a.download='quant_genome_v13_preset.json';a.click();URL.revokeObjectURL(u);}
 function supportsWebGL(){try{const c=document.createElement('canvas');return !!(c.getContext('webgl2')||c.getContext('webgl')||c.getContext('experimental-webgl'));}catch(e){return false;}}
 
@@ -409,13 +457,15 @@ function modeLabel(){return state.priceMode==='candle'?'5-Minuten-Candles (kein 
 function syncModeControls(){
  $('useCandles').checked=state.priceMode==='candle';$('usePercent').checked=state.priceMode==='renko_pct';
  $('modeTag').textContent=modeLabel();
- $('modeExplanation').textContent=state.priceMode==='candle'?'Normaler 5m-OHLC-Kerzen-IMBA: S×10 Candles, keine Boxgröße.':'Alle tatsächlich berechneten Renko-Boxen verfügbar. Einzeln per Regler oder alle zusammen.';
+ $('modeExplanation').textContent=state.priceMode==='candle'?'Normaler 5m-OHLC-Kerzen-IMBA: S×10 Candles, keine Boxgröße.':
+  state.priceMode==='renko_pct'?'Nur tatsächlich berechnete %-Renko-Strategien. Bei einem USD-Pool werden Sensitivity und Exit-Programm exakt abgeglichen; die Prozent-Box wird unabhängig gewählt (keine USD-Umrechnung).':
+  'Alle tatsächlich berechneten Renko-Boxen verfügbar. Einzeln per Regler oder alle zusammen.';
  $('useAllBoxes').disabled=state.priceMode==='candle';
  if(state.priceMode==='candle')state.box='all';
  $('useAllBoxes').checked=state.box==='all';
  $('boxStep').disabled=state.priceMode==='candle'||state.box==='all';
  $('boxStepLabel').textContent=state.priceMode==='candle'?'kein Renko':(Number($('boxStep').value)/10).toFixed(1)+(state.priceMode==='renko_pct'?' %':' USD');
- const boxes=state.priceMode==='renko_pct'?Array.from({length:10},(_,i)=>(i+1)/10):
+ const boxes=state.priceMode==='renko_pct'?[...new Set(PERCENT_MODE_IDS.map(i=>Number(META[i].b)))].sort((a,b)=>a-b):
     state.priceMode==='candle'?[]:[...new Set(META.filter(m=>m.priceMode==='renko_usd').map(m=>m.b))].sort((a,b)=>a-b);
  const prev=state.box;
  populateSelector('boxFilter',[['all','Alle gerechneten Werte'],...boxes.map(b=>[b.toFixed(2),b.toFixed(2)+(state.priceMode==='renko_pct'?' %':' USD')])], prev);
@@ -429,8 +479,133 @@ function switchPriceMode(kind){
  syncModeControls();setControls();changePool();
 }
 
+
+let activeTradeSweep=null;
+function installTradeLabControls(){
+ const guardInput=$('guard'),anchor=guardInput.closest('.item')||guardInput.parentElement;
+ if(!anchor||!anchor.parentElement)throw Error('Stopp-Regler nicht gefunden.');
+ const node=document.createElement('div');node.id='tradeSweepControls';node.className='tradeSweepControls';
+ node.innerHTML='<div class="tradeSweepPair"><div><label for="topN">HANDELNDE TOP-N STRATEGIEN</label>'+
+  '<div class="tradeSweepRange"><input type="range" id="topN" min="1" max="6" step="1" value="6" aria-label="Anzahl Top-Strategien">'+
+  '<strong id="topNValue">6</strong></div></div>'+
+  '<div><label for="stopScope">STOPP GILT FÜR</label>'+
+  '<select id="stopScope"><option value="strategy">Jede Strategie einzeln</option>'+
+  '<option value="portfolio">Gesamtes Handelskapital</option></select></div></div>'+
+  '<p class="muted">Der bestehende Stopp-Prozentsatz gilt wahlweise für einzelne Strategien oder das gesamte Handelskapital ohne Reserve. Ein Gesamtstopp pausiert bis zur nächsten 14-Tage-Rotation.</p>'+
+  '<div class="tradeSweepButtons"><button type="button" id="runTradeSweep">Automatisch optimieren · Sweep</button>'+
+  '<button type="button" id="cancelTradeSweep" disabled>Abbrechen</button></div>'+
+  '<div id="tradeSweepProgress" class="muted" aria-live="polite">Testet den ausgewählten Strategienpool im gewählten Jahr. Ranking, Top-N, Stoppgrenze und Stoppmodus werden kombiniert.</div>'+
+  '<div id="tradeSweepResults"></div>';
+ anchor.insertAdjacentElement('afterend',node);
+ const style=document.createElement('style');style.textContent=
+  '.tradeSweepControls{grid-column:1/-1;border:1px solid #3c6b76;border-radius:11px;padding:12px;background:#102e3d;margin:9px 0}' +
+  '.tradeSweepPair{display:grid;grid-template-columns:1fr 1fr;gap:12px}' +
+  '.tradeSweepPair label{display:block;font-size:10px;color:#9dc8d4;font-weight:700;margin-bottom:7px}' +
+  '.tradeSweepRange{display:flex;align-items:center;gap:12px}.tradeSweepRange input{flex:1;accent-color:#65d7ad}.tradeSweepRange strong{min-width:24px;text-align:center;color:#92e8d8}' +
+  '.tradeSweepPair select{max-width:100%;width:100%}.tradeSweepButtons{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}' +
+  '#runTradeSweep{background:#17565a;border-color:#6ed5bd;color:#e6fff7;font-weight:700}' +
+  '#tradeSweepResults{font-size:12px}.tradeSweepResult{padding:8px 0;border-bottom:1px solid #315166;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}' +
+  '.tradeSweepResult button{font-size:11px;padding:6px 9px}.tradeSweepResult strong{color:#d9f5df}' +
+  '@media(max-width:600px){.tradeSweepPair{grid-template-columns:1fr}}';
+ document.head.appendChild(style);
+}
+function cancelTradeSweep(message){
+ if(!activeTradeSweep)return;
+ activeTradeSweep.cancelled=true;activeTradeSweep=null;
+ if($('runTradeSweep'))$('runTradeSweep').disabled=false;
+ if($('cancelTradeSweep'))$('cancelTradeSweep').disabled=true;
+ if(message&&$('tradeSweepProgress'))$('tradeSweepProgress').textContent=message;
+}
+function sweepGuardOptions(){
+ const control=$('guard'),lo=Number(control.min)||0,hi=Number(control.max)||60;
+ const step=Math.max(5,Number(control.step)||5),out=[];
+ for(let x=lo;x<=hi+1e-9;x+=step)out.push(Number(x.toFixed(3)));
+ for(const v of [0,state.guard])if(v>=lo&&v<=hi&&!out.includes(v))out.push(v);
+ return out.sort((a,b)=>a-b);
+}
+async function runTradeSweep(){
+ cancelTradeSweep();
+ const token={cancelled:false};activeTradeSweep=token;
+ const pool=state.filtered.slice(),year=state.dataset,mode=state.mode,priceMode=state.priceMode;
+ const ranks=[...new Set([...$('ranking').options].map(o=>Number(o.value)).filter(Number.isFinite))];
+ const guards=sweepGuardOptions(),topNs=[1,2,3,4,5,6],scopes=['strategy','portfolio'];
+ const corrLimit=state.corrLimit,corrFallback=state.corrFallback;
+ const total=ranks.length*guards.length*topNs.length*scopes.length;
+ const progress=$('tradeSweepProgress'),results=$('tradeSweepResults');
+ $('runTradeSweep').disabled=true;$('cancelTradeSweep').disabled=false;
+ results.textContent='';
+ const yieldFrame=()=>new Promise(resolve=>setTimeout(resolve,0));
+ try{
+  if(!pool.length||!ranks.length)throw Error('Kein gültiger Kandidatenpool oder Rankingzeitraum.');
+  const selections=new Map();
+  let ready=0,cycles=ranks.length*Math.ceil(DAYS/14);
+  progress.textContent='Ranking-Auswahl vorbereiten: 0 / '+cycles+' Rotationen';
+  for(const rank of ranks){
+   for(let d=0;d<DAYS;d+=14){
+    if(token.cancelled)return;
+    // Every rebalance ranks using completed PAST returns; parameter search itself is retrospective.
+    const ranked=pool.map(i=>[i,rPct(i,d-1,rank)]).filter(v=>v[1]>0)
+      .sort((a,b)=>b[1]-a[1]||a[0]-b[0]);
+    for(const topN of topNs){
+     selections.set(rank+'|'+topN+'|'+d,
+       applyCorrelationCap(ranked,d,topN,corrLimit,corrFallback).map(p=>p[0]));
+    }
+    ready++;
+    if(ready%3===0){
+     progress.textContent='Ranking-Auswahl vorbereiten: '+ready+' / '+cycles+' Rotationen';
+     await yieldFrame();
+    }
+   }
+  }
+  const sorted=[];
+  let tested=0;
+  for(const rank of ranks)for(const topN of topNs)for(const stopScope of scopes)for(const guard of guards){
+   if(token.cancelled)return;
+   const config={pool,rank,topN,stopScope,guard,corrLimit,corrFallback};
+   const stats=simulatePortfolio(config,selections,true);
+   sorted.push({...stats,rank,topN,stopScope,guard});
+   tested++;
+   if(tested%16===0){
+    progress.textContent='Sweep: '+tested+' / '+total+' Kombinationen ('+year+' · '+mode+' · '+priceMode+')';
+    await yieldFrame();
+   }
+  }
+  if(token.cancelled)return;
+  sorted.sort((a,b)=>b.endWealth-a.endWealth||b.maxDrawdownPct-a.maxDrawdownPct||a.guard-b.guard);
+  progress.textContent=total+' Kombinationen abgeschlossen · '+pool.length+' Kandidaten · '+year+'. Ranking und Stopp wurden rückblickend optimiert (In-Sample, keine Prognose).';
+  const wrapper=document.createElement('div');
+  const note=document.createElement('p');note.className='muted';
+  note.textContent='Beste 5 nach Endvermögen. MaxDD bezieht sich auf das gesamte Depot inklusive Reserve. Optimierung gilt nur für das angezeigte Testjahr.';
+  wrapper.appendChild(note);
+  for(let j=0;j<Math.min(5,sorted.length);j++){
+   const item=sorted[j],row=document.createElement('div');row.className='tradeSweepResult';
+   const label=document.createElement('span');
+   label.textContent=(j+1)+'. '+item.rank+' Tage · Top '+item.topN+' · Stopp '+item.guard+' % · '+
+    (item.stopScope==='strategy'?'Einzelstopp':'Gesamtstopp');
+   const scoreEl=document.createElement('strong');
+   scoreEl.textContent=euro(item.endWealth)+' · MaxDD '+number(item.maxDrawdownPct,1)+' %';
+   const btn=document.createElement('button');btn.type='button';btn.textContent='Übernehmen';
+   btn.onclick=()=>{
+    state.rank=item.rank;state.guard=item.guard;state.topN=item.topN;state.stopScope=item.stopScope;
+    setControls();changePool();
+    progress.textContent='Übernommen: '+label.textContent+' · Historischer Endwert '+euro(item.endWealth)+
+      '. Einstellungen bitte außerhalb des Optimierungsjahrs prüfen.';
+   };
+   row.append(label,scoreEl,btn);wrapper.appendChild(row);
+  }
+  results.replaceChildren(wrapper);
+ }catch(err){
+  if(!token.cancelled){console.error(err);progress.textContent='Sweep fehlgeschlagen: '+err.message;}
+ }finally{
+  if(activeTradeSweep===token){
+   activeTradeSweep=null;$('runTradeSweep').disabled=false;$('cancelTradeSweep').disabled=true;
+  }
+ }
+}
+
 function bindUI(){
  initOptions();
+ installTradeLabControls();
  syncModeControls();
  $('useCandles').onchange=e=>switchPriceMode(e.target.checked?'candle':'renko_usd');
  $('usePercent').onchange=e=>switchPriceMode(e.target.checked?'renko_pct':'renko_usd');
@@ -468,7 +643,7 @@ function bindUI(){
    $(el).onchange=async e=>{state[field]=e.target.value;
     if(field==='mode'&&state.mode.startsWith('rawYear') && Number(state.dataset)<=Number(state.mode.slice(7))){
        const targetYear=String(Number(state.mode.slice(7))+1);await loadYear(targetYear);}
-    if(field==='mode'&&(['original462','top100','balanced100'].includes(state.mode)||state.mode.startsWith('rawYear'))&&state.priceMode!=='renko_usd'){
+    if(field==='mode'&&(['original462','top100','balanced100'].includes(state.mode)||state.mode.startsWith('rawYear'))&&state.priceMode==='candle'){
      state.priceMode='renko_usd';state.box='all';syncModeControls();
     }
     if(field==='box'){if(state.box!=='all')$('boxStep').value=Math.round(Number(state.box)*10);syncModeControls();}
@@ -504,6 +679,11 @@ function bindUI(){
  $('ranking').onchange=e=>{state.rank=Number(e.target.value);changePool();};
  $('guard').oninput=e=>{$('stopVal').textContent=e.target.value==='0'?'Aus':'−'+e.target.value+' %';};
  $('guard').onchange=e=>{state.guard=Number(e.target.value);changePool();};
+ $('topN').oninput=e=>{$('topNValue').textContent=e.target.value;};
+ $('topN').onchange=e=>{state.topN=Math.max(1,Math.min(6,Number(e.target.value)));changePool();};
+ $('stopScope').onchange=e=>{state.stopScope=e.target.value==='portfolio'?'portfolio':'strategy';changePool();};
+ $('runTradeSweep').onclick=runTradeSweep;
+ $('cancelTradeSweep').onclick=()=>cancelTradeSweep('Sweep abgebrochen.');
  $('correlationLimit').onchange=e=>{state.corrLimit=e.target.value==='off'?null:Number(e.target.value);changePool();};
  $('corrFallback').onchange=e=>{state.corrFallback=e.target.checked;changePool();};
  $('geneScope').onchange=()=>renderGeneCards(choosePortfolio()[state.day]);
@@ -525,7 +705,7 @@ function bindUI(){
     state.family=familySelectionMode();
    state.priceMode=['candle','renko_pct','renko_usd'].includes(x.priceMode)?x.priceMode:'renko_usd';
    state.box=x.box||'all';state.mode=x.mode||'all4158';state.horizon=x.horizon??30;
-   state.rank=x.rank??14;state.guard=x.stop??30;state.corrLimit=(x.corrLimit===null||x.corrLimit===undefined)?null:Number(x.corrLimit);state.corrFallback=!!x.corrFallback;
+   state.rank=x.rank??14;state.guard=x.stop??30;state.topN=Math.max(1,Math.min(6,Number(x.topN)||6));state.stopScope=x.stopScope==='portfolio'?'portfolio':'strategy';state.corrLimit=(x.corrLimit===null||x.corrLimit===undefined)?null:Number(x.corrLimit);state.corrFallback=!!x.corrFallback;
    syncModeControls();setControls();$('horizon').value=state.horizon;$('slider').value=state.day;updateManual();changePool();
   }catch(err){alert('Preset konnte nicht geladen werden: '+err.message);}
  };
@@ -552,7 +732,7 @@ async function loadSaved2026(key){
  const p=SCREENSHOT_PRESETS[key];if(!p)return;
  if(state.playing!==null){cancelAnimationFrame(state.playing);state.playing=null;}
  if(state.dataset!=='2026')await loadYear('2026');
- state.mode=p.pool;state.rank=p.rank;state.guard=p.guard;state.corrLimit=null;state.corrFallback=false;
+ state.mode=p.pool;state.rank=p.rank;state.guard=p.guard;state.topN=6;state.stopScope='strategy';state.corrLimit=null;state.corrFallback=false;
  state.family='all';state.familyEnabled={none:true,tp:true,ttp:true,both:true};
  state.priceMode='renko_usd';state.box='all';state.x='s';state.y='b';state.day=DAYS-1;
  state.chart=supportsWebGL()?'3d':'2d';state.points='top6';state.horizon=30;
@@ -619,5 +799,270 @@ function bindSavedEvidence(){
  }
 }
 
-async function startApp(){try{await loadYear('2026');bindUI();bindSavedEvidence();window.__QUANT_V13_READY=true;}catch(e){console.error('Quant v13 failed to load',e);alert('Daten konnten nicht geladen werden: '+e.message);}}
+/* v13 research extension: matched REAL legacy TTP matrices and proposed Kraken TTP settings.
+ * Never infer uncomputed 0%-activation results from legacy 2%/3%-activation daily factors.
+ */
+const TTP_RESEARCH_DEFAULTS={activationPct:0,trailPct:1.5,closeFractionPct:100,action:'flip'};
+state.krakenTtp={...TTP_RESEARCH_DEFAULTS};
+function matchedExitRaster(act,trail){
+ const map=new Map();
+ META.forEach((m,i)=>{
+  if(m.priceMode!=='renko_usd'||m.family!=='ttp')return;
+  if(Math.abs(Number(m.act)-act)>1e-5||Math.abs(Number(m.trail)-trail)>1e-5)return;
+  map.set(String(m.s)+'|'+Number(m.b).toFixed(5),i);
+ });
+ const pure=[],ttp=[];
+ for(const i of ORIGINAL){
+  const m=META[i];
+  if(m.family!=='none'||m.priceMode!=='renko_usd')continue;
+  const j=map.get(String(m.s)+'|'+Number(m.b).toFixed(5));
+  if(j!==undefined){pure.push(i);ttp.push(j);}
+ }
+ return {pure,ttp,mixed:[...pure,...ttp]};
+}
+const HIST_EXIT_315=matchedExitRaster(3,1.5);
+const HIST_EXIT_21=matchedExitRaster(2,1);
+const RESEARCH_POOL_VARIANTS={
+ pure315:HIST_EXIT_315.pure,ttp315:HIST_EXIT_315.ttp,mixed315:HIST_EXIT_315.mixed,
+ pure21:HIST_EXIT_21.pure,ttp21:HIST_EXIT_21.ttp,mixed21:HIST_EXIT_21.mixed
+};
+const PREVIOUS_GET_IDS=getPresetIds;
+getPresetIds=function(){return RESEARCH_POOL_VARIANTS[state.mode]||PREVIOUS_GET_IDS();};
+
+// Link USD-pool selections to real, precomputed percentage-Renko counterparts.
+// Sensitivity and exit-program identity must match exactly; % brick sizes stay
+// independent parameters, not an approximate USD-to-percent backtest.
+const PERCENT_MODE_IDS=ALL.filter(i=>META[i].priceMode==='renko_pct');
+const PERCENT_GENES=new Map();
+function correspondingGeneKey(m){return String(m.s)+'|'+String(m.family)+'|'+String(m.exitKey);}
+for(const i of PERCENT_MODE_IDS){
+ const k=correspondingGeneKey(META[i]);
+ if(!PERCENT_GENES.has(k))PERCENT_GENES.set(k,[]);
+ PERCENT_GENES.get(k).push(i);
+}
+const PRE_PERCENT_GET_IDS=getPresetIds;
+getPresetIds=function(){
+ const selected=PRE_PERCENT_GET_IDS();
+ if(state.priceMode!=='renko_pct'||!selected.length)return selected;
+ // These universal pools already contain their own percentage candidates.
+ if(['all4158','grid20','grid30'].includes(state.mode))return selected;
+ const out=new Set();
+ for(const id of selected){
+  const m=META[id];if(!m)continue;
+  if(m.priceMode==='renko_pct'){out.add(id);continue;}
+  for(const j of PERCENT_GENES.get(correspondingGeneKey(m))||[])out.add(j);
+ }
+ return [...out];
+};
+const PREVIOUS_SERIALIZE=serialize;
+serialize=function(){return {...PREVIOUS_SERIALIZE(),krakenTtp:{...state.krakenTtp}};};
+function normalizeResearchTtp(x){
+ const v=x||{};
+ const trail=Number(v.trailPct);
+ return {
+  activationPct:[0,.5,1,2,3].includes(Number(v.activationPct))?Number(v.activationPct):0,
+  trailPct:Number.isFinite(trail)?Math.max(.5,Math.min(4,Math.round(trail*2)/2)):1.5,
+  closeFractionPct:Number(v.closeFractionPct)===50?50:100,
+  action:v.action==='close'?'close':'flip'
+ };
+}
+function renderTtpControls(){
+ const v=state.krakenTtp;
+ if(!$('krakenTtpTrail'))return;
+ $('krakenTtpTrail').value=String(v.trailPct);$('krakenTtpTrailValue').textContent=number(v.trailPct,1)+' %';
+ $('krakenTtpActivation').value=String(v.activationPct);
+ $('krakenTtpAction').value=v.action;
+ $('krakenTtpFraction').value=String(v.closeFractionPct);
+ $('krakenTtpFraction').disabled=v.action==='flip';
+ if($('historicalPairsInfo'))$('historicalPairsInfo').textContent=
+  'Tatsächlich berechnet: '+HIST_EXIT_315.pure.length+' paarige IMBA + '+HIST_EXIT_315.ttp.length+
+  ' TTP 3/1,5 sowie '+HIST_EXIT_21.pure.length+' IMBA + '+HIST_EXIT_21.ttp.length+
+  ' TTP 2/1. Nicht das neue Kraken-TTP 0/1,5.';
+}
+const PREVIOUS_SET_CONTROLS=setControls;
+setControls=function(){PREVIOUS_SET_CONTROLS();if($('researchPairPool')&&RESEARCH_POOL_VARIANTS[state.mode])$('researchPairPool').value=state.mode;renderTtpControls();};
+function historicalCompare(){
+ const out=$('historicalCompareOutput'),chart=$('historicalCompareChart');
+ if(state.priceMode!=='renko_usd'){out.textContent='Nur feste USD-Renko-Boxen können mit dem 462er-Raster verglichen werden.';return;}
+ const test=[
+  ['IMBA pur · paarig',HIST_EXIT_315.pure,null,false],
+  ['TTP Alt 3%/1,5%',HIST_EXIT_315.ttp,null,false],
+  ['IMBA + TTP Alt',HIST_EXIT_315.mixed,null,false],
+  ['Aktueller Pool · ρ≤0,85',state.filtered,.85,false],
+  ['Aktueller Pool · ρ≤0,90',state.filtered,.9,false]
+ ];
+ const traces=[],labels=[];
+ for(const [name,base,limit,fallback] of test){
+  const pool=base.filter(i=>state.box==='all'||Math.abs(Number(META[i].b)-Number(state.box))<1e-5);
+  if(!pool.length){labels.push(name+': keine simulierten Daten');continue;}
+  const rows=simulatePortfolio({pool,rank:state.rank,topN:state.topN,guard:state.guard,stopScope:state.stopScope,
+    corrLimit:limit===null?state.corrLimit:limit,corrFallback:fallback});
+  let peak=1000,dd=0;
+  for(const r of rows){peak=Math.max(peak,r.wealth);dd=Math.min(dd,100*(r.wealth/peak-1));}
+  labels.push(name+': '+euro(rows[rows.length-1].wealth)+' · DD '+number(dd,1)+' % · n='+pool.length);
+  traces.push({type:'scatter',mode:'lines',name,x:rows.map(r=>r.date),y:rows.map(r=>r.wealth)});
+ }
+ out.textContent=labels.join(' | ')+' · '+state.dataset+' · Top '+state.topN+
+  ' · '+state.rank+' Tage Ranking · Stopp '+state.guard+' % · '+state.stopScope+
+  '. Vergleich mit gleichen Portfolioregeln, historische Alt-TTP-Signale. Keine Kraken-Flip-Resultate.';
+ if(traces.length&&typeof Plotly!=='undefined'){
+  chart.style.height='390px';
+  Plotly.react(chart,traces,{paper_bgcolor:'#0c2336',plot_bgcolor:'#102b40',
+   font:{color:'#c9deed',size:11},margin:{l:60,r:20,t:50,b:55},
+   xaxis:{gridcolor:'#284e62'},yaxis:{title:'Depotwert (€)',gridcolor:'#284e62'},
+   legend:{orientation:'h',x:0,y:1.18},hovermode:'x unified'},
+   {responsive:true,displaylogo:false});
+ }
+}
+async function compareTtpYears(){
+ const btn=$('historicalAllYearsBtn'),out=$('historicalAllYearsOutput'),savedYear=state.dataset,savedDay=state.day;
+ const savedSelected=state.selected;
+ btn.disabled=true;out.textContent='Jahresvergleich laden …';
+ const series=[
+  ['IMBA',HIST_EXIT_315.pure,null,false],
+  ['TTP Alt',HIST_EXIT_315.ttp,null,false],
+  ['Mix',HIST_EXIT_315.mixed,null,false],
+  ['Korr. 0,85 strikt',null,.85,false],
+  ['Korr. 0,90 auffüllen',null,.9,true]
+ ];
+ const rows=[],failures=[];
+ try{
+  for(const year of ['2022','2023','2024','2025','2026']){
+   out.textContent='Prüfe '+year+' … ('+(rows.length+1)+'/5)';
+   await loadYear(year);
+   const currentPool=eligible();
+   const vals=series.map(([name,base,cap,fallback])=>{
+    const pool=(base||currentPool).filter(i=>base===null||
+      state.box==='all'||Math.abs(Number(META[i].b)-Number(state.box))<1e-5);
+    if(!pool.length)return null;
+    const x=simulatePortfolio({pool,rank:state.rank,topN:state.topN,guard:state.guard,
+     stopScope:state.stopScope,corrLimit:cap===null?state.corrLimit:cap,
+     corrFallback:cap===null?state.corrFallback:fallback},null,true);
+    return {value:x.endWealth,dd:x.maxDrawdownPct,count:pool.length};
+   });
+   rows.push([year,...vals]);
+   await new Promise(resolve=>setTimeout(resolve,0));
+  }
+ }catch(e){failures.push(e.message);}
+ finally{
+  try{await loadYear(savedYear);state.day=Math.min(savedDay,DAYS-1);state.selected=savedSelected;changePool();}
+  catch(e){failures.push('Wiederherstellen: '+e.message);}
+  btn.disabled=false;
+ }
+ const table=document.createElement('table');table.style.cssText='width:100%;font-size:11px;border-collapse:collapse';
+ const title=document.createElement('tr');
+ for(const h of ['Jahr',...series.map(s=>s[0])]){
+  const cell=document.createElement('th');cell.textContent=h;cell.style.padding='5px';title.appendChild(cell);
+ }
+ table.appendChild(title);
+ for(const row of rows){
+  const tr=document.createElement('tr');
+  for(const value of row){
+   const td=document.createElement('td');td.style.cssText='padding:6px;border-top:1px solid #385769';
+   td.textContent=typeof value==='string'?value:value?euro(value.value)+' / '+number(value.dd,1)+' % DD':'–';
+   tr.appendChild(td);
+  }
+  table.appendChild(tr);
+ }
+ out.replaceChildren(document.createTextNode(
+  'Einzeln gestartete Jahresdepots zu je 1.000 €, kein Jahresübertrag; aktuelle Top-N/Ranking/Stopp-Regeln. '+
+  'TTP Alt 3 % / 1,5 % ist nicht der neue Kraken-Flip. '+(failures.length?'Fehler: '+failures.join('; '):'')
+ ),table);
+}
+
+function installTTPResearch(){
+ const base=$('tradeSweepControls');
+ if(!base)throw Error('Top-N-Trade-Sweep UI fehlt');
+ const panel=document.createElement('section');panel.className='tradeSweepControls';panel.id='ttpResearchControls';
+ panel.innerHTML='<h3>462er-Raster · IMBA gegen TTP / Korrelation</h3>'+
+  '<p class="muted">Gleiche Sensitivity-/Box-Koordinaten. Nur bereits vorhandene Alt-TTP-Ergebnisse (Aktivierung 3 % oder 2 %) sind in den Tageskurven enthalten.</p>'+
+  '<label for="researchPairPool">Historisch vorhandener Pool</label>'+
+  '<select id="researchPairPool"><option value="pure315">462 IMBA pur · paarig</option>'+
+  '<option value="ttp315">462 TTP Alt · Aktivierung 3 % / Trail 1,5 %</option>'+
+  '<option value="mixed315">Bis 924 IMBA + TTP Alt 3/1,5</option>'+
+  '<option value="pure21">462 IMBA pur · paarig mit TTP 2/1</option>'+
+  '<option value="ttp21">462 TTP Alt · Aktivierung 2 % / Trail 1 %</option>'+
+  '<option value="mixed21">Bis 924 IMBA + TTP Alt 2/1</option></select>'+
+  '<p id="historicalPairsInfo" class="muted"></p>'+
+  '<div class="tradeSweepButtons"><button id="researchCorr85" type="button">ρ≤0,85 strikt</button>'+
+  '<button id="researchCorr90" type="button">ρ≤0,90 auffüllen</button>'+
+  '<button id="researchCorrOff" type="button">Korrelation aus</button></div>'+
+  '<button type="button" id="historicalCompareBtn">Historische Pools vergleichen</button>'+
+  '<button type="button" id="historicalAllYearsBtn">Vergleich 2022–2026</button>'+
+  '<div id="historicalAllYearsOutput" class="muted"></div>'+
+  '<p id="historicalCompareOutput" class="muted" aria-live="polite"></p><div id="historicalCompareChart"></div>'+
+  '<details><summary>Neue Kraken-TTP-Einstellungen (Research-Preset, Backtest ausstehend)</summary>'+
+  '<p class="muted">Keine fiktiven Erträge: Änderungen hier werden gespeichert, aber nicht auf die vorhandenen Alt-TTP-Tagesrenditen angewendet.</p>'+
+  '<label for="krakenTtpActivation">Aktivierung</label><select id="krakenTtpActivation">'+
+  '<option value="0">0 % sofort</option><option value="0.5">0,5 %</option>'+
+  '<option value="1">1 %</option><option value="2">2 %</option><option value="3">3 %</option></select>'+
+  '<label for="krakenTtpTrail">Trailing-Abstand: <strong id="krakenTtpTrailValue">1,5 %</strong></label>'+
+  '<input id="krakenTtpTrail" type="range" min="0.5" max="4" step="0.5" value="1.5">'+
+  '<label for="krakenTtpAction">Aktion beim TTP-Stopp</label>'+
+  '<select id="krakenTtpAction"><option value="flip">Kraken-Flip → WAIT</option>'+
+  '<option value="close">Schließen / Teilgewinn</option></select>'+
+  '<label for="krakenTtpFraction">Geschlossener Anteil (nur Schließen)</label>'+
+  '<select id="krakenTtpFraction"><option value="100">100 %</option><option value="50">50 %</option></select>'+
+  '<p class="muted">Kraken-Flip schließt die alte Position vollständig und eröffnet die Gegenrichtung. Der neue Trade ist zunächst WAIT (SL), bis IMBA erneut TTP aktiviert. Für einen veränderbaren TTP braucht es neue Intraday-Trades und neue Tageskurven.</p>'+
+  '</details>';
+ base.insertAdjacentElement('afterend',panel);
+ const pool=$('researchPairPool');
+ const poolDropdown=$('poolMode');
+ const poolLabels={
+  pure315:'IMBA pur · TTP 3/1,5 gepaart',ttp315:'TTP Alt 3% / 1,5% · gepaart',
+  mixed315:'IMBA + TTP Alt 3/1,5',pure21:'IMBA pur · TTP 2/1 gepaart',
+  ttp21:'TTP Alt 2% / 1%',mixed21:'IMBA + TTP Alt 2/1'
+ };
+ for(const [value,label] of Object.entries(poolLabels)){
+  if(![...poolDropdown.options].some(o=>o.value===value)){
+   const o=document.createElement('option');o.value=value;o.textContent=label;poolDropdown.appendChild(o);
+  }
+ }
+ const nativePoolChange=poolDropdown.onchange;
+ poolDropdown.onchange=async e=>{
+  if(RESEARCH_POOL_VARIANTS[e.target.value]){
+   const mode=e.target.value;const fam=mode.startsWith('pure')?'none':mode.startsWith('ttp')?'ttp':'mix';
+   state.priceMode='renko_usd';state.box='all';
+   state.familyEnabled={none:fam!=='ttp',tp:false,ttp:fam!=='none',both:false};
+   state.family=familySelectionMode();
+   syncModeControls();
+  }
+  await nativePoolChange(e);
+ };
+ pool.onchange=e=>{
+  state.mode=e.target.value;state.priceMode='renko_usd';state.box='all';
+  const fam=e.target.value.startsWith('pure')?'none':e.target.value.startsWith('ttp')?'ttp':'mix';
+  state.familyEnabled={none:fam!=='ttp',tp:false,ttp:fam!=='none',both:false};
+  state.family=familySelectionMode();
+  if($('poolMode')&&![...$('poolMode').options].some(o=>o.value===state.mode)){
+   const opt=document.createElement('option');opt.value=state.mode;opt.textContent=e.target.selectedOptions[0].textContent;$('poolMode').appendChild(opt);
+  }
+  syncModeControls();setControls();changePool();
+ };
+ $('researchCorr85').onclick=()=>{state.corrLimit=.85;state.corrFallback=false;setControls();changePool();};
+ $('researchCorr90').onclick=()=>{state.corrLimit=.9;state.corrFallback=true;setControls();changePool();};
+ $('researchCorrOff').onclick=()=>{state.corrLimit=null;state.corrFallback=false;setControls();changePool();};
+ $('historicalCompareBtn').onclick=historicalCompare;
+ $('historicalAllYearsBtn').onclick=compareTtpYears;
+ $('krakenTtpActivation').onchange=e=>{state.krakenTtp.activationPct=Number(e.target.value);};
+ $('krakenTtpTrail').oninput=e=>{state.krakenTtp.trailPct=Number(e.target.value);renderTtpControls();};
+ $('krakenTtpAction').onchange=e=>{state.krakenTtp.action=e.target.value==='close'?'close':'flip';renderTtpControls();};
+ $('krakenTtpFraction').onchange=e=>{state.krakenTtp.closeFractionPct=Number(e.target.value)===50?50:100;};
+ const oldLoad=$('loadPreset').onchange;
+ $('loadPreset').onchange=async e=>{
+  const file=e.target.files[0];
+  if(file){try{const x=JSON.parse(await file.text());state.krakenTtp=normalizeResearchTtp(x.krakenTtp);}catch(err){console.error(err);}}
+  await oldLoad(e);renderTtpControls();
+ };
+ const select=$('correlationLimit');
+ for(const val of [.5,.65,.7,.75,.8,.95]){
+  if(![...select.options].some(o=>o.value===String(val))){
+   const opt=document.createElement('option');opt.value=String(val);opt.textContent='Maximal +'+val.toFixed(2);select.appendChild(opt);
+  }
+ }
+ if(state.corrLimit!==null)select.value=String(state.corrLimit);
+ renderTtpControls();
+}
+
+async function startApp(){try{await loadYear('2026');bindUI();bindSavedEvidence();installTTPResearch();window.__QUANT_V13_READY=true;}catch(e){console.error('Quant v13 failed to load',e);alert('Daten konnten nicht geladen werden: '+e.message);}}
 startApp();
