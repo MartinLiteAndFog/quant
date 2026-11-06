@@ -195,6 +195,11 @@ app=app.replace(needle,needle+"\n $('corrInfo').textContent=state.corrLimit===nu
 app=app.replace('window.__QUANT_V12_READY','window.__QUANT_V13_READY').replace('Quant Genome v12','Quant Genome v13')
 app=app.replace('version:12,priceMode','version:13,priceMode').replace('quant_genome_v12_preset.json','quant_genome_v13_preset.json').replace('[7,8,9,10,11,12]','[7,8,9,10,11,12,13]')
 app=app.replace("console.error('Quant v9 failed to load'","console.error('Quant v13 failed to load'")
+# Research-only trading-rule extension: use the committed JS source for the final dashboard.
+# All preceding v13 construction and the 7,326 backtest curves remain unchanged.
+updated_app=Path(__file__).with_name('app_v13.js')
+if updated_app.is_file():
+    app=updated_app.read_text(encoding='utf-8')
 (OUT/'imba_genome_app_v13.js').write_text(app,encoding='utf8')
 
 # HTML additions
