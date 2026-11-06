@@ -246,7 +246,7 @@ function setStatus(){const d=choosePortfolio()[state.day];const len=state.filter
  $('dayLabel').textContent=DATES[state.day];$('slider').value=state.day;
  $('liveNote').textContent=`${chosen} gewählt · ${d.live.length} handeln · ${chosen-d.live.length} gestoppt/ohne Einsatz`;
  $('plotCountNote').textContent=`${len} echte Bot-Kurven · ${state.grid.occupied} belegte Parameterzellen · ${state.priceMode==='candle'?'5-Minuten-Candles':state.priceMode==='renko_pct'?'Prozent-Renko':'USD-Renko'} · ${state.box==='all'?'Alle getesteten Größen': 'Box '+state.box} · 10× nur im Portfolio`;
- $('corrInfo').textContent=state.corrLimit===null?'Korrelationsfilter ausgeschaltet':('Pearson-Korrelation der letzten 28 vollständigen Tage ≤ '+state.corrLimit.toFixed(2)+(state.corrFallback?' · Aufstockung kann den Grenzwert verletzen':' · strikt, auch weniger als sechs Bots möglich'));
+ $('corrInfo').textContent=state.corrLimit===null?'Korrelationsfilter ausgeschaltet':('Pearson-Korrelation der letzten 28 vollständigen Tage ≤ '+state.corrLimit.toFixed(2)+(state.corrFallback?' · Aufstockung kann den Grenzwert verletzen':' · strikt, auch weniger als '+state.topN+' Bots möglich'));
  $('dataWarning').textContent=`${state.dataset}: Echte Tagesrenditen für alle 7.326 Gen-Kombinationen im gewählten Marktmodus. 10× Portfolio mit eigenem Startkapital zu Jahresbeginn. Keine TradingView-/Liquidationsparität.`;
  if(state.mode.startsWith('rawYear')&&Number(state.dataset)<=Number(state.mode.slice(7)))$('dataWarning').textContent+=' Trainingsfamilie darf erst in den folgenden Jahren gehandelt werden: kein Lookahead; deshalb keine Kandidaten.';
  renderGeneCards(d);renderTop6(d);renderEquityChart();renderFamilyBreakdown(d);
@@ -284,10 +284,10 @@ function renderFamilyBreakdown(d){
  }
  const heatmapMath=$('heatmapMath');
  if(heatmapMath){const w=state.horizon===0?'seit Jahresbeginn':state.horizon+' Tage';
-   heatmapMath.innerHTML=`<strong>So entsteht die Fläche:</strong> X=${AXES[state.x]}, Y=${AXES[state.y]}, Höhe/Farbe=${state.aggregate==='max'?'beste':'mittlere'} tatsächlich zurückgerechnete <strong>1×-Rendite</strong> über ${w}. Pro Zelle liegen ${state.grid.occupied===state.filtered.length?'genau ein':'ein oder mehrere'} echte Bots. Die Top-6-Neuwahl erfolgt alle 14 Tage nach dem <strong>${state.rank}-Tage-Ranking vor dem Auswahlstichtag</strong>, nicht nach der hier dargestellten aktuellen Rendite. Optische Glättung ändert keine Bot-Rendite.`;
+   heatmapMath.innerHTML=`<strong>So entsteht die Fläche:</strong> X=${AXES[state.x]}, Y=${AXES[state.y]}, Höhe/Farbe=${state.aggregate==='max'?'beste':'mittlere'} tatsächlich zurückgerechnete <strong>1×-Rendite</strong> über ${w}. Pro Zelle liegen ${state.grid.occupied===state.filtered.length?'genau ein':'ein oder mehrere'} echte Bots. Die Top-${state.topN}-Neuwahl erfolgt alle 14 Tage nach dem <strong>${state.rank}-Tage-Ranking vor dem Auswahlstichtag</strong>, nicht nach der hier dargestellten aktuellen Rendite. Optische Glättung ändert keine Bot-Rendite.`;
  }
  const pointHint=$('pointHint');
- if(pointHint)pointHint.textContent=`Punktmodus: ${state.points==='all'?'alle tatsächlichen Kandidaten':state.points==='manual'?'manuelle Punkte':'nur gewählte Top 6'} · ${number(totalVisible,0)} sichtbare Marker · Top-6-Auswahl nutzt immer alle ${number(totalEligible,0)} zulässigen Strategien (nicht nur die eingeblendeten).`;
+ if(pointHint)pointHint.textContent=`Punktmodus: ${state.points==='all'?'alle tatsächlichen Kandidaten':state.points==='manual'?'manuelle Punkte':'nur gewählte Top '+state.topN} · ${number(totalVisible,0)} sichtbare Marker · Top-${state.topN}-Auswahl nutzt immer alle ${number(totalEligible,0)} zulässigen Strategien (nicht nur die eingeblendeten).`;
  table.querySelectorAll('[data-trade-family]').forEach(el=>el.onchange=e=>{
   state.familyEnabled[e.target.dataset.tradeFamily]=e.target.checked;
   state.family=familySelectionMode();setControls();changePool();
@@ -434,7 +434,7 @@ function setControls(){
  if($('stopScope'))$('stopScope').value=state.stopScope;
  $('correlationLimit').value=state.corrLimit===null?'off':String(state.corrLimit);$('corrFallback').checked=state.corrFallback;
 }
-function changePool(){cancelTradeSweep();state.portKey='';state.filtered=eligible();state.grid=buildHeatmap();state.port=null;setStatus();renderChart();}
+function changePool(){cancelTradeSweep();if($('tradeSweepResults'))$('tradeSweepResults').replaceChildren();state.portKey='';state.filtered=eligible();state.grid=buildHeatmap();state.port=null;setStatus();renderChart();}
 function applyPreset(n){
  if(n==='tp'){state.x='tp';state.y='s';state.family='tp';state.familyEnabled={none:false,tp:true,ttp:false,both:false};state.box='all';state.mode='all4158';}
  else if(n==='ttp'){state.x='act';state.y='s';state.family='ttp';state.familyEnabled={none:false,tp:false,ttp:true,both:false};state.box='all';state.mode='all4158';}
