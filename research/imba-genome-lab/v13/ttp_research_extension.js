@@ -198,6 +198,7 @@ function installTTPResearch(){
    state.priceMode='renko_usd';state.box='all';
    state.familyEnabled={none:fam!=='ttp',tp:false,ttp:fam!=='none',both:false};
    state.family=familySelectionMode();
+   syncModeControls();
   }
   await nativePoolChange(e);
  };
