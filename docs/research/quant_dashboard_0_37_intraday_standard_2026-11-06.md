@@ -4,8 +4,8 @@ Date: 2026-11-06
 Status: **integration prototype**. The separately tested 0.36 intraday simulation has been refactored into a single minute-bar portfolio ledger. **Not yet complete multi-year/TradingView parity**. No live-trading change.
 
 ## Offline release
-- `QUANT_IMBA_Dashboard_0.37_Intraday_Standard_Offline.html` SHA-256 `9e16d627e2a842ef593719e7c18322286e83a90402db8d657170070d472675a0`.
-- `QUANT_IMBA_Dashboard_0.37_Intraday_Standard_Offline.zip` SHA-256 `2acf1edb42eaa799945d8f0f56a0271fcb0db89cda787038211c4392635e5c5b`.
+- `QUANT_IMBA_Dashboard_0.37_Intraday_Standard_Offline.html` SHA-256 `5b1d2595334df610da76f87f85315446a34300d11b0be74ad66093ff2554fb36`.
+- `QUANT_IMBA_Dashboard_0.37_Intraday_Standard_Offline.zip` SHA-256 `c8aec36a22c88c1f076777077bd3288efeea9d3046fdae60958dfdb9462061f9`.
 - ZIP has the complete offline HTML, separate `quant_intraday_core_037.js`, `quant_intraday_ui_037.js`, CSS, readme and a dependency-free Node core test.
 - **ZIP/HTML NOT committed to GitHub**: available as the original conversation download. These documents are the GitHub-side release manifest only.
 
