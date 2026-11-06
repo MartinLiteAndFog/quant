@@ -948,6 +948,7 @@ function installTTPResearch(){
   '<select id="researchPairPool"><option value="pure315">462 IMBA pur · paarig</option>'+
   '<option value="ttp315">462 TTP Alt · Aktivierung 3 % / Trail 1,5 %</option>'+
   '<option value="mixed315">Bis 924 IMBA + TTP Alt 3/1,5</option>'+
+  '<option value="pure21">462 IMBA pur · paarig mit TTP 2/1</option>'+
   '<option value="ttp21">462 TTP Alt · Aktivierung 2 % / Trail 1 %</option>'+
   '<option value="mixed21">Bis 924 IMBA + TTP Alt 2/1</option></select>'+
   '<p id="historicalPairsInfo" class="muted"></p>'+
@@ -974,6 +975,27 @@ function installTTPResearch(){
   '</details>';
  base.insertAdjacentElement('afterend',panel);
  const pool=$('researchPairPool');
+ const poolDropdown=$('poolMode');
+ const poolLabels={
+  pure315:'IMBA pur · TTP 3/1,5 gepaart',ttp315:'TTP Alt 3% / 1,5% · gepaart',
+  mixed315:'IMBA + TTP Alt 3/1,5',pure21:'IMBA pur · TTP 2/1 gepaart',
+  ttp21:'TTP Alt 2% / 1%',mixed21:'IMBA + TTP Alt 2/1'
+ };
+ for(const [value,label] of Object.entries(poolLabels)){
+  if(![...poolDropdown.options].some(o=>o.value===value)){
+   const o=document.createElement('option');o.value=value;o.textContent=label;poolDropdown.appendChild(o);
+  }
+ }
+ const nativePoolChange=poolDropdown.onchange;
+ poolDropdown.onchange=async e=>{
+  if(RESEARCH_POOL_VARIANTS[e.target.value]){
+   const mode=e.target.value;const fam=mode.startsWith('pure')?'none':mode.startsWith('ttp')?'ttp':'mix';
+   state.priceMode='renko_usd';state.box='all';
+   state.familyEnabled={none:fam!=='ttp',tp:false,ttp:fam!=='none',both:false};
+   state.family=familySelectionMode();
+  }
+  await nativePoolChange(e);
+ };
  pool.onchange=e=>{
   state.mode=e.target.value;state.priceMode='renko_usd';state.box='all';
   const fam=e.target.value.startsWith('pure')?'none':e.target.value.startsWith('ttp')?'ttp':'mix';
