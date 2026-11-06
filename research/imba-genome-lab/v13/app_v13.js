@@ -434,7 +434,7 @@ function setControls(){
  if($('stopScope'))$('stopScope').value=state.stopScope;
  $('correlationLimit').value=state.corrLimit===null?'off':String(state.corrLimit);$('corrFallback').checked=state.corrFallback;
 }
-function changePool(){state.portKey='';state.filtered=eligible();state.grid=buildHeatmap();state.port=null;setStatus();renderChart();}
+function changePool(){cancelTradeSweep();state.portKey='';state.filtered=eligible();state.grid=buildHeatmap();state.port=null;setStatus();renderChart();}
 function applyPreset(n){
  if(n==='tp'){state.x='tp';state.y='s';state.family='tp';state.familyEnabled={none:false,tp:true,ttp:false,both:false};state.box='all';state.mode='all4158';}
  else if(n==='ttp'){state.x='act';state.y='s';state.family='ttp';state.familyEnabled={none:false,tp:false,ttp:true,both:false};state.box='all';state.mode='all4158';}
@@ -473,8 +473,133 @@ function switchPriceMode(kind){
  syncModeControls();setControls();changePool();
 }
 
+
+let activeTradeSweep=null;
+function installTradeLabControls(){
+ const guardInput=$('guard'),anchor=guardInput.closest('.item')||guardInput.parentElement;
+ if(!anchor||!anchor.parentElement)throw Error('Stopp-Regler nicht gefunden.');
+ const node=document.createElement('div');node.id='tradeSweepControls';node.className='tradeSweepControls';
+ node.innerHTML='<div class="tradeSweepPair"><div><label for="topN">HANDELNDE TOP-N STRATEGIEN</label>'+
+  '<div class="tradeSweepRange"><input type="range" id="topN" min="1" max="6" step="1" value="6" aria-label="Anzahl Top-Strategien">'+
+  '<strong id="topNValue">6</strong></div></div>'+
+  '<div><label for="stopScope">STOPP GILT FÜR</label>'+
+  '<select id="stopScope"><option value="strategy">Jede Strategie einzeln</option>'+
+  '<option value="portfolio">Gesamtes Handelskapital</option></select></div></div>'+
+  '<p class="muted">Der bestehende Stopp-Prozentsatz gilt wahlweise für einzelne Strategien oder das gesamte Handelskapital ohne Reserve. Ein Gesamtstopp pausiert bis zur nächsten 14-Tage-Rotation.</p>'+
+  '<div class="tradeSweepButtons"><button type="button" id="runTradeSweep">Automatisch optimieren · Sweep</button>'+
+  '<button type="button" id="cancelTradeSweep" disabled>Abbrechen</button></div>'+
+  '<div id="tradeSweepProgress" class="muted" aria-live="polite">Testet den ausgewählten Strategienpool im gewählten Jahr. Ranking, Top-N, Stoppgrenze und Stoppmodus werden kombiniert.</div>'+
+  '<div id="tradeSweepResults"></div>';
+ anchor.insertAdjacentElement('afterend',node);
+ const style=document.createElement('style');style.textContent=
+  '.tradeSweepControls{grid-column:1/-1;border:1px solid #3c6b76;border-radius:11px;padding:12px;background:#102e3d;margin:9px 0}' +
+  '.tradeSweepPair{display:grid;grid-template-columns:1fr 1fr;gap:12px}' +
+  '.tradeSweepPair label{display:block;font-size:10px;color:#9dc8d4;font-weight:700;margin-bottom:7px}' +
+  '.tradeSweepRange{display:flex;align-items:center;gap:12px}.tradeSweepRange input{flex:1;accent-color:#65d7ad}.tradeSweepRange strong{min-width:24px;text-align:center;color:#92e8d8}' +
+  '.tradeSweepPair select{max-width:100%;width:100%}.tradeSweepButtons{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}' +
+  '#runTradeSweep{background:#17565a;border-color:#6ed5bd;color:#e6fff7;font-weight:700}' +
+  '#tradeSweepResults{font-size:12px}.tradeSweepResult{padding:8px 0;border-bottom:1px solid #315166;display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}' +
+  '.tradeSweepResult button{font-size:11px;padding:6px 9px}.tradeSweepResult strong{color:#d9f5df}' +
+  '@media(max-width:600px){.tradeSweepPair{grid-template-columns:1fr}}';
+ document.head.appendChild(style);
+}
+function cancelTradeSweep(message){
+ if(!activeTradeSweep)return;
+ activeTradeSweep.cancelled=true;activeTradeSweep=null;
+ if($('runTradeSweep'))$('runTradeSweep').disabled=false;
+ if($('cancelTradeSweep'))$('cancelTradeSweep').disabled=true;
+ if(message&&$('tradeSweepProgress'))$('tradeSweepProgress').textContent=message;
+}
+function sweepGuardOptions(){
+ const control=$('guard'),lo=Number(control.min)||0,hi=Number(control.max)||60;
+ const step=Math.max(5,Number(control.step)||5),out=[];
+ for(let x=lo;x<=hi+1e-9;x+=step)out.push(Number(x.toFixed(3)));
+ for(const v of [0,state.guard])if(v>=lo&&v<=hi&&!out.includes(v))out.push(v);
+ return out.sort((a,b)=>a-b);
+}
+async function runTradeSweep(){
+ cancelTradeSweep();
+ const token={cancelled:false};activeTradeSweep=token;
+ const pool=state.filtered.slice(),year=state.dataset,mode=state.mode,priceMode=state.priceMode;
+ const ranks=[...new Set([...$('ranking').options].map(o=>Number(o.value)).filter(Number.isFinite))];
+ const guards=sweepGuardOptions(),topNs=[1,2,3,4,5,6],scopes=['strategy','portfolio'];
+ const corrLimit=state.corrLimit,corrFallback=state.corrFallback;
+ const total=ranks.length*guards.length*topNs.length*scopes.length;
+ const progress=$('tradeSweepProgress'),results=$('tradeSweepResults');
+ $('runTradeSweep').disabled=true;$('cancelTradeSweep').disabled=false;
+ results.textContent='';
+ const yieldFrame=()=>new Promise(resolve=>setTimeout(resolve,0));
+ try{
+  if(!pool.length||!ranks.length)throw Error('Kein gültiger Kandidatenpool oder Rankingzeitraum.');
+  const selections=new Map();
+  let ready=0,cycles=ranks.length*Math.ceil(DAYS/14);
+  progress.textContent='Ranking-Auswahl vorbereiten: 0 / '+cycles+' Rotationen';
+  for(const rank of ranks){
+   for(let d=0;d<DAYS;d+=14){
+    if(token.cancelled)return;
+    // Every rebalance ranks using completed PAST returns; parameter search itself is retrospective.
+    const ranked=pool.map(i=>[i,rPct(i,d-1,rank)]).filter(v=>v[1]>0)
+      .sort((a,b)=>b[1]-a[1]||a[0]-b[0]);
+    for(const topN of topNs){
+     selections.set(rank+'|'+topN+'|'+d,
+       applyCorrelationCap(ranked,d,topN,corrLimit,corrFallback).map(p=>p[0]));
+    }
+    ready++;
+    if(ready%3===0){
+     progress.textContent='Ranking-Auswahl vorbereiten: '+ready+' / '+cycles+' Rotationen';
+     await yieldFrame();
+    }
+   }
+  }
+  const sorted=[];
+  let tested=0;
+  for(const rank of ranks)for(const topN of topNs)for(const stopScope of scopes)for(const guard of guards){
+   if(token.cancelled)return;
+   const config={pool,rank,topN,stopScope,guard,corrLimit,corrFallback};
+   const stats=simulatePortfolio(config,selections,true);
+   sorted.push({...stats,rank,topN,stopScope,guard});
+   tested++;
+   if(tested%16===0){
+    progress.textContent='Sweep: '+tested+' / '+total+' Kombinationen ('+year+' · '+mode+' · '+priceMode+')';
+    await yieldFrame();
+   }
+  }
+  if(token.cancelled)return;
+  sorted.sort((a,b)=>b.endWealth-a.endWealth||b.maxDrawdownPct-a.maxDrawdownPct||a.guard-b.guard);
+  progress.textContent=total+' Kombinationen abgeschlossen · '+pool.length+' Kandidaten · '+year+'. Ranking und Stopp wurden rückblickend optimiert (In-Sample, keine Prognose).';
+  const wrapper=document.createElement('div');
+  const note=document.createElement('p');note.className='muted';
+  note.textContent='Beste 5 nach Endvermögen. MaxDD bezieht sich auf das gesamte Depot inklusive Reserve. Optimierung gilt nur für das angezeigte Testjahr.';
+  wrapper.appendChild(note);
+  for(let j=0;j<Math.min(5,sorted.length);j++){
+   const item=sorted[j],row=document.createElement('div');row.className='tradeSweepResult';
+   const label=document.createElement('span');
+   label.textContent=(j+1)+'. '+item.rank+' Tage · Top '+item.topN+' · Stopp '+item.guard+' % · '+
+    (item.stopScope==='strategy'?'Einzelstopp':'Gesamtstopp');
+   const scoreEl=document.createElement('strong');
+   scoreEl.textContent=euro(item.endWealth)+' · MaxDD '+number(item.maxDrawdownPct,1)+' %';
+   const btn=document.createElement('button');btn.type='button';btn.textContent='Übernehmen';
+   btn.onclick=()=>{
+    state.rank=item.rank;state.guard=item.guard;state.topN=item.topN;state.stopScope=item.stopScope;
+    setControls();changePool();
+    progress.textContent='Übernommen: '+label.textContent+' · Historischer Endwert '+euro(item.endWealth)+
+      '. Einstellungen bitte außerhalb des Optimierungsjahrs prüfen.';
+   };
+   row.append(label,scoreEl,btn);wrapper.appendChild(row);
+  }
+  results.replaceChildren(wrapper);
+ }catch(err){
+  if(!token.cancelled){console.error(err);progress.textContent='Sweep fehlgeschlagen: '+err.message;}
+ }finally{
+  if(activeTradeSweep===token){
+   activeTradeSweep=null;$('runTradeSweep').disabled=false;$('cancelTradeSweep').disabled=true;
+  }
+ }
+}
+
 function bindUI(){
  initOptions();
+ installTradeLabControls();
  syncModeControls();
  $('useCandles').onchange=e=>switchPriceMode(e.target.checked?'candle':'renko_usd');
  $('usePercent').onchange=e=>switchPriceMode(e.target.checked?'renko_pct':'renko_usd');
@@ -548,6 +673,11 @@ function bindUI(){
  $('ranking').onchange=e=>{state.rank=Number(e.target.value);changePool();};
  $('guard').oninput=e=>{$('stopVal').textContent=e.target.value==='0'?'Aus':'−'+e.target.value+' %';};
  $('guard').onchange=e=>{state.guard=Number(e.target.value);changePool();};
+ $('topN').oninput=e=>{$('topNValue').textContent=e.target.value;};
+ $('topN').onchange=e=>{state.topN=Math.max(1,Math.min(6,Number(e.target.value)));changePool();};
+ $('stopScope').onchange=e=>{state.stopScope=e.target.value==='portfolio'?'portfolio':'strategy';changePool();};
+ $('runTradeSweep').onclick=runTradeSweep;
+ $('cancelTradeSweep').onclick=()=>cancelTradeSweep('Sweep abgebrochen.');
  $('correlationLimit').onchange=e=>{state.corrLimit=e.target.value==='off'?null:Number(e.target.value);changePool();};
  $('corrFallback').onchange=e=>{state.corrFallback=e.target.checked;changePool();};
  $('geneScope').onchange=()=>renderGeneCards(choosePortfolio()[state.day]);
