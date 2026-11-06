@@ -44,3 +44,11 @@ The new Kraken settings are stored in the normal v13 JSON preset (`krakenTtp`) a
 `app_v13.js` contains the extension (source also kept as `ttp_research_extension.js`). The unchanged `upgrade_trade_rules.py` can swap the script into the existing standalone v13 HTML, preserving its compressed market data.
 
 Completed: JS syntax parse, controlled synthetic 462-pair matching and pool switching, default Kraken settings and JSON serialization. Not completed: actual full HTML run against the gzip-embedded 2022–2026 data, verification that the full set of 462 TTP matches exists, and genuine intraday Kraken-0%-activation historical returns. No financial results are claimed for that uncomputed mode.
+
+## Renko-%-Kopplung zu bestehenden Strategie-Pools (6 November)
+
+Problem: `original462`, `top100`, `balanced100`, `rawYear*` sowie die historischen paarigen 462er IMBA/TTP-Pools enthalten zunächst nur USD-Renko-IDs. Ein Wechsel von USD zu %-Renko filterte sämtliche Kandidaten weg und führte ohne erklärende Fehlermeldung zu null Trades.
+
+Fix im Forschungsbranch: Sobald %-Renko aktiv ist, wird jeder Kandidat eines spezifischen USD-Pools auf **bereits vorhandene**, echte %-Renko-META-Einträge mit exakt derselben `s` (Sensitivity), `family` und `exitKey` (Exit-Programm) abgebildet. Jede passende %-Boxgröße bleibt ein unabhängiger, wirklich getesteter Kandidat. Im universellen `all4158`- oder Rasterpool wird nichts umgemappt; dessen originale %-Strategien werden direkt genutzt. Manuelle Pools können ihre vorhandenen %-Einträge beibehalten. Keine Kurve wird interpoliert, durch feste USD/Preis-Konversion ersetzt oder frei erfunden. Beim Filterergebnis null wird nun die Ursache und eine konkrete Bedienalternative angezeigt. Der %-Boxfilter bietet nur vorhandene %-Boxwerte an.
+
+**Grenzen:** Dies ist eine **Gen-Kopplung**, keine identische TradingView-/Ausführungskurve zu einer USD-Renko-Strategie. Für einen ausgewählten Tag kann selbst bei vorhandenem Pool null Positionen aktiv sein (fehlender positiver vergangener Ranking-Score, aktive Stops oder strikter Korrelationsfilter). Syntaktisch geprüft, Matching-Logik an Kontrollbeispielen geprüft; vollständiger Browser-/Renditetest mit dem separaten 24,5-MB-Historien-HTML bleibt offen. Originalwerte im USD-Modus werden durch den Fix nicht geändert.
