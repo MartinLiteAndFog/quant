@@ -1,0 +1,39 @@
+{
+  "original_2026_14d_20": {
+    "label": "Original 462 · 14 Tage · Einzelstopp 20 %",
+    "pool": "original462",
+    "rank": 14,
+    "guard": 20,
+    "screenshot": "Screenshot 2 (09:41:04)",
+    "wealth_at_1000": 9367.04925136168,
+    "verified": true
+  },
+  "balanced_2026_30d_30": {
+    "label": "Top100 Balanced · 30 Tage · Einzelstopp 30 %",
+    "pool": "balanced100",
+    "rank": 30,
+    "guard": 30,
+    "screenshot": "Screenshot 1 (09:39:49)",
+    "wealth_at_1000": 7242.873165803406,
+    "verified": true
+  },
+  "balanced_2026_30d_25": {
+    "label": "Top100 Balanced · 30 Tage · Einzelstopp 25 %",
+    "pool": "balanced100",
+    "rank": 30,
+    "guard": 25,
+    "screenshot": "Screenshot 3 (09:41:58)",
+    "wealth_at_1000": 10654.973910559,
+    "verified": true
+  },
+  "raw_2026_30d_30_comparison": {
+    "label": "Top100 Raw · 30 Tage · Einzelstopp 30 % (Vergleich)",
+    "pool": "top100",
+    "rank": 30,
+    "guard": 30,
+    "screenshot": null,
+    "wealth_at_1000": 3493.6135685711342,
+    "verified": true,
+    "note": "Keiner der drei Screenshots zeigt Raw; Vergleichsannahme aus früheren Tests."
+  }
+}
