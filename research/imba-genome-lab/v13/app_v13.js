@@ -434,7 +434,11 @@ function setControls(){
  if($('stopScope'))$('stopScope').value=state.stopScope;
  $('correlationLimit').value=state.corrLimit===null?'off':String(state.corrLimit);$('corrFallback').checked=state.corrFallback;
 }
-function changePool(){cancelTradeSweep();if($('tradeSweepResults'))$('tradeSweepResults').replaceChildren();state.portKey='';state.filtered=eligible();state.grid=buildHeatmap();state.port=null;setStatus();renderChart();}
+function changePool(){cancelTradeSweep();if($('tradeSweepResults'))$('tradeSweepResults').replaceChildren();state.portKey='';state.filtered=eligible();state.grid=buildHeatmap();state.port=null;setStatus();
+ if(state.priceMode==='renko_pct'&&!state.filtered.length){
+  $('dataWarning').textContent+=' Keine berechneten %-Renko-Gegenstücke im aktuellen Pool/Boxfilter. Wähle „Alle wirklich berechneten Strategien“ und „Alle gerechneten Werte“, oder einen anderen Exit-Filter.';
+ }
+ renderChart();}
 function applyPreset(n){
  if(n==='tp'){state.x='tp';state.y='s';state.family='tp';state.familyEnabled={none:false,tp:true,ttp:false,both:false};state.box='all';state.mode='all4158';}
  else if(n==='ttp'){state.x='act';state.y='s';state.family='ttp';state.familyEnabled={none:false,tp:false,ttp:true,both:false};state.box='all';state.mode='all4158';}
@@ -453,13 +457,15 @@ function modeLabel(){return state.priceMode==='candle'?'5-Minuten-Candles (kein 
 function syncModeControls(){
  $('useCandles').checked=state.priceMode==='candle';$('usePercent').checked=state.priceMode==='renko_pct';
  $('modeTag').textContent=modeLabel();
- $('modeExplanation').textContent=state.priceMode==='candle'?'Normaler 5m-OHLC-Kerzen-IMBA: S×10 Candles, keine Boxgröße.':'Alle tatsächlich berechneten Renko-Boxen verfügbar. Einzeln per Regler oder alle zusammen.';
+ $('modeExplanation').textContent=state.priceMode==='candle'?'Normaler 5m-OHLC-Kerzen-IMBA: S×10 Candles, keine Boxgröße.':
+  state.priceMode==='renko_pct'?'Nur tatsächlich berechnete %-Renko-Strategien. Bei einem USD-Pool werden Sensitivity und Exit-Programm exakt abgeglichen; die Prozent-Box wird unabhängig gewählt (keine USD-Umrechnung).':
+  'Alle tatsächlich berechneten Renko-Boxen verfügbar. Einzeln per Regler oder alle zusammen.';
  $('useAllBoxes').disabled=state.priceMode==='candle';
  if(state.priceMode==='candle')state.box='all';
  $('useAllBoxes').checked=state.box==='all';
  $('boxStep').disabled=state.priceMode==='candle'||state.box==='all';
  $('boxStepLabel').textContent=state.priceMode==='candle'?'kein Renko':(Number($('boxStep').value)/10).toFixed(1)+(state.priceMode==='renko_pct'?' %':' USD');
- const boxes=state.priceMode==='renko_pct'?Array.from({length:10},(_,i)=>(i+1)/10):
+ const boxes=state.priceMode==='renko_pct'?[...new Set(PERCENT_MODE_IDS.map(i=>Number(META[i].b)))].sort((a,b)=>a-b):
     state.priceMode==='candle'?[]:[...new Set(META.filter(m=>m.priceMode==='renko_usd').map(m=>m.b))].sort((a,b)=>a-b);
  const prev=state.box;
  populateSelector('boxFilter',[['all','Alle gerechneten Werte'],...boxes.map(b=>[b.toFixed(2),b.toFixed(2)+(state.priceMode==='renko_pct'?' %':' USD')])], prev);
@@ -637,7 +643,7 @@ function bindUI(){
    $(el).onchange=async e=>{state[field]=e.target.value;
     if(field==='mode'&&state.mode.startsWith('rawYear') && Number(state.dataset)<=Number(state.mode.slice(7))){
        const targetYear=String(Number(state.mode.slice(7))+1);await loadYear(targetYear);}
-    if(field==='mode'&&(['original462','top100','balanced100'].includes(state.mode)||state.mode.startsWith('rawYear'))&&state.priceMode!=='renko_usd'){
+    if(field==='mode'&&(['original462','top100','balanced100'].includes(state.mode)||state.mode.startsWith('rawYear'))&&state.priceMode==='candle'){
      state.priceMode='renko_usd';state.box='all';syncModeControls();
     }
     if(field==='box'){if(state.box!=='all')$('boxStep').value=Math.round(Number(state.box)*10);syncModeControls();}
@@ -822,6 +828,32 @@ const RESEARCH_POOL_VARIANTS={
 };
 const PREVIOUS_GET_IDS=getPresetIds;
 getPresetIds=function(){return RESEARCH_POOL_VARIANTS[state.mode]||PREVIOUS_GET_IDS();};
+
+// Link USD-pool selections to real, precomputed percentage-Renko counterparts.
+// Sensitivity and exit-program identity must match exactly; % brick sizes stay
+// independent parameters, not an approximate USD-to-percent backtest.
+const PERCENT_MODE_IDS=ALL.filter(i=>META[i].priceMode==='renko_pct');
+const PERCENT_GENES=new Map();
+function correspondingGeneKey(m){return String(m.s)+'|'+String(m.family)+'|'+String(m.exitKey);}
+for(const i of PERCENT_MODE_IDS){
+ const k=correspondingGeneKey(META[i]);
+ if(!PERCENT_GENES.has(k))PERCENT_GENES.set(k,[]);
+ PERCENT_GENES.get(k).push(i);
+}
+const PRE_PERCENT_GET_IDS=getPresetIds;
+getPresetIds=function(){
+ const selected=PRE_PERCENT_GET_IDS();
+ if(state.priceMode!=='renko_pct'||!selected.length)return selected;
+ // These universal pools already contain their own percentage candidates.
+ if(['all4158','grid20','grid30'].includes(state.mode))return selected;
+ const out=new Set();
+ for(const id of selected){
+  const m=META[id];if(!m)continue;
+  if(m.priceMode==='renko_pct'){out.add(id);continue;}
+  for(const j of PERCENT_GENES.get(correspondingGeneKey(m))||[])out.add(j);
+ }
+ return [...out];
+};
 const PREVIOUS_SERIALIZE=serialize;
 serialize=function(){return {...PREVIOUS_SERIALIZE(),krakenTtp:{...state.krakenTtp}};};
 function normalizeResearchTtp(x){
