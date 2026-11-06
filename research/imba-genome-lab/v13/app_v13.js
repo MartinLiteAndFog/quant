@@ -882,6 +882,62 @@ function historicalCompare(){
    {responsive:true,displaylogo:false});
  }
 }
+async function compareTtpYears(){
+ const btn=$('historicalAllYearsBtn'),out=$('historicalAllYearsOutput'),savedYear=state.dataset,savedDay=state.day;
+ const savedSelected=state.selected;
+ btn.disabled=true;out.textContent='Jahresvergleich laden …';
+ const series=[
+  ['IMBA',HIST_EXIT_315.pure,null,false],
+  ['TTP Alt',HIST_EXIT_315.ttp,null,false],
+  ['Mix',HIST_EXIT_315.mixed,null,false],
+  ['Korr. 0,85 strikt',null,.85,false],
+  ['Korr. 0,90 auffüllen',null,.9,true]
+ ];
+ const rows=[],failures=[];
+ try{
+  for(const year of ['2022','2023','2024','2025','2026']){
+   out.textContent='Prüfe '+year+' … ('+(rows.length+1)+'/5)';
+   await loadYear(year);
+   const currentPool=eligible();
+   const vals=series.map(([name,base,cap,fallback])=>{
+    const pool=(base||currentPool).filter(i=>base===null||
+      state.box==='all'||Math.abs(Number(META[i].b)-Number(state.box))<1e-5);
+    if(!pool.length)return null;
+    const x=simulatePortfolio({pool,rank:state.rank,topN:state.topN,guard:state.guard,
+     stopScope:state.stopScope,corrLimit:cap===null?state.corrLimit:cap,
+     corrFallback:cap===null?state.corrFallback:fallback},null,true);
+    return {value:x.endWealth,dd:x.maxDrawdownPct,count:pool.length};
+   });
+   rows.push([year,...vals]);
+   await new Promise(resolve=>setTimeout(resolve,0));
+  }
+ }catch(e){failures.push(e.message);}
+ finally{
+  try{await loadYear(savedYear);state.day=Math.min(savedDay,DAYS-1);state.selected=savedSelected;changePool();}
+  catch(e){failures.push('Wiederherstellen: '+e.message);}
+  btn.disabled=false;
+ }
+ const table=document.createElement('table');table.style.cssText='width:100%;font-size:11px;border-collapse:collapse';
+ const title=document.createElement('tr');
+ for(const h of ['Jahr',...series.map(s=>s[0])]){
+  const cell=document.createElement('th');cell.textContent=h;cell.style.padding='5px';title.appendChild(cell);
+ }
+ table.appendChild(title);
+ for(const row of rows){
+  const tr=document.createElement('tr');
+  for(const value of row){
+   const td=document.createElement('td');td.style.cssText='padding:6px;border-top:1px solid #385769';
+   td.textContent=typeof value==='string'?value:value?euro(value.value)+' / '+number(value.dd,1)+' % DD':'–';
+   tr.appendChild(td);
+  }
+  table.appendChild(tr);
+ }
+ out.replaceChildren(document.createTextNode(
+  'Einzeln gestartete Jahresdepots zu je 1.000 €, kein Jahresübertrag; aktuelle Top-N/Ranking/Stopp-Regeln. '+
+  'TTP Alt 3 % / 1,5 % ist nicht der neue Kraken-Flip. '+(failures.length?'Fehler: '+failures.join('; '):'')
+ ),table);
+}
+
 function installTTPResearch(){
  const base=$('tradeSweepControls');
  if(!base)throw Error('Top-N-Trade-Sweep UI fehlt');
@@ -899,6 +955,8 @@ function installTTPResearch(){
   '<button id="researchCorr90" type="button">ρ≤0,90 auffüllen</button>'+
   '<button id="researchCorrOff" type="button">Korrelation aus</button></div>'+
   '<button type="button" id="historicalCompareBtn">Historische Pools vergleichen</button>'+
+  '<button type="button" id="historicalAllYearsBtn">Vergleich 2022–2026</button>'+
+  '<div id="historicalAllYearsOutput" class="muted"></div>'+
   '<p id="historicalCompareOutput" class="muted" aria-live="polite"></p><div id="historicalCompareChart"></div>'+
   '<details><summary>Neue Kraken-TTP-Einstellungen (Research-Preset, Backtest ausstehend)</summary>'+
   '<p class="muted">Keine fiktiven Erträge: Änderungen hier werden gespeichert, aber nicht auf die vorhandenen Alt-TTP-Tagesrenditen angewendet.</p>'+
@@ -930,6 +988,7 @@ function installTTPResearch(){
  $('researchCorr90').onclick=()=>{state.corrLimit=.9;state.corrFallback=true;setControls();changePool();};
  $('researchCorrOff').onclick=()=>{state.corrLimit=null;state.corrFallback=false;setControls();changePool();};
  $('historicalCompareBtn').onclick=historicalCompare;
+ $('historicalAllYearsBtn').onclick=compareTtpYears;
  $('krakenTtpActivation').onchange=e=>{state.krakenTtp.activationPct=Number(e.target.value);};
  $('krakenTtpTrail').oninput=e=>{state.krakenTtp.trailPct=Number(e.target.value);renderTtpControls();};
  $('krakenTtpAction').onchange=e=>{state.krakenTtp.action=e.target.value==='close'?'close':'flip';renderTtpControls();};
